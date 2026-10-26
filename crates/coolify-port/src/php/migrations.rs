@@ -89,7 +89,7 @@ pub fn summarize_migration(src: &str) -> MigrationSummary {
     let mut i = 0;
     while i < toks.len() {
         match &toks[i].tok {
-            Tok::Ident(id) if id == "Schema" && is_punct(&toks, i + 1, "::") => {
+            Tok::Ident(id) if id == "Schema" && is_punct(toks, i + 1, "::") => {
                 if let (Some(Tok::Ident(method)), Some(Tok::Str(table))) = (
                     toks.get(i + 2).map(|t| &t.tok),
                     toks.get(i + 4).map(|t| &t.tok),
@@ -109,7 +109,7 @@ pub fn summarize_migration(src: &str) -> MigrationSummary {
                             s.destructive = true;
                         }
                         let (columns, next) = if matches!(op, TableOp::Create | TableOp::Alter) {
-                            closure_columns(&toks, i + 5)
+                            closure_columns(toks, i + 5)
                         } else {
                             (Vec::new(), i + 5)
                         };
@@ -129,7 +129,7 @@ pub fn summarize_migration(src: &str) -> MigrationSummary {
                     }
                 }
             }
-            Tok::Ident(id) if id == "DB" && is_punct(&toks, i + 1, "::") => {
+            Tok::Ident(id) if id == "DB" && is_punct(toks, i + 1, "::") => {
                 match toks.get(i + 2).map(|t| &t.tok) {
                     Some(Tok::Ident(m)) if m == "statement" || m == "unprepared" => {
                         s.has_raw_sql = true

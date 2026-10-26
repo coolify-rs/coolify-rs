@@ -200,9 +200,22 @@ pub fn build_plan(input: PlanInput<'_>) -> Plan {
             );
         }
     }
-    if implemented_hit
-        && (c.has(Category::DeploymentEngine) || c.has(Category::ContainerIntegration))
-    {
+    // Only deployment/container paths that map to a non-planned component count.
+    let engine_paths: Vec<&str> = [Category::DeploymentEngine, Category::ContainerIntegration]
+        .iter()
+        .filter_map(|cat| c.categories.get(cat))
+        .flatten()
+        .filter(|e| e.kind == crate::classify::EvidenceKind::Path)
+        .map(|e| e.detail.as_str())
+        .collect();
+    let engine_hit = input.components.iter().any(|m| {
+        m.status != crate::mapping::Status::Planned
+            && m.reasons.iter().any(|r| {
+                r.strip_prefix("path ")
+                    .is_some_and(|p| engine_paths.contains(&p))
+            })
+    });
+    if engine_hit {
         bump(
             Risk::High,
             "deployment/container behaviour in an implemented component".into(),
