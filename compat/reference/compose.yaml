@@ -1,0 +1,60 @@
+# Reference (upstream) Coolify environment used for baseline capture and
+# differential testing. It runs the official upstream image against its own
+# isolated Postgres and Redis. Nothing here touches a real installation.
+#
+# Start with scripts/reference-up.sh (it generates the secrets file).
+name: coolify-rs-reference
+
+services:
+  coolify:
+    image: "coollabsio/coolify:${COOLIFY_REFERENCE_VERSION:-4.5.0}"
+    env_file:
+      - ./secrets/reference.envfile
+    environment:
+      APP_ENV: production
+      APP_URL: http://127.0.0.1:18000
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      REDIS_HOST: redis
+      # The reference instance never manages real servers.
+      SELF_HOSTED: "true"
+      AUTOUPDATE: "false"
+    ports:
+      - "127.0.0.1:18000:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: curl --fail http://127.0.0.1:8080/api/health || exit 1
+      interval: 5s
+      retries: 60
+      start_period: 30s
+      timeout: 2s
+
+  postgres:
+    image: postgres:15-alpine
+    env_file:
+      - ./secrets/reference.envfile
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - reference-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coolify -d coolify"]
+      interval: 2s
+      retries: 30
+      timeout: 2s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--loglevel", "warning"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 30
+      timeout: 2s
+
+volumes:
+  reference-db:

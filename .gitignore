@@ -1,0 +1,5 @@
+/target
+/.upstream/
+/compat/reference/secrets/
+/.migration-runs/
+*.local.toml

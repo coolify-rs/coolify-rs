@@ -1,0 +1,56 @@
+{
+    "generator": "Illuminate\\Encryption\\Encrypter (coollabsio/coolify:4.5.0, laravel/framework 12.69.3)",
+    "app_key": "base64:hPAFGDXpvHW0ZnwoP/YKkC1WJ+9Bv2jZCwc1hGGaI3s=",
+    "cases": [
+        {
+            "kind": "encryptString",
+            "plaintext": "hello",
+            "payload": "eyJpdiI6Imd4SkRJWVpvWEZSK1Q2aVJLTE5NZGc9PSIsInZhbHVlIjoiS0xwQjJUNm1RN0RKTXRtSWE3U00zQT09IiwibWFjIjoiZjUyODQzYWE2NDNhZjAxY2FkZWM3NTRkY2E0NmQ5YmNiZWU1MjBlY2NkMzkzYTdmYWIyZDczYTQ5OGNhMTg2NCIsInRhZyI6IiJ9"
+        },
+        {
+            "kind": "encrypt_serialized",
+            "plaintext": "hello",
+            "payload": "eyJpdiI6IndBejAveW10M3Q5WDVtcVR5MEpib0E9PSIsInZhbHVlIjoiUmZvN1M0UXd0OXBlNzA5Tnc5cVFVUT09IiwibWFjIjoiMzk0M2VlYzJlZmJjMWJiYTU3YjdjNDMzYmM0YTZkYTU1NGNhZDE2ZGUzYmIzMDM2NzJkZDMzYzc2YTRjZmE5NSIsInRhZyI6IiJ9"
+        },
+        {
+            "kind": "encryptString",
+            "plaintext": "",
+            "payload": "eyJpdiI6ImlDWDVhZlE1aFJ5TzVkb0VSOHMvdkE9PSIsInZhbHVlIjoidXViSHRJUE9oY2tBN1J0TTRFWnVqQT09IiwibWFjIjoiYmZlMjczZDU2MTcwMWJlZGMzNDk5YmM3Mzk4MzljOTc4N2JmZGUxYTkyYmU3MzZmN2I3YTJjNDcyNzYzYmI5MSIsInRhZyI6IiJ9"
+        },
+        {
+            "kind": "encrypt_serialized",
+            "plaintext": "",
+            "payload": "eyJpdiI6InVEdDZWR0pveElZaTQ3RmtrdUpqZHc9PSIsInZhbHVlIjoiWk1KSytBVFlsWWVFb2FrODlVb3Eydz09IiwibWFjIjoiNzM5MjViMjY2NzMwNjQ3MWM3YTZhODkyODdmZWU2ZWI4YWI4Y2RjZmI5NDNhNGMxNWMxM2NlOGZhYmE1N2E3NiIsInRhZyI6IiJ9"
+        },
+        {
+            "kind": "encryptString",
+            "plaintext": "multi\nline ✓ unicode",
+            "payload": "eyJpdiI6IkpIRTlyam5hM3hCSHMvL1hvenRDK2c9PSIsInZhbHVlIjoiVGhBbkVWV0svYVhZdE5VT2s1TnVFTDlOQkxOU2w1V2FQZEQxSERVQTgvcz0iLCJtYWMiOiI2YWRjMjNkMDJmYjJkNTlkYTkyZGQwZjE0NzkwNDdkMWUwOTlmMmYwZTVmNGE5ZWZjYTRhOWI2YzkwYjY5NTUyIiwidGFnIjoiIn0="
+        },
+        {
+            "kind": "encrypt_serialized",
+            "plaintext": "multi\nline ✓ unicode",
+            "payload": "eyJpdiI6IlltQkhnMm9SQmgvcW9VTGEyWFFWVmc9PSIsInZhbHVlIjoiSXFHZE1iMUtJQVlMTXJDNUQ2YVUzS1FtL3U3dVhJcTZhYWlIb1duTzJMVT0iLCJtYWMiOiIwMTg1M2EwOWE0OGRmYmRmOTJjZDljZmViYTAwZjliN2E4M2EyMzZkN2VmZjBlM2I3MGUxYzBhMTJhMmQwY2NjIiwidGFnIjoiIn0="
+        },
+        {
+            "kind": "encryptString",
+            "plaintext": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "payload": "eyJpdiI6IjIrdWNka1UvbUNUbU5HUWh3b1lPeUE9PSIsInZhbHVlIjoiTHRPZGJCMzY3YlZCa3ZPY2dlTUNoVFZZZ092TDdGczFLZTFlYnpzUFFGSXg2UHU3MjJNWnJwRHFaM0dQTkxZMlpSbExsM1J5RDQ5cGF4U3E1TU9JbThZZ25UNFpVa0trbHg5Q29EbngzNzYwWG02QXNTOUlwRDVvS0FuRkovNytsNlpsRzFhVG9BeFQvZXVhTHBaczFRPT0iLCJtYWMiOiJkN2Y4NjEzMTFhOTE4NGNjMjI3MWYzNDBlZGQ0ZThiYzQ2MDQ1N2ZiZTRiZjAxYzI5OTk3NjNjMDcxNTNiZmI2IiwidGFnIjoiIn0="
+        },
+        {
+            "kind": "encrypt_serialized",
+            "plaintext": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "payload": "eyJpdiI6InAwNEtmRlpVN0JQRUdKWEMvSVF1OWc9PSIsInZhbHVlIjoiYzNhY3Z0czdCV2hFdGZWNzJ0cEtEcHR4MFBtcXRrSmMzTy9RNzcwK254QzVqOFd1K01kdkpjWW1rMTZBb2ZBL21zdXMvdW42YS9ycStmRXo0VmxVNUlHS2E5TFhFWGRSMFZINVNYc2FOUS96bnljTHAxZWtxcDdyNUozWThiTWZrT2JuQWVnN2NSN0Z1dzRDUzQwSzRnPT0iLCJtYWMiOiJlMTAxYmY3NzdhMDc0YzA0OWYyMTk4MDUwNWNhNzNhZDFhNTdlMzYwZmY0NzIwOGI0NmMwNTg0Nzk0NWE3MmI2IiwidGFnIjoiIn0="
+        },
+        {
+            "kind": "encryptString",
+            "plaintext": "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----",
+            "payload": "eyJpdiI6ImwxQWZML2tnY0JqVTBXN2IwRVZrWnc9PSIsInZhbHVlIjoiNWxCT25hU3NEa2liRkRLdHFnblVHSXJ0c01kcXdJdGttK2dKOVQ4VHUzT1d6UWZMNEI1cTJYMVh4Q3M0QlpMeVB3MHJSa2JRMUJMOEwrTENzKzYvZXQ5MkkzZGg1Q3J0bkJWK25YQllRZTQ9IiwibWFjIjoiZTkzZTIxNmQ3N2E0OTdlYzcyMTUxYTY1YjBkMTU1Y2I4YTRjOTE4YmJiZDI1NDVlMTcwYThkYmNjZGY4N2YyMyIsInRhZyI6IiJ9"
+        },
+        {
+            "kind": "encrypt_serialized",
+            "plaintext": "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----",
+            "payload": "eyJpdiI6InI1dXRHUXl3K2NaUmhjWU1TY3BhNEE9PSIsInZhbHVlIjoieTRWaFlyVVQ2dnY1VEo2WEo0NkJWeGxwaW5xTm5kdEZKSHJ4QnB5WUh3anpBK25RQU9hak5oelhoYnFyMDl4YmhpcEJ4UEpzNmtMbmwyRzhqMkxaUHRRQ1JXdWdNYUVSRGVZMjVjM1JpSDllcXhEQ3pmY0ZlZlczK3I0cC92ZDkiLCJtYWMiOiJmZTJmMTI4OWI3M2NlZDAzZDlhNzlmZTFjMWY5ZTI1MmVhNGM4MTYzMmNjNjU0ODc5NDdmZmI1YzIxOTEyOWUwIiwidGFnIjoiIn0="
+        }
+    ]
+}
