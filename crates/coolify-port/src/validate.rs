@@ -140,7 +140,7 @@ fn run_one(
         }
     };
     let output = std::fs::read_to_string(tmp.path()).unwrap_or_default();
-    let tail = tail_lines(&output, 40);
+    let tail = summarize_output(&output);
     match status {
         None => CheckResult {
             command: cmd.to_vec(),
@@ -161,6 +161,22 @@ fn run_one(
             output_tail: tail,
         },
     }
+}
+
+/// Keeps what a reviewer needs: the `failures:` section of test output if any,
+/// otherwise the last lines without build-progress noise.
+fn summarize_output(s: &str) -> String {
+    if let Some(pos) = s.find("\nfailures:\n") {
+        return tail_lines(&s[pos..], 80);
+    }
+    let useful: Vec<&str> = s
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            !(t.starts_with("Compiling ") || t.starts_with("Checking ") || t.starts_with("Downloaded "))
+        })
+        .collect();
+    tail_lines(&useful.join("\n"), 40)
 }
 
 fn tail_lines(s: &str, n: usize) -> String {
