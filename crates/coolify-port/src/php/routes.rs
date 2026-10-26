@@ -142,10 +142,7 @@ impl Parser<'_> {
     fn chain(&mut self, mut i: usize, end: usize, ctx: &Ctx) -> usize {
         let line = self.toks[i.saturating_sub(2)].line;
         let mut calls: Vec<(String, Vec<Value>)> = Vec::new();
-        loop {
-            let Some(Tok::Ident(name)) = self.toks.get(i).map(|t| &t.tok) else {
-                break;
-            };
+        while let Some(Tok::Ident(name)) = self.toks.get(i).map(|t| &t.tok) {
             let name = name.clone();
             if self.toks.get(i + 1).map(|t| &t.tok) != Some(&Tok::Punct("(")) {
                 break;

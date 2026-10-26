@@ -421,6 +421,35 @@ impl Engine {
                 .display()
                 .to_string(),
         )];
+        let missing: Vec<&String> = self
+            .cfg
+            .validation
+            .required_env
+            .iter()
+            .filter(|k| std::env::var(k).map(|v| v.is_empty()).unwrap_or(true))
+            .collect();
+        if !missing.is_empty() {
+            let checks: Vec<CheckResult> = plan
+                .validation
+                .iter()
+                .map(|c| CheckResult {
+                    command: c.clone(),
+                    status: crate::validate::CheckStatus::Inconclusive,
+                    exit_code: None,
+                    duration_ms: 0,
+                    output_tail: format!("required environment not set: {missing:?}"),
+                })
+                .collect();
+            state.attempts.push(Attempt {
+                number: 0,
+                kind: "initial".into(),
+                checks,
+                verdict: Verdict::Inconclusive,
+                tamper_findings: vec![],
+            });
+            state.verdict = Some(Verdict::Inconclusive);
+            return Ok(());
+        }
         let checks = run_checks(&plan.validation, &worktree, timeout, &envs);
         let mut v = verdict(&checks);
         state.attempts.push(Attempt {

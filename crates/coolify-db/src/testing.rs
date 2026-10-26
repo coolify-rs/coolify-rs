@@ -4,6 +4,9 @@
 //! `compose.yaml` Postgres). Missing infrastructure is a hard failure, never
 //! a silent pass.
 
+// Test-only helper: failing loudly is the intended behaviour.
+#![allow(clippy::expect_used, clippy::panic)]
+
 use std::time::Duration;
 
 use rand::Rng;

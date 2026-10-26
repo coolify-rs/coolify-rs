@@ -77,11 +77,13 @@ pub fn validate(
 ) -> Result<(), ApiError> {
     let mut errors: Map<String, Value> = Map::new();
     let mut push = |field: &str, msg: String| {
-        errors
+        if let Some(list) = errors
             .entry(field.to_string())
             .or_insert_with(|| Value::Array(vec![]))
             .as_array_mut()
-            .map(|a| a.push(Value::String(msg)));
+        {
+            list.push(Value::String(msg));
+        }
     };
 
     for f in fields {

@@ -97,7 +97,7 @@ upstream.symbols = [
 ]
 upstream.routes = ["GET api/v1/projects*", "POST api/v1/projects*", "PATCH api/v1/projects*", "DELETE api/v1/projects*"]
 upstream.tables = ["projects", "environments", "project_settings"]
-upstream.tests = ["tests/Feature/Api/Environment*.php", "tests/Feature/Api/Project*.php", "tests/Feature/ResourceAccessConsistencyTest.php"]
+upstream.tests = ["tests/Feature/Api/EnvironmentUpdateApiTest.php", "tests/Feature/Api/Project*Test.php", "tests/Feature/ResourceAccessConsistencyTest.php"]
 rust.paths = [
   "crates/coolify-api/src/routes/projects.rs",
   "crates/coolify-api/src/validation.rs",

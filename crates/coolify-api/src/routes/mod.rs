@@ -10,7 +10,6 @@ pub mod projects;
 pub mod teams;
 
 use axum::Router;
-use axum::http::Method;
 use axum::middleware::{from_fn, from_fn_with_state};
 use axum::routing::{MethodRouter, on};
 use coolify_domain::Ability;
@@ -323,9 +322,4 @@ where
     T: 'static,
 {
     on(axum::routing::MethodFilter::POST, h)
-}
-
-#[allow(dead_code)]
-fn method(m: &str) -> Method {
-    m.parse().unwrap_or(Method::GET)
 }

@@ -1,0 +1,15 @@
+{
+  "runs": {
+    "run-5ca69705d-b5823c777": {
+      "commits": 148,
+      "risk": "High",
+      "escalated": true,
+      "verdict": "failed",
+      "validated_first_attempt": false,
+      "repair_attempts": 0,
+      "security_sensitive_commits": 29,
+      "review_outcome": null,
+      "recorded_at": "2026-10-26T20:46:47Z"
+    }
+  }
+}

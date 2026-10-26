@@ -92,7 +92,9 @@ pub struct PlanInput<'a> {
 
 /// Files that cannot change runtime behaviour of the API server.
 fn behaviour_irrelevant(path: &str) -> bool {
-    path.ends_with(".md")
+    // Tool/editor configuration such as .cursor/, .codex/, .github/.
+    path.starts_with('.')
+        || path.ends_with(".md")
         || path.starts_with("docs/")
         || path.starts_with("tests/")
         || path.starts_with("resources/")

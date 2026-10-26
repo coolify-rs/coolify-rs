@@ -79,8 +79,12 @@ const NON_COLUMN_METHODS: &[&str] = &[
     "virtualAs",
 ];
 
+/// Summarizes the forward (`up()`) direction of a migration. The `down()`
+/// rollback usually mirrors it with drops, which must not count as
+/// destructive. Files without an `up()` method are analysed whole.
 pub fn summarize_migration(src: &str) -> MigrationSummary {
-    let toks = tokenize(src);
+    let all = tokenize(src);
+    let toks = up_body(&all).unwrap_or(&all);
     let mut s = MigrationSummary::default();
     let mut i = 0;
     while i < toks.len() {
@@ -145,6 +149,28 @@ pub fn summarize_migration(src: &str) -> MigrationSummary {
         i += 1;
     }
     s
+}
+
+/// Tokens of the `function up(...)` body, if present.
+fn up_body(toks: &[super::lexer::Token]) -> Option<&[super::lexer::Token]> {
+    let start = toks.windows(2).position(|w| {
+        w[0].tok == Tok::Ident("function".into()) && w[1].tok == Tok::Ident("up".into())
+    })?;
+    let open = (start..toks.len()).find(|&i| toks[i].tok == Tok::Punct("{"))?;
+    let mut depth = 0i32;
+    for (i, t) in toks.iter().enumerate().skip(open) {
+        match t.tok {
+            Tok::Punct("{") => depth += 1,
+            Tok::Punct("}") => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&toks[open + 1..i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn is_punct(toks: &[super::lexer::Token], i: usize, p: &str) -> bool {
@@ -231,7 +257,8 @@ return new class extends Migration {
 };"#;
         let s = summarize_migration(src);
         assert_eq!(s.table_names(), vec!["projects"]);
-        assert_eq!(s.tables.len(), 2);
+        // Only up(): the dropColumn in down() is a rollback, not a destructive change.
+        assert_eq!(s.tables.len(), 1);
         assert_eq!(s.tables[0].op, TableOp::Alter);
         assert_eq!(
             s.tables[0].columns,
@@ -240,10 +267,8 @@ return new class extends Migration {
                 columns: vec!["canvas_position".into()]
             }]
         );
-        assert_eq!(s.tables[1].columns[0].method, "dropColumn");
         assert!(s.touches_data);
-        // dropColumn in down() is still reported: reviewers decide what matters.
-        assert!(s.destructive);
+        assert!(!s.destructive);
     }
 
     #[test]

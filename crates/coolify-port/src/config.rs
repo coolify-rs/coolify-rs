@@ -40,6 +40,10 @@ pub struct ValidationConfig {
     pub timeout_secs: u64,
     /// Shared target dir so worktree validations reuse build artifacts.
     pub cargo_target_dir: PathBuf,
+    /// Environment the checks need (e.g. the test database URL). If any is
+    /// missing the run is `inconclusive`, never `failed` or `passed`.
+    #[serde(default)]
+    pub required_env: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -83,10 +87,13 @@ impl PortConfig {
         let src = std::fs::read_to_string(path)
             .map_err(|e| ConfigError::Io(path.display().to_string(), e))?;
         let mut cfg: PortConfig = toml::from_str(&src)?;
-        cfg.root = path
+        let parent = path
             .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        cfg.root = parent
+            .canonicalize()
+            .map_err(|e| ConfigError::Io(parent.display().to_string(), e))?;
         Ok(cfg)
     }
 

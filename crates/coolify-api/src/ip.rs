@@ -108,11 +108,10 @@ pub fn api_ip_allowed(allowed_ips: Option<&str>, client: IpAddr) -> bool {
             if in_cidr(client, net, mask as u8) {
                 return true;
             }
-        } else if entry == "0.0.0.0" {
-            return true;
-        } else if entry
-            .parse::<IpAddr>()
-            .is_ok_and(|ip| ip.to_canonical() == client)
+        } else if entry == "0.0.0.0"
+            || entry
+                .parse::<IpAddr>()
+                .is_ok_and(|ip| ip.to_canonical() == client)
         {
             return true;
         }

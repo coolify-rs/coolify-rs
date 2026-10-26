@@ -162,14 +162,9 @@ pub fn tokenize(src: &str) -> Vec<Token> {
 }
 
 fn starts_with(chars: &[char], i: usize, pat: &str) -> bool {
-    let mut j = i;
-    for p in pat.chars() {
-        if chars.get(j) != Some(&p) {
-            return false;
-        }
-        j += 1;
-    }
-    true
+    (i..)
+        .zip(pat.chars())
+        .all(|(j, p)| chars.get(j) == Some(&p))
 }
 
 fn is_ident_start(c: char) -> bool {
