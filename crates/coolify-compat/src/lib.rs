@@ -5,6 +5,7 @@
 //! adopt an upstream database without rewriting it.
 
 pub mod encrypter;
+pub mod php_json;
 pub mod php_serialize;
 pub mod sanctum;
 

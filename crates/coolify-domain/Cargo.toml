@@ -1,0 +1,18 @@
+[package]
+name = "coolify-domain"
+description = "Domain types and invariants for coolify-rs (teams, roles, API abilities, naming rules)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rand.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

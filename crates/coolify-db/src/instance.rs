@@ -1,0 +1,33 @@
+//! `instance_settings` (singleton row id 0).
+
+use chrono::NaiveDateTime;
+
+use crate::{Db, DbResult};
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ApiSettings {
+    pub is_api_enabled: bool,
+    pub allowed_ips: Option<String>,
+}
+
+pub async fn api_settings(db: &Db) -> DbResult<ApiSettings> {
+    // Upstream uses InstanceSettings::findOrFail(0); a missing row is a 500 there too.
+    Ok(
+        sqlx::query_as("SELECT is_api_enabled, allowed_ips FROM instance_settings WHERE id = 0")
+            .fetch_one(db.pool())
+            .await?,
+    )
+}
+
+/// `OtherController@disable_api`.
+pub async fn disable_api(db: &Db, now: NaiveDateTime) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query(
+        "UPDATE instance_settings SET is_api_enabled = false, updated_at = $1 \
+         WHERE id = 0 AND is_api_enabled IS DISTINCT FROM false",
+    )
+    .bind(now)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}

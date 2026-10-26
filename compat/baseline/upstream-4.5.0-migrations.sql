@@ -2,7 +2,6 @@
 -- PostgreSQL database dump
 --
 
-\restrict 59qFHQuVOD4dccFvSTvwrVCRfztlsFKTXJF4ZMOWoUqljaQyFLBNlwjCEJnr0Dz
 
 -- Dumped from database version 15.19
 -- Dumped by pg_dump version 15.19
@@ -504,5 +503,4 @@ SELECT pg_catalog.setval('public.migrations_id_seq', 469, true);
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 59qFHQuVOD4dccFvSTvwrVCRfztlsFKTXJF4ZMOWoUqljaQyFLBNlwjCEJnr0Dz
 

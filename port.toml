@@ -1,0 +1,27 @@
+# coolify-port configuration (upstream migration engine).
+
+[upstream]
+url = "https://github.com/coollabsio/coolify"
+branch = "main"
+# Bare mirror; create with:
+#   git clone --bare --no-single-branch https://github.com/coollabsio/coolify .upstream/coolify.git
+mirror = ".upstream/coolify.git"
+remote = "origin"
+
+[engine]
+runs_dir = ".migration-runs"
+ledger_dir = "migration/ledger"
+mapping = "compat/mapping/registry.toml"
+state_file = "migration/state.json"
+prompt_pack_max_bytes = 262144
+
+[validation]
+timeout_secs = 1800
+cargo_target_dir = "target/port"
+
+[repair]
+max_attempts = 2
+# External agent for layer C repairs, as an argv array. Disabled by default:
+# enabling it is a security decision (see docs/SECURITY_MODEL.md).
+agent_command = []
+agent_timeout_secs = 1800

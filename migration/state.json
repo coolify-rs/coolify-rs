@@ -1,0 +1,14 @@
+{
+  "upstream_branch": "main",
+  "baseline": "5ca69705d681da46028ea15a8a39d90a4ebcce89",
+  "last_analyzed": null,
+  "last_integrated": null,
+  "history": [
+    {
+      "at": "2026-10-26T20:30:56Z",
+      "kind": "baseline",
+      "commit": "5ca69705d681da46028ea15a8a39d90a4ebcce89",
+      "run_id": null
+    }
+  ]
+}

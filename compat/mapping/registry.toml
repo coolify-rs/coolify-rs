@@ -1,0 +1,185 @@
+# Upstream → coolify-rs traceability registry (schema in crates/coolify-port/src/mapping.rs).
+#
+# status: planned | partial | implemented | verified
+#   verified = implemented + differential tests against the reference pass.
+# Path globs: `*` within a segment, `**` across segments.
+# Review this file whenever module boundaries change (docs/MIGRATION_STRATEGY.md §4).
+
+schema_version = 1
+
+[[component]]
+id = "api.auth-chain"
+title = "API authentication, token team, API enabled, IP allowlist, sensitive flag, abilities"
+status = "verified"
+upstream.paths = [
+  "app/Http/Middleware/ApiAbility.php",
+  "app/Http/Middleware/ApiAllowed.php",
+  "app/Http/Middleware/ApiIpAllowed.php",
+  "app/Http/Middleware/ApiSensitiveData.php",
+  "app/Http/Middleware/EnsureTokenBelongsToCurrentTeamMember.php",
+  "app/Http/Middleware/Authenticate.php",
+  "app/Http/Middleware/TrustProxies.php",
+  "app/Models/PersonalAccessToken.php",
+  "app/Http/Kernel.php",
+  "config/sanctum.php",
+  "app/Exceptions/Handler.php",
+]
+upstream.symbols = [
+  "app/Models/User.php::createToken()",
+  "app/Models/User.php::isAdminOfTeam()",
+  "app/Models/User.php::teams()",
+  "bootstrap/helpers/api.php::getTeamIdFromToken()",
+  "bootstrap/helpers/api.php::invalidTokenResponse()",
+  "bootstrap/helpers/shared.php::checkIPAgainstAllowlist()",
+  "bootstrap/helpers/auth.php::client_ip()",
+]
+upstream.tables = ["personal_access_tokens", "team_user", "instance_settings"]
+upstream.tests = [
+  "tests/Feature/Authorization/Api*.php",
+  "tests/Feature/Authorization/LegacyMemberTokenTest.php",
+  "tests/Feature/ApiToken*.php",
+  "tests/Feature/Security/IpAllowlistTest.php",
+  "tests/Feature/Security/ApiTokenCreationSecurityTest.php",
+]
+rust.paths = [
+  "crates/coolify-api/src/auth.rs",
+  "crates/coolify-api/src/ip.rs",
+  "crates/coolify-db/src/auth.rs",
+  "crates/coolify-db/src/instance.rs",
+  "crates/coolify-compat/src/sanctum.rs",
+  "crates/coolify-domain/src/access.rs",
+]
+rust.tests = ["crates/coolify-api/tests/auth_chain.rs", "compat/diff/differential.py"]
+rust.packages = ["coolify-api", "coolify-db", "coolify-compat", "coolify-domain"]
+contracts = ["docs/API_COMPATIBILITY.md#2-routing-and-middleware-static"]
+divergences = [
+  "X-Forwarded-For trusted only from COOLIFY_RS_TRUSTED_PROXIES (upstream trusts all proxies)",
+  "no rate limiting (upstream throttle:api)",
+  "audit events for auth failures are not written",
+]
+
+[[component]]
+id = "api.teams"
+title = "Teams REST API (token-team scoped)"
+status = "verified"
+upstream.paths = ["app/Http/Controllers/Api/TeamController.php", "app/Policies/TeamPolicy.php"]
+upstream.symbols = ["app/Models/Team.php::casts()", "app/Models/Team.php::members()"]
+upstream.routes = ["GET api/v1/teams*", "GET api/v1/team*", "PATCH api/v1/team"]
+upstream.tables = ["teams", "team_user"]
+upstream.tests = ["tests/Feature/Api/Team*.php"]
+rust.paths = ["crates/coolify-api/src/routes/teams.rs", "crates/coolify-db/src/teams.rs", "crates/coolify-db/src/records.rs"]
+rust.tests = ["crates/coolify-api/tests/projects.rs", "compat/diff/differential.py"]
+rust.packages = ["coolify-api", "coolify-db"]
+contracts = ["docs/API_COMPATIBILITY.md#teams-teamcontroller--hides-custom_server_limit-pivot"]
+
+[[component]]
+id = "api.projects"
+title = "Projects and environments REST API"
+status = "verified"
+upstream.paths = [
+  "app/Http/Controllers/Api/ProjectController.php",
+  "app/Models/Project.php",
+  "app/Models/Environment.php",
+  "app/Models/ProjectSetting.php",
+  "app/Policies/ProjectPolicy.php",
+  "app/Policies/EnvironmentPolicy.php",
+  "app/Traits/HasSafeStringAttribute.php",
+]
+upstream.symbols = [
+  "app/Support/ValidationPatterns.php::nameRules()",
+  "app/Support/ValidationPatterns.php::descriptionRules()",
+  "app/Support/ValidationPatterns.php::nameMessages()",
+  "app/Support/ValidationPatterns.php::descriptionMessages()",
+  "app/Support/ValidationPatterns.php::combinedMessages()",
+  "bootstrap/helpers/api.php::serializeApiResponse()",
+  "bootstrap/helpers/api.php::validateIncomingRequest()",
+  "bootstrap/helpers/shared.php::new_public_id()",
+]
+upstream.routes = ["GET api/v1/projects*", "POST api/v1/projects*", "PATCH api/v1/projects*", "DELETE api/v1/projects*"]
+upstream.tables = ["projects", "environments", "project_settings"]
+upstream.tests = ["tests/Feature/Api/Environment*.php", "tests/Feature/Api/Project*.php", "tests/Feature/ResourceAccessConsistencyTest.php"]
+rust.paths = [
+  "crates/coolify-api/src/routes/projects.rs",
+  "crates/coolify-api/src/validation.rs",
+  "crates/coolify-api/src/serialize.rs",
+  "crates/coolify-api/src/input.rs",
+  "crates/coolify-db/src/projects.rs",
+  "crates/coolify-domain/src/naming.rs",
+]
+rust.tests = ["crates/coolify-api/tests/projects.rs", "compat/diff/differential.py"]
+rust.packages = ["coolify-api", "coolify-db", "coolify-domain"]
+contracts = ["docs/API_COMPATIBILITY.md#projects-and-environments-projectcontroller"]
+divergences = [
+  "environment details with resources return 501 until application/database/service serialization is ported",
+  "audit events (api.project.environment_*) are not written",
+  "multi-row writes are transactional (upstream: model hooks without a transaction)",
+]
+
+[[component]]
+id = "api.misc"
+title = "Health, version, disable API"
+status = "verified"
+upstream.symbols = [
+  "app/Http/Controllers/Api/OtherController.php::healthcheck()",
+  "app/Http/Controllers/Api/OtherController.php::version()",
+  "app/Http/Controllers/Api/OtherController.php::disable_api()",
+  "app/Http/Controllers/Api/OtherController.php::post_required()",
+]
+upstream.routes = ["GET api/health", "GET api/v1/health", "GET api/v1/version", "GET api/v1/disable", "POST api/v1/disable"]
+upstream.tests = ["tests/Feature/HealthcheckVersionHeaderTest.php", "tests/Feature/Api/StateChangingRoutesUsePostTest.php"]
+rust.paths = ["crates/coolify-api/src/routes/misc.rs", "crates/coolify-api/src/fallback.rs"]
+rust.packages = ["coolify-api"]
+
+[[component]]
+id = "api.route-inventory"
+title = "Upstream route inventory (layer A) and route contract test"
+status = "verified"
+upstream.paths = ["routes/api.php", "app/Http/Kernel.php", "app/Providers/RouteServiceProvider.php"]
+rust.paths = ["compat/api/upstream-routes.json", "crates/coolify-api/tests/route_inventory.rs", "crates/coolify-port/src/php/routes.rs"]
+rust.packages = ["coolify-api", "coolify-port"]
+
+[[component]]
+id = "db.schema-guard"
+title = "Supported upstream migrations (layer A) and startup schema guard"
+status = "implemented"
+upstream.paths = ["database/migrations/**"]
+rust.paths = ["compat/baseline/supported-migrations.txt", "crates/coolify-db/src/schema.rs"]
+rust.packages = ["coolify-db"]
+
+[[component]]
+id = "compat.encryption"
+title = "Laravel encrypter (APP_KEY, AES-256-CBC + HMAC)"
+status = "verified"
+upstream.paths = ["config/app.php", "app/Console/Commands/ReencryptWithAppKey.php", "app/Casts/EncryptedArrayCast.php"]
+rust.paths = ["crates/coolify-compat/src/encrypter.rs", "crates/coolify-compat/src/php_serialize.rs"]
+rust.tests = ["crates/coolify-compat/tests/laravel_interop.rs", "scripts/verify-encrypter-interop.sh"]
+rust.packages = ["coolify-compat"]
+
+# ---- planned (not yet ported; listed so classification knows their scope) ----
+
+[[component]]
+id = "api.servers"
+title = "Servers REST API"
+status = "planned"
+upstream.paths = ["app/Http/Controllers/Api/Server*.php", "app/Models/Server.php", "app/Models/ServerSetting.php", "app/Policies/ServerPolicy.php", "app/Rules/ValidServerIp.php"]
+upstream.tables = ["servers", "server_settings", "standalone_dockers", "swarm_dockers"]
+
+[[component]]
+id = "api.private-keys"
+title = "Private keys REST API"
+status = "planned"
+upstream.paths = ["app/Http/Controllers/Api/SecurityController.php", "app/Models/PrivateKey.php", "app/Policies/PrivateKeyPolicy.php"]
+upstream.tables = ["private_keys"]
+
+[[component]]
+id = "deployment.engine"
+title = "Application deployment engine"
+status = "planned"
+upstream.paths = ["app/Jobs/ApplicationDeploymentJob.php", "app/Traits/ExecuteRemoteCommand.php", "bootstrap/helpers/applications.php", "app/Http/Controllers/Api/DeployController.php"]
+upstream.tables = ["application_deployment_queues", "applications", "application_settings"]
+
+[[component]]
+id = "remote.execution"
+title = "SSH remote execution and multiplexing"
+status = "planned"
+upstream.paths = ["bootstrap/helpers/remoteProcess.php", "app/Helpers/SshMultiplexingHelper.php", "bootstrap/helpers/sudo.php", "app/Helpers/SshRetryHandler.php", "app/Traits/SshRetryable.php"]

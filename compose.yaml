@@ -1,0 +1,22 @@
+# Local development services for coolify-rs.
+#   docker compose up -d --wait
+# Tests read COOLIFY_RS_TEST_DATABASE_URL (see scripts/test.sh); each test
+# creates and drops its own database loaded with the upstream 4.5.0 schema.
+name: coolify-rs-dev
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: coolify_rs
+      POSTGRES_PASSWORD: coolify_rs
+      POSTGRES_DB: coolify_rs
+    ports:
+      - "127.0.0.1:25432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coolify_rs -d coolify_rs"]
+      interval: 2s
+      retries: 30
+      timeout: 2s
+    tmpfs:
+      - /var/lib/postgresql/data

@@ -1,0 +1,1267 @@
+{
+  "passed": 97,
+  "total": 97,
+  "results": [
+    {
+      "case": "health",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "OK"
+      },
+      "subject": {
+        "status": 200,
+        "body": "OK"
+      }
+    },
+    {
+      "case": "v1 health",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "OK"
+      },
+      "subject": {
+        "status": 200,
+        "body": "OK"
+      }
+    },
+    {
+      "case": "no token",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 401,
+        "body": "{\"message\":\"Unauthenticated.\"}"
+      },
+      "subject": {
+        "status": 401,
+        "body": "{\"message\":\"Unauthenticated.\"}"
+      }
+    },
+    {
+      "case": "garbage token",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 401,
+        "body": "{\"message\":\"Unauthenticated.\"}"
+      },
+      "subject": {
+        "status": 401,
+        "body": "{\"message\":\"Unauthenticated.\"}"
+      }
+    },
+    {
+      "case": "unknown token id",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 401,
+        "body": "{\"message\":\"Unauthenticated.\"}"
+      },
+      "subject": {
+        "status": 401,
+        "body": "{\"message\":\"Unauthenticated.\"}"
+      }
+    },
+    {
+      "case": "bare unknown token",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 401,
+        "body": "{\"message\":\"Unauthenticated.\"}"
+      },
+      "subject": {
+        "status": 401,
+        "body": "{\"message\":\"Unauthenticated.\"}"
+      }
+    },
+    {
+      "case": "write token on read route",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 403,
+        "body": "{\"message\":\"Missing required permissions: read\"}"
+      },
+      "subject": {
+        "status": 403,
+        "body": "{\"message\":\"Missing required permissions: read\"}"
+      }
+    },
+    {
+      "case": "member with legacy write token",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 403,
+        "body": "{\"message\":\"Missing required team role.\"}"
+      },
+      "subject": {
+        "status": 403,
+        "body": "{\"message\":\"Missing required team role.\"}"
+      }
+    },
+    {
+      "case": "read token on write route",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 403,
+        "body": "{\"message\":\"Missing required permissions: write\"}"
+      },
+      "subject": {
+        "status": 403,
+        "body": "{\"message\":\"Missing required permissions: write\"}"
+      }
+    },
+    {
+      "case": "version",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "4.5.0"
+      },
+      "subject": {
+        "status": 200,
+        "body": "4.5.0"
+      }
+    },
+    {
+      "case": "unknown route",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Not found.\",\"docs\":\"https:\\/\\/coolify.io\\/docs\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Not found.\",\"docs\":\"https:\\/\\/coolify.io\\/docs\"}"
+      }
+    },
+    {
+      "case": "unknown route no auth",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Not found.\",\"docs\":\"https:\\/\\/coolify.io\\/docs\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Not found.\",\"docs\":\"https:\\/\\/coolify.io\\/docs\"}"
+      }
+    },
+    {
+      "case": "wrong method on known path",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Not found.\",\"docs\":\"https:\\/\\/coolify.io\\/docs\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Not found.\",\"docs\":\"https:\\/\\/coolify.io\\/docs\"}"
+      }
+    },
+    {
+      "case": "GET disable",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 405,
+        "body": "{\"message\":\"This endpoint has changed to a POST request.\"}"
+      },
+      "subject": {
+        "status": 405,
+        "body": "{\"message\":\"This endpoint has changed to a POST request.\"}"
+      }
+    },
+    {
+      "case": "POST disable non-root team",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 403,
+        "body": "{\"message\":\"You are not allowed to disable the API.\"}"
+      },
+      "subject": {
+        "status": 403,
+        "body": "{\"message\":\"You are not allowed to disable the API.\"}"
+      }
+    },
+    {
+      "case": "teams [acme_owner_read]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:42:40.000000Z\"}]"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:42:40.000000Z\"}]"
+      }
+    },
+    {
+      "case": "team [acme_owner_read]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:42:40.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:42:40.000000Z\"}"
+      }
+    },
+    {
+      "case": "team members [acme_owner_read]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":1,\"name\":\"Alice Owner\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"alice@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"},{\"id\":2,\"name\":\"Bob Member\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"e"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":1,\"name\":\"Alice Owner\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"alice@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"},{\"id\":2,\"name\":\"Bob Member\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"e"
+      }
+    },
+    {
+      "case": "teams/current [acme_owner_read]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:42:40.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:42:40.000000Z\"}"
+      }
+    },
+    {
+      "case": "teams/current/members [acme_owner_read]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":1,\"name\":\"Alice Owner\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"alice@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"},{\"id\":2,\"name\":\"Bob Member\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"e"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":1,\"name\":\"Alice Owner\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"alice@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"},{\"id\":2,\"name\":\"Bob Member\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"e"
+      }
+    },
+    {
+      "case": "teams [acme_member_read]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:42:40.000000Z\"}]"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:42:40.000000Z\"}]"
+      }
+    },
+    {
+      "case": "team [acme_member_read]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:42:40.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:42:40.000000Z\"}"
+      }
+    },
+    {
+      "case": "team members [acme_member_read]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":1,\"name\":\"Alice Owner\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"alice@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"},{\"id\":2,\"name\":\"Bob Member\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"e"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":1,\"name\":\"Alice Owner\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"alice@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"},{\"id\":2,\"name\":\"Bob Member\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"e"
+      }
+    },
+    {
+      "case": "teams/current [acme_member_read]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:42:40.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:42:40.000000Z\"}"
+      }
+    },
+    {
+      "case": "teams/current/members [acme_member_read]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":1,\"name\":\"Alice Owner\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"alice@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"},{\"id\":2,\"name\":\"Bob Member\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"e"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":1,\"name\":\"Alice Owner\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"alice@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"},{\"id\":2,\"name\":\"Bob Member\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"e"
+      }
+    },
+    {
+      "case": "teams [root_read]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":0,\"description\":\"The root team\",\"name\":\"Root Team\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":true,\"show_boarding\":true,\"created_at\":\"2026-10-26T20:08:46.000000Z\",\"updated_at\":\"2026-10-26T20:08:46.000000Z\"}]"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":0,\"description\":\"The root team\",\"name\":\"Root Team\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":true,\"show_boarding\":true,\"created_at\":\"2026-10-26T20:08:46.000000Z\",\"updated_at\":\"2026-10-26T20:08:46.000000Z\"}]"
+      }
+    },
+    {
+      "case": "team [root_read]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":0,\"description\":\"The root team\",\"name\":\"Root Team\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":true,\"show_boarding\":true,\"created_at\":\"2026-10-26T20:08:46.000000Z\",\"updated_at\":\"2026-10-26T20:08:46.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":0,\"description\":\"The root team\",\"name\":\"Root Team\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":true,\"show_boarding\":true,\"created_at\":\"2026-10-26T20:08:46.000000Z\",\"updated_at\":\"2026-10-26T20:08:46.000000Z\"}"
+      }
+    },
+    {
+      "case": "team members [root_read]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":0,\"name\":\"Root\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"root@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"}]"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":0,\"name\":\"Root\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"root@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"}]"
+      }
+    },
+    {
+      "case": "teams/current [root_read]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":0,\"description\":\"The root team\",\"name\":\"Root Team\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":true,\"show_boarding\":true,\"created_at\":\"2026-10-26T20:08:46.000000Z\",\"updated_at\":\"2026-10-26T20:08:46.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":0,\"description\":\"The root team\",\"name\":\"Root Team\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":true,\"show_boarding\":true,\"created_at\":\"2026-10-26T20:08:46.000000Z\",\"updated_at\":\"2026-10-26T20:08:46.000000Z\"}"
+      }
+    },
+    {
+      "case": "teams/current/members [root_read]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":0,\"name\":\"Root\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"root@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"}]"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":0,\"name\":\"Root\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"root@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"}]"
+      }
+    },
+    {
+      "case": "teams [carol_root]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":3,\"name\":\"Carol Other's Team\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"description\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":true,\"show_boarding\":true,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"}]"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":3,\"name\":\"Carol Other's Team\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"description\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":true,\"show_boarding\":true,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"}]"
+      }
+    },
+    {
+      "case": "team [carol_root]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":3,\"name\":\"Carol Other's Team\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"description\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":true,\"show_boarding\":true,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":3,\"name\":\"Carol Other's Team\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"description\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":true,\"show_boarding\":true,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"}"
+      }
+    },
+    {
+      "case": "team members [carol_root]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":3,\"name\":\"Carol Other\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"carol@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"}]"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":3,\"name\":\"Carol Other\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"carol@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"}]"
+      }
+    },
+    {
+      "case": "teams/current [carol_root]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":3,\"name\":\"Carol Other's Team\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"description\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":true,\"show_boarding\":true,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":3,\"name\":\"Carol Other's Team\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"description\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":true,\"show_boarding\":true,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"}"
+      }
+    },
+    {
+      "case": "teams/current/members [carol_root]",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":3,\"name\":\"Carol Other\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"carol@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"}]"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":3,\"name\":\"Carol Other\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"carol@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"}]"
+      }
+    },
+    {
+      "case": "teams/{id} own",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:42:40.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:42:40.000000Z\"}"
+      }
+    },
+    {
+      "case": "teams/{id} other",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Team not found.\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Team not found.\"}"
+      }
+    },
+    {
+      "case": "teams/{id}/members own",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":1,\"name\":\"Alice Owner\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"alice@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"},{\"id\":2,\"name\":\"Bob Member\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"e"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":1,\"name\":\"Alice Owner\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"email\":\"alice@example.test\",\"email_verified_at\":null,\"force_password_reset\":false,\"marketing_emails\":true,\"pending_email\":null,\"two_factor_confirmed_at\":null,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:26:28.000000Z\"},{\"id\":2,\"name\":\"Bob Member\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"current_team_id\":null,\"e"
+      }
+    },
+    {
+      "case": "teams/{id}/members other",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Team not found.\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Team not found.\"}"
+      }
+    },
+    {
+      "case": "PATCH team invalid",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"is_build_server_fallback_enabled\":[\"The is build server fallback enabled field must be true or false.\"]}}"
+      },
+      "subject": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"is_build_server_fallback_enabled\":[\"The is build server fallback enabled field must be true or false.\"]}}"
+      }
+    },
+    {
+      "case": "PATCH team extra field",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"This field is not allowed.\"]}}"
+      },
+      "subject": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"This field is not allowed.\"]}}"
+      }
+    },
+    {
+      "case": "PATCH team missing",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"is_build_server_fallback_enabled\":[\"This field is required.\"],\"foo\":[\"This field is not allowed.\"]}}"
+      },
+      "subject": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"is_build_server_fallback_enabled\":[\"This field is required.\"],\"foo\":[\"This field is not allowed.\"]}}"
+      }
+    },
+    {
+      "case": "PATCH team fallback=False",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":false,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:43:04.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":false,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:43:04.000000Z\"}"
+      }
+    },
+    {
+      "case": "PATCH team fallback=True",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:43:04.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":4,\"description\":\"Fixture team\",\"name\":\"Acme\",\"avatar_path\":null,\"avatar_s3_storage_id\":null,\"avatar_storage_type\":null,\"is_build_server_fallback_enabled\":true,\"is_mcp_server_enabled\":true,\"personal_team\":false,\"show_boarding\":false,\"created_at\":\"2026-10-26T20:26:28.000000Z\",\"updated_at\":\"2026-10-26T20:43:04.000000Z\"}"
+      }
+    },
+    {
+      "case": "create empty json",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 400,
+        "body": "{\"message\":\"Invalid request.\",\"error\":\"Empty JSON.\"}"
+      },
+      "subject": {
+        "status": 400,
+        "body": "{\"message\":\"Invalid request.\",\"error\":\"Empty JSON.\"}"
+      }
+    },
+    {
+      "case": "create name null",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name field is required.\"]}}"
+      },
+      "subject": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name field is required.\"]}}"
+      }
+    },
+    {
+      "case": "create short name, long desc, extra",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name must be at least 3 characters.\"],\"description\":[\"The description may not be greater than 255 characters.\"],\"foo\":[\"This field is not allowed.\"]}}"
+      },
+      "subject": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name must be at least 3 characters.\"],\"description\":[\"The description may not be greater than 255 characters.\"],\"foo\":[\"This field is not allowed.\"]}}"
+      }
+    },
+    {
+      "case": "create bad chars",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name may only contain letters (including Unicode), numbers, spaces, and these characters: - _ . \\/ @ & ( ) # , : +\"]}}"
+      },
+      "subject": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name may only contain letters (including Unicode), numbers, spaces, and these characters: - _ . \\/ @ & ( ) # , : +\"]}}"
+      }
+    },
+    {
+      "case": "create unicode symbol",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name may only contain letters (including Unicode), numbers, spaces, and these characters: - _ . \\/ @ & ( ) # , : +\"]}}"
+      },
+      "subject": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name may only contain letters (including Unicode), numbers, spaces, and these characters: - _ . \\/ @ & ( ) # , : +\"]}}"
+      }
+    },
+    {
+      "case": "create name int",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name field must be a string.\"]}}"
+      },
+      "subject": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name field must be a string.\"]}}"
+      }
+    },
+    {
+      "case": "create desc bad",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"description\":[\"The description may only contain letters (including Unicode), numbers, spaces, and common punctuation: - _ . , ! ? ( ) ' \\\" + = * \\/ @ &\"]}}"
+      },
+      "subject": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"description\":[\"The description may only contain letters (including Unicode), numbers, spaces, and common punctuation: - _ . , ! ? ( ) ' \\\" + = * \\/ @ &\"]}}"
+      }
+    },
+    {
+      "case": "create whitespace name",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name field is required.\"]}}"
+      },
+      "subject": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name field is required.\"]}}"
+      }
+    },
+    {
+      "case": "create trimmed short",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name must be at least 3 characters.\"]}}"
+      },
+      "subject": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name must be at least 3 characters.\"]}}"
+      }
+    },
+    {
+      "case": "create form encoded",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 400,
+        "body": "{\"message\":\"Invalid request.\",\"error\":\"Content-Type must be application\\/json.\"}"
+      },
+      "subject": {
+        "status": 400,
+        "body": "{\"message\":\"Invalid request.\",\"error\":\"Content-Type must be application\\/json.\"}"
+      }
+    },
+    {
+      "case": "create bad json",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 400,
+        "body": "{\"message\":\"Invalid request.\",\"error\":\"Invalid JSON.\"}"
+      },
+      "subject": {
+        "status": 400,
+        "body": "{\"message\":\"Invalid request.\",\"error\":\"Invalid JSON.\"}"
+      }
+    },
+    {
+      "case": "create json array",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 400,
+        "body": "{\"message\":\"Invalid request.\",\"error\":\"Invalid JSON.\"}"
+      },
+      "subject": {
+        "status": 400,
+        "body": "{\"message\":\"Invalid request.\",\"error\":\"Invalid JSON.\"}"
+      }
+    },
+    {
+      "case": "create query extra",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name must be at least 3 characters.\"],\"foo\":[\"This field is not allowed.\"]}}"
+      },
+      "subject": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name must be at least 3 characters.\"],\"foo\":[\"This field is not allowed.\"]}}"
+      }
+    },
+    {
+      "case": "member cannot create (read token)",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 403,
+        "body": "{\"message\":\"Missing required permissions: write\"}"
+      },
+      "subject": {
+        "status": 403,
+        "body": "{\"message\":\"Missing required permissions: write\"}"
+      }
+    },
+    {
+      "case": "patch missing project invalid body",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name must be at least 3 characters.\"]}}"
+      },
+      "subject": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name must be at least 3 characters.\"]}}"
+      }
+    },
+    {
+      "case": "patch missing project valid body",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      }
+    },
+    {
+      "case": "show missing project",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      }
+    },
+    {
+      "case": "delete missing project",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      }
+    },
+    {
+      "case": "create project",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 201,
+        "body": "{\"uuid\":\"ydg7cxdgvxtltl6zukenmt56\"}"
+      },
+      "subject": {
+        "status": 201,
+        "body": "{\"uuid\":\"41rvfmt9hriau86e3nlvkkwn\"}"
+      }
+    },
+    {
+      "case": "create project without description",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 201,
+        "body": "{\"uuid\":\"3lblduikpncoee5t4imwcixq\"}"
+      },
+      "subject": {
+        "status": 201,
+        "body": "{\"uuid\":\"s3mjw7q95v9ig2xm3hlemzxe\"}"
+      }
+    },
+    {
+      "case": "cross-read rust-created: show",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":7,\"uuid\":\"41rvfmt9hriau86e3nlvkkwn\",\"description\":\"made by rust\",\"name\":\"Diff Rs Proj\",\"environments\":[{\"id\":10,\"name\":\"production\",\"project_id\":7,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\",\"description\":null,\"uuid\":\"ub83om0jopkzsw9c6acs21k1\",\"canvas_positions\":null}],\"icon_path\":null,\"icon_s3_storage_id\":null,\"icon_storage_type\":null,\"team_id\":4,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":7,\"uuid\":\"41rvfmt9hriau86e3nlvkkwn\",\"description\":\"made by rust\",\"name\":\"Diff Rs Proj\",\"environments\":[{\"id\":10,\"name\":\"production\",\"project_id\":7,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\",\"description\":null,\"uuid\":\"ub83om0jopkzsw9c6acs21k1\",\"canvas_positions\":null}],\"icon_path\":null,\"icon_s3_storage_id\":null,\"icon_storage_type\":null,\"team_id\":4,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\"}"
+      }
+    },
+    {
+      "case": "cross-read rust-created: environments",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":10,\"uuid\":\"ub83om0jopkzsw9c6acs21k1\",\"name\":\"production\"}]"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":10,\"uuid\":\"ub83om0jopkzsw9c6acs21k1\",\"name\":\"production\"}]"
+      }
+    },
+    {
+      "case": "cross-read rust-created: env details",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":10,\"uuid\":\"ub83om0jopkzsw9c6acs21k1\",\"name\":\"production\",\"applications\":[],\"canvas_positions\":null,\"description\":null,\"mariadbs\":[],\"mongodbs\":[],\"mysqls\":[],\"postgresqls\":[],\"project_id\":7,\"redis\":[],\"services\":[],\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":10,\"uuid\":\"ub83om0jopkzsw9c6acs21k1\",\"name\":\"production\",\"applications\":[],\"canvas_positions\":null,\"description\":null,\"mariadbs\":[],\"mongodbs\":[],\"mysqls\":[],\"postgresqls\":[],\"project_id\":7,\"redis\":[],\"services\":[],\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\"}"
+      }
+    },
+    {
+      "case": "cross-read rust-created: other team 404",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      }
+    },
+    {
+      "case": "cross-read php-created: show",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":6,\"uuid\":\"ydg7cxdgvxtltl6zukenmt56\",\"description\":\"made by php\",\"name\":\"Diff Ref Proj\",\"environments\":[{\"id\":9,\"name\":\"production\",\"project_id\":6,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\",\"description\":null,\"uuid\":\"pqjuy5nzwjskodfy3v5ii4jd\",\"canvas_positions\":null}],\"icon_path\":null,\"icon_s3_storage_id\":null,\"icon_storage_type\":null,\"team_id\":4,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":6,\"uuid\":\"ydg7cxdgvxtltl6zukenmt56\",\"description\":\"made by php\",\"name\":\"Diff Ref Proj\",\"environments\":[{\"id\":9,\"name\":\"production\",\"project_id\":6,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\",\"description\":null,\"uuid\":\"pqjuy5nzwjskodfy3v5ii4jd\",\"canvas_positions\":null}],\"icon_path\":null,\"icon_s3_storage_id\":null,\"icon_storage_type\":null,\"team_id\":4,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\"}"
+      }
+    },
+    {
+      "case": "cross-read php-created: environments",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":9,\"uuid\":\"pqjuy5nzwjskodfy3v5ii4jd\",\"name\":\"production\"}]"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":9,\"uuid\":\"pqjuy5nzwjskodfy3v5ii4jd\",\"name\":\"production\"}]"
+      }
+    },
+    {
+      "case": "cross-read php-created: env details",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":9,\"uuid\":\"pqjuy5nzwjskodfy3v5ii4jd\",\"name\":\"production\",\"applications\":[],\"canvas_positions\":null,\"description\":null,\"mariadbs\":[],\"mongodbs\":[],\"mysqls\":[],\"postgresqls\":[],\"project_id\":6,\"redis\":[],\"services\":[],\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":9,\"uuid\":\"pqjuy5nzwjskodfy3v5ii4jd\",\"name\":\"production\",\"applications\":[],\"canvas_positions\":null,\"description\":null,\"mariadbs\":[],\"mongodbs\":[],\"mysqls\":[],\"postgresqls\":[],\"project_id\":6,\"redis\":[],\"services\":[],\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\"}"
+      }
+    },
+    {
+      "case": "cross-read php-created: other team 404",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      }
+    },
+    {
+      "case": "cross-read no-description projects",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":9,\"uuid\":\"s3mjw7q95v9ig2xm3hlemzxe\",\"name\":\"Diff Rs NoDesc\",\"description\":\"\",\"environments\":[{\"id\":12,\"name\":\"production\",\"project_id\":9,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\",\"description\":null,\"uuid\":\"9z862bbhqsvfabz3p58cha35\",\"canvas_positions\":null}],\"icon_path\":null,\"icon_s3_storage_id\":null,\"icon_storage_type\":null,\"team_id\":4,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":9,\"uuid\":\"s3mjw7q95v9ig2xm3hlemzxe\",\"name\":\"Diff Rs NoDesc\",\"description\":\"\",\"environments\":[{\"id\":12,\"name\":\"production\",\"project_id\":9,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\",\"description\":null,\"uuid\":\"9z862bbhqsvfabz3p58cha35\",\"canvas_positions\":null}],\"icon_path\":null,\"icon_s3_storage_id\":null,\"icon_storage_type\":null,\"team_id\":4,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\"}"
+      }
+    },
+    {
+      "case": "list after creates",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "[{\"id\":1,\"uuid\":\"jjdm4dzqz3gvmnmufo27mbfl\",\"name\":\"Renamed\",\"description\":\"\"},{\"id\":6,\"uuid\":\"ydg7cxdgvxtltl6zukenmt56\",\"description\":\"made by php\",\"name\":\"Diff Ref Proj\"},{\"id\":7,\"uuid\":\"41rvfmt9hriau86e3nlvkkwn\",\"description\":\"made by rust\",\"name\":\"Diff Rs Proj\"},{\"id\":8,\"uuid\":\"3lblduikpncoee5t4imwcixq\",\"name\":\"Diff Ref NoDesc\",\"description\":\"\"},{\"id\":9,\"uuid\":\"s3mjw7q95v9ig2xm3hlemzxe\",\"name\":\"Diff Rs NoDesc\",\"description\":\"\"}]"
+      },
+      "subject": {
+        "status": 200,
+        "body": "[{\"id\":1,\"uuid\":\"jjdm4dzqz3gvmnmufo27mbfl\",\"name\":\"Renamed\",\"description\":\"\"},{\"id\":6,\"uuid\":\"ydg7cxdgvxtltl6zukenmt56\",\"description\":\"made by php\",\"name\":\"Diff Ref Proj\"},{\"id\":7,\"uuid\":\"41rvfmt9hriau86e3nlvkkwn\",\"description\":\"made by rust\",\"name\":\"Diff Rs Proj\"},{\"id\":8,\"uuid\":\"3lblduikpncoee5t4imwcixq\",\"name\":\"Diff Ref NoDesc\",\"description\":\"\"},{\"id\":9,\"uuid\":\"s3mjw7q95v9ig2xm3hlemzxe\",\"name\":\"Diff Rs NoDesc\",\"description\":\"\"}]"
+      }
+    },
+    {
+      "case": "env step POST /environments {'name': 'staging'}",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 201,
+        "body": "{\"uuid\":\"x0vynefwk0lqvayeodzajwfy\"}"
+      },
+      "subject": {
+        "status": 201,
+        "body": "{\"uuid\":\"36oieccpxzdwlc1dp26sfk8l\"}"
+      }
+    },
+    {
+      "case": "env step POST /environments {'name': 'staging'}",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 409,
+        "body": "{\"message\":\"Environment with this name already exists.\"}"
+      },
+      "subject": {
+        "status": 409,
+        "body": "{\"message\":\"Environment with this name already exists.\"}"
+      }
+    },
+    {
+      "case": "env step POST /environments {'name': 'x1', 'description': 'd'}",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name must be at least 3 characters.\"],\"description\":[\"This field is not allowed.\"]}}"
+      },
+      "subject": {
+        "status": 422,
+        "body": "{\"message\":\"Validation failed.\",\"errors\":{\"name\":[\"The name must be at least 3 characters.\"],\"description\":[\"This field is not allowed.\"]}}"
+      }
+    },
+    {
+      "case": "env step PATCH /environments/staging {'name': 'production'}",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 409,
+        "body": "{\"message\":\"Environment with this name already exists.\"}"
+      },
+      "subject": {
+        "status": 409,
+        "body": "{\"message\":\"Environment with this name already exists.\"}"
+      }
+    },
+    {
+      "case": "env step PATCH /environments/staging {'description': 'Stage \u00e9/\u00fc'}",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"uuid\":\"x0vynefwk0lqvayeodzajwfy\",\"name\":\"staging\",\"description\":\"Stage \\u00e9\\/\\u00fc\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"uuid\":\"36oieccpxzdwlc1dp26sfk8l\",\"name\":\"staging\",\"description\":\"Stage \\u00e9\\/\\u00fc\"}"
+      }
+    },
+    {
+      "case": "env step PATCH /environments/staging {'name': '  '}",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"uuid\":\"x0vynefwk0lqvayeodzajwfy\",\"name\":\"\",\"description\":\"Stage \\u00e9\\/\\u00fc\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"uuid\":\"36oieccpxzdwlc1dp26sfk8l\",\"name\":\"\",\"description\":\"Stage \\u00e9\\/\\u00fc\"}"
+      }
+    },
+    {
+      "case": "env step GET /staging None",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Environment not found.\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Environment not found.\"}"
+      }
+    },
+    {
+      "case": "env step PATCH /environments/nope {'name': 'abc'}",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Environment not found.\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Environment not found.\"}"
+      }
+    },
+    {
+      "case": "env step DELETE /environments/staging None",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Environment not found.\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Environment not found.\"}"
+      }
+    },
+    {
+      "case": "env step DELETE /environments/staging None",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Environment not found.\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Environment not found.\"}"
+      }
+    },
+    {
+      "case": "env step PATCH  {'description': None}",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 201,
+        "body": "{\"uuid\":\"ydg7cxdgvxtltl6zukenmt56\",\"name\":\"Diff Ref Proj\",\"description\":\"\"}"
+      },
+      "subject": {
+        "status": 201,
+        "body": "{\"uuid\":\"41rvfmt9hriau86e3nlvkkwn\",\"name\":\"Diff Rs Proj\",\"description\":\"\"}"
+      }
+    },
+    {
+      "case": "env step PATCH  {'name': 'Renamed Proj'}",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 201,
+        "body": "{\"uuid\":\"ydg7cxdgvxtltl6zukenmt56\",\"name\":\"Renamed Proj\",\"description\":\"\"}"
+      },
+      "subject": {
+        "status": 201,
+        "body": "{\"uuid\":\"41rvfmt9hriau86e3nlvkkwn\",\"name\":\"Renamed Proj\",\"description\":\"\"}"
+      }
+    },
+    {
+      "case": "env step PATCH  {'name': 'Renamed Proj', 'description': 'same'}",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 201,
+        "body": "{\"uuid\":\"ydg7cxdgvxtltl6zukenmt56\",\"name\":\"Renamed Proj\",\"description\":\"same\"}"
+      },
+      "subject": {
+        "status": 201,
+        "body": "{\"uuid\":\"41rvfmt9hriau86e3nlvkkwn\",\"name\":\"Renamed Proj\",\"description\":\"same\"}"
+      }
+    },
+    {
+      "case": "cross-read after env steps (rust project)",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":7,\"uuid\":\"41rvfmt9hriau86e3nlvkkwn\",\"description\":\"same\",\"name\":\"Renamed Proj\",\"environments\":[{\"id\":10,\"name\":\"production\",\"project_id\":7,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\",\"description\":null,\"uuid\":\"ub83om0jopkzsw9c6acs21k1\",\"canvas_positions\":null},{\"id\":14,\"name\":\"\",\"project_id\":7,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\",\"description\":\"Stage \\u00e9\\/\\u00fc\",\"uuid\":\"36oieccpxzdwlc1dp26sfk8l\","
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":7,\"uuid\":\"41rvfmt9hriau86e3nlvkkwn\",\"description\":\"same\",\"name\":\"Renamed Proj\",\"environments\":[{\"id\":10,\"name\":\"production\",\"project_id\":7,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\",\"description\":null,\"uuid\":\"ub83om0jopkzsw9c6acs21k1\",\"canvas_positions\":null},{\"id\":14,\"name\":\"\",\"project_id\":7,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\",\"description\":\"Stage \\u00e9\\/\\u00fc\",\"uuid\":\"36oieccpxzdwlc1dp26sfk8l\","
+      }
+    },
+    {
+      "case": "cross-read after env steps (php project)",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"id\":6,\"uuid\":\"ydg7cxdgvxtltl6zukenmt56\",\"description\":\"same\",\"name\":\"Renamed Proj\",\"environments\":[{\"id\":9,\"name\":\"production\",\"project_id\":6,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\",\"description\":null,\"uuid\":\"pqjuy5nzwjskodfy3v5ii4jd\",\"canvas_positions\":null},{\"id\":13,\"name\":\"\",\"project_id\":6,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\",\"description\":\"Stage \\u00e9\\/\\u00fc\",\"uuid\":\"x0vynefwk0lqvayeodzajwfy\",\""
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"id\":6,\"uuid\":\"ydg7cxdgvxtltl6zukenmt56\",\"description\":\"same\",\"name\":\"Renamed Proj\",\"environments\":[{\"id\":9,\"name\":\"production\",\"project_id\":6,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\",\"description\":null,\"uuid\":\"pqjuy5nzwjskodfy3v5ii4jd\",\"canvas_positions\":null},{\"id\":13,\"name\":\"\",\"project_id\":6,\"created_at\":\"2026-10-26T20:43:05.000000Z\",\"updated_at\":\"2026-10-26T20:43:05.000000Z\",\"description\":\"Stage \\u00e9\\/\\u00fc\",\"uuid\":\"x0vynefwk0lqvayeodzajwfy\",\""
+      }
+    },
+    {
+      "case": "rust deletes php project",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"message\":\"Project deleted.\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"message\":\"Project deleted.\"}"
+      }
+    },
+    {
+      "case": "rust deletes php project: gone on both",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      }
+    },
+    {
+      "case": "php deletes rust project",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"message\":\"Project deleted.\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"message\":\"Project deleted.\"}"
+      }
+    },
+    {
+      "case": "php deletes rust project: gone on both",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      }
+    },
+    {
+      "case": "rust deletes php project 2",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"message\":\"Project deleted.\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"message\":\"Project deleted.\"}"
+      }
+    },
+    {
+      "case": "rust deletes php project 2: gone on both",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      }
+    },
+    {
+      "case": "php deletes rust project 2",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 200,
+        "body": "{\"message\":\"Project deleted.\"}"
+      },
+      "subject": {
+        "status": 200,
+        "body": "{\"message\":\"Project deleted.\"}"
+      }
+    },
+    {
+      "case": "php deletes rust project 2: gone on both",
+      "match": true,
+      "note": "",
+      "reference": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      },
+      "subject": {
+        "status": 404,
+        "body": "{\"message\":\"Project not found.\"}"
+      }
+    }
+  ]
+}

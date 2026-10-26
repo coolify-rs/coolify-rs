@@ -1,0 +1,30 @@
+[package]
+name = "coolify-db"
+description = "Access to an upstream-compatible Coolify PostgreSQL database."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Test helpers: per-test databases loaded with the upstream baseline schema.
+testing = ["dep:rand"]
+
+[dependencies]
+chrono.workspace = true
+coolify-compat.workspace = true
+coolify-domain.workspace = true
+rand = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

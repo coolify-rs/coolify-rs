@@ -1,0 +1,4812 @@
+{
+  "generator": "coolify-port 0.1.0",
+  "upstream_commit": "5ca69705d681da46028ea15a8a39d90a4ebcce89",
+  "routes": [
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/applications/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@delete_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/applications/{uuid}/destinations/{destination_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@remove_destination",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/applications/{uuid}/envs/{env_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@delete_env_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/applications/{uuid}/previews/{pull_request_id}",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@delete_preview_by_pull_request_id",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@delete_scheduled_task_by_application_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/applications/{uuid}/storages/{storage_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@delete_storage",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/applications/{uuid}/storages/{storage_uuid}/backups",
+      "action": "App\\Http\\Controllers\\Api\\VolumeBackupsController@destroy",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/applications/{uuid}/tags/{tag_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@delete_tag",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/cloud-init-scripts/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\CloudInitScriptsController@destroy",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/cloud-tokens/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\CloudProviderTokensController@destroy",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/databases/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/databases/{uuid}/backups/{scheduled_backup_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_backup_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/databases/{uuid}/backups/{scheduled_backup_uuid}/executions/{execution_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_execution_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/databases/{uuid}/envs/{env_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_env_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/databases/{uuid}/storages/{storage_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_storage",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/databases/{uuid}/storages/{storage_uuid}/backups",
+      "action": "App\\Http\\Controllers\\Api\\VolumeBackupsController@destroy",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/databases/{uuid}/tags/{tag_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_tag",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/destinations/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\DestinationsController@delete",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/github-apps/{github_app_id}",
+      "action": "App\\Http\\Controllers\\Api\\GithubController@delete_github_app",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/gitlab-apps/{gitlab_app_id}",
+      "action": "App\\Http\\Controllers\\Api\\GitlabController@delete_gitlab_app",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/projects/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ProjectController@delete_project",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/projects/{uuid}/environments/{environment_name_or_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ProjectController@delete_environment",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/projects/{uuid}/environments/{environment_name_or_uuid}/envs/{env_id}",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@environment_delete_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/projects/{uuid}/envs/{env_id}",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@project_delete_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/s3-storages/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\S3StoragesController@destroy",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/security/keys/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\SecurityController@delete_key",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/servers/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ServersController@delete_server",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/servers/{uuid}/envs/{env_id}",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@server_delete_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/servers/{uuid}/registries/{registry}",
+      "action": "App\\Http\\Controllers\\Api\\ServerDockerRegistriesController@logout",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/services/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@delete_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/services/{uuid}/envs/{env_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@delete_env_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@delete_scheduled_task_by_service_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/services/{uuid}/storages/{storage_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@delete_storage",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/services/{uuid}/storages/{storage_uuid}/backups",
+      "action": "App\\Http\\Controllers\\Api\\VolumeBackupsController@destroy",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/services/{uuid}/tags/{tag_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@delete_tag",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/tags/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\TagsController@delete",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/team/envs/{env_id}",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@team_delete_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/health",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@healthcheck",
+      "middleware": [
+        "api"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@applications",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@application_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}/destinations",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@destinations",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}/envs",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@envs",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}/logs",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@logs_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read:sensitive"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}/previews",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationPreviewsController@index",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}/previews/{pull_request_id}",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationPreviewsController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}/previews/{pull_request_id}/logs",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@logs_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read:sensitive"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}/restart",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}/rollback-images",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@rollback_images",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}/scheduled-tasks",
+      "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@scheduled_tasks_by_application_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}/executions",
+      "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@executions_by_application_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}/start",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}/stop",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}/storages",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@storages",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}/tags",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@tags",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/audit-events",
+      "action": "App\\Http\\Controllers\\Api\\AuditEventsController@index",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/cloud-init-scripts",
+      "action": "App\\Http\\Controllers\\Api\\CloudInitScriptsController@index",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/cloud-init-scripts/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\CloudInitScriptsController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/cloud-tokens",
+      "action": "App\\Http\\Controllers\\Api\\CloudProviderTokensController@index",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/cloud-tokens/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\CloudProviderTokensController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/databases",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@databases",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/databases/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@database_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/databases/{uuid}/backups",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@database_backup_details_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/databases/{uuid}/backups/{scheduled_backup_uuid}/executions",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@list_backup_executions",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/databases/{uuid}/envs",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@envs",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/databases/{uuid}/imports/{activity_id}",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@show_import",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/databases/{uuid}/logs",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@logs_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read:sensitive"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/databases/{uuid}/restart",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/databases/{uuid}/start",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/databases/{uuid}/stop",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/databases/{uuid}/storages",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@storages",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/databases/{uuid}/tags",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@tags",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/deploy",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/deployments",
+      "action": "App\\Http\\Controllers\\Api\\DeployController@deployments",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/deployments/applications/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\DeployController@get_application_deployments",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/deployments/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\DeployController@deployment_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/destinations",
+      "action": "App\\Http\\Controllers\\Api\\DestinationsController@index",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/destinations/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\DestinationsController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/digitalocean/images",
+      "action": "App\\Http\\Controllers\\Api\\DigitalOceanController@images",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/digitalocean/regions",
+      "action": "App\\Http\\Controllers\\Api\\DigitalOceanController@regions",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/digitalocean/sizes",
+      "action": "App\\Http\\Controllers\\Api\\DigitalOceanController@sizes",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/digitalocean/ssh-keys",
+      "action": "App\\Http\\Controllers\\Api\\DigitalOceanController@sshKeys",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/disable",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\ApiIpAllowed",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/github-apps",
+      "action": "App\\Http\\Controllers\\Api\\GithubController@list_github_apps",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/github-apps/{github_app_id}/repositories",
+      "action": "App\\Http\\Controllers\\Api\\GithubController@load_repositories",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/github-apps/{github_app_id}/repositories/{owner}/{repo}/branches",
+      "action": "App\\Http\\Controllers\\Api\\GithubController@load_branches",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/gitlab-apps",
+      "action": "App\\Http\\Controllers\\Api\\GitlabController@list_gitlab_apps",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/health",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@healthcheck",
+      "middleware": [
+        "api"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/hetzner/firewalls",
+      "action": "App\\Http\\Controllers\\Api\\HetznerController@firewalls",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/hetzner/images",
+      "action": "App\\Http\\Controllers\\Api\\HetznerController@images",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/hetzner/locations",
+      "action": "App\\Http\\Controllers\\Api\\HetznerController@locations",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/hetzner/networks",
+      "action": "App\\Http\\Controllers\\Api\\HetznerController@networks",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/hetzner/server-types",
+      "action": "App\\Http\\Controllers\\Api\\HetznerController@serverTypes",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/hetzner/ssh-keys",
+      "action": "App\\Http\\Controllers\\Api\\HetznerController@sshKeys",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/hostinger/catalog",
+      "action": "App\\Http\\Controllers\\Api\\HostingerController@catalog",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/hostinger/data-centers",
+      "action": "App\\Http\\Controllers\\Api\\HostingerController@dataCenters",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/hostinger/post-install-scripts",
+      "action": "App\\Http\\Controllers\\Api\\HostingerController@postInstallScripts",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/hostinger/ssh-keys",
+      "action": "App\\Http\\Controllers\\Api\\HostingerController@sshKeys",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/hostinger/templates",
+      "action": "App\\Http\\Controllers\\Api\\HostingerController@templates",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/notifications/discord",
+      "action": "App\\Http\\Controllers\\Api\\NotificationsController@discord",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/notifications/email",
+      "action": "App\\Http\\Controllers\\Api\\NotificationsController@email",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/notifications/pushover",
+      "action": "App\\Http\\Controllers\\Api\\NotificationsController@pushover",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/notifications/slack",
+      "action": "App\\Http\\Controllers\\Api\\NotificationsController@slack",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/notifications/telegram",
+      "action": "App\\Http\\Controllers\\Api\\NotificationsController@telegram",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/notifications/webhook",
+      "action": "App\\Http\\Controllers\\Api\\NotificationsController@webhook",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/projects",
+      "action": "App\\Http\\Controllers\\Api\\ProjectController@projects",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/projects/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ProjectController@project_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/projects/{uuid}/environments",
+      "action": "App\\Http\\Controllers\\Api\\ProjectController@get_environments",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/projects/{uuid}/environments/{environment_name_or_uuid}/envs",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@environment_envs",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/projects/{uuid}/envs",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@project_envs",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/projects/{uuid}/{environment_name_or_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ProjectController@environment_details",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/resources",
+      "action": "App\\Http\\Controllers\\Api\\ResourcesController@resources",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/s3-storages",
+      "action": "App\\Http\\Controllers\\Api\\S3StoragesController@index",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/s3-storages/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\S3StoragesController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/security/keys",
+      "action": "App\\Http\\Controllers\\Api\\SecurityController@keys",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/security/keys/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\SecurityController@key_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers",
+      "action": "App\\Http\\Controllers\\Api\\ServersController@servers",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers/import/check",
+      "action": "App\\Http\\Controllers\\Api\\ServerTransferController@check",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers/{server_uuid}/destinations",
+      "action": "App\\Http\\Controllers\\Api\\DestinationsController@index_by_server",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ServersController@server_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers/{uuid}/cloudflare-tunnel",
+      "action": "App\\Http\\Controllers\\Api\\ServerCloudflareTunnelController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers/{uuid}/docker-cleanup",
+      "action": "App\\Http\\Controllers\\Api\\ServerDockerCleanupController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers/{uuid}/docker-cleanup/executions",
+      "action": "App\\Http\\Controllers\\Api\\ServerDockerCleanupController@executions",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers/{uuid}/domains",
+      "action": "App\\Http\\Controllers\\Api\\ServersController@domains_by_server",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers/{uuid}/envs",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@server_envs",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers/{uuid}/log-drains",
+      "action": "App\\Http\\Controllers\\Api\\ServerLogDrainsController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers/{uuid}/proxy",
+      "action": "App\\Http\\Controllers\\Api\\ServerProxyController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers/{uuid}/registries",
+      "action": "App\\Http\\Controllers\\Api\\ServerDockerRegistriesController@index",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read:sensitive"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers/{uuid}/resources",
+      "action": "App\\Http\\Controllers\\Api\\ServersController@resources_by_server",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers/{uuid}/sentinel",
+      "action": "App\\Http\\Controllers\\Api\\ServerSentinelController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers/{uuid}/transfer",
+      "action": "App\\Http\\Controllers\\Api\\ServerTransferController@status",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read,write"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/servers/{uuid}/validate",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@services",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@service_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/applications",
+      "action": "App\\Http\\Controllers\\Api\\ServiceApplicationsController@index",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/applications/{app_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ServiceApplicationsController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/applications/{app_uuid}/restart",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/applications/{app_uuid}/start",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/applications/{app_uuid}/stop",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/databases",
+      "action": "App\\Http\\Controllers\\Api\\ServiceDatabasesController@index",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/databases/{database_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ServiceDatabasesController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/databases/{database_uuid}/imports/{activity_id}",
+      "action": "App\\Http\\Controllers\\Api\\ServiceDatabasesController@show_import",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/databases/{database_uuid}/logs",
+      "action": "App\\Http\\Controllers\\Api\\ServiceDatabasesController@logs",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read:sensitive"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/envs",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@envs",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/logs",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@logs_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read:sensitive"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/restart",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/scheduled-tasks",
+      "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@scheduled_tasks_by_service_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}/executions",
+      "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@executions_by_service_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/start",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/stop",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/storages",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@storages",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/services/{uuid}/tags",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@tags",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/settings/email",
+      "action": "App\\Http\\Controllers\\Api\\InstanceEmailSettingsController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/tags",
+      "action": "App\\Http\\Controllers\\Api\\TagsController@tags",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/team",
+      "action": "App\\Http\\Controllers\\Api\\TeamController@current_team",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/team/envs",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@team_envs",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/team/members",
+      "action": "App\\Http\\Controllers\\Api\\TeamController@current_team_members",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/teams",
+      "action": "App\\Http\\Controllers\\Api\\TeamController@teams",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/teams/current",
+      "action": "App\\Http\\Controllers\\Api\\TeamController@current_team",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/teams/current/members",
+      "action": "App\\Http\\Controllers\\Api\\TeamController@current_team_members",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/teams/{id}",
+      "action": "App\\Http\\Controllers\\Api\\TeamController@team_by_id",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/teams/{id}/members",
+      "action": "App\\Http\\Controllers\\Api\\TeamController@members_by_id",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/version",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@version",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/vultr/os",
+      "action": "App\\Http\\Controllers\\Api\\VultrController@operatingSystems",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/vultr/plans",
+      "action": "App\\Http\\Controllers\\Api\\VultrController@plans",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/vultr/regions",
+      "action": "App\\Http\\Controllers\\Api\\VultrController@regions",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/vultr/ssh-keys",
+      "action": "App\\Http\\Controllers\\Api\\VultrController@sshKeys",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/applications/{app_uuid}/logs",
+      "action": "App\\Http\\Controllers\\Api\\ServiceApplicationsController@logs_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read:sensitive"
+      ]
+    },
+    {
+      "methods": [
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "OPTIONS"
+      ],
+      "uri": "api/{any}",
+      "action": "Closure",
+      "middleware": [
+        "api"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/applications/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@update_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/applications/{uuid}/envs",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@update_env_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/applications/{uuid}/envs/bulk",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@create_bulk_envs",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/applications/{uuid}/previews/{pull_request_id}",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@update_preview_by_pull_request_id",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@update_scheduled_task_by_application_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/applications/{uuid}/secret-manager",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationSecretManagerController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/applications/{uuid}/storages",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@update_storage",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/cloud-init-scripts/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\CloudInitScriptsController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/cloud-tokens/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\CloudProviderTokensController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/databases/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@update_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/databases/{uuid}/backups/{scheduled_backup_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@update_backup",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/databases/{uuid}/envs",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@update_env_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/databases/{uuid}/envs/bulk",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@create_bulk_envs",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/databases/{uuid}/storages",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@update_storage",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/destinations/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\DestinationsController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/github-apps/{github_app_id}",
+      "action": "App\\Http\\Controllers\\Api\\GithubController@update_github_app",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/gitlab-apps/{gitlab_app_id}",
+      "action": "App\\Http\\Controllers\\Api\\GitlabController@update_gitlab_app",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/notifications/discord",
+      "action": "App\\Http\\Controllers\\Api\\NotificationsController@update_discord",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/notifications/email",
+      "action": "App\\Http\\Controllers\\Api\\NotificationsController@update_email",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/notifications/pushover",
+      "action": "App\\Http\\Controllers\\Api\\NotificationsController@update_pushover",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/notifications/slack",
+      "action": "App\\Http\\Controllers\\Api\\NotificationsController@update_slack",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/notifications/telegram",
+      "action": "App\\Http\\Controllers\\Api\\NotificationsController@update_telegram",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/notifications/webhook",
+      "action": "App\\Http\\Controllers\\Api\\NotificationsController@update_webhook",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/projects/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ProjectController@update_project",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/projects/{uuid}/environments/{environment_name_or_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ProjectController@update_environment",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/projects/{uuid}/environments/{environment_name_or_uuid}/envs/{env_id}",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@environment_update_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/projects/{uuid}/envs/{env_id}",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@project_update_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/s3-storages/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\S3StoragesController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/security/keys/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\SecurityController@update_key",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/servers/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ServersController@update_server",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/servers/{uuid}/cloudflare-tunnel",
+      "action": "App\\Http\\Controllers\\Api\\ServerCloudflareTunnelController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/servers/{uuid}/docker-cleanup",
+      "action": "App\\Http\\Controllers\\Api\\ServerDockerCleanupController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/servers/{uuid}/envs/{env_id}",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@server_update_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/servers/{uuid}/log-drains",
+      "action": "App\\Http\\Controllers\\Api\\ServerLogDrainsController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/servers/{uuid}/proxy",
+      "action": "App\\Http\\Controllers\\Api\\ServerProxyController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/servers/{uuid}/sentinel",
+      "action": "App\\Http\\Controllers\\Api\\ServerSentinelController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/services/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@update_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/services/{uuid}/applications/{app_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ServiceApplicationsController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/services/{uuid}/databases/{database_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ServiceDatabasesController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/services/{uuid}/envs",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@update_env_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/services/{uuid}/envs/bulk",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@create_bulk_envs",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}",
+      "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@update_scheduled_task_by_service_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/services/{uuid}/storages",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@update_storage",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/settings/email",
+      "action": "App\\Http\\Controllers\\Api\\InstanceEmailSettingsController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write:sensitive"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/tags/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\TagsController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/team",
+      "action": "App\\Http\\Controllers\\Api\\TeamController@update_current_team",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/team/envs/{env_id}",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@team_update_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/feedback",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@feedback",
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:feedback"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/dockerfile",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@create_dockerfile_application",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/dockerimage",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@create_dockerimage_application",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/private-deploy-key",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@create_private_deploy_key_application",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/private-github-app",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@create_private_gh_app_application",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/public",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@create_public_application",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/clone",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@clone_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/destinations",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@add_destination",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/envs",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@create_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/migrate",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@migrate_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/move",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@move_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/previews",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationPreviewsController@store",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/restart",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@action_restart",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/rollback",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@rollback_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/scheduled-tasks",
+      "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@create_scheduled_task_by_application_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}/execute",
+      "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@execute_scheduled_task_by_application_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/start",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@action_deploy",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/stop",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@action_stop",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/storages",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@create_storage",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/storages/{storage_uuid}/backups/run",
+      "action": "App\\Http\\Controllers\\Api\\VolumeBackupsController@run",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/tags",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@create_tag",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/cloud-init-scripts",
+      "action": "App\\Http\\Controllers\\Api\\CloudInitScriptsController@store",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/cloud-tokens",
+      "action": "App\\Http\\Controllers\\Api\\CloudProviderTokensController@store",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/cloud-tokens/{uuid}/validate",
+      "action": "App\\Http\\Controllers\\Api\\CloudProviderTokensController@validateToken",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/clickhouse",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@create_database_clickhouse",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/dragonfly",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@create_database_dragonfly",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/keydb",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@create_database_keydb",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/mariadb",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@create_database_mariadb",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/mongodb",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@create_database_mongodb",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/mysql",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@create_database_mysql",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/postgresql",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@create_database_postgresql",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/redis",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@create_database_redis",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/sqlite",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@create_database_sqlite",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/{uuid}/backups",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@create_backup",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/{uuid}/clone",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@clone_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/{uuid}/envs",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@create_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/{uuid}/imports",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@create_import",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/{uuid}/imports/uploads",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@upload_import",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/{uuid}/migrate",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@migrate_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/{uuid}/move",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@move_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/{uuid}/restart",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@action_restart",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/{uuid}/start",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@action_deploy",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/{uuid}/stop",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@action_stop",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/{uuid}/storages",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@create_storage",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/{uuid}/storages/{storage_uuid}/backups/run",
+      "action": "App\\Http\\Controllers\\Api\\VolumeBackupsController@run",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/databases/{uuid}/tags",
+      "action": "App\\Http\\Controllers\\Api\\DatabasesController@create_tag",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/deploy",
+      "action": "App\\Http\\Controllers\\Api\\DeployController@deploy",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/deployments/{uuid}/cancel",
+      "action": "App\\Http\\Controllers\\Api\\DeployController@cancel_deployment",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/disable",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@disable_api",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\ApiIpAllowed",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/github-apps",
+      "action": "App\\Http\\Controllers\\Api\\GithubController@create_github_app",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/gitlab-apps",
+      "action": "App\\Http\\Controllers\\Api\\GitlabController@create_gitlab_app",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/mcp/disable",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@disable_mcp",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\ApiIpAllowed",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/mcp/enable",
+      "action": "App\\Http\\Controllers\\Api\\OtherController@enable_mcp",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\ApiIpAllowed",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/projects",
+      "action": "App\\Http\\Controllers\\Api\\ProjectController@create_project",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/projects/{uuid}/environments",
+      "action": "App\\Http\\Controllers\\Api\\ProjectController@create_environment",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/projects/{uuid}/environments/{environment_name_or_uuid}/envs",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@environment_create_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/projects/{uuid}/envs",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@project_create_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/s3-storages",
+      "action": "App\\Http\\Controllers\\Api\\S3StoragesController@store",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/s3-storages/{uuid}/validate",
+      "action": "App\\Http\\Controllers\\Api\\S3StoragesController@validateStorage",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/security/integration-tokens",
+      "action": "App\\Http\\Controllers\\Api\\IntegrationTokensController@store",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/security/keys",
+      "action": "App\\Http\\Controllers\\Api\\SecurityController@create_key",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/sentinel/push",
+      "action": "App\\Http\\Controllers\\Api\\SentinelController@push",
+      "middleware": [
+        "api"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers",
+      "action": "App\\Http\\Controllers\\Api\\ServersController@create_server",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/digitalocean",
+      "action": "App\\Http\\Controllers\\Api\\DigitalOceanController@createServer",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/hetzner",
+      "action": "App\\Http\\Controllers\\Api\\HetznerController@createServer",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/hostinger",
+      "action": "App\\Http\\Controllers\\Api\\HostingerController@createServer",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/import",
+      "action": "App\\Http\\Controllers\\Api\\ServerTransferController@import",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/vultr",
+      "action": "App\\Http\\Controllers\\Api\\VultrController@createServer",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/{server_uuid}/destinations",
+      "action": "App\\Http\\Controllers\\Api\\DestinationsController@create",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/{uuid}/cloudflare-tunnel/disable",
+      "action": "App\\Http\\Controllers\\Api\\ServerCloudflareTunnelController@disable",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/{uuid}/cloudflare-tunnel/enable",
+      "action": "App\\Http\\Controllers\\Api\\ServerCloudflareTunnelController@enable",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/{uuid}/docker-cleanup/run",
+      "action": "App\\Http\\Controllers\\Api\\ServerDockerCleanupController@run",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/{uuid}/envs",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@server_create_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/{uuid}/migrate",
+      "action": "App\\Http\\Controllers\\Api\\ServerTransferController@migrate",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/{uuid}/proxy/restart",
+      "action": "App\\Http\\Controllers\\Api\\ServerProxyController@restart",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/{uuid}/registries",
+      "action": "App\\Http\\Controllers\\Api\\ServerDockerRegistriesController@login",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/{uuid}/registries/{registry}/check",
+      "action": "App\\Http\\Controllers\\Api\\ServerDockerRegistriesController@check",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/{uuid}/transfer/complete",
+      "action": "App\\Http\\Controllers\\Api\\ServerTransferController@complete",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/{uuid}/validate",
+      "action": "App\\Http\\Controllers\\Api\\ServersController@validate_server",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@create_service",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/applications/{app_uuid}/restart",
+      "action": "App\\Http\\Controllers\\Api\\ServiceApplicationsController@action_restart",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/applications/{app_uuid}/start",
+      "action": "App\\Http\\Controllers\\Api\\ServiceApplicationsController@action_start",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/applications/{app_uuid}/stop",
+      "action": "App\\Http\\Controllers\\Api\\ServiceApplicationsController@action_stop",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/clone",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@clone_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/databases/{database_uuid}/imports",
+      "action": "App\\Http\\Controllers\\Api\\ServiceDatabasesController@create_import",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/databases/{database_uuid}/imports/uploads",
+      "action": "App\\Http\\Controllers\\Api\\ServiceDatabasesController@upload_import",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/databases/{database_uuid}/restart",
+      "action": "App\\Http\\Controllers\\Api\\ServiceDatabasesController@restart",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/databases/{database_uuid}/start",
+      "action": "App\\Http\\Controllers\\Api\\ServiceDatabasesController@start",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/databases/{database_uuid}/stop",
+      "action": "App\\Http\\Controllers\\Api\\ServiceDatabasesController@stop",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/envs",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@create_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/migrate",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@migrate_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/move",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@move_by_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/restart",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@action_restart",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/scheduled-tasks",
+      "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@create_scheduled_task_by_service_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}/execute",
+      "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@execute_scheduled_task_by_service_uuid",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/start",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@action_deploy",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/stop",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@action_stop",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/storages",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@create_storage",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/storages/{storage_uuid}/backups/run",
+      "action": "App\\Http\\Controllers\\Api\\VolumeBackupsController@run",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/tags",
+      "action": "App\\Http\\Controllers\\Api\\ServicesController@create_tag",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/tags",
+      "action": "App\\Http\\Controllers\\Api\\TagsController@create",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/team/envs",
+      "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@team_create_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PUT"
+      ],
+      "uri": "api/v1/applications/{uuid}/storages/{storage_uuid}/backups",
+      "action": "App\\Http\\Controllers\\Api\\VolumeBackupsController@upsert",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PUT"
+      ],
+      "uri": "api/v1/databases/{uuid}/storages/{storage_uuid}/backups",
+      "action": "App\\Http\\Controllers\\Api\\VolumeBackupsController@upsert",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PUT"
+      ],
+      "uri": "api/v1/servers/{uuid}/proxy/configuration",
+      "action": "App\\Http\\Controllers\\Api\\ServerProxyController@saveConfiguration",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PUT"
+      ],
+      "uri": "api/v1/services/{uuid}/storages/{storage_uuid}/backups",
+      "action": "App\\Http\\Controllers\\Api\\VolumeBackupsController@upsert",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    }
+  ]
+}

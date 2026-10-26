@@ -1,0 +1,21 @@
+[package]
+name = "coolify-port-cli"
+description = "CLI for the coolify-rs upstream migration engine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "coolify-port"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+coolify-port.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
