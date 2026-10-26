@@ -173,7 +173,9 @@ fn summarize_output(s: &str) -> String {
         .lines()
         .filter(|l| {
             let t = l.trim_start();
-            !(t.starts_with("Compiling ") || t.starts_with("Checking ") || t.starts_with("Downloaded "))
+            !(t.starts_with("Compiling ")
+                || t.starts_with("Checking ")
+                || t.starts_with("Downloaded "))
         })
         .collect();
     tail_lines(&useful.join("\n"), 40)
