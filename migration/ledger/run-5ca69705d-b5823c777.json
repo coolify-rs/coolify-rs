@@ -2239,7 +2239,7 @@
     ]
   },
   "branch": "port/run-5ca69705d-b5823c777",
-  "base_commit": "9b101a3fc7d130955b824fd97d1ce210021356f8",
+  "base_commit": "3fe14c9de699d70e3622938229c893d04f820dc4",
   "worktree": null,
   "generated_files": [
     "compat/api/upstream-routes.json",
@@ -2259,10 +2259,10 @@
             "--all",
             "--check"
           ],
-          "status": "failed",
-          "exit_code": 1,
-          "duration_ms": 272,
-          "output_tail": "Diff in /Users/azeemhassni/Code/coolify-rs/.migration-runs/run-5ca69705d-b5823c777/worktree/crates/coolify-port/src/validate.rs:173:\n         .lines()\n         .filter(|l| {\n             let t = l.trim_start();\n-            !(t.starts_with(\"Compiling \") || t.starts_with(\"Checking \") || t.starts_with(\"Downloaded \"))\n+            !(t.starts_with(\"Compiling \")\n+                || t.starts_with(\"Checking \")\n+                || t.starts_with(\"Downloaded \"))\n         })\n         .collect();\n     tail_lines(&useful.join(\"\\n\"), 40)"
+          "status": "passed",
+          "exit_code": 0,
+          "duration_ms": 165,
+          "output_tail": ""
         },
         {
           "command": [
@@ -2274,10 +2274,10 @@
             "-D",
             "warnings"
           ],
-          "status": "blocked",
-          "exit_code": null,
-          "duration_ms": 0,
-          "output_tail": "blocked by an earlier failure"
+          "status": "passed",
+          "exit_code": 0,
+          "duration_ms": 1184,
+          "output_tail": "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.06s"
         },
         {
           "command": [
@@ -2286,10 +2286,10 @@
             "-p",
             "coolify-api"
           ],
-          "status": "blocked",
-          "exit_code": null,
-          "duration_ms": 0,
-          "output_tail": "blocked by an earlier failure"
+          "status": "failed",
+          "exit_code": 101,
+          "duration_ms": 3699,
+          "output_tail": "\nfailures:\n\n---- disable_endpoint stdout ----\n\nthread 'disable_endpoint' (61925099) panicked at crates/coolify-api/tests/auth_chain.rs:172:10:\nassertion `left == right` failed: body: {\"message\":\"coolify-rs is in read-only mode.\",\"reason\":\"database is missing 4 upstream migration(s) this build expects (oldest: 2026_10_23_182201_add_canvas_position_to_projects_table); upgrade upstream first\"}\n  left: 503\n right: 200\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n---- last_used_at_is_recorded stdout ----\n\nthread 'last_used_at_is_recorded' (61925101) panicked at crates/coolify-api/tests/auth_chain.rs:189:5:\nassertion failed: used.is_some()\n\n\nfailures:\n    disable_endpoint\n    last_used_at_is_recorded\n\ntest result: FAILED. 7 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.97s\n"
         },
         {
           "command": [
@@ -2346,6 +2346,6 @@
   ],
   "verdict": "failed",
   "recommended_action": "validation failed within the repair budget: escalate with the attached failure output",
-  "started_at": "2026-10-26T20:51:16Z",
-  "updated_at": "2026-10-26T20:51:24Z"
+  "started_at": "2026-10-26T20:51:34Z",
+  "updated_at": "2026-10-26T20:51:47Z"
 }

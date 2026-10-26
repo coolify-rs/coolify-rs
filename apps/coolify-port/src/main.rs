@@ -138,7 +138,17 @@ fn main() -> Result<()> {
             };
             let to = to.unwrap_or_else(|| branch.clone());
             let state = engine.run(&from, &to, generate)?;
-            st.record("analyzed", &state.upstream_to, Some(&state.run_id));
+            // Markers only move forward: an ad-hoc older sub-range is recorded
+            // in the history but does not rewind `last_analyzed`.
+            let advances = match &st.last_analyzed {
+                None => true,
+                Some(prev) => engine.git.is_ancestor(prev, &state.upstream_to)?,
+            };
+            if advances {
+                st.record("analyzed", &state.upstream_to, Some(&state.run_id));
+            } else {
+                st.record("analyzed-subrange", &state.upstream_to, Some(&state.run_id));
+            }
             st.save(&engine.cfg)?;
             let plan = state.plan.as_ref();
             println!("run:      {}", state.run_id);
@@ -157,6 +167,14 @@ fn main() -> Result<()> {
                 .with_context(|| format!("no run {run_id}"))?;
             let state: coolify_port::run::RunState = serde_json::from_slice(&bytes)?;
             let mut st = TrackerState::load(&engine.cfg)?;
+            if let Some(prev) = &st.last_integrated
+                && !engine.git.is_ancestor(prev, &state.upstream_to)?
+            {
+                bail!(
+                    "{run_id} ends at {} which is not newer than last_integrated {prev}",
+                    state.upstream_to
+                );
+            }
             st.record("integrated", &state.upstream_to, Some(&run_id));
             st.save(&engine.cfg)?;
             println!(

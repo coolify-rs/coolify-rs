@@ -9,7 +9,29 @@
       "repair_attempts": 0,
       "security_sensitive_commits": 29,
       "review_outcome": null,
-      "recorded_at": "2026-10-26T20:51:24Z"
+      "recorded_at": "2026-10-26T20:51:47Z"
+    },
+    "run-b17c83d68-a1c24e084": {
+      "commits": 1,
+      "risk": "Low",
+      "escalated": false,
+      "verdict": "validated",
+      "validated_first_attempt": true,
+      "repair_attempts": 0,
+      "security_sensitive_commits": 0,
+      "review_outcome": null,
+      "recorded_at": "2026-10-26T20:52:19Z"
+    },
+    "run-f75136586-4559d21b4": {
+      "commits": 1,
+      "risk": "Medium",
+      "escalated": false,
+      "verdict": "validated",
+      "validated_first_attempt": true,
+      "repair_attempts": 0,
+      "security_sensitive_commits": 0,
+      "review_outcome": null,
+      "recorded_at": "2026-10-26T20:52:57Z"
     }
   }
 }
