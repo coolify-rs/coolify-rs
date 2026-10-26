@@ -1,0 +1,24 @@
+coolify-rs
+Copyright 2026 the coolify-rs contributors
+
+This product is an independent Rust implementation of the behaviour and
+interfaces of Coolify (https://github.com/coollabsio/coolify), which is
+licensed under the Apache License, Version 2.0, copyright Andras Bacsai and
+the Coolify contributors.
+
+The following files are copied or generated from Coolify (Apache-2.0) and
+retain that license; they are unmodified unless noted:
+
+  crates/coolify-port/tests/fixtures/v4.5.0/api.php       (routes/api.php @ v4.5.0)
+  crates/coolify-port/tests/fixtures/v4.5.0/Kernel.php    (app/Http/Kernel.php @ v4.5.0)
+  compat/baseline/upstream-4.5.0-schema.sql               (pg_dump of the schema created by Coolify 4.5.0 migrations)
+  compat/baseline/upstream-4.5.0-migrations.sql           (migration names of Coolify 4.5.0)
+  compat/api/upstream-routes.json, compat/api/reference-route-list-4.5.0.json
+  compat/baseline/supported-migrations.txt                (generated from Coolify source)
+
+Validation messages, naming patterns and error strings reproduced in
+crates/coolify-api and crates/coolify-domain are taken from Coolify for
+API compatibility.
+
+"Coolify" is a trademark of its owners; this project is not affiliated with
+or endorsed by coolLabs and does not use Coolify branding or logos.

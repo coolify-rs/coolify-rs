@@ -47,6 +47,14 @@ Regression tests that encode past fixes (names only; useful as specs): cross-tea
 (SSH, health checks, log drains, docker networks, deployment newlines, compose), path traversal, XSS, SSRF,
 secret visibility, token privilege, terminal session security, IP allowlist.
 
+### Findings from this analysis
+
+- **Spoofable client IP (upstream).** `TrustProxies::$proxies = '*'` makes `X-Forwarded-For` authoritative for any
+  peer, so the API IP allowlist (and IP-keyed rate limits) can be bypassed when the app is reachable directly.
+  coolify-rs diverges (ADR 0006).
+- **No SSH host-key verification (upstream).** Recorded for the remote-execution milestone.
+- Upstream tests run on SQLite and are not run in upstream CI, so security regressions are caught only by review.
+
 ## 4. Encryption at rest (compatibility requirement)
 
 Laravel Encrypter, AES-256-CBC + HMAC-SHA256, key = `APP_KEY` (`base64:` 32 bytes), optional `APP_PREVIOUS_KEYS`.

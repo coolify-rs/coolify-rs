@@ -1,0 +1,5 @@
+target
+.upstream
+.migration-runs
+compat/reference/secrets
+.git

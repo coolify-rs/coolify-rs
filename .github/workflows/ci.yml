@@ -1,0 +1,88 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: coolify_rs
+          POSTGRES_PASSWORD: coolify_rs
+          POSTGRES_DB: coolify_rs
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U coolify_rs -d coolify_rs"
+          --health-interval 2s --health-retries 30
+    env:
+      COOLIFY_RS_TEST_DATABASE_URL: postgres://coolify_rs:coolify_rs@127.0.0.1:5432/coolify_rs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: test (unit, integration, API contract against the upstream 4.5.0 schema)
+        run: cargo test --workspace --all-features --locked
+
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: build container image
+        run: docker build -t coolify-rs:ci .
+
+  # Weekly upstream tracking: analysis only (no generation, no credentials),
+  # publishes the report as an artifact for human triage.
+  upstream-analysis:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: mirror upstream (read-only)
+        run: git clone --bare --filter=blob:none --no-single-branch https://github.com/coollabsio/coolify .upstream/coolify.git
+      - name: analyse pending upstream commits
+        run: cargo run -q -p coolify-port-cli --bin coolify-port -- run
+      - uses: actions/upload-artifact@v4
+        with:
+          name: migration-report
+          path: .migration-runs/*/report.*

@@ -1,0 +1,11 @@
+# Fixtures in this repository contain throwaway test material only.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Throwaway test keys and generated ciphertext fixtures"
+paths = [
+  '''crates/coolify-compat/tests/fixtures/.*''',
+  '''crates/coolify-compat/src/encrypter\.rs''',
+  '''scripts/verify-encrypter-interop\.sh''',
+]

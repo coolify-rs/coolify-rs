@@ -19,7 +19,7 @@ use coolify_api::ip::TrustedProxies;
 use coolify_db::{Db, DbConfig};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultOnFailure, DefaultOnResponse, TraceLayer};
 
 /// The upstream release whose API contract and schema this build implements.
 const UPSTREAM_COMPAT_VERSION: &str = "4.5.0";
@@ -156,7 +156,9 @@ fn app(state: AppState) -> Router {
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or("-");
                 tracing::info_span!("request", method = %req.method(), path = %req.uri().path(), request_id = %id)
-            }),
+            })
+            .on_response(DefaultOnResponse::new().level(tracing::Level::INFO))
+            .on_failure(DefaultOnFailure::new().level(tracing::Level::WARN)),
         )
         .layer(PropagateRequestIdLayer::new(request_id.clone()))
         .layer(SetRequestIdLayer::new(request_id, MakeRequestUuid))
