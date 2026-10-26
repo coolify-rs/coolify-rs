@@ -40,7 +40,25 @@ impl TrustedProxies {
         self.0.iter().any(|(net, mask)| in_cidr(ip, *net, *mask))
     }
 
+    /// Upstream `client_ip()` (`bootstrap/helpers/auth.php`, since `80ce0efe7`):
+    /// the request IP, replaced by a valid `CF-Connecting-IP` when the request
+    /// IP is a Cloudflare edge address (self-hosted rule; coolify-rs has no
+    /// cloud mode). A client connecting directly cannot set it.
     pub fn client_ip(&self, peer: SocketAddr, headers: &HeaderMap) -> IpAddr {
+        let ip = self.request_ip(peer, headers);
+        if is_cloudflare_ip(ip)
+            && let Some(cf) = headers
+                .get("cf-connecting-ip")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<IpAddr>().ok())
+        {
+            return cf.to_canonical();
+        }
+        ip
+    }
+
+    /// Laravel `Request::ip()` under the configured trusted proxies.
+    pub fn request_ip(&self, peer: SocketAddr, headers: &HeaderMap) -> IpAddr {
         let peer_ip = peer.ip().to_canonical();
         if !self.trusts(peer_ip) {
             return peer_ip;
@@ -60,6 +78,43 @@ impl TrustedProxies {
             .or_else(|| chain.first().copied())
             .unwrap_or(peer_ip)
     }
+}
+
+/// Upstream `isCloudflareIp()` (`bootstrap/helpers/shared.php`), copied verbatim
+/// from upstream `main` @ b5823c77; changes upstream are flagged by the mapping
+/// registry (symbol `isCloudflareIp()`).
+const CLOUDFLARE_RANGES: &[&str] = &[
+    "173.245.48.0/20",
+    "103.21.244.0/22",
+    "103.22.200.0/22",
+    "103.31.4.0/22",
+    "141.101.64.0/18",
+    "108.162.192.0/18",
+    "190.93.240.0/20",
+    "188.114.96.0/20",
+    "197.234.240.0/22",
+    "198.41.128.0/17",
+    "162.158.0.0/15",
+    "104.16.0.0/13",
+    "104.24.0.0/14",
+    "172.64.0.0/13",
+    "131.0.72.0/22",
+    "2400:cb00::/32",
+    "2606:4700::/32",
+    "2803:f800::/32",
+    "2405:b500::/32",
+    "2405:8100::/32",
+    "2a06:98c0::/29",
+    "2c0f:f248::/32",
+];
+
+pub fn is_cloudflare_ip(ip: IpAddr) -> bool {
+    CLOUDFLARE_RANGES.iter().any(|range| {
+        range
+            .split_once('/')
+            .and_then(|(net, mask)| Some((net.parse::<IpAddr>().ok()?, mask.parse::<u8>().ok()?)))
+            .is_some_and(|(net, mask)| in_cidr(ip, net, mask))
+    })
 }
 
 fn in_cidr(ip: IpAddr, net: IpAddr, mask: u8) -> bool {
@@ -150,6 +205,31 @@ mod tests {
         assert!(!api_ip_allowed(Some("10.0.0.0/33"), ip("10.0.0.1")));
         // IPv4-mapped IPv6 peers compare as IPv4.
         assert!(api_ip_allowed(Some("127.0.0.1"), ip("::ffff:127.0.0.1")));
+    }
+
+    #[test]
+    fn cloudflare_client_ip_only_from_cloudflare_peers() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "cf-connecting-ip",
+            "198.51.100.7".parse().unwrap_or_else(|_| unreachable!()),
+        );
+        let none = TrustedProxies::default();
+        let cf_peer: SocketAddr = "104.16.1.1:443".parse().unwrap_or_else(|_| unreachable!());
+        let direct: SocketAddr = "203.0.113.5:443".parse().unwrap_or_else(|_| unreachable!());
+        assert_eq!(none.client_ip(cf_peer, &h), ip("198.51.100.7"));
+        // A client connecting directly cannot choose its IP with the header.
+        assert_eq!(none.client_ip(direct, &h), ip("203.0.113.5"));
+        // Range added upstream after 4.5.0.
+        assert!(is_cloudflare_ip(ip("104.24.0.1")));
+        assert!(is_cloudflare_ip(ip("2606:4700::1")));
+        assert!(!is_cloudflare_ip(ip("8.8.8.8")));
+        let mut bad = HeaderMap::new();
+        bad.insert(
+            "cf-connecting-ip",
+            "not-an-ip".parse().unwrap_or_else(|_| unreachable!()),
+        );
+        assert_eq!(none.client_ip(cf_peer, &bad), ip("104.16.1.1"));
     }
 
     #[test]

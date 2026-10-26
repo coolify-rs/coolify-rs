@@ -22,7 +22,7 @@ use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::{DefaultOnFailure, DefaultOnResponse, TraceLayer};
 
 /// The upstream release whose API contract and schema this build implements.
-const UPSTREAM_COMPAT_VERSION: &str = "4.5.0";
+const UPSTREAM_COMPAT_VERSION: &str = "4.5.1-dev.b5823c777";
 
 #[derive(Parser)]
 #[command(name = "coolify-rs", version, about)]

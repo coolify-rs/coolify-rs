@@ -1,5 +1,5 @@
 //! Shared harness for API contract tests: a fresh database with the upstream
-//! 4.5.0 schema, a small fixture, and helpers to call the router in-process.
+//! baseline schema (upstream main @ b5823c7), a small fixture, and helpers to call the router in-process.
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
@@ -14,6 +14,7 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 pub const ACME: i64 = 1;
+pub const VERSION: &str = "4.5.1-dev.b5823c777";
 pub const OTHER: i64 = 2;
 
 /// Fixture mirroring compat/reference/seed-fixtures.php.
@@ -71,7 +72,16 @@ impl Harness {
     }
 
     pub async fn with_extra_sql(extra: &str) -> Self {
-        let tdb = TestDb::new(&format!("{SEED}\n{extra}")).await;
+        Self::build(TestDb::new(&format!("{SEED}\n{extra}")).await).await
+    }
+
+    /// A database at the older upstream 4.5.0 schema.
+    pub async fn on_4_5_0() -> Self {
+        use coolify_db::testing::{MIGRATIONS_4_5_0, SCHEMA_4_5_0};
+        Self::build(TestDb::with_baseline(SCHEMA_4_5_0, MIGRATIONS_4_5_0, SEED).await).await
+    }
+
+    async fn build(tdb: TestDb) -> Self {
         let mut tokens = Vec::new();
         for (i, (name, user, team, abilities, expires)) in TOKENS.iter().enumerate() {
             let plain = format!("{name}-secret-{i:02}");
@@ -90,7 +100,7 @@ impl Harness {
             .unwrap();
             tokens.push((name.to_string(), format!("{id}|{plain}")));
         }
-        let state = AppState::new(tdb.db.clone(), "4.5.0".into(), TrustedProxies::default());
+        let state = AppState::new(tdb.db.clone(), VERSION.into(), TrustedProxies::default());
         let app = coolify_api::router(state);
         Self { tdb, app, tokens }
     }

@@ -4,16 +4,16 @@ A Rust implementation of [Coolify](https://github.com/coollabsio/coolify)'s API 
 engine that tracks upstream Coolify and ports its changes. *Working name; not affiliated with coolLabs.*
 
 **Status: early.** 23 of 321 upstream API operations are implemented and verified against the official
-`coollabsio/coolify:4.5.0` image. There is no UI, deployment engine or server management yet. See
+`coollabsio/coolify` image built from upstream `main` @ b5823c7 (`sha-b5823c7`). There is no UI, deployment engine or server management yet. See
 [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md) and [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 
 ## What works
 
 - Upstream-compatible `/api`: token auth chain (Sanctum tokens, team binding, API switch, IP allowlist, abilities),
   teams, projects and environments, health/version/disable. Response bodies are byte-identical to upstream for all
-  97 differential cases.
-- Adoption of an existing Coolify 4.5.0 PostgreSQL database in place, with a schema guard that goes read-only when
-  the database is newer than the build.
+  102 differential cases.
+- Adoption of an existing Coolify PostgreSQL database (schema of upstream `main` @ b5823c7) in place, with a schema
+  guard that goes read-only when the database is older or newer than the build.
 - Laravel `APP_KEY` encryption interop in both directions.
 - `coolify-port`: tracks upstream, classifies changes with evidence, maps them to Rust components, plans risk,
   regenerates deterministic artifacts in an isolated branch, validates, and writes a ledger.
@@ -37,10 +37,10 @@ docs/                   specs, decisions (docs/decisions), project state
 
 ```bash
 docker compose up -d --wait          # dev Postgres on 127.0.0.1:25432
-./scripts/test.sh                    # fmt + clippy + all tests (against the upstream 4.5.0 schema)
+./scripts/test.sh                    # fmt + clippy + all tests (against the upstream main@b5823c7 schema)
 ```
 
-Run against an existing Coolify 4.5.0 database (read the caveats in docs/DATABASE_COMPATIBILITY.md §6 first):
+Run against an existing Coolify database at the baseline (read the caveats in docs/DATABASE_COMPATIBILITY.md §6 first):
 
 ```bash
 DATABASE_URL=postgres://coolify:...@host:5432/coolify cargo run -p coolify-rs -- check-schema
@@ -48,7 +48,7 @@ DATABASE_URL=postgres://coolify:...@host:5432/coolify COOLIFY_RS_LISTEN=127.0.0.
 ```
 
 Configuration: `DATABASE_URL` or upstream's `DB_HOST/DB_PORT/DB_DATABASE/DB_USERNAME/DB_PASSWORD`;
-`COOLIFY_RS_LISTEN` (default `0.0.0.0:8080`); `COOLIFY_VERSION` (reported by `/api/v1/version`, default `4.5.0`);
+`COOLIFY_RS_LISTEN` (default `0.0.0.0:8080`); `COOLIFY_VERSION` (reported by `/api/v1/version`, default `4.5.1-dev.b5823c777`);
 `COOLIFY_RS_TRUSTED_PROXIES` (IPs/CIDRs whose `X-Forwarded-For` is trusted; default none);
 `COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA`; `COOLIFY_RS_LOG_FORMAT=pretty|json`; `RUST_LOG`.
 
@@ -56,10 +56,11 @@ Configuration: `DATABASE_URL` or upstream's `DB_HOST/DB_PORT/DB_DATABASE/DB_USER
 
 ```bash
 git clone --bare --no-single-branch https://github.com/coollabsio/coolify .upstream/coolify.git
-./scripts/reference-up.sh            # official 4.5.0 image on 127.0.0.1:18000 (throwaway secrets)
+./scripts/reference-up.sh            # official sha-b5823c7 image on 127.0.0.1:18000 (throwaway secrets)
 ./scripts/reference-seed.sh          # fixture users/teams/tokens via upstream's own models
 # start coolify-rs on :18080 against the reference database (password in compat/reference/secrets/reference.envfile)
-python3 compat/diff/differential.py --tokens compat/reference/secrets/tokens.json
+# (COOLIFY_RS_TRUSTED_PROXIES=127.0.0.1 enables the allowlist cases via --db-url)
+python3 compat/diff/differential.py --tokens compat/reference/secrets/tokens.json [--db-url postgres://...]
 ```
 
 ## Upstream migration engine

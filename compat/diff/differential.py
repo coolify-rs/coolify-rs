@@ -33,13 +33,15 @@ class Client:
         self.base = base.rstrip("/")
         self.tokens = tokens
 
-    def req(self, method, path, tok=None, body=None, raw=None, ctype="application/json"):
+    def req(self, method, path, tok=None, body=None, raw=None, ctype="application/json", headers=None):
         data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
         r = urllib.request.Request(self.base + path, data=data, method=method)
         if tok:
             r.add_header("Authorization", "Bearer " + self.tokens[tok])
         if data is not None and ctype:
             r.add_header("Content-Type", ctype)
+        for k, v in (headers or {}).items():
+            r.add_header(k, v)
         try:
             resp = urllib.request.urlopen(r, timeout=30)
             return resp.status, resp.headers.get("Content-Type", ""), resp.read()
@@ -68,6 +70,8 @@ def main():
     ap.add_argument("--reference", default="http://127.0.0.1:18000")
     ap.add_argument("--subject", default="http://127.0.0.1:18080")
     ap.add_argument("--report")
+    ap.add_argument("--db-url", help="shared database URL; enables IP allowlist cases "
+                    "(coolify-rs must run with COOLIFY_RS_TRUSTED_PROXIES=127.0.0.1)")
     a = ap.parse_args()
     tokens = json.load(open(a.tokens))
     ref, sub = Client(a.reference, tokens), Client(a.subject, tokens)
@@ -207,6 +211,30 @@ def main():
             ok = r[0] == 200 and r[2] == b'{"message":"Project deleted."}'
             record(label, ok, r, r)
             same(f"{label}: gone on both", "GET", f"/api/v1/projects/{uuid}", "acme_owner_read")
+
+    # --- IP allowlist through a proxy hop (needs DB access) ---------------------------
+    if a.db_url:
+        import subprocess
+
+        def set_allowed(v):
+            sql = "UPDATE instance_settings SET allowed_ips = %s WHERE id = 0" % ("NULL" if v is None else "'" + v + "'")
+            subprocess.run(["psql", a.db_url, "-qc", sql], check=True)
+
+        cases = [
+            ("CF peer + CF-Connecting-IP allowed", "198.51.100.7", {"X-Forwarded-For": "104.16.1.1", "CF-Connecting-IP": "198.51.100.7"}),
+            ("non-CF peer cannot use CF-Connecting-IP", "198.51.100.7", {"X-Forwarded-For": "203.0.113.5", "CF-Connecting-IP": "198.51.100.7"}),
+            ("CF range added after 4.5.0 (104.24/14)", "198.51.100.7", {"X-Forwarded-For": "104.24.0.9", "CF-Connecting-IP": "198.51.100.7"}),
+            ("forwarded client in CIDR", "203.0.113.0/24", {"X-Forwarded-For": "203.0.113.5"}),
+            ("loopback not in allowlist", "10.0.0.0/8", {}),
+        ]
+        try:
+            for name, allowed, headers in cases:
+                set_allowed(allowed)
+                r1 = ref.req("GET", "/api/v1/version", "acme_owner_read", headers=headers)
+                r2 = sub.req("GET", "/api/v1/version", "acme_owner_read", headers=headers)
+                record(f"allowlist: {name}", r1[0] == r2[0] and r1[2] == r2[2], r1, r2)
+        finally:
+            set_allowed(None)
 
     passed = sum(r["match"] for r in results)
     print(f"\n{passed}/{len(results)} cases match")

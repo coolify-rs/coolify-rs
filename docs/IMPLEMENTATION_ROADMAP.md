@@ -6,16 +6,13 @@ definition in PROJECT_VISION.md.
 ## Milestone 1: foundation and first slice (done, 2026-10-27)
 
 Workspace, config, logging, readiness, schema adoption + guard, Laravel encrypter, Sanctum auth chain, teams,
-projects/environments, PHP-compatible JSON, differential harness (97/97), migration engine v1 with three ledger runs.
+projects/environments, PHP-compatible JSON, differential harness, migration engine v1 with three ledger runs.
 
 ## Milestone 2: absorb upstream `main` and strengthen the engine (next)
 
-1. **Resolve run `run-5ca69705d-b5823c777`** (escalated):
-   - capture the schema of upstream `main` (build the image from source or wait for 4.5.1), add it as the second
-     baseline, run the API tests against both baselines;
-   - accept the 4 new migrations (review `projects.canvas_position`, `teams.is_two_factor_required`, already
-     registered as known columns);
-   - decide on `CF-Connecting-IP` support (needs a Cloudflare IP range source).
+1. ~~Resolve run `run-5ca69705d-b5823c777`~~ **done (session 2)**: baseline moved to `main` @ b5823c7 using the
+   upstream per-commit image; 4 migrations accepted; `CF-Connecting-IP` ported with upstream's own range list;
+   102/102 differential cases on `main`.
 2. **Layer B template**: "new nullable column on a mapped table": generate the `records.rs` known-column entry and
    a fixture update; validate with the differential harness.
 3. **Calibration**: label ~200 historical commits; report precision/recall per category; tune `PATH_RULES`.

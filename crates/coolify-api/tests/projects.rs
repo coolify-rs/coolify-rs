@@ -80,6 +80,7 @@ async fn project_lifecycle() {
             "uuid",
             "description",
             "name",
+            "canvas_position",
             "environments",
             "icon_path",
             "icon_s3_storage_id",
@@ -320,6 +321,41 @@ async fn read_only_mode_refuses_writes() {
         h.get("/api/v1/projects", "acme_owner_read").await.status,
         200
     );
+    let r = h
+        .call(
+            "POST",
+            "/api/v1/projects",
+            W,
+            Some(json!({"name": "Blocked"})),
+        )
+        .await;
+    assert_eq!(r.status, 503, "{}", r.body);
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn teams_expose_two_factor_flag_on_main_schema() {
+    let h = Harness::new().await;
+    let t = h.get("/api/v1/team", "acme_owner_read").await.json();
+    assert_eq!(t["is_two_factor_required"], false);
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn older_upstream_database_is_read_only() {
+    // A 4.5.0 database lacks migrations this build expects.
+    let h = Harness::on_4_5_0().await;
+    let reason = h
+        .tdb
+        .db
+        .schema()
+        .read_only_reason
+        .clone()
+        .unwrap_or_default();
+    assert!(reason.contains("missing 4 upstream migration"), "{reason}");
+    // Reads keep working and adapt to the missing columns.
+    let t = h.get("/api/v1/team", "acme_owner_read").await.json();
+    assert!(t.get("is_two_factor_required").is_none());
     let r = h
         .call(
             "POST",

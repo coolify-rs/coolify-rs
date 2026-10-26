@@ -105,9 +105,14 @@ report confidence values.
 
 | Run | Range | Commits | Risk | Verdict | What it showed |
 |---|---|---|---|---|---|
-| `run-5ca69705d-b5823c777` | v4.5.0..main | 148 | High (escalated) | failed | Detected 4 new migrations, two on mapped tables (`projects.canvas_position`, `teams.is_two_factor_required`); detected a real security-relevant change in a verified component (`80ce0efe7`: API allowlist now honours `CF-Connecting-IP` from Cloudflare peers). Layer A patch regenerated the supported-migration list; validation then failed because the schema guard and test baseline still describe 4.5.0. That is the correct outcome: accepting the new schema needs a reviewed baseline update (layer B/D). |
+| `run-5ca69705d-b5823c777` | v4.5.0..main | 148 | High (escalated) | failed | Detected 4 new migrations, two on mapped tables (`projects.canvas_position`, `teams.is_two_factor_required`); detected a real security-relevant change in a verified component (`80ce0efe7`: API allowlist now honours `CF-Connecting-IP` from Cloudflare peers). Layer A patch regenerated the supported-migration list; validation then failed because the schema guard and test baseline still describe 4.5.0. That is the correct outcome: accepting the new schema needs a reviewed baseline update (layer B/D). **Resolved by a human-led port (session 2):** baseline moved to `main` @ b5823c7, migrations accepted, Cloudflare client IP ported; tests 86/86, differential 102/102; recorded with `mark-integrated` (`review_outcome = accepted-after-manual-port`). |
 | `run-b17c83d68-a1c24e084` | 1 commit | 1 | Low | validated | Frontend-only change, nothing to port, full workspace validation passed. |
 | `run-f75136586-4559d21b4` | 1 commit | 1 | Medium | validated | API fix in an unported controller (`ApplicationsController`); correctly classified, no Rust impact, coverage 0% reported. |
+
+What the resolution took, for effort accounting: capturing the new runtime schema (upstream image), switching
+the test baseline, porting one security-relevant behaviour (`client_ip()`), two new contract tests and five new
+differential cases. The two schema changes needed no code because the columns had been pre-registered after the
+engine's first report, which is the layer B pattern to automate next.
 
 During development the pipeline also blocked two of our own regressions (clippy and rustfmt failures in the worktree),
 demonstrating that validation gates are enforced. Human-effort reduction has **not** been measured yet: no

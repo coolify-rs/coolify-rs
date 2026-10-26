@@ -8,15 +8,16 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   implemented in coolify-rs yet."}`.
 - No web UI, sessions, login, 2FA, OAuth, registration or root setup window (ADR 0003).
 - No deployment engine, SSH execution, proxy management, backups, scheduler, notifications or webhooks yet.
-- coolify-rs cannot bootstrap a new installation: it requires a database created by upstream Coolify 4.5.0
-  (it runs no upstream DDL).
+- coolify-rs cannot bootstrap a new installation: it requires a database created by upstream Coolify at the baseline
+  (`main` @ b5823c7, 473 migrations); it runs no upstream DDL. A 4.5.0 database is served read-only until upstream
+  is upgraded.
 
 ## API divergences (implemented routes)
 
 | Area | Upstream | coolify-rs | Reason |
 |---|---|---|---|
 | Client IP for the API allowlist | `TrustProxies('*')`: `X-Forwarded-For` trusted from anyone, so the leftmost (client-controlled) entry is used | peer address unless `COOLIFY_RS_TRUSTED_PROXIES` is set; then rightmost untrusted hop | security fix: the allowlist is spoofable upstream when the app is reachable without a proxy |
-| `CF-Connecting-IP` for the allowlist | `main` (post-4.5.0, commit `80ce0efe7`) honours it from Cloudflare peers | not honoured (4.5.0 behaviour) | escalated by migration run `run-5ca69705d-b5823c777`; needs a maintained Cloudflare range list |
+| `CF-Connecting-IP` on Coolify Cloud | honoured for any peer when `isCloud()` | not applicable | coolify-rs has no cloud mode; the self-hosted rule (Cloudflare peers only) is implemented |
 | Rate limiting | `throttle:api` 200/min, `X-RateLimit-*` headers | none | not implemented yet |
 | Audit events | `audit_events` rows for environment changes, auth failures | not written | not implemented yet |
 | Environment details with resources | applications/databases/services serialized with sensitive-field rules | `501` | refusing is safer than partial or unfiltered data |

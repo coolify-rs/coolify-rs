@@ -1,7 +1,8 @@
 # API Compatibility
 
-Reference: upstream `coollabsio/coolify` `main` @ `b5823c777b8d60df856fcf779b70e4b1d237a845` (version string 4.5.1)
-for static analysis; the official image `coollabsio/coolify:4.5.0` for runtime checks.
+Reference: upstream `coollabsio/coolify` `main` @ `b5823c777b8d60df856fcf779b70e4b1d237a845` (version string
+`4.5.1-dev.b5823c777`) for static analysis and, via the official image `coollabsio/coolify:sha-b5823c7`, for runtime
+checks. Observations first made on 4.5.0 were re-verified on `sha-b5823c7` (differential run, 102/102).
 
 Evidence levels used below:
 
@@ -18,7 +19,8 @@ The REST API under `/api` is the **primary compatibility contract** for coolify-
 machine-readable interface shared by upstream and coolify-rs.
 
 Inventory: `openapi.json` declares 212 paths / 301 operations. `php artisan route:list --path=api`
-on 4.5.0 reports **394** routes [runtime] (`compat/api/reference-route-list-4.5.0.json`).
+on 4.5.0 reports **321** routes under `api/` [runtime] (`compat/api/reference-route-list-4.5.0.json`; its `--path=api`
+filter also matches 73 `canvas/api` and `horizon/api` web routes). The `/api` route set is unchanged on `main`.
 The generated inventory `compat/api/upstream-routes.json` (produced by `coolify-port inventory`)
 is the authoritative list that the Rust route table is checked against.
 
@@ -52,7 +54,9 @@ Stacked middlewares (`['api.ability:write','api.ability:deploy']`) require **bot
 2. `api.token.team`: token `team_id` null or user not a member → 401 `{"message":"Invalid token."}`;
    elevated token (`root|write|write:sensitive|deploy|read:sensitive`) but pivot role not admin/owner → 403 `{"message":"Missing required team role."}`
 3. `ApiAllowed`: `instance_settings.is_api_enabled = false` → 403 `{"success":true,"message":"API is disabled."}`
-4. `ApiIpAllowed`: `allowed_ips` empty or `0.0.0.0` allows all, else comma list (IP/CIDR) → 403 `{"success":true,"message":"You are not allowed to access the API."}`
+4. `ApiIpAllowed`: `allowed_ips` empty or `0.0.0.0` allows all, else comma list (IP/CIDR) → 403 `{"success":true,"message":"You are not allowed to access the API."}`.
+   The checked address is `client_ip()`: since `80ce0efe7` (after 4.5.0) a valid `CF-Connecting-IP` replaces the request
+   IP when the request IP is a Cloudflare address (`isCloudflareIp`, hardcoded ranges) [static, rust-verified, differential].
 5. `api.sensitive`: `can_read_sensitive = (token can root || read:sensitive) && user is admin/owner of token team`
 6. `api.ability:X`: member-held elevated token → 403 (long message, see SECURITY_MODEL.md); `root` passes everything;
    otherwise any listed ability; failure → 403 `{"message":"Missing required permissions: <abilities joined ', '>"}`.

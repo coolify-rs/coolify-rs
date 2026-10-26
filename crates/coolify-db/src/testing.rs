@@ -1,4 +1,5 @@
-//! Per-test databases loaded with the upstream 4.5.0 baseline schema.
+//! Per-test databases loaded with an upstream baseline schema (default: upstream
+//! `main` @ b5823c7; the 4.5.0 baseline is kept to test older databases).
 //!
 //! Requires `COOLIFY_RS_TEST_DATABASE_URL` (an admin connection, e.g. the
 //! `compose.yaml` Postgres). Missing infrastructure is a hard failure, never
@@ -15,8 +16,11 @@ use sqlx::{Connection, Executor, PgConnection};
 use crate::{Db, DbConfig};
 
 pub const BASELINE_SCHEMA: &str =
-    include_str!("../../../compat/baseline/upstream-4.5.0-schema.sql");
+    include_str!("../../../compat/baseline/upstream-main-b5823c7-schema.sql");
 pub const BASELINE_MIGRATIONS: &str =
+    include_str!("../../../compat/baseline/upstream-main-b5823c7-migrations.sql");
+pub const SCHEMA_4_5_0: &str = include_str!("../../../compat/baseline/upstream-4.5.0-schema.sql");
+pub const MIGRATIONS_4_5_0: &str =
     include_str!("../../../compat/baseline/upstream-4.5.0-migrations.sql");
 
 #[derive(Debug)]
@@ -46,6 +50,11 @@ impl TestDb {
     /// Creates a fresh database with the upstream schema, the upstream
     /// migrations table, and `seed_sql` applied.
     pub async fn new(seed_sql: &str) -> Self {
+        Self::with_baseline(BASELINE_SCHEMA, BASELINE_MIGRATIONS, seed_sql).await
+    }
+
+    /// Like [`new`](Self::new) with an explicit baseline (schema dump + migrations rows).
+    pub async fn with_baseline(schema: &str, migrations: &str, seed_sql: &str) -> Self {
         let admin_url = admin_url();
         let name = format!("t_{:016x}", rand::thread_rng().r#gen::<u64>());
         let mut admin = PgConnection::connect(&admin_url)
@@ -62,11 +71,11 @@ impl TestDb {
         let mut conn = PgConnection::connect(&url)
             .await
             .expect("connect test database");
-        sqlx::raw_sql(BASELINE_SCHEMA)
+        sqlx::raw_sql(schema)
             .execute(&mut conn)
             .await
             .expect("load baseline schema");
-        sqlx::raw_sql(BASELINE_MIGRATIONS)
+        sqlx::raw_sql(migrations)
             .execute(&mut conn)
             .await
             .expect("load migrations table");

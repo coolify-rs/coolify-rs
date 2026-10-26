@@ -7,7 +7,7 @@ name: coolify-rs-reference
 
 services:
   coolify:
-    image: "coollabsio/coolify:${COOLIFY_REFERENCE_VERSION:-4.5.0}"
+    image: "coollabsio/coolify:${COOLIFY_REFERENCE_VERSION:-sha-b5823c7}"
     env_file:
       - ./secrets/reference.envfile
     environment:

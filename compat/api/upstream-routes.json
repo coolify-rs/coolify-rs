@@ -1,6 +1,6 @@
 {
   "generator": "coolify-port 0.1.0",
-  "upstream_commit": "5ca69705d681da46028ea15a8a39d90a4ebcce89",
+  "upstream_commit": "b5823c777b8d60df856fcf779b70e4b1d237a845",
   "routes": [
     {
       "methods": [

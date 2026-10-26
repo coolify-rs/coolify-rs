@@ -13,6 +13,9 @@ retain that license; they are unmodified unless noted:
   crates/coolify-port/tests/fixtures/v4.5.0/Kernel.php    (app/Http/Kernel.php @ v4.5.0)
   compat/baseline/upstream-4.5.0-schema.sql               (pg_dump of the schema created by Coolify 4.5.0 migrations)
   compat/baseline/upstream-4.5.0-migrations.sql           (migration names of Coolify 4.5.0)
+  compat/baseline/upstream-main-b5823c7-schema.sql        (pg_dump of the schema created by Coolify main @ b5823c7)
+  compat/baseline/upstream-main-b5823c7-migrations.sql    (migration names of Coolify main @ b5823c7)
+  CLOUDFLARE_RANGES in crates/coolify-api/src/ip.rs       (isCloudflareIp() list, bootstrap/helpers/shared.php)
   compat/api/upstream-routes.json, compat/api/reference-route-list-4.5.0.json
   compat/baseline/supported-migrations.txt                (generated from Coolify source)
 

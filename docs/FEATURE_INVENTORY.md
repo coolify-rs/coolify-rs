@@ -1,6 +1,6 @@
 # Feature Inventory
 
-Status legend: **verified** (implemented + contract tests + differential match against the 4.5.0 reference),
+Status legend: **verified** (implemented + contract tests + differential match against the upstream reference, now `main` @ b5823c7),
 **implemented**, **partial**, **not started**, **out of scope (for now)**.
 Upstream references are relative to the upstream repository root.
 
@@ -34,10 +34,10 @@ Upstream references are relative to the upstream repository root.
 |---|---|---|---|
 | Sanctum token auth (`id|secret`, sha256, expiry, tokenable check) | `app/Models/User.php:266`, Sanctum 4 | verified | `tests/auth_chain.rs`, differential |
 | Token team binding, membership + role re-check per request | `EnsureTokenBelongsToCurrentTeamMember` | verified | `removed_member_loses_access`, `members_with_elevated_tokens_are_refused` |
-| API enabled switch, IP allowlist (IP/CIDR/IPv6, `0.0.0.0`) | `ApiAllowed`, `ApiIpAllowed`, `checkIPAgainstAllowlist` | verified (4.5.0 semantics) | `api_disabled_and_ip_allowlist`, unit tests |
+| API enabled switch, IP allowlist (IP/CIDR/IPv6, `0.0.0.0`) | `ApiAllowed`, `ApiIpAllowed`, `checkIPAgainstAllowlist` | verified (`main` semantics incl. `CF-Connecting-IP` from Cloudflare peers) | `api_disabled_and_ip_allowlist`, unit tests, 5 differential allowlist cases |
 | Ability middleware (`root` superset, any-of, stacked all-of) | `ApiAbility` | verified | `abilities_are_enforced`, route inventory test |
 | `can_read_sensitive` flag | `ApiSensitiveData` | implemented (no ported endpoint exposes sensitive fields yet) | unit-level |
-| Error vocabulary and status codes | `Handler.php`, controllers | verified for ported routes | differential (97/97) |
+| Error vocabulary and status codes | `Handler.php`, controllers | verified for ported routes | differential (102/102) |
 | PHP `json_encode` byte compatibility (`\/`, `\uXXXX`) | Laravel `JsonResponse` | verified | `php_json` tests, byte-identical differential |
 | `serializeApiResponse` key ordering | `bootstrap/helpers/api.php:45` | verified | unit + differential |
 | Input normalization (TrimStrings, ConvertEmptyStringsToNull, query merge) | Laravel middleware | verified for ported fields | `input.rs` tests, differential |

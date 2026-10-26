@@ -32,6 +32,8 @@ upstream.symbols = [
   "bootstrap/helpers/api.php::invalidTokenResponse()",
   "bootstrap/helpers/shared.php::checkIPAgainstAllowlist()",
   "bootstrap/helpers/auth.php::client_ip()",
+  "bootstrap/helpers/shared.php::isCloudflareIp()",
+  "bootstrap/helpers/shared.php::ipMatch()",
 ]
 upstream.tables = ["personal_access_tokens", "team_user", "instance_settings"]
 upstream.tests = [
@@ -54,6 +56,7 @@ rust.packages = ["coolify-api", "coolify-db", "coolify-compat", "coolify-domain"
 contracts = ["docs/API_COMPATIBILITY.md#2-routing-and-middleware-static"]
 divergences = [
   "X-Forwarded-For trusted only from COOLIFY_RS_TRUSTED_PROXIES (upstream trusts all proxies)",
+  "CF-Connecting-IP honoured for Cloudflare peers (upstream main 80ce0efe7); cloud-mode rule not applicable",
   "no rate limiting (upstream throttle:api)",
   "audit events for auth failures are not written",
 ]

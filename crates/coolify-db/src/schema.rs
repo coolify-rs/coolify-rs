@@ -130,9 +130,10 @@ mod tests {
     }
 
     #[test]
-    fn embedded_list_is_the_4_5_0_baseline() {
+    fn embedded_list_is_the_main_baseline() {
         let s = supported_migrations();
-        assert_eq!(s.len(), 469);
+        assert_eq!(s.len(), 473);
+        assert!(s.contains("2026_10_25_115811_add_is_two_factor_required_to_teams_table"));
         assert!(s.contains("2014_10_12_000000_create_users_table"));
     }
 

@@ -109,7 +109,7 @@ async fn abilities_are_enforced() {
     .await
     .assert(403, r#"{"message":"Missing required permissions: write"}"#);
     let v = h.get("/api/v1/version", "acme_owner_root").await;
-    v.assert(200, "4.5.0");
+    v.assert(200, common::VERSION);
     assert!(v.ctype.starts_with("text/html"));
     h.finish().await;
 }
