@@ -1,8 +1,8 @@
 {
   "upstream_branch": "main",
-  "baseline": "5ca69705d681da46028ea15a8a39d90a4ebcce89",
+  "baseline": "b5823c777b8d60df856fcf779b70e4b1d237a845",
   "last_analyzed": "b5823c777b8d60df856fcf779b70e4b1d237a845",
-  "last_integrated": null,
+  "last_integrated": "b5823c777b8d60df856fcf779b70e4b1d237a845",
   "history": [
     {
       "at": "2026-10-26T20:30:56Z",
@@ -51,6 +51,18 @@
       "kind": "analyzed-subrange",
       "commit": "4559d21b4ca19f2d005d602c588671494094dbda",
       "run_id": "run-f75136586-4559d21b4"
+    },
+    {
+      "at": "2026-10-26T21:09:30Z",
+      "kind": "baseline",
+      "commit": "b5823c777b8d60df856fcf779b70e4b1d237a845",
+      "run_id": null
+    },
+    {
+      "at": "2026-10-26T21:09:30Z",
+      "kind": "integrated",
+      "commit": "b5823c777b8d60df856fcf779b70e4b1d237a845",
+      "run_id": "run-5ca69705d-b5823c777"
     }
   ]
 }

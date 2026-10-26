@@ -8,7 +8,7 @@
       "validated_first_attempt": false,
       "repair_attempts": 0,
       "security_sensitive_commits": 29,
-      "review_outcome": null,
+      "review_outcome": "accepted-after-manual-port",
       "recorded_at": "2026-10-26T20:51:47Z"
     },
     "run-b17c83d68-a1c24e084": {
