@@ -1,6 +1,6 @@
 # ADR 0003: Frontend strategy
 
-Status: accepted (2026-10-27); revisit at milestone 6
+Status: accepted (2026-10-27); the frontend part is refined by ADR 0007
 
 ## Context
 

@@ -20,7 +20,12 @@ projects/environments, PHP-compatible JSON, differential harness, migration engi
    tests in plans as specification diffs.
 5. Containerize the differential run so CI can execute it (reference image + coolify-rs + seeded fixtures).
 
-## Milestone 3: servers and private keys (read side first)
+## Web UI track (started session 3, ADR 0007)
+
+Done: sessions, login with 2FA, projects, environments, private keys, team view. Next with each backend slice: its
+pages. Separately: 2FA enrollment, recovery codes, password reset, API tokens, invitations, instance settings.
+
+## Milestone 3: servers and private keys (read side first; private keys done in session 3)
 
 Private keys API (needs encrypter, `read:sensitive` exposure, fingerprinting via an SSH key library), then servers
 read endpoints (`GET /servers`, `/servers/{uuid}`, `/resources`, `/domains`) and `ServerSetting` serialization rules,

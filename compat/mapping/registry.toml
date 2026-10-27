@@ -170,9 +170,60 @@ upstream.tables = ["servers", "server_settings", "standalone_dockers", "swarm_do
 [[component]]
 id = "api.private-keys"
 title = "Private keys REST API"
-status = "planned"
+status = "verified"
 upstream.paths = ["app/Http/Controllers/Api/SecurityController.php", "app/Models/PrivateKey.php", "app/Policies/PrivateKeyPolicy.php"]
+upstream.symbols = [
+  "bootstrap/helpers/shared.php::formatPrivateKey()",
+  "bootstrap/helpers/shared.php::generate_random_name()",
+  "bootstrap/helpers/shared.php::customApiValidator()",
+]
+upstream.routes = ["GET api/v1/security/keys*", "POST api/v1/security/keys", "PATCH api/v1/security/keys/{uuid}", "DELETE api/v1/security/keys/{uuid}"]
 upstream.tables = ["private_keys"]
+upstream.tests = ["tests/Feature/Api/PrivateKey*Test.php", "tests/Feature/PrivateKeyFingerprintTeamScopeTest.php", "tests/Feature/Security/ApiSensitiveFieldsTest.php"]
+rust.paths = ["crates/coolify-api/src/routes/private_keys.rs", "crates/coolify-db/src/private_keys.rs", "crates/coolify-compat/src/sshkey.rs"]
+rust.tests = ["crates/coolify-api/tests/private_keys.rs", "crates/coolify-compat/tests/sshkey_interop.rs", "compat/diff/differential.py"]
+rust.packages = ["coolify-api", "coolify-db", "coolify-compat"]
+divergences = [
+  "PuTTY and PKCS#8 EC keys are rejected (phpseclib accepts them)",
+  "generated names use different words than nubs/random-name-generator",
+  "invalid key on PATCH returns 422 JSON even without Accept: application/json (upstream redirects)",
+  "keys are not written to storage/app/ssh/keys (upstream rewrites them before each SSH use)",
+]
+
+[[component]]
+id = "ui.session"
+title = "Browser sessions (Fortify-compatible login, TOTP) and the /ui/api bridge"
+status = "implemented"
+upstream.paths = [
+  "app/Providers/FortifyServiceProvider.php",
+  "config/fortify.php",
+  "app/Http/Middleware/UseSessionTeamApiToken.php",
+  "app/Http/Middleware/RequireTeamTwoFactor.php",
+  "app/Http/Middleware/DecideWhatToDoWithUser.php",
+  "config/session.php",
+  "config/hashing.php",
+]
+upstream.symbols = [
+  "app/Models/User.php::resolveStoredTeam()",
+  "app/Models/User.php::currentTeam()",
+  "app/Providers/RouteServiceProvider.php::configureRateLimiting()",
+]
+upstream.tables = ["users", "team_user", "teams"]
+rust.paths = ["crates/coolify-api/src/session.rs", "crates/coolify-db/src/users.rs", "crates/coolify-compat/src/password.rs", "crates/coolify-compat/src/totp.rs"]
+rust.tests = ["crates/coolify-api/tests/ui_session.rs"]
+rust.packages = ["coolify-api", "coolify-db", "coolify-compat"]
+divergences = [
+  "sessions are in memory (lost on restart), not in the upstream sessions table",
+  "no registration, password reset, 2FA enrollment, recovery codes, passkeys or OAuth yet",
+]
+
+[[component]]
+id = "ui.frontend"
+title = "Web UI (Svelte) following upstream DESIGN.md"
+status = "implemented"
+upstream.paths = ["DESIGN.md", "resources/css/app.css"]
+rust.paths = ["frontend/src/**"]
+rust.packages = ["coolify-api"]
 
 [[component]]
 id = "deployment.engine"

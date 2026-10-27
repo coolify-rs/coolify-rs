@@ -157,11 +157,30 @@ Validation (`app/Support/ValidationPatterns.php`):
 
 Quirk: validation runs before the existence lookup (invalid body on a missing project → 422, not 404).
 
-### Private keys and servers
+### Private keys (`SecurityController`) [runtime, rust-verified, differential]
 
-Documented by the recon (see git history of this file for the full tables); not yet implemented in Rust.
-Key points: `private_key` hidden unless `can_read_sensitive`; `PATCH /security/keys/{uuid}` and `PATCH /servers/{uuid}`
-return **201**; server `id` is always hidden; `is_coolify_host` appended (id 0); delete of server 0 is refused.
+| Method | Path | Ability | Behaviour |
+|---|---|---|---|
+| GET | `/security/keys` | read | array of keys of the token team; `public_key` appended; `private_key` only with `can_read_sensitive` |
+| GET | `/security/keys/{uuid}` | read | 404 `"Private Key not found."`; team-0 keys need admin |
+| POST | `/security/keys` | write | admin; `customApiValidator` (`name`/`description` string max 255, `private_key` required string; no extra-field check); non-PEM input is base64-decoded (PHP non-strict); 422 `"Invalid private key."` / `"Private key already exists."` (fingerprint per team); 201 `{"uuid"}` |
+| PATCH | `/security/keys/{uuid}` | write | extra fields rejected; model `saving` hook re-validates: 422 `{"message":"The private key is invalid.","errors":{"private_key":[...]}}` or `"This private key already exists."`; **201** `{"uuid"}` |
+| DELETE | `/security/keys/{uuid}` | write | 422 `{"message":"Private Key is in use and cannot be deleted.","details":"..."}` when used by servers/applications (not soft-deleted) or Git apps; 200 `{"message":"Private Key deleted."}` |
+
+Formats observed on the reference: `fingerprint` = OpenSSH SHA-256 without `SHA256:`; `public_key` =
+`"<type> <base64> "` (trailing space from phpseclib's empty comment); stored key = trimmed + one trailing newline,
+encrypted with `APP_KEY`. Upstream defect: without `Accept: application/json` an invalid key on PATCH yields a 302
+redirect (KNOWN_LIMITATIONS.md).
+
+### Servers
+
+Not yet implemented. Recon notes: `PATCH /servers/{uuid}` returns **201**; server `id` is always hidden;
+`is_coolify_host` appended (id 0); delete of server 0 is refused.
+
+## 6b. Browser-session bridge (coolify-rs)
+
+`/ui/session` (GET current, POST login, DELETE logout), `/ui/session/team` (POST switch) and `/ui/api/v1/...`, which
+mirrors every ported main-group route with session authentication (ADR 0007). Not part of the upstream contract.
 
 ## 7. Upstream tests that specify this behaviour
 

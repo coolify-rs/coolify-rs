@@ -272,3 +272,33 @@ async fn login_is_throttled() {
     );
     h.finish().await;
 }
+
+#[tokio::test]
+async fn serves_the_web_ui_with_security_headers() {
+    let dir = std::env::temp_dir().join(format!("coolify-rs-ui-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    std::fs::write(dir.join("index.html"), "<!doctype html><title>ui</title>").unwrap();
+    std::fs::write(dir.join("assets/app.js"), "console.log(1)").unwrap();
+    let h = Harness::with_ui(dir.clone()).await;
+    // Client-side routes fall back to index.html.
+    let page = h.request("GET", "/projects/abc", &[], None).await;
+    assert_eq!(page.status, 200);
+    assert!(page.body.contains("<title>ui</title>"));
+    let csp = page.csp.unwrap_or_default();
+    assert!(
+        csp.contains("default-src 'self'") && csp.contains("frame-ancestors 'none'"),
+        "{csp}"
+    );
+    let asset = h.request("GET", "/assets/app.js", &[], None).await;
+    assert_eq!(asset.body, "console.log(1)");
+    // API paths never fall through to the UI.
+    h.request("GET", "/api/v1/nope", &[], None).await.assert(
+        404,
+        r#"{"message":"Not found.","docs":"https:\/\/coolify.io\/docs"}"#,
+    );
+    assert_eq!(h.request("GET", "/ui/nope", &[], None).await.status, 404);
+    // Writes to UI paths are refused.
+    assert_eq!(h.request("POST", "/projects", &[], None).await.status, 405);
+    h.finish().await;
+    let _ = std::fs::remove_dir_all(dir);
+}

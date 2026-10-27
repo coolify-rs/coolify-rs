@@ -21,12 +21,12 @@ Upstream references are relative to the upstream repository root.
 | `cloud-tokens`, `hetzner`, `digitalocean`, `vultr`, `hostinger`, `cloud-init-scripts` | 30 | 0 | not started |
 | `github-apps`, `gitlab-apps` | 10 | 0 | not started |
 | `s3-storages` | 6 | 0 | not started |
-| `security` (private keys, integration tokens) | 6 | 0 | not started |
+| `security` (private keys, integration tokens) | 6 | 5 | private keys verified (CRUD, 131/131 differential); integration tokens not started |
 | `destinations`, `tags`, `resources`, `settings`, `audit-events` | 12 | 0 | not started |
 | `deploy`, `deployments` | 6 | 0 | not started |
 | `health`, `version`, `disable` | 5 | 5 | verified |
 | `mcp`, `feedback`, `sentinel` | 4 | 0 | not started |
-| **Total** | **321** | **23** | |
+| **Total** | **321** | **28** | |
 
 ## 2. Cross-cutting foundations
 
@@ -46,17 +46,20 @@ Upstream references are relative to the upstream repository root.
 | Upstream schema adoption + schema guard (read-only on unknown migrations) | `database/migrations` | implemented | `read_only_mode_refuses_writes`, `schema.rs` tests |
 | Health / readiness / liveness | `/api/health` | verified (`/api/health`); `/readyz`, `/livez` are coolify-rs additions | tests |
 | Structured JSON logging, request ids, graceful shutdown, body limit, timeouts | — | implemented | `apps/coolify-rs` |
-| Rate limiting (`throttle:api`, 200/min) | `RouteServiceProvider.php:47` | not started | KNOWN_LIMITATIONS |
+| Rate limiting (`throttle:api`, 200/min) | `RouteServiceProvider.php:47` | not started (login throttle implemented) | KNOWN_LIMITATIONS |
+| SSH private key parsing (OpenSSH Ed25519/ECDSA/RSA, RSA PKCS#1/PKCS#8), public key + fingerprint | phpseclib in `PrivateKey` | verified against upstream output | `sshkey_interop.rs` |
+| Browser login (bcrypt, TOTP 2FA, throttle), sessions, CSRF, team switching | Fortify, `UseSessionTeamApiToken`, `RequireTeamTwoFactor` | implemented | `ui_session.rs` (8 tests), manual browser test |
+| Web UI: projects, environments, private keys, team, team switcher, light/dark, mobile layout | Livewire pages (behaviour), `DESIGN.md` (look) | implemented | browser walkthrough 2026-10-27 |
 | Audit events (`audit_events`) | `bootstrap/helpers/audit.php` | not started | KNOWN_LIMITATIONS |
 
 ## 3. Product areas (from upstream inventory; all not started unless stated)
 
 | Area | Upstream entry points | Notes |
 |---|---|---|
-| Web UI, sessions, login, 2FA, passkeys, OAuth, registration/root setup window | Livewire (272 components), Fortify, Socialite | out of scope until ADR 0003's frontend project starts |
+| Web UI beyond the ported areas; registration/root setup window, password reset, 2FA enrollment, passkeys, OAuth | Livewire (272 components), Fortify, Socialite | started (ADR 0007): login, projects, environments, keys, team view |
 | Teams, invitations, roles | `app/Livewire/Team`, `TeamPolicy` | API reads verified; invitations not started |
 | Servers: validation, SSH, proxy, Sentinel, Cloudflare tunnel, transfers | `ServersController`, `SshMultiplexingHelper`, `app/Actions/Server` | next slice |
-| Private keys | `SecurityController`, `PrivateKey` | needs encrypter (done) |
+| Private keys | `SecurityController`, `PrivateKey` | verified (API + UI) |
 | Git sources (GitHub/GitLab/Gitea/Bitbucket apps, webhooks) | `app/Http/Controllers/Webhook/*` | |
 | Applications and build packs (nixpacks, railpack, dockerfile, compose, static, image) | `ApplicationDeploymentJob` (6,479 lines) | critical, large |
 | Deployment queue, logs, cancellation, previews | `application_deployment_queues`, `bootstrap/helpers/applications.php` | |

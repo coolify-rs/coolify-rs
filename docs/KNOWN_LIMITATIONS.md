@@ -4,9 +4,14 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 
 ## Scope
 
-- Only 23 of 321 upstream API operations are implemented. Others answer `501 {"message":"This endpoint is not
+- Only 28 of 321 upstream API operations are implemented. Others answer `501 {"message":"This endpoint is not
   implemented in coolify-rs yet."}`.
-- No web UI, sessions, login, 2FA, OAuth, registration or root setup window (ADR 0003).
+- The web UI covers projects, environments, private keys and team viewing. Not available yet: registration and the
+  root setup window, password reset and forced password change, 2FA enrollment and recovery codes, passkeys, OAuth/SSO,
+  team invitations and member management, instance settings, API token management.
+- Browser sessions live in memory: a restart signs everyone out. Session limits: 10,000 sessions, 7-day idle
+  (`SESSION_LIFETIME`), 30-day absolute.
+- Users must sign in with an existing Coolify account (created in upstream Coolify).
 - No deployment engine, SSH execution, proxy management, backups, scheduler, notifications or webhooks yet.
 - coolify-rs cannot bootstrap a new installation: it requires a database created by upstream Coolify at the baseline
   (`main` @ b5823c7, 473 migrations); it runs no upstream DDL. A 4.5.0 database is served read-only until upstream

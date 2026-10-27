@@ -3,3 +3,5 @@ target
 .migration-runs
 compat/reference/secrets
 .git
+frontend/node_modules
+frontend/dist

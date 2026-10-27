@@ -88,6 +88,15 @@ impl Harness {
     }
 
     async fn build(tdb: TestDb) -> Self {
+        Self::build_with(tdb, None).await
+    }
+
+    /// A harness that also serves the web UI from `dir`.
+    pub async fn with_ui(dir: std::path::PathBuf) -> Self {
+        Self::build_with(TestDb::new(SEED).await, Some(dir)).await
+    }
+
+    async fn build_with(tdb: TestDb, ui_dir: Option<std::path::PathBuf>) -> Self {
         let mut tokens = Vec::new();
         for (i, (name, user, team, abilities, expires)) in TOKENS.iter().enumerate() {
             let plain = format!("{name}-secret-{i:02}");
@@ -112,6 +121,7 @@ impl Harness {
             TrustedProxies::default(),
             Options {
                 encrypter: Some(Encrypter::new(APP_KEY).unwrap()),
+                ui_dir,
                 ..Options::default()
             },
         );
@@ -158,6 +168,7 @@ impl Harness {
             ctype,
             allow,
             set_cookie: None,
+            csp: None,
             body: String::from_utf8(bytes.to_vec()).unwrap(),
         }
     }
@@ -177,6 +188,7 @@ impl Harness {
             ctype: String::new(),
             allow: None,
             set_cookie: None,
+            csp: None,
             body: String::from_utf8(bytes.to_vec()).unwrap(),
         }
     }
@@ -206,12 +218,17 @@ impl Harness {
             .headers()
             .get("set-cookie")
             .map(|v| v.to_str().unwrap().to_string());
+        let csp = res
+            .headers()
+            .get("content-security-policy")
+            .map(|v| v.to_str().unwrap().to_string());
         let bytes = res.into_body().collect().await.unwrap().to_bytes();
         Resp {
             status,
             ctype: String::new(),
             allow: None,
             set_cookie,
+            csp,
             body: String::from_utf8(bytes.to_vec()).unwrap(),
         }
     }
@@ -254,6 +271,7 @@ pub struct Resp {
     pub ctype: String,
     pub allow: Option<String>,
     pub set_cookie: Option<String>,
+    pub csp: Option<String>,
     pub body: String,
 }
 

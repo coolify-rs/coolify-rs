@@ -3,15 +3,17 @@
 A Rust implementation of [Coolify](https://github.com/coollabsio/coolify)'s API and data model, plus a migration
 engine that tracks upstream Coolify and ports its changes. *Working name; not affiliated with coolLabs.*
 
-**Status: early.** 23 of 321 upstream API operations are implemented and verified against the official
-`coollabsio/coolify` image built from upstream `main` @ b5823c7 (`sha-b5823c7`). There is no UI, deployment engine or server management yet. See
+**Status: early.** 28 of 321 upstream API operations are implemented and verified against the official
+`coollabsio/coolify` image built from upstream `main` @ b5823c7 (`sha-b5823c7`). A web UI covers what is ported (projects, environments, private keys, team). There is no deployment engine or server management yet. See
 [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md) and [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 
 ## What works
 
 - Upstream-compatible `/api`: token auth chain (Sanctum tokens, team binding, API switch, IP allowlist, abilities),
-  teams, projects and environments, health/version/disable. Response bodies are byte-identical to upstream for all
-  102 differential cases.
+  teams, projects and environments, private keys, health/version/disable. Response bodies are byte-identical to
+  upstream for all 131 differential cases.
+- Web UI (`frontend/`, Svelte): sign in with a Coolify account (2FA supported), switch teams, manage projects,
+  environments and private keys, view team members. Styled after upstream's `DESIGN.md`.
 - Adoption of an existing Coolify PostgreSQL database (schema of upstream `main` @ b5823c7) in place, with a schema
   guard that goes read-only when the database is older or newer than the build.
 - Laravel `APP_KEY` encryption interop in both directions.
@@ -38,7 +40,11 @@ docs/                   specs, decisions (docs/decisions), project state
 ```bash
 docker compose up -d --wait          # dev Postgres on 127.0.0.1:25432
 ./scripts/test.sh                    # fmt + clippy + all tests (against the upstream main@b5823c7 schema)
+(cd frontend && npm ci && npm run build)   # web UI into frontend/dist (served by coolify-rs)
 ```
+
+UI development with hot reload: run coolify-rs on `127.0.0.1:18080`, then `cd frontend && npm run dev`
+(Vite on :5173 proxies `/ui` and `/api`).
 
 Run against an existing Coolify database at the baseline (read the caveats in docs/DATABASE_COMPATIBILITY.md §6 first):
 
@@ -48,6 +54,9 @@ DATABASE_URL=postgres://coolify:...@host:5432/coolify COOLIFY_RS_LISTEN=127.0.0.
 ```
 
 Configuration: `DATABASE_URL` or upstream's `DB_HOST/DB_PORT/DB_DATABASE/DB_USERNAME/DB_PASSWORD`;
+`APP_KEY` / `APP_PREVIOUS_KEYS` (the upstream instance's key; needed for private keys and 2FA logins);
+`COOLIFY_RS_UI_DIR` (default `frontend/dist`); `COOLIFY_RS_SECURE_COOKIES=true` behind HTTPS; `SESSION_LIFETIME`
+(minutes, default 10080);
 `COOLIFY_RS_LISTEN` (default `0.0.0.0:8080`); `COOLIFY_VERSION` (reported by `/api/v1/version`, default `4.5.1-dev.b5823c777`);
 `COOLIFY_RS_TRUSTED_PROXIES` (IPs/CIDRs whose `X-Forwarded-For` is trusted; default none);
 `COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA`; `COOLIFY_RS_LOG_FORMAT=pretty|json`; `RUST_LOG`.

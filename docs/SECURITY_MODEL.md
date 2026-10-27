@@ -87,7 +87,23 @@ coolify-rs implements this format in `crates/coolify-compat/src/encrypter.rs`:
 | Malicious upstream change / prompt injection into the migration engine | High | Upstream content is data: the engine never executes upstream code, runs git with argv arrays, generates patches only in isolated worktrees, never merges, and escalates security-sensitive changes (implemented in `coolify-port`) |
 | Compromised AI agent | High | Layer-C agent hook disabled by default; when enabled, it receives a prompt pack and may only write inside its worktree; validation gates are enforced outside the agent (design; hook not enabled) |
 
-## 6. Rules for contributors and automation
+## 6. Browser sessions (coolify-rs)
+
+- Login: lowercased email, bcrypt verification (dummy verification for unknown users to equalize timing), TOTP for
+  confirmed 2FA with ±1 step and replay protection, 5 failed attempts per minute per email+IP and per email identity
+  (client IP from the trusted-proxy resolution, never from a client header). Accounts with `force_password_reset`
+  cannot sign in to coolify-rs until reset in Coolify.
+- Session id: 256-bit random, stored only as SHA-256; cookie `HttpOnly; SameSite=Lax` (+ `Secure` with
+  `COOLIFY_RS_SECURE_COOKIES=true`). Logout and password changes end sessions (the password hash fingerprint is checked
+  on every request); membership, role and the team's 2FA requirement are re-checked on every request.
+- CSRF: non-GET requests need the per-session `X-CSRF-Token` (419 otherwise); login only accepts JSON, which a
+  cross-site form cannot send without a CORS preflight (no CORS is enabled).
+- The `/ui/api` bridge grants the role-based abilities upstream's `UseSessionTeamApiToken` grants and skips the REST
+  API switch and IP allowlist, like upstream's canvas bridge.
+- UI responses carry `Content-Security-Policy: default-src 'self'` (no inline scripts), `X-Frame-Options: DENY`,
+  `nosniff`, `Referrer-Policy: same-origin`.
+
+## 7. Rules for contributors and automation
 
 - Never log secret values; types holding secrets must not derive `Debug`.
 - Never interpolate untrusted input into a shell string; use argv arrays.

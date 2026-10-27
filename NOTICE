@@ -19,6 +19,9 @@ retain that license; they are unmodified unless noted:
   compat/api/upstream-routes.json, compat/api/reference-route-list-4.5.0.json
   compat/baseline/supported-migrations.txt                (generated from Coolify source)
 
+frontend/src/app.css transcribes the design tokens and component anatomy of
+Coolify's DESIGN.md (Part 1, "portable design language").
+
 Validation messages, naming patterns and error strings reproduced in
 crates/coolify-api and crates/coolify-domain are taken from Coolify for
 API compatibility.

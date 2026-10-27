@@ -39,8 +39,26 @@ jobs:
         run: cargo fmt --all --check
       - name: clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - name: test (unit, integration, API contract against the upstream 4.5.0 schema)
+      - name: test (unit, integration, API contract against the upstream baseline schema)
         run: cargo test --workspace --all-features --locked
+
+  frontend:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.15.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: type-check
+        run: npm run check
+      - run: npm run build
+      - run: npm audit --audit-level=high
 
   audit:
     runs-on: ubuntu-24.04
