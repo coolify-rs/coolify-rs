@@ -1,0 +1,1480 @@
+//! `ApplicationDeploymentJob` for the Docker image build pack on a standalone
+//! Docker destination: the same commands in the same order, the same log
+//! entries in `application_deployment_queues.logs`, the same rows.
+//! compat/notes/deployment-job-dockerimage.md describes upstream's job.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
+use chrono::{NaiveDateTime, Utc};
+use coolify_db::applications::{self as apps, ApplicationRow, LogEntry};
+use coolify_db::servers::{self, ColumnValue};
+use coolify_remote::shell::quote;
+use coolify_remote::{RunOptions, Stream, Target};
+use serde_json::Value;
+
+use super::compose::{self, ENV_FILE};
+use super::labels::{self, LabelInput};
+use super::snapshot;
+use crate::Jobs;
+use crate::databases::env::{self, Owner, Var};
+use crate::server::ServerInfo;
+
+/// `ExecuteRemoteCommand::$batch_counter`: one per `execute_remote_command` call, never reset.
+static BATCH: AtomicU64 = AtomicU64::new(0);
+
+/// `config('constants.coolify.helper_version')`.
+const HELPER_VERSION: &str = "1.0.19";
+/// `config('constants.ssh.command_timeout')`.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(3600);
+const SEPARATOR: &str = "----------------------------------------";
+
+fn now() -> NaiveDateTime {
+    Utc::now().naive_utc()
+}
+
+/// Carbon's JSON form with microseconds.
+fn timestamp() -> String {
+    Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string()
+}
+
+/// One command of an `execute_remote_command` call.
+#[derive(Debug, Clone, Default)]
+struct Cmd {
+    command: String,
+    hidden: bool,
+    ignore_errors: bool,
+    save: Option<String>,
+    append: bool,
+    kind: Option<&'static str>,
+    skip_command_log: bool,
+    /// Content upstream sends on the command's stdin.
+    input: Option<String>,
+}
+
+impl Cmd {
+    fn new(command: impl Into<String>) -> Self {
+        Cmd {
+            command: command.into(),
+            append: true,
+            ..Default::default()
+        }
+    }
+    fn hidden(mut self) -> Self {
+        self.hidden = true;
+        self
+    }
+    fn ignore_errors(mut self) -> Self {
+        self.ignore_errors = true;
+        self
+    }
+    fn save(mut self, key: impl Into<String>, append: bool) -> Self {
+        self.save = Some(key.into());
+        self.append = append;
+        self
+    }
+    fn kind(mut self, kind: &'static str) -> Self {
+        self.kind = Some(kind);
+        self
+    }
+    fn skip_command_log(mut self) -> Self {
+        self.skip_command_log = true;
+        self
+    }
+    fn input(mut self, input: String) -> Self {
+        self.input = Some(input);
+        self
+    }
+}
+
+/// `executeInDocker($container, $command)`.
+fn in_docker(container: &str, command: &str) -> String {
+    format!(
+        "docker exec {container} bash -c '{}'",
+        command.replace('\'', "'\\''")
+    )
+}
+
+/// How a deployment ends early.
+#[derive(Debug)]
+enum Fail {
+    /// `Deployment cancelled by user` (code 69420): the status stays `cancelled-by-user`.
+    Cancelled,
+    /// A failure; `logged` when the message was already written to the log.
+    Error {
+        message: String,
+        code: i64,
+        logged: bool,
+    },
+}
+
+impl Fail {
+    fn new(message: impl Into<String>) -> Self {
+        Fail::Error {
+            message: message.into(),
+            code: 0,
+            logged: false,
+        }
+    }
+}
+
+type Step = Result<(), Fail>;
+
+/// The state of one deployment.
+struct Run {
+    jobs: Jobs,
+    queue_id: i64,
+    dep: String,
+    app: ApplicationRow,
+    server: ServerInfo,
+    server_name: String,
+    target: Target,
+    container: String,
+    commit: String,
+    workdir: String,
+    cfg: String,
+    stop_timeout: u32,
+    known: Vec<String>,
+    locked: Vec<String>,
+    saved: HashMap<String, String>,
+    generated_compose: Option<String>,
+    healthy: bool,
+}
+
+impl Run {
+    fn redact(&self, text: &str) -> String {
+        let known: Vec<&str> = self.known.iter().map(String::as_str).collect();
+        let locked: Vec<&str> = self.locked.iter().map(String::as_str).collect();
+        coolify_compat::redact::redact_text(text, &known, &locked)
+    }
+
+    /// `addLogEntry($message, $type, $hidden)` (batch 1, no command).
+    async fn log(&self, message: &str, kind: &'static str, hidden: bool) {
+        let mut output = self.redact(message.trim());
+        if output.starts_with('╔') {
+            output = format!("\n{output}");
+        }
+        let kind = if kind == "error" { "stderr" } else { kind };
+        let entry = LogEntry {
+            command: None,
+            output,
+            kind,
+            timestamp: timestamp(),
+            hidden,
+            batch: 1,
+        };
+        let _ = apps::append_log(&self.jobs.0.db, self.queue_id, &[entry], now()).await;
+    }
+
+    async fn info(&self, message: &str) {
+        self.log(message, "stdout", false).await;
+    }
+
+    async fn status(&self) -> String {
+        apps::deployment_by_id(&self.jobs.0.db, self.queue_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|d| d.status)
+            .unwrap_or_default()
+    }
+
+    /// `checkForCancellation()`.
+    async fn check_cancelled(&self) -> Step {
+        if self.status().await == "cancelled-by-user" {
+            self.info("Deployment cancelled by user, stopping execution.")
+                .await;
+            return Err(Fail::Cancelled);
+        }
+        Ok(())
+    }
+
+    /// `instant_remote_process($commands, $server)`.
+    async fn instant(&self, commands: &[&str], throw: bool) -> Result<Option<String>, Fail> {
+        match self
+            .jobs
+            .remote()
+            .run(&self.target, commands, RunOptions::op("deployment.instant"))
+            .await
+        {
+            Ok(out) => Ok(out),
+            Err(e) if throw => Err(Fail::Error {
+                message: e.message,
+                code: e.code.unwrap_or(1).into(),
+                logged: false,
+            }),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// `execute_remote_command(...$commands)`.
+    async fn exec(&mut self, commands: Vec<Cmd>) -> Step {
+        let batch = BATCH.fetch_add(1, Ordering::SeqCst) + 1;
+        for cmd in commands {
+            if self.status().await == "cancelled-by-user" {
+                return Err(Fail::Cancelled);
+            }
+            let script = match &cmd.input {
+                // Upstream pipes the input into ssh; here it travels inside the script.
+                Some(input) => {
+                    format!("echo '{}' | base64 -d | {}", B64.encode(input), cmd.command)
+                }
+                None => cmd.command.clone(),
+            };
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(Stream, String)>();
+            let db = self.jobs.0.db.clone();
+            let queue_id = self.queue_id;
+            let command_for_log = (!cmd.skip_command_log).then(|| self.redact(&cmd.command));
+            let known = self.known.clone();
+            let locked = self.locked.clone();
+            let (hidden, kind) = (cmd.hidden, cmd.kind);
+            let skip = cmd.skip_command_log;
+            let writer = tokio::spawn(async move {
+                let mut chunks: Vec<String> = Vec::new();
+                let mut stdout = String::new();
+                while let Some((stream, chunk)) = rx.recv().await {
+                    chunks.push(chunk.clone());
+                    if stream == Stream::Out {
+                        stdout.push_str(&chunk);
+                    }
+                    let k: Vec<&str> = known.iter().map(String::as_str).collect();
+                    let l: Vec<&str> = locked.iter().map(String::as_str).collect();
+                    let mut text = chunk.trim().to_owned();
+                    if skip {
+                        text = redact_base64_payloads(&text);
+                    }
+                    let mut output = coolify_compat::redact::redact_text(&text, &k, &l);
+                    if output.is_empty() {
+                        continue;
+                    }
+                    if output.starts_with('╔') {
+                        output = format!("\n{output}");
+                    }
+                    let entry = LogEntry {
+                        command: command_for_log.clone(),
+                        output,
+                        kind: kind.unwrap_or(if stream == Stream::Err {
+                            "stderr"
+                        } else {
+                            "stdout"
+                        }),
+                        timestamp: timestamp(),
+                        hidden,
+                        batch,
+                    };
+                    let _ = apps::append_log(&db, queue_id, &[entry], now()).await;
+                }
+                (chunks, stdout)
+            });
+            let result = self
+                .jobs
+                .remote()
+                .run_streaming(
+                    &self.target,
+                    &[script],
+                    RunOptions::op("deployment.command").timeout(COMMAND_TIMEOUT),
+                    tx,
+                )
+                .await;
+            let (chunks, stdout) = writer.await.unwrap_or_default();
+            if let Some(key) = &cmd.save {
+                let value = if cmd.append {
+                    chunks.concat()
+                } else {
+                    chunks
+                        .last()
+                        .map(|c| c.trim().to_owned())
+                        .unwrap_or_default()
+                };
+                if cmd.append {
+                    self.saved.entry(key.clone()).or_default().push_str(&value);
+                } else {
+                    self.saved.insert(key.clone(), value);
+                }
+            }
+            if let Err(e) = result
+                && !cmd.ignore_errors
+            {
+                if self.status().await == "cancelled-by-user" {
+                    return Err(Fail::Cancelled);
+                }
+                let code = e.code.unwrap_or(1);
+                let error = if e.message.starts_with("SSH command failed with exit code") {
+                    let out = stdout.trim();
+                    if out.is_empty() {
+                        "Command failed with no error output".to_owned()
+                    } else {
+                        out.to_owned()
+                    }
+                } else {
+                    e.message.clone()
+                };
+                let shown = if cmd.skip_command_log {
+                    "[command hidden because it contains sensitive data]".to_owned()
+                } else {
+                    self.redact(&cmd.command)
+                };
+                return Err(Fail::Error {
+                    message: format!(
+                        "Command execution failed (exit code {code}): {shown}\nError: {}",
+                        self.redact(&error)
+                    ),
+                    code: code.into(),
+                    logged: false,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// `dockerStopCommand($timeout, escapeshellarg($name), $server)`.
+    fn stop_command(&self, name: &str) -> String {
+        crate::databases::docker_stop_command(
+            self.stop_timeout,
+            &quote(name),
+            self.server.docker_version(),
+        )
+    }
+
+    /// `graceful_shutdown_container($name, $skipRemove)`.
+    async fn graceful_shutdown(&mut self, name: &str, skip_remove: bool) {
+        let stop = Cmd::new(self.stop_command(name)).hidden().ignore_errors();
+        if let Err(Fail::Error { message, .. }) = self.exec(vec![stop]).await {
+            self.log(
+                &format!("Error stopping container {name}: {message}"),
+                "stderr",
+                false,
+            )
+            .await;
+            return;
+        }
+        if !skip_remove {
+            self.remove_container(name).await;
+        }
+    }
+
+    /// `removeContainerWithTimeout($name)`.
+    async fn remove_container(&mut self, name: &str) {
+        let script = format!(
+            "if command -v timeout >/dev/null 2>&1; then output=$(timeout -k 10s 60s docker rm -f {q} 2>&1); exit_code=$?; else output=''; exit_code=124; fi; if [ \"$exit_code\" -eq 124 ]; then echo '__COOLIFY_CONTAINER_REMOVE_TIMEOUT__'; elif [ \"$exit_code\" -ne 0 ] && printf '%s' \"$output\" | grep -q 'No such container:'; then exit 0; elif [ \"$exit_code\" -ne 0 ]; then printf '%s\\n' \"$output\" >&2; else printf '%s\\n' \"$output\"; fi; exit $exit_code",
+            q = quote(name)
+        );
+        let key = format!("container_remove_{}", md5_hex(name));
+        let cmd = Cmd::new(format!("bash -c {}", quote(&script)))
+            .hidden()
+            .ignore_errors()
+            .save(key.clone(), false);
+        if self.exec(vec![cmd]).await.is_ok()
+            && self
+                .saved
+                .get(&key)
+                .is_some_and(|o| o.contains("__COOLIFY_CONTAINER_REMOVE_TIMEOUT__"))
+        {
+            self.log(
+                &format!("Warning: Removing container {name} timed out after 60 seconds. The deployment will continue and cleanup will be retried in 5 minutes."),
+                "stderr",
+                false,
+            )
+            .await;
+        }
+    }
+
+    /// `getCurrentApplicationContainerStatus($server, $application, 0)`: containers that belong
+    /// to the application (running and stopped).
+    async fn current_containers(&self) -> Vec<Value> {
+        let u = &self.app.uuid;
+        let lines = [
+            format!(
+                "docker ps -a --filter 'label=coolify.applicationUuid={u}' --format '{{{{json .}}}}'"
+            ),
+            format!(
+                "docker ps -a --filter 'label=coolify.applicationId' --filter 'label=com.docker.compose.project={u}' --format '{{{{json .}}}}'"
+            ),
+            format!(
+                "docker ps -a --filter 'label=coolify.applicationId' --filter 'name={u}' --format '{{{{json .}}}}'"
+            ),
+        ];
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let out = self
+            .instant(&refs, false)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let mut seen: Vec<String> = Vec::new();
+        let mut containers = Vec::new();
+        for line in out.lines() {
+            let Ok(v) = serde_json::from_str::<Value>(line.trim()) else {
+                continue;
+            };
+            let id = v
+                .get("ID")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            if seen.contains(&id) {
+                continue;
+            }
+            seen.push(id);
+            let labels = v.get("Labels").and_then(Value::as_str).unwrap_or_default();
+            if !labels.contains("coolify.pullRequestId=")
+                || labels.contains("coolify.pullRequestId=0")
+            {
+                containers.push(v);
+            }
+        }
+        containers
+    }
+}
+
+fn md5_hex(s: &str) -> String {
+    use md5::Digest as _;
+    md5::Md5::digest(s.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// `skip_command_log`: base64 payloads of the command that decode to text are not shown.
+fn redact_base64_payloads(text: &str) -> String {
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"[A-Za-z0-9+/]{16,}={0,2}").unwrap_or_else(|_| unreachable!())
+    });
+    RE.replace_all(text, |c: &regex::Captures<'_>| {
+        let m = &c[0];
+        match B64.decode(m).ok().and_then(|b| String::from_utf8(b).ok()) {
+            Some(t) if t.chars().all(|ch| !ch.is_control() || ch.is_whitespace()) => {
+                "<REDACTED>".to_owned()
+            }
+            _ => m.to_owned(),
+        }
+    })
+    .into_owned()
+}
+
+impl Jobs {
+    /// Runs the queued deployment `queue_id` (the `ApplicationDeploymentJob` queue worker).
+    pub async fn run_application_deployment(&self, queue_id: i64) {
+        let Ok(Some(q)) = apps::deployment_by_id(&self.0.db, queue_id).await else {
+            return;
+        };
+        let Ok(Some(app)) = apps::find_by_id(&self.0.db, q.application_id).await else {
+            return;
+        };
+        let server_id = q.int("server_id").unwrap_or_default();
+        let Ok(Some(server_row)) = servers::find_by_id(&self.0.db, server_id).await else {
+            return;
+        };
+        let server = ServerInfo::from_row(&server_row);
+        let server_name = server_row
+            .record
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let target = match server.target(self).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(deployment = %q.uuid, error = %e, "deployment cannot reach its server");
+                let _ = apps::transition_status(&self.0.db, queue_id, "failed", now()).await;
+                return;
+            }
+        };
+        let base = app
+            .str("base_directory")
+            .unwrap_or("/")
+            .trim_end_matches('/')
+            .to_owned();
+        let grace = app
+            .setting_int("stop_grace_period")
+            .filter(|g| (1..=3600).contains(g))
+            .unwrap_or(30);
+        let created = q
+            .str("created_at")
+            .and_then(|t| NaiveDateTime::parse_from_str(t, "%Y-%m-%dT%H:%M:%S%.f").ok())
+            .unwrap_or_else(now);
+        let mut run = Run {
+            jobs: self.clone(),
+            queue_id,
+            dep: q.uuid.clone(),
+            container: compose::container_name(&app, created),
+            commit: q.str("commit").unwrap_or("HEAD").to_owned(),
+            workdir: format!("/artifacts/{}{base}", q.uuid),
+            cfg: format!("/data/coolify/applications/{}", app.uuid),
+            stop_timeout: u32::try_from(grace).unwrap_or(30),
+            app,
+            server,
+            server_name,
+            target,
+            known: Vec::new(),
+            locked: Vec::new(),
+            saved: HashMap::new(),
+            generated_compose: None,
+            healthy: false,
+        };
+
+        // handle()
+        if q.status == "cancelled-by-user" {
+            run.info("Deployment was cancelled before starting.").await;
+            return;
+        }
+        let host = std::env::var("HOSTNAME")
+            .ok()
+            .or_else(hostname)
+            .unwrap_or_default();
+        let _ = apps::update_deployment(
+            &self.0.db,
+            queue_id,
+            &[
+                ("status", ColumnValue::Text(Some("in_progress".into()))),
+                ("horizon_job_worker", ColumnValue::Text(Some(host))),
+            ],
+            now(),
+        )
+        .await;
+        if !run.server.is_functional() {
+            run.info("Server is not functional.").await;
+            run.failed(&Fail::new("Server is not functional.")).await;
+            return;
+        }
+        let result = run.deploy().await;
+        if let Err(e) = &result {
+            run.failed(e).await;
+        }
+        run.finally().await;
+    }
+}
+
+fn hostname() -> Option<String> {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_owned())
+}
+
+impl Run {
+    async fn deploy(&mut self) -> Step {
+        let net = quote(self.app.network());
+        self.instant(
+            &[&format!(
+                "docker network inspect {net} -f '{{{{json .Containers}}}}' "
+            )],
+            true,
+        )
+        .await?;
+        self.detect_buildkit().await;
+        self.deploy_docker_image().await?;
+        self.post_deployment().await;
+        Ok(())
+    }
+
+    /// `detectBuildKitCapabilities()`.
+    async fn detect_buildkit(&mut self) {
+        let name = format!("deployment server ({})", self.server_name);
+        let version = match self
+            .instant(&["docker version --format '{{.Server.Version}}'"], true)
+            .await
+        {
+            Ok(v) => v.unwrap_or_default(),
+            Err(Fail::Error { message, .. }) => {
+                self.info(&format!(
+                    "Could not detect BuildKit capabilities on {name}: {message}"
+                ))
+                .await;
+                return;
+            }
+            Err(Fail::Cancelled) => return,
+        };
+        let parsed = crate::checks::parse_docker_engine_version(Some(&version));
+        let n = now();
+        let _ = servers::update_settings(
+            &self.jobs.0.db,
+            self.server.id,
+            &[
+                ("docker_version", ColumnValue::Text(parsed.clone())),
+                ("docker_version_checked_at", ColumnValue::Time(n)),
+            ],
+            n,
+        )
+        .await;
+        if let Some(p) = &parsed {
+            self.server
+                .settings
+                .insert("docker_version".into(), Value::String(p.clone()));
+        }
+        let mut parts = version.split('.').map(|x| x.parse::<u64>().unwrap_or(0));
+        let (major, minor) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+        if major < 18 || (major == 18 && minor < 9) {
+            self.info(&format!(
+                "Docker {version} on {name} does not support BuildKit (requires 18.09+)."
+            ))
+            .await;
+            return;
+        }
+        let buildx = self
+            .instant(&["docker buildx version >/dev/null 2>&1 && echo 'available' || echo 'not-available'"], true)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if buildx == "available" {
+            self.info(&format!(
+                "Docker {version} with BuildKit and Buildx detected on {name}."
+            ))
+            .await;
+        } else {
+            let progress = self
+                .instant(
+                    &["DOCKER_BUILDKIT=1 docker build --help 2>&1 | grep -q '\\-\\-progress' && echo 'supported' || echo 'not-supported'"],
+                    true,
+                )
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            if progress == "supported" {
+                self.info(&format!(
+                    "Docker {version} with BuildKit support detected on {name}."
+                ))
+                .await;
+            } else {
+                self.info(&format!(
+                    "Docker {version} on {name} does not support BuildKit. Build output progress will be limited."
+                ))
+                .await;
+            }
+        }
+    }
+
+    /// `deploy_dockerimage_buildpack()`.
+    async fn deploy_docker_image(&mut self) -> Step {
+        let image_name = self
+            .app
+            .str("docker_registry_image_name")
+            .unwrap_or_default()
+            .to_owned();
+        let tag = self
+            .app
+            .str("docker_registry_image_tag")
+            .filter(|t| !t.is_empty())
+            .unwrap_or("latest")
+            .to_owned();
+        let (display, image) = match tag.strip_prefix("sha256-") {
+            Some(hash) => (
+                format!("{image_name}@sha256:{hash}"),
+                format!("{image_name}@sha256:{hash}"),
+            ),
+            None => (format!("{image_name}:{tag}"), format!("{image_name}:{tag}")),
+        };
+        // generate_image_names(): a leftover inline Dockerfile wins.
+        let image = if self.app.str("dockerfile").is_some_and(|d| !d.is_empty()) {
+            format!(
+                "{}:latest",
+                self.app
+                    .str("docker_registry_image_name")
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or(&self.app.uuid)
+            )
+        } else {
+            image
+        };
+        self.info(&format!(
+            "Starting deployment of {display} to {}.",
+            self.server_name
+        ))
+        .await;
+        self.prepare_builder_image().await?;
+        self.generate_compose_file(&image).await?;
+        self.save_runtime_environment().await?;
+        self.rolling_update().await
+    }
+
+    /// `prepare_builder_image()`.
+    async fn prepare_builder_image(&mut self) -> Step {
+        self.check_cancelled().await?;
+        let settings = coolify_db::instance::deployment_settings(&self.jobs.0.db)
+            .await
+            .unwrap_or_default();
+        let registry = settings
+            .docker_registry_url
+            .filter(|r| !r.is_empty())
+            .unwrap_or_else(|| "docker.io".into());
+        let version = match settings.helper_version.filter(|v| !v.is_empty()) {
+            Some(v) if version_gt(&v, HELPER_VERSION) => v,
+            _ => HELPER_VERSION.to_owned(),
+        };
+        let helper = format!("{registry}/coollabsio/coolify-helper:{version}");
+        let home = self
+            .instant(&["echo $HOME"], true)
+            .await?
+            .unwrap_or_default();
+        self.instant(&[&format!("mkdir -p {home}/.docker/buildx")], true)
+            .await?;
+        let config = self
+            .instant(
+                &[&format!(
+                    "test -f {home}/.docker/config.json && echo 'OK' || echo 'NOK'"
+                )],
+                true,
+            )
+            .await?
+            .unwrap_or_default();
+        let buildx = format!("-v {home}/.docker/buildx:/root/.docker/buildx");
+        let net = quote(self.app.network());
+        let dep = &self.dep;
+        // `{env_flags}` and `{seccompMounts}` are empty for a Docker image deployment.
+        let run_command = if config == "OK" {
+            format!(
+                "docker run -d --network {net} --name {dep}  --rm -v {home}/.docker/config.json:/root/.docker/config.json:ro {buildx} -v /var/run/docker.sock:/var/run/docker.sock  {helper}"
+            )
+        } else {
+            format!(
+                "docker run -d --network {net} --name {dep}  --rm {buildx} -v /var/run/docker.sock:/var/run/docker.sock  {helper}"
+            )
+        };
+        self.info(&format!("Preparing container with helper image: {helper}"))
+            .await;
+        let dep = self.dep.clone();
+        self.graceful_shutdown(&dep, true).await;
+        let mkdir = in_docker(&dep, &format!("mkdir -p /artifacts/{dep}"));
+        self.exec(vec![Cmd::new(run_command).hidden(), Cmd::new(mkdir)])
+            .await
+    }
+
+    /// `generate_compose_file()`.
+    async fn generate_compose_file(&mut self, image: &str) -> Step {
+        self.check_cancelled().await?;
+        let mkdir = in_docker(&self.dep, &format!("mkdir -p {}", self.workdir));
+        let cfg = format!("mkdir -p {}", self.cfg);
+        self.exec(vec![Cmd::new(mkdir), Cmd::new(cfg)]).await?;
+        let db = self.jobs.0.db.clone();
+        let server_row = servers::find_by_id(&db, self.server.id)
+            .await
+            .map_err(|e| Fail::new(e.to_string()))?
+            .ok_or_else(|| Fail::new("Server not found."))?;
+        let mut labels: Vec<String> = match compose::stored_labels(self.app.str("custom_labels")) {
+            Some(text) => {
+                let text = match text {
+                    Ok(t) => t,
+                    Err(()) => {
+                        labels::application(&LabelInput::new(&self.app, &server_row)).join("\n")
+                    }
+                };
+                // parseContainerLabels() saves the base64 form; `coolify.` lines are dropped.
+                let kept: Vec<String> = text
+                    .split("\r\n")
+                    .flat_map(|l| l.split(['\n', '\r']))
+                    .filter(|l| !l.starts_with("coolify."))
+                    .map(str::to_owned)
+                    .collect();
+                let stored = B64.encode(kept.join("\n"));
+                let _ = apps::update_if_changed(
+                    &db,
+                    self.app.id,
+                    &[("custom_labels", ColumnValue::Text(Some(stored.clone())))],
+                    now(),
+                )
+                .await;
+                self.app
+                    .raw
+                    .insert("custom_labels".into(), Value::String(stored));
+                kept
+            }
+            None if self.app.setting_bool("is_container_label_readonly_enabled") => {
+                labels::application(&LabelInput::new(&self.app, &server_row))
+            }
+            None => return Err(Fail::new("Undefined variable $labels")),
+        };
+        // traefikHostRulesWithoutIpv6Brackets
+        labels = labels
+            .into_iter()
+            .map(|l| strip_ipv6_brackets(&l))
+            .collect();
+        if self
+            .app
+            .settings
+            .get("is_container_label_escape_enabled")
+            .and_then(Value::as_bool)
+            != Some(false)
+        {
+            labels = labels.into_iter().map(|l| l.replace('$', "$$")).collect();
+        }
+        let version = self.jobs.version();
+        labels.extend(labels::default_labels(
+            &self.app.uuid,
+            self.app
+                .project
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            self.app.str("name").unwrap_or_default(),
+            self.app
+                .environment
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            &version,
+        ));
+        let volumes = apps::persistent_volumes(&db, self.app.id)
+            .await
+            .map_err(|e| Fail::new(e.to_string()))?;
+        let network = self.app.network().to_owned();
+        let yaml = compose::compose(&compose::ComposeInput {
+            a: &self.app,
+            container_name: &self.container,
+            image,
+            network: &network,
+            labels,
+            volumes: &volumes,
+        });
+        self.generated_compose = Some(yaml);
+        Ok(())
+    }
+
+    /// `save_runtime_environment_variables()`.
+    async fn save_runtime_environment(&mut self) -> Step {
+        let enc = self
+            .jobs
+            .0
+            .encrypter
+            .as_ref()
+            .ok_or_else(|| Fail::new("No application encryption key has been specified."))?;
+        let owner = Owner {
+            morph: apps::MORPH,
+            id: self.app.id,
+            team_id: self.app.team_id,
+            project_id: self.app.project.get("id").and_then(Value::as_i64),
+            environment_id: self.app.environment.get("id").and_then(Value::as_i64),
+        };
+        let variables: Vec<Var> = env::load_for(&self.jobs.0.db, enc, &owner, Some(self.server.id))
+            .await
+            .map_err(Fail::new)?;
+        // Log redaction: all values when `redact_all_env_values_in_logs`, locked values always.
+        let redact_all = self
+            .app
+            .settings
+            .get("redact_all_env_values_in_logs")
+            .and_then(Value::as_bool)
+            != Some(false);
+        for v in &variables {
+            if let Some(value) = v.resolved.clone().filter(|x| !x.is_empty()) {
+                if v.is_shown_once {
+                    self.locked.push(value);
+                } else if redact_all {
+                    self.known.push(value);
+                }
+            }
+        }
+        let project = self
+            .app
+            .project
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let environment = self
+            .app
+            .environment
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let ip = self.server.ip.clone();
+        let (envs, warning) = compose::runtime_env(
+            &self.app,
+            &variables,
+            &compose::EnvContext {
+                commit: &self.commit,
+                container_name: &self.container,
+                project_name: project.as_deref(),
+                environment_name: environment.as_deref(),
+                server_ip: Some(&ip),
+            },
+        );
+        if let Some(w) = warning {
+            self.log(&w, "stderr", false).await;
+        }
+        self.log(
+            &format!("Creating {ENV_FILE} file with runtime variables for container."),
+            "stdout",
+            true,
+        )
+        .await;
+        let b64 = B64.encode(envs.join("\n"));
+        let w = &self.workdir;
+        let write_work = in_docker(
+            &self.dep,
+            &format!(
+                "rm -f {w}/{ENV_FILE} && echo '{b64}' | base64 -d | tee {w}/{ENV_FILE} > /dev/null"
+            ),
+        );
+        self.exec(vec![Cmd::new(write_work).skip_command_log()])
+            .await?;
+        let c = &self.cfg;
+        self.exec(vec![
+            Cmd::new(format!("rm -f {c}/{ENV_FILE}")).hidden(),
+            Cmd::new(format!(
+                "echo '{b64}' | base64 -d | tee {c}/{ENV_FILE} > /dev/null"
+            ))
+            .skip_command_log(),
+        ])
+        .await
+    }
+
+    /// `rolling_update()`.
+    async fn rolling_update(&mut self) -> Step {
+        let inner = async {
+            self.check_cancelled().await?;
+            // write_compose_file_to_workdir()
+            let w = self.workdir.clone();
+            let dep = self.dep.clone();
+            let yaml = self.generated_compose.clone().unwrap_or_default();
+            self.exec(vec![
+                Cmd::new(format!("docker exec {dep} rm -f {w}/docker-compose.yaml")).hidden(),
+                Cmd::new(format!(
+                    "docker exec -i {dep} tee {w}/docker-compose.yaml > /dev/null"
+                ))
+                .input(yaml)
+                .hidden(),
+            ])
+            .await?;
+            let options = self
+                .app
+                .str("custom_docker_run_options")
+                .unwrap_or_default()
+                .to_owned();
+            let mapped = self
+                .app
+                .str("ports_mappings")
+                .is_some_and(|p| !p.is_empty());
+            let consistent = self
+                .app
+                .setting_bool("is_consistent_container_name_enabled");
+            if mapped || consistent || options.contains("--ip") {
+                self.info(SEPARATOR).await;
+                if mapped {
+                    self.info("Application has ports mapped to the host system, rolling update is not supported.").await;
+                }
+                if consistent {
+                    self.info("Consistent container name feature enabled, rolling update is not supported.").await;
+                }
+                if consistent
+                    && self
+                        .app
+                        .setting_str("custom_internal_name")
+                        .is_some_and(|n| !n.is_empty())
+                {
+                    self.info("Custom internal name is set, rolling update is not supported.")
+                        .await;
+                }
+                if options.contains("--ip") {
+                    self.info("Custom IP address is set, rolling update is not supported.")
+                        .await;
+                }
+                self.stop_running_container(true).await?;
+                self.start_by_compose_file().await
+            } else {
+                self.info(SEPARATOR).await;
+                self.info("Rolling update started.").await;
+                self.start_by_compose_file().await?;
+                self.health_check().await?;
+                self.wait_for_proxy().await;
+                self.stop_running_container(false).await?;
+                self.info("Rolling update completed.").await;
+                Ok(())
+            }
+        };
+        match inner.await {
+            Err(Fail::Error {
+                message,
+                code,
+                logged,
+            }) => Err(Fail::Error {
+                message: format!(
+                    "Rolling update failed (App\\Exceptions\\DeploymentException): {message}"
+                ),
+                code,
+                logged,
+            }),
+            other => other,
+        }
+    }
+
+    /// `start_by_compose_file()`.
+    async fn start_by_compose_file(&mut self) -> Step {
+        let net = quote(self.app.network());
+        let c = self.cfg.clone();
+        let started = async {
+            self.exec(vec![
+                Cmd::new(format!("touch {c}/{ENV_FILE}")).hidden(),
+                Cmd::new(format!(
+                    "docker network connect {net} coolify-proxy >/dev/null 2>&1 || true"
+                ))
+                .hidden()
+                .ignore_errors(),
+            ])
+            .await?;
+            self.info("Pulling latest images from the registry.").await;
+            let u = self.app.uuid.clone();
+            let w = self.workdir.clone();
+            let dep = self.dep.clone();
+            self.exec(vec![
+                Cmd::new(in_docker(
+                    &dep,
+                    &format!("docker compose --project-name {u} --project-directory {w} pull"),
+                ))
+                .hidden(),
+                // `{$this->coolify_variables}` is empty here: the command starts with a space.
+                Cmd::new(in_docker(
+                    &dep,
+                    &format!(
+                        " docker compose --project-name {u} --project-directory {w} up --build -d"
+                    ),
+                ))
+                .hidden(),
+            ])
+            .await?;
+            self.info("New container started.").await;
+            Ok(())
+        };
+        match started.await {
+            Err(Fail::Error {
+                message,
+                code,
+                logged,
+            }) => Err(Fail::Error {
+                message: format!("Failed to start container: {message}"),
+                code,
+                logged,
+            }),
+            other => other,
+        }
+    }
+
+    /// `health_check()`.
+    async fn health_check(&mut self) -> Step {
+        let enabled = self
+            .app
+            .raw
+            .get("health_check_enabled")
+            .and_then(Value::as_bool)
+            != Some(false);
+        let custom = self.app.bool("custom_healthcheck_found");
+        if !enabled && !custom {
+            self.healthy = true;
+            return Ok(());
+        }
+        if !enabled {
+            self.info("Using the custom healthcheck from the Dockerfile.")
+                .await;
+        }
+        self.info("Waiting for healthcheck to pass on the new container.")
+            .await;
+        if let Some((_, full)) = compose::healthcheck_command(&self.app).filter(|_| enabled) {
+            let what = if self.app.str("health_check_type") == Some("cmd") {
+                "command"
+            } else {
+                "URL"
+            };
+            self.info(&format!(
+                "Healthcheck {what} (inside the container): {full}"
+            ))
+            .await;
+        }
+        let start_period = self.app.int("health_check_start_period").unwrap_or(5);
+        let interval = self.app.int("health_check_interval").unwrap_or(5);
+        let retries = self.app.int("health_check_retries").unwrap_or(10);
+        self.info(&format!(
+            "Waiting for the start period ({start_period} seconds) before starting healthcheck."
+        ))
+        .await;
+        tokio::time::sleep(Duration::from_secs(
+            u64::try_from(start_period).unwrap_or(0),
+        ))
+        .await;
+        let cn = quote(&self.container);
+        let mut status = String::new();
+        let mut counter = 1;
+        while counter <= retries {
+            self.exec(vec![
+                Cmd::new(format!(
+                    "docker inspect --format='{{{{json .State.Health.Status}}}}' {cn}"
+                ))
+                .hidden()
+                .save("health_check", false),
+                Cmd::new(format!(
+                    "docker inspect --format='{{{{json .State.Health.Log}}}}' {cn}"
+                ))
+                .hidden()
+                .save("health_check_logs", false),
+            ])
+            .await?;
+            status = self.saved.get("health_check").cloned().unwrap_or_default();
+            self.info(&format!(
+                "Attempt {counter} of {retries} | Healthcheck status: {status}"
+            ))
+            .await;
+            if let Some(last) = self
+                .saved
+                .get("health_check_logs")
+                .and_then(|l| serde_json::from_str::<Value>(l).ok())
+                .and_then(|v| v.as_array().and_then(|a| a.last().cloned()))
+            {
+                let output = last
+                    .get("Output")
+                    .and_then(Value::as_str)
+                    .filter(|o| !o.is_empty())
+                    .unwrap_or("(no logs)")
+                    .to_owned();
+                let code = last
+                    .get("ExitCode")
+                    .map_or_else(|| "(no return code)".to_owned(), |c| c.to_string());
+                self.info(&format!("Healthcheck logs: {output} | Return code: {code}"))
+                    .await;
+            }
+            match status.trim_matches('"') {
+                "healthy" => {
+                    self.healthy = true;
+                    let _ = apps::update_if_changed(
+                        &self.jobs.0.db,
+                        self.app.id,
+                        &[(
+                            "status",
+                            ColumnValue::Text(Some("running:unhealthy".into())),
+                        )],
+                        now(),
+                    )
+                    .await;
+                    self.info("New container is healthy.").await;
+                    break;
+                }
+                "unhealthy" => {
+                    self.healthy = false;
+                    self.log("New container is unhealthy.", "error", false)
+                        .await;
+                    self.query_logs().await;
+                    break;
+                }
+                _ => {
+                    counter += 1;
+                    tokio::time::sleep(Duration::from_secs(u64::try_from(interval).unwrap_or(5)))
+                        .await;
+                }
+            }
+        }
+        if status.trim_matches('"') == "starting" {
+            self.query_logs().await;
+        }
+        Ok(())
+    }
+
+    /// `query_logs()`.
+    async fn query_logs(&mut self) {
+        self.info(SEPARATOR).await;
+        self.info("Container logs:").await;
+        let cn = quote(&self.container);
+        let _ = self
+            .exec(vec![
+                Cmd::new(format!("docker logs -n 100 {cn}"))
+                    .kind("stderr")
+                    .ignore_errors(),
+            ])
+            .await;
+        self.info(SEPARATOR).await;
+    }
+
+    /// `wait_for_proxy_to_route_new_container()`.
+    async fn wait_for_proxy(&mut self) {
+        let seconds = self
+            .app
+            .setting_int("rolling_update_drain_seconds")
+            .unwrap_or(5)
+            .clamp(0, 300);
+        if seconds == 0 || !self.healthy {
+            return;
+        }
+        let old: Vec<String> = self
+            .current_containers()
+            .await
+            .into_iter()
+            .filter(|c| c.get("State").and_then(Value::as_str) == Some("running"))
+            .filter_map(|c| c.get("Names").and_then(Value::as_str).map(str::to_owned))
+            .filter(|n| *n != self.container)
+            .collect();
+        if old.is_empty() {
+            return;
+        }
+        let names: Vec<String> = std::iter::once(self.container.clone())
+            .chain(old)
+            .map(|n| quote(&n))
+            .collect();
+        let out = self
+            .instant(
+                &[&format!(
+                    "docker inspect --format '{{{{json .Config.Labels}}}}' {}",
+                    names.join(" ")
+                )],
+                false,
+            )
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let mut sets: Vec<String> = Vec::new();
+        for line in out.trim().lines() {
+            let labels: serde_json::Map<String, Value> =
+                serde_json::from_str(line).unwrap_or_default();
+            let mut proxy: Vec<(String, Value)> = labels
+                .into_iter()
+                .filter(|(k, _)| k.starts_with("traefik.") || k.starts_with("caddy"))
+                .collect();
+            proxy.sort_by(|a, b| a.0.cmp(&b.0));
+            let key = serde_json::to_string(&proxy).unwrap_or_default();
+            if !sets.contains(&key) {
+                sets.push(key);
+            }
+        }
+        if sets.len() > 1 {
+            self.info("The proxy labels changed, so the old containers stop without waiting.")
+                .await;
+            return;
+        }
+        self.info(&format!(
+            "Waiting {seconds} seconds for the proxy to send traffic to the new container."
+        ))
+        .await;
+        tokio::time::sleep(Duration::from_secs(u64::try_from(seconds).unwrap_or(5))).await;
+    }
+
+    /// `stop_running_container($force)`.
+    async fn stop_running_container(&mut self, force: bool) -> Step {
+        self.info("Removing old containers.").await;
+        if self.healthy || force {
+            let consistent = self
+                .app
+                .setting_bool("is_consistent_container_name_enabled");
+            let mut names: Vec<String> = self
+                .current_containers()
+                .await
+                .into_iter()
+                .filter_map(|c| c.get("Names").and_then(Value::as_str).map(str::to_owned))
+                .collect();
+            if consistent {
+                names.push(self.container.clone());
+                names.dedup();
+            } else {
+                names.retain(|n| *n != self.container);
+            }
+            for name in names {
+                self.graceful_shutdown(&name, false).await;
+            }
+            return Ok(());
+        }
+        self.info(SEPARATOR).await;
+        self.info("WARNING: Dockerfile or Docker Image based deployment detected. The healthcheck needs a curl or wget command to check the health of the application. Please make sure that it is available in the image or turn off healthcheck on Coolify's UI.").await;
+        self.info(SEPARATOR).await;
+        self.info("New container is not healthy, rolling back to the old container.")
+            .await;
+        self.fail_deployment().await;
+        let cn = self.container.clone();
+        self.graceful_shutdown(&cn, false).await;
+        Ok(())
+    }
+
+    /// `failDeployment()` → `transitionToStatus(FAILED)`.
+    async fn fail_deployment(&self) {
+        let prev = apps::transition_status(&self.jobs.0.db, self.queue_id, "failed", now())
+            .await
+            .ok()
+            .flatten();
+        if !matches!(
+            prev.as_deref(),
+            Some("finished" | "failed" | "cancelled-by-user")
+        ) {
+            self.jobs
+                .queue_next_deployment(self.app.id, self.server.id)
+                .await;
+        }
+    }
+
+    /// `post_deployment()`.
+    async fn post_deployment(&mut self) {
+        // completeDeployment() → transitionToStatus(FINISHED)
+        let prev = apps::transition_status(&self.jobs.0.db, self.queue_id, "finished", now())
+            .await
+            .ok()
+            .flatten();
+        if !matches!(
+            prev.as_deref(),
+            Some("finished" | "failed" | "cancelled-by-user")
+        ) {
+            self.handle_successful_deployment().await;
+            self.jobs
+                .queue_next_deployment(self.app.id, self.server.id)
+                .await;
+        }
+        // GetContainersStatus::dispatch($server)
+        let jobs = self.jobs.clone();
+        let server_id = self.server.id;
+        tokio::spawn(async move { jobs.check_server_applications(server_id).await });
+    }
+
+    /// `handleSuccessfulDeployment()`.
+    async fn handle_successful_deployment(&mut self) {
+        let db = self.jobs.0.db.clone();
+        let n = now();
+        let _ = apps::update_if_changed(
+            &db,
+            self.app.id,
+            &[
+                ("restart_count", ColumnValue::Int(0)),
+                ("last_restart_at", ColumnValue::Text(None)),
+                ("last_restart_type", ColumnValue::Text(None)),
+                ("restart_limit_reached", ColumnValue::Bool(false)),
+            ],
+            n,
+        )
+        .await;
+        // markDeploymentConfigurationApplied()
+        if let (Ok(Some(fresh)), Some(enc)) = (
+            apps::find_by_id(&db, self.app.id).await,
+            self.jobs.0.encrypter.as_ref(),
+        ) && let Ok(hash) = snapshot::config_hash(&db, enc, &fresh).await
+        {
+            let _ = apps::update_deployment(
+                &db,
+                self.queue_id,
+                &[("configuration_hash", ColumnValue::Text(Some(hash.clone())))],
+                n,
+            )
+            .await;
+            let _ = apps::update_if_changed(
+                &db,
+                self.app.id,
+                &[("config_hash", ColumnValue::Text(Some(hash)))],
+                n,
+            )
+            .await;
+        }
+    }
+
+    /// `failed($e)`: the failure lines (after `failDeployment()`).
+    async fn failed(&mut self, e: &Fail) {
+        let (message, code, logged) = match e {
+            Fail::Cancelled => return,
+            Fail::Error {
+                message,
+                code,
+                logged,
+            } => (message.clone(), *code, *logged),
+        };
+        self.fail_deployment().await;
+        self.log("========================================", "stderr", false)
+            .await;
+        if logged {
+            self.log("Deployment failed.", "stderr", false).await;
+        } else {
+            let shown = if message.is_empty() {
+                "Unknown error occurred"
+            } else {
+                message.as_str()
+            };
+            self.log(&format!("Deployment failed: {shown}"), "stderr", false)
+                .await;
+        }
+        self.log(
+            "Error type: App\\Exceptions\\DeploymentException",
+            "stderr",
+            true,
+        )
+        .await;
+        self.log(&format!("Error code: {code}"), "stderr", true)
+            .await;
+    }
+
+    /// The `finally` block of `handle()`.
+    async fn finally(&mut self) {
+        let db = self.jobs.0.db.clone();
+        let finished = now();
+        let _ = apps::update_deployment(
+            &db,
+            self.queue_id,
+            &[("finished_at", ColumnValue::Time(finished))],
+            finished,
+        )
+        .await;
+        // write_deployment_configurations()
+        if let Some(yaml) = self.generated_compose.clone() {
+            let name = sanitize_string(self.app.str("name").unwrap_or_default());
+            let readme = format!(
+                "Resource name: {name}\nLatest Deployment Date: {}",
+                finished.format("%Y-%m-%d %H:%M:%S")
+            );
+            let c = self.cfg.clone();
+            let written = self
+                .exec(vec![
+                    Cmd::new(format!("mkdir -p {c}")),
+                    Cmd::new(format!("rm -f {c}/docker-compose.yaml {c}/README.md")).hidden(),
+                    Cmd::new(format!("tee {c}/docker-compose.yaml > /dev/null")).input(yaml),
+                    Cmd::new(format!("echo '{readme}' | tee {c}/README.md > /dev/null")),
+                ])
+                .await;
+            if let Err(Fail::Error { message, .. }) = written {
+                self.log(
+                    &format!("Warning: Failed to write deployment configurations: {message}"),
+                    "stderr",
+                    false,
+                )
+                .await;
+            }
+        }
+        let dep = self.dep.clone();
+        self.info(&format!("Gracefully shutting down build container: {dep}"))
+            .await;
+        self.graceful_shutdown(&dep, true).await;
+    }
+}
+
+/// `sanitize_string()`: strip_tags, htmlspecialchars (ENT_QUOTES | ENT_HTML5), no control characters.
+fn sanitize_string(s: &str) -> String {
+    let stripped = coolify_domain::naming::strip_tags(Some(s));
+    let escaped = stripped
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;");
+    escaped
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
+/// `traefikHostRulesWithoutIpv6Brackets` for one label.
+fn strip_ipv6_brackets(label: &str) -> String {
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"Host\(`\[([0-9A-Fa-f:.]+)\]`\)").unwrap_or_else(|_| unreachable!())
+    });
+    RE.replace_all(label, |c: &regex::Captures<'_>| {
+        if c[1].parse::<std::net::Ipv6Addr>().is_ok() {
+            format!("Host(`{}`)", &c[1])
+        } else {
+            c[0].to_owned()
+        }
+    })
+    .into_owned()
+}
+
+/// `version_compare($a, $b, '>')` for dotted numeric versions.
+fn version_gt(a: &str, b: &str) -> bool {
+    let parse = |v: &str| {
+        v.split('.')
+            .map(|x| x.parse::<u64>().unwrap_or(0))
+            .collect::<Vec<_>>()
+    };
+    parse(a) > parse(b)
+}

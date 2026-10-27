@@ -74,9 +74,11 @@ impl AppState {
         trusted_proxies: TrustedProxies,
         o: Options,
     ) -> Self {
-        let jobs = o
-            .remote
-            .map(|r| coolify_jobs::Jobs::new(db.clone(), r, o.encrypter.clone()));
+        let jobs = o.remote.map(|r| {
+            let jobs = coolify_jobs::Jobs::new(db.clone(), r, o.encrypter.clone());
+            jobs.set_version(version.clone());
+            jobs
+        });
         Self(Arc::new(Inner {
             jobs,
             db,

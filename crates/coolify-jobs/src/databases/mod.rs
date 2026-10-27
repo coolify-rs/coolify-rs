@@ -27,8 +27,9 @@ mod mysql;
 mod postgresql;
 mod redis;
 
+pub(crate) use common::docker_stop_command;
 pub use common::slug;
-use common::{CONFIGURATION_DIR, docker_stop_command, hrtime, now};
+use common::{CONFIGURATION_DIR, hrtime, now};
 
 /// Everything a `Start*` action reads, resolved: the database, its decrypted
 /// `encrypted` columns and runtime variables, the server and the destination.
@@ -688,11 +689,18 @@ impl Jobs {
             let mut tick = tokio::time::interval(Duration::from_secs(60));
             loop {
                 tick.tick().await;
-                let Ok(ids) = dbs::servers_with_databases(&jobs.0.db).await else {
-                    continue;
-                };
-                for id in ids {
-                    jobs.check_server_databases(id).await;
+                if let Ok(ids) = dbs::servers_with_databases(&jobs.0.db).await {
+                    for id in ids {
+                        jobs.check_server_databases(id).await;
+                    }
+                }
+                // GetContainersStatus also covers the applications of a server.
+                if let Ok(ids) =
+                    coolify_db::applications::servers_with_applications(&jobs.0.db).await
+                {
+                    for id in ids {
+                        jobs.check_server_applications(id).await;
+                    }
                 }
             }
         });

@@ -80,6 +80,8 @@ impl Key {
 pub struct Encrypter {
     current: Key,
     previous: Vec<Key>,
+    /// The `APP_KEY` string as configured (`config('app.key')`), for HMACs keyed with it.
+    app_key: zeroize::Zeroizing<String>,
 }
 
 impl std::fmt::Debug for Encrypter {
@@ -105,7 +107,21 @@ impl Encrypter {
         Ok(Self {
             current: Key::parse(app_key)?,
             previous: Vec::new(),
+            app_key: zeroize::Zeroizing::new(app_key.to_owned()),
         })
+    }
+
+    /// `hash_hmac('sha256', $data, config('app.key'))`, lower-case hex.
+    pub fn hmac_with_app_key(&self, data: &[u8]) -> String {
+        let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(self.app_key.as_bytes()) else {
+            return String::new();
+        };
+        mac.update(data);
+        mac.finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
     }
 
     /// Adds `APP_PREVIOUS_KEYS` (comma separated, as Laravel reads them).

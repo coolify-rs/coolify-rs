@@ -60,7 +60,22 @@ fn decrypt(state: &AppState, cipher: &str) -> Result<String, ApiError> {
 }
 
 /// `$server->toArray()` as nested in a database (`$hidden`, accessors, appends, settings).
-fn nested_server(state: &AppState, ctx: &AuthCtx, s: &ServerRow) -> Result<Value, ApiError> {
+pub(crate) fn nested_server(
+    state: &AppState,
+    ctx: &AuthCtx,
+    s: &ServerRow,
+) -> Result<Value, ApiError> {
+    nested_server_with(state, s, ctx.can_read_sensitive, ctx.can_read_sensitive)
+}
+
+/// `nested_server` with the two switches apart: `expose_secrets` (`exposeNestedServerSecrets`)
+/// and `sensitive_payload` (whether `serializeApiResponse` keeps the proxy configuration).
+pub(crate) fn nested_server_with(
+    state: &AppState,
+    s: &ServerRow,
+    expose_secrets: bool,
+    sensitive_payload: bool,
+) -> Result<Value, ApiError> {
     let mut r = s.record.clone();
     r.shift_remove("proxy_error_page");
     if let Some(Value::String(ip)) = r.get("ip") {
@@ -71,7 +86,7 @@ fn nested_server(state: &AppState, ctx: &AuthCtx, s: &ServerRow) -> Result<Value
         let v = user_accessor(u);
         r.insert("user".into(), Value::String(v));
     }
-    if !ctx.can_read_sensitive {
+    if !sensitive_payload {
         // ApiSensitiveData strips these wherever they appear.
         r.shift_remove("validation_logs");
         if let Some(Value::Object(proxy)) = r.get_mut("proxy") {
@@ -85,7 +100,7 @@ fn nested_server(state: &AppState, ctx: &AuthCtx, s: &ServerRow) -> Result<Value
         .map(|x| SERVER_SETTING.present(x))
         .unwrap_or_default();
     for key in SETTING_HIDDEN {
-        let visible = ctx.can_read_sensitive && SETTING_SENSITIVE.contains(key);
+        let visible = expose_secrets && SETTING_SENSITIVE.contains(key);
         if !visible {
             settings.shift_remove(*key);
         } else if SETTING_ENCRYPTED.contains(key)
@@ -171,7 +186,7 @@ fn server_ip(server: Option<&ServerRow>) -> Option<&str> {
 }
 
 /// `isFunctional()` of the destination's server.
-fn server_functional(s: &ServerRow) -> bool {
+pub(crate) fn server_functional(s: &ServerRow) -> bool {
     let settings = s.settings.clone().unwrap_or_default();
     let flag = |k: &str| settings.get(k).and_then(Value::as_bool);
     let ip = s
@@ -459,14 +474,14 @@ static DB_PASSWORD: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new
         .unwrap_or_else(|_| unreachable!())
 });
 
-fn errors_with(field: &str, msg: &str) -> ApiError {
+pub(crate) fn errors_with(field: &str, msg: &str) -> ApiError {
     let mut m = Map::new();
     m.insert(field.into(), Value::String(msg.into()));
     ApiError::Validation(m)
 }
 
 /// PHP `$request->boolean($key)`.
-fn input_bool(input: &Input, key: &str) -> bool {
+pub(crate) fn input_bool(input: &Input, key: &str) -> bool {
     match input.get(key) {
         Some(Value::Bool(b)) => *b,
         Some(Value::Number(n)) => n.as_i64() == Some(1),
@@ -498,7 +513,7 @@ pub(crate) fn random_password() -> String {
 }
 
 /// `isBase64Encoded` + `base64_decode` + UTF-8 check.
-fn decode_conf(v: &Value) -> Option<String> {
+pub(crate) fn decode_conf(v: &Value) -> Option<String> {
     use base64::Engine as _;
     let s = v.as_str()?;
     let bytes = base64::engine::general_purpose::STANDARD.decode(s).ok()?;
@@ -1022,7 +1037,7 @@ pub async fn restart(
     Ok(ok(json!({"message": "Database restarting request queued."})).into_response())
 }
 
-fn query_bool(uri: &Uri, input: &Input, key: &str, default: bool) -> bool {
+pub(crate) fn query_bool(uri: &Uri, input: &Input, key: &str, default: bool) -> bool {
     if let Some(v) = query_param(uri, key) {
         return matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes");
     }

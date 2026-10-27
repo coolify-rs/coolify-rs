@@ -31,3 +31,35 @@ pub async fn disable_api(db: &Db, now: NaiveDateTime) -> DbResult<()> {
     .await?;
     Ok(())
 }
+
+/// What deployments read from `instance_settings` (id 0).
+#[derive(Debug, Clone, Default)]
+pub struct DeploymentSettings {
+    pub docker_registry_url: Option<String>,
+    pub helper_version: Option<String>,
+    pub public_ipv4: Option<String>,
+    pub public_ipv6: Option<String>,
+}
+
+pub async fn deployment_settings(db: &Db) -> DbResult<DeploymentSettings> {
+    type Row = (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let r: Option<Row> = sqlx::query_as(
+        "SELECT docker_registry_url, helper_version, public_ipv4, public_ipv6 FROM instance_settings WHERE id = 0",
+    )
+    .fetch_optional(db.pool())
+    .await?;
+    Ok(r.map(
+        |(docker_registry_url, helper_version, public_ipv4, public_ipv6)| DeploymentSettings {
+            docker_registry_url,
+            helper_version,
+            public_ipv4,
+            public_ipv6,
+        },
+    )
+    .unwrap_or_default())
+}

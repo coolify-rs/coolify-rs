@@ -40,6 +40,8 @@ pub enum Rule {
     Array,
     /// A rule object: returns the failure message (`:attribute` substituted).
     Custom(fn(&Value) -> Option<&'static str>),
+    /// A closure rule whose message is built from the value.
+    CustomOwned(fn(&Value) -> Option<String>),
 }
 
 #[derive(Debug, Clone)]
@@ -301,6 +303,11 @@ pub fn validate(
                     }
                 }
                 Rule::Custom(check) => {
+                    if let Some(msg) = check(v) {
+                        push(f.name, msg.replace(":attribute", &attribute(f.name)));
+                    }
+                }
+                Rule::CustomOwned(check) => {
                     if let Some(msg) = check(v) {
                         push(f.name, msg.replace(":attribute", &attribute(f.name)));
                     }

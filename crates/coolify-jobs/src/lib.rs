@@ -4,6 +4,7 @@
 //! tokio tasks in the API process (ADR 0009): a job is lost if the process
 //! restarts, and one validation per server runs at a time.
 
+pub mod applications;
 pub mod checks;
 pub mod databases;
 pub mod server;
@@ -46,6 +47,8 @@ struct Inner {
     progress: Mutex<HashMap<i64, Progress>>,
     /// Databases with a start or restart in progress (`DatabaseOperationReservation`).
     db_ops: Mutex<HashSet<String>>,
+    /// `config('constants.coolify.version')`, for the `coolify.version` label.
+    version: std::sync::OnceLock<String>,
 }
 
 impl Jobs {
@@ -57,7 +60,22 @@ impl Jobs {
             running: Mutex::new(HashSet::new()),
             progress: Mutex::new(HashMap::new()),
             db_ops: Mutex::new(HashSet::new()),
+            version: std::sync::OnceLock::new(),
         }))
+    }
+
+    /// Sets the instance version (`COOLIFY_VERSION`) once at startup.
+    pub fn set_version(&self, version: String) {
+        let _ = self.0.version.set(version);
+    }
+
+    /// `config('constants.coolify.version')`.
+    pub fn version(&self) -> String {
+        self.0
+            .version
+            .get()
+            .cloned()
+            .unwrap_or_else(|| "4.5.1".into())
     }
 
     pub fn remote(&self) -> &Remote {

@@ -34,6 +34,9 @@ pub struct Var {
     pub is_multiline: bool,
     pub is_shared: bool,
     pub is_shown_once: bool,
+    pub is_runtime: bool,
+    pub is_buildtime: bool,
+    pub is_preview: bool,
     pub uses_legacy_escaping: bool,
     /// The stored ciphertext (upstream's configuration hash sorts by it).
     pub cipher: Option<String>,
@@ -129,11 +132,33 @@ static VAULT: LazyLock<Regex> = LazyLock::new(|| {
 });
 const TYPES: &[&str] = &["team", "project", "environment", "server"];
 
+/// The resource that owns variables, with the ids shared references resolve against.
+#[derive(Debug, Clone, Copy)]
+pub struct Owner<'a> {
+    pub morph: &'a str,
+    pub id: i64,
+    pub team_id: i64,
+    pub project_id: Option<i64>,
+    pub environment_id: Option<i64>,
+}
+
+impl<'a> Owner<'a> {
+    pub fn database(d: &'a DatabaseRow) -> Self {
+        Owner {
+            morph: d.kind.morph(),
+            id: d.id,
+            team_id: d.team_id,
+            project_id: d.project.get("id").and_then(Value::as_i64),
+            environment_id: d.environment.get("id").and_then(Value::as_i64),
+        }
+    }
+}
+
 /// `get_real_environment_variables_internal`.
-async fn resolve_references(
+pub async fn resolve_references(
     db: &Db,
     enc: &Encrypter,
-    d: &DatabaseRow,
+    o: &Owner<'_>,
     server_id: Option<i64>,
     value: &str,
 ) -> Result<String, String> {
@@ -151,13 +176,13 @@ async fn resolve_references(
             continue;
         }
         let owner = match kind {
-            "environment" => d.environment.get("id").and_then(Value::as_i64),
-            "project" => d.project.get("id").and_then(Value::as_i64),
-            "team" => Some(d.team_id),
+            "environment" => o.environment_id,
+            "project" => o.project_id,
+            "team" => Some(o.team_id),
             _ => server_id,
         };
         let Some(owner) = owner else { continue };
-        let shared = vars::shared(db, d.team_id, kind, key, owner)
+        let shared = vars::shared(db, o.team_id, kind, key, owner)
             .await
             .map_err(|e| e.to_string())?;
         if let Some((Some(cipher), _shown_once)) = shared {
@@ -172,7 +197,12 @@ async fn resolve_references(
 
 /// The database's `environment_variables`, decrypted (the value accessor), not resolved.
 pub async fn load_stored(db: &Db, enc: &Encrypter, d: &DatabaseRow) -> Result<Vec<Var>, String> {
-    let rows = vars::for_resource(db, d.kind.morph(), d.id)
+    load_stored_for(db, enc, &Owner::database(d)).await
+}
+
+/// A resource's `environment_variables` (table order), decrypted, not resolved.
+pub async fn load_stored_for(db: &Db, enc: &Encrypter, o: &Owner<'_>) -> Result<Vec<Var>, String> {
+    let rows = vars::for_resource(db, o.morph, o.id)
         .await
         .map_err(|e| e.to_string())?;
     let mut out = Vec::with_capacity(rows.len());
@@ -187,17 +217,21 @@ pub async fn load_stored(db: &Db, enc: &Encrypter, d: &DatabaseRow) -> Result<Ve
             }
             _ => None,
         };
+        let flag = |k: &str| r.record.get(k).and_then(Value::as_bool).unwrap_or(false);
         out.push(Var {
             id: r.id,
-            key: r.key,
             value,
             resolved: None,
             is_literal: r.is_literal,
             is_multiline: r.is_multiline,
             is_shared: r.is_shared,
             is_shown_once: r.is_shown_once,
+            is_runtime: r.is_runtime,
+            is_buildtime: flag("is_buildtime"),
+            is_preview: r.is_preview,
             uses_legacy_escaping: r.uses_legacy_escaping,
             cipher: r.value_encrypted,
+            key: r.key,
         });
     }
     Ok(out)
@@ -210,13 +244,23 @@ pub async fn load(
     d: &DatabaseRow,
     server_id: Option<i64>,
 ) -> Result<Vec<Var>, String> {
-    let mut out = load_stored(db, enc, d).await?;
+    load_for(db, enc, &Owner::database(d), server_id).await
+}
+
+/// A resource's variables, decrypted and with shared references resolved.
+pub async fn load_for(
+    db: &Db,
+    enc: &Encrypter,
+    o: &Owner<'_>,
+    server_id: Option<i64>,
+) -> Result<Vec<Var>, String> {
+    let mut out = load_stored_for(db, enc, o).await?;
     for v in &mut out {
         if v.value.as_deref().is_some_and(|x| VAULT.is_match(x)) {
             return Err(SECRET_MANAGER_NOT_PORTED.into());
         }
         v.resolved = match &v.value {
-            Some(x) if !x.is_empty() => Some(resolve_references(db, enc, d, server_id, x).await?),
+            Some(x) if !x.is_empty() => Some(resolve_references(db, enc, o, server_id, x).await?),
             other => other.clone(),
         };
     }
@@ -313,6 +357,9 @@ mod tests {
             is_multiline: false,
             is_shared: false,
             is_shown_once: false,
+            is_runtime: true,
+            is_buildtime: true,
+            is_preview: false,
             uses_legacy_escaping: legacy,
             cipher: None,
         }

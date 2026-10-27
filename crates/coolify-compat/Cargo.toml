@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+zeroize.workspace = true
 bcrypt.workspace = true
 chrono.workspace = true
 rsa.workspace = true

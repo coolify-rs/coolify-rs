@@ -10,6 +10,7 @@
 //! same (heap) order upstream returns, which differential tests compare byte
 //! for byte.
 
+pub mod applications;
 pub mod auth;
 pub mod dashboard;
 pub mod database_specs;

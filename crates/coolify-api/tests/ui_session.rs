@@ -66,14 +66,9 @@ async fn login_logout_and_bridge() {
         .await
         .assert(401, r#"{"message":"Unauthenticated."}"#);
     assert_eq!(
-        h.request(
-            "GET",
-            "/ui/api/v1/applications",
-            &[("cookie", &cookie)],
-            None
-        )
-        .await
-        .status,
+        h.request("GET", "/ui/api/v1/services", &[("cookie", &cookie)], None)
+            .await
+            .status,
         501
     );
 
