@@ -61,7 +61,7 @@ pub async fn list(db: &Db, team_id: TeamId) -> DbResult<Vec<Record>> {
     // Upstream selects exactly these columns in this order.
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT row_to_json(p)::text FROM (SELECT id, name, description, uuid FROM projects \
-         WHERE team_id = $1 ORDER BY id) p",
+         WHERE team_id = $1) p",
     )
     .bind(team_id)
     .fetch_all(db.pool())
@@ -72,7 +72,7 @@ pub async fn list(db: &Db, team_id: TeamId) -> DbResult<Vec<Record>> {
 pub async fn find(db: &Db, team_id: TeamId, uuid: &str) -> DbResult<Option<ProjectRef>> {
     Ok(sqlx::query_as(
         "SELECT id, uuid, team_id, name, description FROM projects WHERE team_id = $1 AND uuid = $2 \
-         ORDER BY id LIMIT 1",
+         LIMIT 1",
     )
     .bind(team_id)
     .bind(uuid)
@@ -91,7 +91,7 @@ pub async fn record(db: &Db, project_id: i64) -> DbResult<Record> {
 
 pub async fn environment_records(db: &Db, project_id: i64) -> DbResult<Vec<Record>> {
     let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT row_to_json(e)::text FROM environments e WHERE e.project_id = $1 ORDER BY e.id",
+        "SELECT row_to_json(e)::text FROM environments e WHERE e.project_id = $1",
     )
     .bind(project_id)
     .fetch_all(db.pool())
@@ -104,7 +104,7 @@ pub async fn environment_records(db: &Db, project_id: i64) -> DbResult<Vec<Recor
 pub async fn environment_briefs(db: &Db, project_id: i64) -> DbResult<Vec<Record>> {
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT row_to_json(e)::text FROM (SELECT id, name, uuid FROM environments \
-         WHERE project_id = $1 ORDER BY id) e",
+         WHERE project_id = $1) e",
     )
     .bind(project_id)
     .fetch_all(db.pool())
@@ -130,7 +130,7 @@ pub async fn find_environment(
     for column in ["name", "uuid"] {
         let env: Option<EnvironmentRef> = sqlx::query_as(&format!(
             "SELECT id, uuid, project_id, name, description FROM environments \
-             WHERE project_id = $1 AND {column} = $2 ORDER BY id LIMIT 1"
+             WHERE project_id = $1 AND {column} = $2 LIMIT 1"
         ))
         .bind(project_id)
         .bind(name_or_uuid)

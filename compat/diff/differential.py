@@ -212,6 +212,60 @@ def main():
             record(label, ok, r, r)
             same(f"{label}: gone on both", "GET", f"/api/v1/projects/{uuid}", "acme_owner_read")
 
+    # --- private keys (coolify-rs must run with the reference APP_KEY) ----------------
+    import os
+    import subprocess
+    import tempfile
+
+    def new_key(kind):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "k")
+        if kind == "pkcs1":
+            subprocess.run(["openssl", "genrsa", "-traditional", "-out", path, "2048"], check=True, capture_output=True)
+        else:
+            subprocess.run(["ssh-keygen", "-q", "-t", kind, "-N", "", "-f", path], check=True)
+        return open(path).read()
+
+    created = {}
+    for label, client in (("ref", ref), ("sub", sub)):
+        for kind in ("ed25519", "pkcs1"):
+            r = client.req("POST", "/api/v1/security/keys", w, {"name": f"diff {label} {kind}", "private_key": new_key(kind)})
+            created[(label, kind)] = (r, json.loads(r[2]).get("uuid") if r[0] == 201 else None)
+    for kind in ("ed25519", "pkcs1"):
+        r1, r2 = created[("ref", kind)][0], created[("sub", kind)][0]
+        record(f"keys: create {kind}", r1[0] == r2[0] == 201 and norm(r1[2]) == norm(r2[2]), r1, r2)
+    for tok in ("acme_owner_read", "acme_owner_root", "acme_member_read", "carol_root"):
+        same(f"keys: list [{tok}]", "GET", "/api/v1/security/keys", tok)
+    for (label, kind), (_, uuid) in created.items():
+        if uuid:
+            same(f"keys: show {label}-created {kind} (sensitive)", "GET", f"/api/v1/security/keys/{uuid}", "acme_owner_root")
+            same(f"keys: show {label}-created {kind} other team", "GET", f"/api/v1/security/keys/{uuid}", "carol_root")
+    dup = new_key("ed25519")
+    r1 = ref.req("POST", "/api/v1/security/keys", w, {"private_key": dup})
+    r2 = sub.req("POST", "/api/v1/security/keys", w, {"private_key": dup})
+    record("keys: duplicate fingerprint", r1[0] == 201 and r2[0] == 422 and r2[2] == b'{"message":"Private key already exists."}', r1, r2)
+    same("keys: invalid", "POST", "/api/v1/security/keys", w, {"private_key": "garbage"})
+    same("keys: missing key", "POST", "/api/v1/security/keys", w, {"name": "x"})
+    same("keys: name not a string", "POST", "/api/v1/security/keys", w, {"name": 5, "private_key": "x"})
+    same("keys: member cannot create", "POST", "/api/v1/security/keys", "acme_member_read", {"private_key": "x"})
+    ru, su = created[("ref", "ed25519")][1], created[("sub", "ed25519")][1]
+    if ru and su:
+        json_accept = {"Accept": "application/json"}
+        for body in ({"name": "Renamed key"}, {"private_key": "nope"}, {"foo": 1}, {"description": None}):
+            r1 = ref.req("PATCH", f"/api/v1/security/keys/{su}", w, body, headers=json_accept)
+            r2 = sub.req("PATCH", f"/api/v1/security/keys/{ru}", w, body, headers=json_accept)
+            record(f"keys: update {body}", r1[0] == r2[0] and norm(r1[2]) == norm(r2[2]), r1, r2)
+        # Documented divergence: upstream redirects non-JSON clients (KNOWN_LIMITATIONS.md).
+        r1 = ref.req("PATCH", f"/api/v1/security/keys/{su}", w, {"private_key": "nope"})
+        r2 = sub.req("PATCH", f"/api/v1/security/keys/{ru}", w, {"private_key": "nope"})
+        record("keys: invalid update without Accept (expected divergence: 302 vs 422)", r1[0] == 302 and r2[0] == 422, r1, r2)
+        same("keys: cross-read after update", "GET", "/api/v1/security/keys", "acme_owner_root")
+        # Each server deletes the key the other created.
+        for label, client, uuid in (("rust deletes php key", sub, ru), ("php deletes rust key", ref, su)):
+            r = client.req("DELETE", f"/api/v1/security/keys/{uuid}", w)
+            record(label, r[0] == 200 and r[2] == b'{"message":"Private Key deleted."}', r, r)
+            same(f"{label}: gone on both", "GET", f"/api/v1/security/keys/{uuid}", "acme_owner_read")
+
     # --- IP allowlist through a proxy hop (needs DB access) ---------------------------
     if a.db_url:
         import subprocess

@@ -43,7 +43,7 @@ impl AuthCtx {
     }
 }
 
-fn client_ip(state: &AppState, req: &Request) -> IpAddr {
+pub(crate) fn client_ip(state: &AppState, req: &Request) -> IpAddr {
     let peer = req
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()

@@ -5,9 +5,12 @@
 //! adopt an upstream database without rewriting it.
 
 pub mod encrypter;
+pub mod password;
 pub mod php_json;
 pub mod php_serialize;
 pub mod sanctum;
+pub mod sshkey;
+pub mod totp;
 
 pub use encrypter::{DecryptError, Encrypter, EncrypterKeyError};
 pub use sanctum::{ParsedToken, hash_token, parse_bearer_token};

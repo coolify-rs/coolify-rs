@@ -8,12 +8,18 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use coolify_api::AppState;
 use coolify_api::ip::TrustedProxies;
+use coolify_api::state::Options;
+use coolify_compat::Encrypter;
 use coolify_compat::hash_token;
 use coolify_db::testing::TestDb;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 pub const ACME: i64 = 1;
+/// Throwaway test key (same as the encrypter fixture).
+pub const APP_KEY: &str = "base64:hPAFGDXpvHW0ZnwoP/YKkC1WJ+9Bv2jZCwc1hGGaI3s=";
+/// Password of every fixture user (bcrypt cost 4 hash in SEED).
+pub const PASSWORD: &str = "secret-password";
 pub const VERSION: &str = "4.5.1-dev.b5823c777";
 pub const OTHER: i64 = 2;
 
@@ -25,10 +31,10 @@ INSERT INTO teams (id, name, description, personal_team, show_boarding, created_
   (1, 'Acme', 'Fixture team', false, false, '2026-01-02 00:00:00', '2026-01-02 00:00:00'),
   (2, 'Other', NULL, true, false, '2026-01-03 00:00:00', '2026-01-03 00:00:00');
 INSERT INTO users (id, name, email, password, created_at, updated_at) VALUES
-  (0, 'Root', 'root@example.test', '$2y$10$abcdefghijklmnopqrstuv', '2026-01-01 00:00:00', '2026-01-01 00:00:00'),
-  (1, 'Alice Owner', 'alice@example.test', '$2y$10$abcdefghijklmnopqrstuv', '2026-01-02 00:00:00', '2026-01-02 00:00:00'),
-  (2, 'Bob Member', 'bob@example.test', '$2y$10$abcdefghijklmnopqrstuv', '2026-01-02 00:00:00', '2026-01-02 00:00:00'),
-  (3, 'Carol Other', 'carol@example.test', '$2y$10$abcdefghijklmnopqrstuv', '2026-01-03 00:00:00', '2026-01-03 00:00:00');
+  (0, 'Root', 'root@example.test', '$2y$04$3EUJ/TMAepQkPElj6gMovusWMWBd2XclldAGdQYIBGuB7QCBai9jK', '2026-01-01 00:00:00', '2026-01-01 00:00:00'),
+  (1, 'Alice Owner', 'alice@example.test', '$2y$04$3EUJ/TMAepQkPElj6gMovusWMWBd2XclldAGdQYIBGuB7QCBai9jK', '2026-01-02 00:00:00', '2026-01-02 00:00:00'),
+  (2, 'Bob Member', 'bob@example.test', '$2y$04$3EUJ/TMAepQkPElj6gMovusWMWBd2XclldAGdQYIBGuB7QCBai9jK', '2026-01-02 00:00:00', '2026-01-02 00:00:00'),
+  (3, 'Carol Other', 'carol@example.test', '$2y$04$3EUJ/TMAepQkPElj6gMovusWMWBd2XclldAGdQYIBGuB7QCBai9jK', '2026-01-03 00:00:00', '2026-01-03 00:00:00');
 INSERT INTO team_user (team_id, user_id, role) VALUES (0, 0, 'owner'), (1, 1, 'owner'), (1, 2, 'member'), (2, 3, 'owner');
 "#;
 
@@ -100,7 +106,15 @@ impl Harness {
             .unwrap();
             tokens.push((name.to_string(), format!("{id}|{plain}")));
         }
-        let state = AppState::new(tdb.db.clone(), VERSION.into(), TrustedProxies::default());
+        let state = AppState::with_options(
+            tdb.db.clone(),
+            VERSION.into(),
+            TrustedProxies::default(),
+            Options {
+                encrypter: Some(Encrypter::new(APP_KEY).unwrap()),
+                ..Options::default()
+            },
+        );
         let app = coolify_api::router(state);
         Self { tdb, app, tokens }
     }
@@ -143,6 +157,7 @@ impl Harness {
             status,
             ctype,
             allow,
+            set_cookie: None,
             body: String::from_utf8(bytes.to_vec()).unwrap(),
         }
     }
@@ -161,8 +176,67 @@ impl Harness {
             status,
             ctype: String::new(),
             allow: None,
+            set_cookie: None,
             body: String::from_utf8(bytes.to_vec()).unwrap(),
         }
+    }
+
+    /// Raw request with arbitrary headers; captures `Set-Cookie`.
+    pub async fn request(
+        &self,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: Option<serde_json::Value>,
+    ) -> Resp {
+        let mut b = Request::builder().method(method).uri(path);
+        for (k, v) in headers {
+            b = b.header(*k, *v);
+        }
+        let req = match body {
+            Some(v) => b
+                .header("Content-Type", "application/json")
+                .body(Body::from(v.to_string()))
+                .unwrap(),
+            None => b.body(Body::empty()).unwrap(),
+        };
+        let res = self.app.clone().oneshot(req).await.unwrap();
+        let status = res.status();
+        let set_cookie = res
+            .headers()
+            .get("set-cookie")
+            .map(|v| v.to_str().unwrap().to_string());
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        Resp {
+            status,
+            ctype: String::new(),
+            allow: None,
+            set_cookie,
+            body: String::from_utf8(bytes.to_vec()).unwrap(),
+        }
+    }
+
+    /// Logs in through `/ui/session`; returns (cookie header, csrf token).
+    pub async fn ui_login(&self, email: &str) -> (String, String) {
+        let r = self
+            .request(
+                "POST",
+                "/ui/session",
+                &[],
+                Some(serde_json::json!({"email": email, "password": PASSWORD})),
+            )
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        let cookie = r
+            .set_cookie
+            .clone()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+        let csrf = r.json()["csrf_token"].as_str().unwrap().to_string();
+        (cookie, csrf)
     }
 
     pub async fn get(&self, path: &str, token: &str) -> Resp {
@@ -179,6 +253,7 @@ pub struct Resp {
     pub status: StatusCode,
     pub ctype: String,
     pub allow: Option<String>,
+    pub set_cookie: Option<String>,
     pub body: String,
 }
 

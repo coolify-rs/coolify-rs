@@ -5,15 +5,21 @@
 //! scopes by team where upstream does, and writes rows exactly as upstream's
 //! models would (including model-event side effects such as the default
 //! `production` environment of a new project).
+//!
+//! Queries add no `ORDER BY` where upstream has none: results then come in the
+//! same (heap) order upstream returns, which differential tests compare byte
+//! for byte.
 
 pub mod auth;
 pub mod instance;
+pub mod private_keys;
 pub mod projects;
 pub mod records;
 pub mod schema;
 pub mod teams;
 #[cfg(feature = "testing")]
 pub mod testing;
+pub mod users;
 
 use std::time::Duration;
 

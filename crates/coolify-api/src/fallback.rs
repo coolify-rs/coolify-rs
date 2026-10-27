@@ -1,17 +1,22 @@
 //! Requests that match no ported route.
 //!
-//! Upstream answers unknown `/api/*` requests with its catch-all
-//! (`routes/api.php:462`, 404 JSON). Requests that match a route upstream
-//! *does* have but coolify-rs has not ported yet get an explicit 501 instead,
-//! so clients can tell "not ported" apart from "does not exist".
+//! * `/api/*` and `/ui/api/*`: upstream's catch-all (`routes/api.php:462`,
+//!   404 JSON), or 501 when upstream *does* have the route but coolify-rs has
+//!   not ported it, so clients can tell "not ported" from "does not exist".
+//! * Anything else: the web UI (static files from `ui_dir`, with
+//!   `index.html` as the single-page-app fallback).
 
 use std::sync::LazyLock;
 
-use axum::extract::Request;
+use axum::extract::{Request, State};
+use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
+use tower::ServiceExt;
+use tower_http::services::{ServeDir, ServeFile};
 
 use crate::response::ApiError;
+use crate::state::AppState;
 
 const INVENTORY: &str = include_str!("../../../compat/api/upstream-routes.json");
 
@@ -47,6 +52,7 @@ static UPSTREAM: LazyLock<Vec<Pattern>> = LazyLock::new(|| {
 
 pub fn upstream_has_route(method: &str, path: &str) -> bool {
     let path = path.trim_matches('/');
+    let path = path.strip_prefix("ui/").unwrap_or(path);
     let segs: Vec<&str> = path.split('/').collect();
     let method = if method == "HEAD" { "GET" } else { method };
     UPSTREAM.iter().any(|p| {
@@ -59,12 +65,60 @@ pub fn upstream_has_route(method: &str, path: &str) -> bool {
     })
 }
 
-pub async fn fallback(req: Request) -> Response {
-    if upstream_has_route(req.method().as_str(), req.uri().path()) {
-        ApiError::NotPorted.into_response()
-    } else {
-        ApiError::RouteNotFound.into_response()
+fn is_api_path(path: &str) -> bool {
+    path == "/api" || path.starts_with("/api/") || path.starts_with("/ui/")
+}
+
+/// Content Security Policy for the UI: same-origin only, no inline scripts.
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+                   img-src 'self' data:; connect-src 'self'; font-src 'self' data:; \
+                   frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+
+pub async fn fallback(State(state): State<AppState>, req: Request) -> Response {
+    let path = req.uri().path().to_string();
+    if is_api_path(&path) {
+        return if upstream_has_route(req.method().as_str(), &path) {
+            ApiError::NotPorted.into_response()
+        } else {
+            ApiError::RouteNotFound.into_response()
+        };
     }
+    let Some(dir) = state.ui_dir.clone() else {
+        return ApiError::RouteNotFound.into_response();
+    };
+    if !matches!(*req.method(), Method::GET | Method::HEAD) {
+        return (StatusCode::METHOD_NOT_ALLOWED, "").into_response();
+    }
+    let index = dir.join("index.html");
+    let svc = ServeDir::new(&dir)
+        .append_index_html_on_directories(true)
+        .fallback(ServeFile::new(&index));
+    let mut res = match svc.oneshot(req).await {
+        Ok(r) => r.into_response(),
+        Err(_) => return ApiError::Internal.into_response(),
+    };
+    let h = res.headers_mut();
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(CSP),
+    );
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
+    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    // Hashed assets can be cached forever; the HTML shell must not be.
+    let cache = if path.starts_with("/assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+    res
 }
 
 #[cfg(test)]
@@ -74,9 +128,18 @@ mod tests {
     #[test]
     fn knows_upstream_routes() {
         assert!(upstream_has_route("GET", "/api/v1/servers"));
+        assert!(upstream_has_route("GET", "/ui/api/v1/servers"));
         assert!(upstream_has_route("POST", "/api/v1/servers/abc/validate"));
         assert!(!upstream_has_route("DELETE", "/api/v1/nope"));
         assert!(!upstream_has_route("GET", "/api/v1/nope"));
         assert!(!upstream_has_route("PUT", "/api/v1/servers"));
+    }
+
+    #[test]
+    fn api_paths() {
+        assert!(is_api_path("/api/v1/x"));
+        assert!(is_api_path("/ui/session"));
+        assert!(!is_api_path("/projects"));
+        assert!(!is_api_path("/apis"));
     }
 }

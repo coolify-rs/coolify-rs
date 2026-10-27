@@ -61,6 +61,10 @@ pub enum ApiError {
     Message(StatusCode, &'static str),
     /// 422 `{"message":"Validation failed.","errors":{...}}`
     Validation(serde_json::Map<String, Value>),
+    /// 422 Laravel `ValidationException` (message = first error).
+    ValidationWithMessage(&'static str, serde_json::Map<String, Value>),
+    /// 429 login throttle, with `Retry-After`.
+    Throttled(u64),
     /// 400 `{"message":"Invalid request.","error": ...}`
     InvalidRequest(&'static str),
     /// 405 for GET on POST-only routes, with `Allow: POST`.
@@ -123,6 +127,21 @@ impl IntoResponse for ApiError {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 json!({"message": "Validation failed.", "errors": errors}),
             ),
+            Self::ValidationWithMessage(m, errors) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({"message": m, "errors": errors}),
+            ),
+            Self::Throttled(secs) => {
+                let mut res = PhpJson(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    json!({"message": format!("Too many login attempts. Please try again in {secs} seconds.")}),
+                )
+                .into_response();
+                if let Ok(v) = HeaderValue::from_str(&secs.to_string()) {
+                    res.headers_mut().insert(header::RETRY_AFTER, v);
+                }
+                return res;
+            }
             Self::InvalidRequest(e) => (
                 StatusCode::BAD_REQUEST,
                 json!({"message": "Invalid request.", "error": e}),

@@ -26,7 +26,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 | Multi-row writes (project create/delete) | model hooks, no transaction | single transaction | improvement; same end state |
 | Unknown columns from newer upstream releases | serialized automatically (`$hidden` is a deny-list) | dropped from output and logged until reviewed in `records.rs` | prevents leaking secret columns added upstream |
 | Writes when the DB schema is newer than this build | n/a | read-only mode (`503`) unless `COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA=true` | schema guard |
-| Ordering of list results | unspecified (insertion order in practice) | `ORDER BY id` / pivot id | deterministic |
+| Invalid `private_key` on `PATCH /security/keys/{uuid}` without `Accept: application/json` | model `ValidationException` → **302 redirect** to the app URL (upstream defect) | 422 JSON, the body upstream returns to JSON clients | API clients should not receive HTML redirects |
 
 ## Upstream defects observed (not reproduced as security issues, recorded for review)
 

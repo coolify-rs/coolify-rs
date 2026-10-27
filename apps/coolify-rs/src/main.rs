@@ -16,7 +16,10 @@ use axum::routing::get;
 use clap::{Parser, Subcommand};
 use coolify_api::AppState;
 use coolify_api::ip::TrustedProxies;
+use coolify_api::state::Options;
+use coolify_compat::Encrypter;
 use coolify_db::{Db, DbConfig};
+use std::path::PathBuf;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::{DefaultOnFailure, DefaultOnResponse, TraceLayer};
@@ -46,6 +49,10 @@ struct Config {
     version: String,
     trusted_proxies: TrustedProxies,
     json_logs: bool,
+    encrypter: Option<Encrypter>,
+    ui_dir: Option<PathBuf>,
+    secure_cookies: bool,
+    session_idle: Duration,
 }
 
 fn env(key: &str) -> Option<String> {
@@ -105,6 +112,30 @@ impl Config {
             .map_err(anyhow::Error::msg)
             .context("COOLIFY_RS_TRUSTED_PROXIES")?,
             json_logs: env("COOLIFY_RS_LOG_FORMAT").is_none_or(|v| v != "pretty"),
+            // Upstream's variables: APP_KEY (base64:...) and APP_PREVIOUS_KEYS.
+            encrypter: match env("APP_KEY") {
+                None => None,
+                Some(key) => Some(
+                    Encrypter::new(&key)
+                        .and_then(|e| {
+                            e.with_previous_keys(&env("APP_PREVIOUS_KEYS").unwrap_or_default())
+                        })
+                        .map_err(|e| anyhow::anyhow!("APP_KEY: {e}"))?,
+                ),
+            },
+            ui_dir: env("COOLIFY_RS_UI_DIR")
+                .map(PathBuf::from)
+                .or_else(|| Some(PathBuf::from("frontend/dist")))
+                .filter(|p| p.join("index.html").is_file()),
+            secure_cookies: env("COOLIFY_RS_SECURE_COOKIES").is_some_and(|v| v == "true"),
+            session_idle: Duration::from_secs(
+                env("SESSION_LIFETIME")
+                    .map(|v| v.parse::<u64>())
+                    .transpose()
+                    .context("SESSION_LIFETIME (minutes)")?
+                    .unwrap_or(10080)
+                    * 60,
+            ),
         })
     }
 }
@@ -216,7 +247,33 @@ async fn main() -> Result<()> {
                 applied_migrations = schema.applied,
                 "coolify-rs starting"
             );
-            let state = AppState::new(db, cfg.version, cfg.trusted_proxies);
+            if cfg.encrypter.is_none() {
+                tracing::warn!(
+                    "APP_KEY not set: private keys and two-factor logins are unavailable"
+                );
+            }
+            match &cfg.ui_dir {
+                Some(dir) => tracing::info!(dir = %dir.display(), "serving web UI"),
+                None => {
+                    tracing::warn!("web UI not found (build frontend/ or set COOLIFY_RS_UI_DIR)")
+                }
+            }
+            if !cfg.secure_cookies && !cfg.listen.ip().is_loopback() {
+                tracing::warn!(
+                    "session cookies are not marked Secure; set COOLIFY_RS_SECURE_COOKIES=true behind HTTPS"
+                );
+            }
+            let state = AppState::with_options(
+                db,
+                cfg.version,
+                cfg.trusted_proxies,
+                Options {
+                    encrypter: cfg.encrypter,
+                    ui_dir: cfg.ui_dir,
+                    secure_cookies: cfg.secure_cookies,
+                    session_idle: cfg.session_idle,
+                },
+            );
             let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
             axum::serve(
                 listener,

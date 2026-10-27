@@ -22,7 +22,7 @@ pub async fn get(db: &Db, team_id: TeamId) -> DbResult<Option<Record>> {
 pub async fn members(db: &Db, team_id: TeamId) -> DbResult<Vec<Record>> {
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT row_to_json(u)::text FROM users u JOIN team_user tu ON tu.user_id = u.id \
-         WHERE tu.team_id = $1 ORDER BY tu.id",
+         WHERE tu.team_id = $1",
     )
     .bind(team_id)
     .fetch_all(db.pool())

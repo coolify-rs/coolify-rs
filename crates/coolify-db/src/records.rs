@@ -137,6 +137,27 @@ pub static ENVIRONMENT: ModelSpec = ModelSpec {
     datetimes: &["created_at", "updated_at"],
 };
 
+pub static PRIVATE_KEY: ModelSpec = ModelSpec {
+    table: "private_keys",
+    known: &[
+        "id",
+        "uuid",
+        "name",
+        "description",
+        "private_key",
+        "is_git_related",
+        "team_id",
+        "created_at",
+        "updated_at",
+        "fingerprint",
+    ],
+    // `private_key` is hidden by the model; handlers re-add it (decrypted)
+    // only for tokens with `can_read_sensitive`.
+    hidden: &["private_key"],
+    timestamps: &["created_at", "updated_at"],
+    datetimes: &["created_at", "updated_at"],
+};
+
 static WARNED: LazyLock<Mutex<BTreeSet<String>>> = LazyLock::new(|| Mutex::new(BTreeSet::new()));
 
 impl ModelSpec {
