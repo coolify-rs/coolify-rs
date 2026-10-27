@@ -4,7 +4,7 @@ A Rust implementation of [Coolify](https://github.com/coollabsio/coolify)'s API 
 engine that tracks upstream Coolify and ports its changes. *Working name; not affiliated with coolLabs.*
 
 **Status: early.** 28 of 321 upstream API operations are implemented and verified against the official
-`coollabsio/coolify` image built from upstream `main` @ b5823c7 (`sha-b5823c7`). A web UI covers what is ported (projects, environments, private keys, team). There is no deployment engine or server management yet. See
+`coollabsio/coolify` image built from upstream `main` @ b5823c7 (`sha-b5823c7`). A web UI that reproduces upstream's interface covers what is ported (dashboard, projects, environments, private keys, team). There is no deployment engine or server management yet. See
 [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md) and [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 
 ## What works
@@ -12,8 +12,10 @@ engine that tracks upstream Coolify and ports its changes. *Working name; not af
 - Upstream-compatible `/api`: token auth chain (Sanctum tokens, team binding, API switch, IP allowlist, abilities),
   teams, projects and environments, private keys, health/version/disable. Response bodies are byte-identical to
   upstream for all 131 differential cases.
-- Web UI (`frontend/`, Svelte): sign in with a Coolify account (2FA supported), switch teams, manage projects,
-  environments and private keys, view team members. Styled after upstream's `DESIGN.md`.
+- Web UI (`frontend/`, Svelte): a port of upstream Coolify's interface (same layout, navigation, URLs, markup and
+  vendored stylesheet; coolify-rs's own name and logo) for sign-in with 2FA, team switching, the dashboard, projects,
+  environments, private keys (including key generation), team settings and member roles, and appearance settings.
+  Pages coolify-rs does not implement yet open a "not available yet" page inside the same chrome (ADR 0008).
 - Adoption of an existing Coolify PostgreSQL database (schema of upstream `main` @ b5823c7) in place, with a schema
   guard that goes read-only when the database is older or newer than the build.
 - Laravel `APP_KEY` encryption interop in both directions.

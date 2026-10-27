@@ -49,15 +49,15 @@ Upstream references are relative to the upstream repository root.
 | Rate limiting (`throttle:api`, 200/min) | `RouteServiceProvider.php:47` | not started (login throttle implemented) | KNOWN_LIMITATIONS |
 | SSH private key parsing (OpenSSH Ed25519/ECDSA/RSA, RSA PKCS#1/PKCS#8), public key + fingerprint | phpseclib in `PrivateKey` | verified against upstream output | `sshkey_interop.rs` |
 | Browser login (bcrypt, TOTP 2FA, throttle), sessions, CSRF, team switching | Fortify, `UseSessionTeamApiToken`, `RequireTeamTwoFactor` | implemented | `ui_session.rs` (8 tests), manual browser test |
-| Web UI: projects, environments, private keys, team, team switcher, light/dark, mobile layout | Livewire pages (behaviour), `DESIGN.md` (look) | implemented | browser walkthrough 2026-10-27 |
+| Web UI: upstream layout and navigation, dashboard, projects, environments, private keys, team settings, members, appearance | Blade views and Livewire components listed in `compat/mapping/registry.toml` (`ui.frontend`) | implemented | screenshot comparison with the reference 2026-10-27; `ui_pages.rs` (5 tests) |
 | Audit events (`audit_events`) | `bootstrap/helpers/audit.php` | not started | KNOWN_LIMITATIONS |
 
 ## 3. Product areas (from upstream inventory; all not started unless stated)
 
 | Area | Upstream entry points | Notes |
 |---|---|---|
-| Web UI beyond the ported areas; registration/root setup window, password reset, 2FA enrollment, passkeys, OAuth | Livewire (272 components), Fortify, Socialite | started (ADR 0007): login, projects, environments, keys, team view |
-| Teams, invitations, roles | `app/Livewire/Team`, `TeamPolicy` | API reads verified; invitations not started |
+| Web UI beyond the ported areas; registration/root setup window, password reset, 2FA enrollment, passkeys, OAuth | Livewire (272 components), Fortify, Socialite | started (ADR 0007, 0008): login, dashboard, projects, environments, keys, team, members, appearance |
+| Teams, invitations, roles | `app/Livewire/Team`, `TeamPolicy` | API reads verified; UI settings and member roles verified; invitations not started |
 | Servers: validation, SSH, proxy, Sentinel, Cloudflare tunnel, transfers | `ServersController`, `SshMultiplexingHelper`, `app/Actions/Server` | next slice |
 | Private keys | `SecurityController`, `PrivateKey` | verified (API + UI) |
 | Git sources (GitHub/GitLab/Gitea/Bitbucket apps, webhooks) | `app/Http/Controllers/Webhook/*` | |

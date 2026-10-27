@@ -1,6 +1,7 @@
 # ADR 0007: Web UI architecture
 
-Status: accepted (2026-10-27); refines ADR 0003
+Status: accepted (2026-10-27); refines ADR 0003. The look (own stylesheet from `DESIGN.md`) is superseded by
+ADR 0008, which ports upstream's markup and stylesheet; the rest stands.
 
 ## Decision
 

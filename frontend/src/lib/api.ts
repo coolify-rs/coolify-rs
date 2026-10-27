@@ -146,3 +146,75 @@ export interface Member {
   two_factor_confirmed_at: string | null;
   created_at: string;
 }
+
+/** `GET /ui/dashboard` (coolify-rs read model for the dashboard page). */
+export interface DashboardData {
+  projects: {
+    uuid: string;
+    name: string;
+    description: string | null;
+    created_at: string | null;
+    environments: { uuid: string; name: string }[];
+    resources: number;
+  }[];
+  servers: {
+    uuid: string;
+    name: string;
+    description: string | null;
+    status: string;
+    status_type: 'success' | 'warning' | 'error';
+  }[];
+  private_keys: number;
+  can_create: boolean;
+}
+
+export const uiApi = {
+  dashboard: () => request<DashboardData>('GET', '/ui/dashboard'),
+  project: (uuid: string) => request<ProjectPageData>('GET', `/ui/projects/${encodeURIComponent(uuid)}`),
+};
+
+/** `GET /ui/projects/{uuid}` (coolify-rs read model for project pages). */
+export interface ProjectPageData {
+  project: { uuid: string; name: string; description: string | null };
+  environments: { uuid: string; name: string; description: string | null; created_at: string | null; resources: number }[];
+  projects: { uuid: string; name: string }[];
+  can_update: boolean;
+  can_create: boolean;
+}
+
+/** `GET /ui/keys` (coolify-rs read model for the private keys page). */
+export interface KeysPageData {
+  keys: { uuid: string; name: string; description: string | null; in_use: boolean; can_view: boolean }[];
+  can_create: boolean;
+}
+
+export const keysUi = {
+  list: () => request<KeysPageData>('GET', '/ui/keys'),
+  generate: (type: 'ed25519' | 'rsa') => request<{ uuid: string }>('POST', '/ui/keys/generate', { type }),
+  cleanup: () => request<{ deleted: number }>('POST', '/ui/keys/cleanup', {}),
+  inspect: (privateKey: string) => request<{ public_key: string | null }>('POST', '/ui/keys/inspect', { private_key: privateKey }),
+};
+
+/** `GET /ui/team` (coolify-rs read model for the team pages). */
+export interface TeamPageData {
+  team: {
+    id: number;
+    name: string;
+    description: string | null;
+    is_mcp_server_enabled: boolean;
+    is_build_server_fallback_enabled: boolean;
+    is_two_factor_required: boolean;
+  };
+  members: { id: number; name: string; email: string; role: Role; two_factor: boolean | null }[];
+  me: number;
+  my_role: Role;
+  can_update: boolean;
+  can_manage_members: boolean;
+}
+
+export const teamUi = {
+  get: () => request<TeamPageData>('GET', '/ui/team'),
+  update: (body: Omit<TeamPageData['team'], 'id'>) => request<{ message: string }>('PATCH', '/ui/team', body),
+  setRole: (id: number, role: Role) => request<{ message: string }>('POST', `/ui/team/members/${id}/role`, { role }),
+  remove: (id: number) => request<{ message: string }>('DELETE', `/ui/team/members/${id}`),
+};

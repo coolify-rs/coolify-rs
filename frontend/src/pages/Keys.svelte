@@ -1,178 +1,292 @@
 <script lang="ts">
-  import Icon from '../components/Icon.svelte';
+  // Port of upstream livewire/security/private-key/index.blade.php with
+  // livewire/security/private-key/create.blade.php.
+  import Reicon from '../components/Reicon.svelte';
+  import Empty from '../components/Empty.svelte';
   import Modal from '../components/Modal.svelte';
-  import ConfirmDialog from '../components/ConfirmDialog.svelte';
-  import { ApiError, api, type PrivateKey } from '../lib/api';
+  import FormInput from '../components/FormInput.svelte';
+  import FormTextarea from '../components/FormTextarea.svelte';
+  import ConfirmModal from '../components/ConfirmModal.svelte';
+  import StatusBadge from '../components/StatusBadge.svelte';
+  import SecurityLayout from '../components/SecurityLayout.svelte';
+  import SettingsSection from '../components/SettingsSection.svelte';
+  import KeyForm from '../components/KeyForm.svelte';
+  import { api, keysUi, ApiError, type KeysPageData, type PrivateKey } from '../lib/api';
   import { session } from '../lib/session.svelte';
   import { notify } from '../lib/toast.svelte';
-  import { focusOnMount } from '../lib/focus';
 
-  let keys = $state<PrivateKey[] | null>(null);
-  let loadError = $state<ApiError | null>(null);
-  let editor = $state<{ key: PrivateKey | null } | null>(null);
-  let deleting = $state<PrivateKey | null>(null);
+  let data = $state<KeysPageData | null>(null);
+  let menuOpen = $state(false);
+  let menuRoot: HTMLDivElement | undefined = $state();
+  let cleaning = $state(false);
+  let editing = $state<{ uuid: string; name: string; description: string } | null>(null);
+  let editingKey = $state<(PrivateKey & { private_key?: string }) | null>(null);
 
-  // Editor form state
-  let name = $state('');
-  let description = $state('');
-  let privateKey = $state('');
-  let busy = $state(false);
-  let formError = $state<ApiError | null>(null);
+  // Add manually.
+  let adding = $state(false);
+  let newName = $state('');
+  let newDescription = $state('');
+  let newValue = $state('');
+  let newPublic = $state('');
+  let addError = $state<ApiError | null>(null);
+  let addBusy = $state(false);
 
   async function load() {
-    try {
-      keys = await api.get<PrivateKey[]>('/security/keys');
-      loadError = null;
-    } catch (e) {
-      loadError = e instanceof ApiError ? e : new ApiError(0, String(e));
-    }
+    data = await keysUi.list();
   }
+  load();
 
-  $effect(() => {
-    session.info?.current_team?.id;
-    load();
-  });
-
-  function open(key: PrivateKey | null) {
-    name = key?.name ?? '';
-    description = key?.description ?? '';
-    privateKey = '';
-    formError = null;
-    editor = { key };
-  }
-
-  async function save() {
-    busy = true;
-    formError = null;
+  async function generate(type: 'ed25519' | 'rsa') {
+    menuOpen = false;
     try {
-      const body: Record<string, string> = {};
-      if (name.trim()) body.name = name;
-      if (description.trim()) body.description = description;
-      if (privateKey.trim()) body.private_key = privateKey;
-      if (editor?.key) {
-        await api.patch(`/security/keys/${editor.key.uuid}`, body);
-        notify.ok('Private key updated');
-      } else {
-        await api.post('/security/keys', body);
-        notify.ok('Private key added');
-      }
-      editor = null;
+      await keysUi.generate(type);
+      notify.ok('Private key generated successfully.');
       await load();
     } catch (e) {
-      formError = e instanceof ApiError ? e : new ApiError(0, String(e));
-    } finally {
-      busy = false;
+      notify.error(e instanceof ApiError ? e.message : String(e));
     }
   }
 
-  async function copy(text: string) {
+  async function cleanup() {
+    await keysUi.cleanup();
+    notify.ok('Unused keys have been cleaned up.');
+    await load();
+  }
+
+  async function openEditor(k: KeysPageData['keys'][number]) {
+    editing = { uuid: k.uuid, name: k.name, description: k.description ?? '' };
+    editingKey = null;
     try {
-      await navigator.clipboard.writeText(text.trim());
-      notify.ok('Public key copied');
-    } catch {
-      notify.error('Could not copy to the clipboard');
+      editingKey = await api.get<PrivateKey & { private_key?: string }>(`/security/keys/${encodeURIComponent(k.uuid)}`);
+    } catch (e) {
+      notify.error(e instanceof ApiError ? e.message : String(e));
+      editing = null;
     }
   }
+
+  let inspectTimer: ReturnType<typeof setTimeout> | undefined;
+  function onValueInput() {
+    clearTimeout(inspectTimer);
+    inspectTimer = setTimeout(async () => {
+      newPublic = newValue.trim() ? ((await keysUi.inspect(newValue).catch(() => null))?.public_key ?? '') : '';
+    }, 200);
+  }
+
+  async function create(e: SubmitEvent) {
+    e.preventDefault();
+    addBusy = true;
+    addError = null;
+    try {
+      await api.post('/security/keys', { name: newName, description: newDescription || undefined, private_key: newValue });
+      notify.ok('Private key created successfully.');
+      adding = false;
+      await load();
+    } catch (err) {
+      addError = err instanceof ApiError ? err : new ApiError(0, String(err));
+      if (!Object.keys(addError.errors).length) notify.error(addError.message);
+    } finally {
+      addBusy = false;
+    }
+  }
+
+  const rowGrid = 'grid-cols-[minmax(0,1fr)_7rem_1.75rem] sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_7rem_1.75rem]';
 </script>
 
-<div class="page-head">
-  <div>
-    <h1>Private keys</h1>
-    <div class="summary">SSH keys Coolify uses to connect to servers and Git repositories.</div>
-  </div>
-  {#if session.isAdmin && session.info?.features.private_keys}
-    <button class="button button-primary" onclick={() => open(null)}><Icon name="plus" /> Add key</button>
-  {/if}
-</div>
+<svelte:window onclick={(e) => menuOpen && menuRoot && !menuRoot.contains(e.target as Node) && (menuOpen = false)} />
 
-<div class="card">
-  <div class="card-well is-flush">
-    {#if loadError}
-      <div class="empty"><div class="empty-title">Could not load private keys</div><div class="empty-text">{loadError.message}</div></div>
-    {:else if keys === null}
-      <div class="empty"><div class="empty-text">Loading…</div></div>
-    {:else if keys.length === 0}
-      <div class="empty">
-        <div class="empty-title">No private keys</div>
-        <div class="empty-text">Add a key to let Coolify reach your servers over SSH.</div>
-      </div>
-    {:else}
-      <table class="table">
-        <thead><tr><th>Name</th><th>Fingerprint (SHA256)</th><th>Description</th><th class="actions"></th></tr></thead>
-        <tbody>
-          {#each keys as k (k.uuid)}
-            <tr>
-              <td class="cell-strong">
-                {k.name}
-                {#if k.is_git_related}<span class="badge" style="margin-left:6px"><span class="badge-dot"></span>Git</span>{/if}
-              </td>
-              <td class="mono cell-faint truncate" title={k.fingerprint ?? ''}>{k.fingerprint ?? 'Unknown'}</td>
-              <td class="cell-faint truncate">{k.description || 'No description'}</td>
-              <td class="actions">
-                <button class="button button-ghost" onclick={() => copy(k.public_key)} title="Copy public key">
-                  <Icon name="copy" /> Public key
+<div>
+  <SecurityLayout>
+    <SettingsSection title="Private keys" description="SSH keys used to connect servers and private repositories." flush>
+      {#snippet actions()}
+        {#if data?.can_create}
+          <div class="relative h-auto max-w-full inline-flex w-auto">
+            <div class="max-w-full inline-flex">
+              <button type="button" class="button whitespace-nowrap text-error! hover:text-error! dark:text-error!" onclick={() => (cleaning = true)}>
+                <span class="max-sm:hidden">Delete unused keys</span>
+                <span class="sm:hidden">Delete unused</span>
+              </button>
+            </div>
+          </div>
+          <div class="relative" bind:this={menuRoot}>
+            <button
+              type="button"
+              onclick={() => (menuOpen = !menuOpen)}
+              class="button whitespace-nowrap button-highlighted"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+            >
+              <Reicon name="plus" class="size-3.5" />
+              <span class="max-sm:hidden">New private key</span>
+              <span class="sm:hidden">New key</span>
+              <Reicon name="chevron-down" class="size-3 opacity-55" />
+            </button>
+            {#if menuOpen}
+              <div role="menu" class="listbox-panel left-auto! right-0! z-[90]! w-52! min-w-52!">
+                <button type="button" class="listbox-option justify-start! gap-2.5!" onclick={() => generate('ed25519')} role="menuitem">
+                  <Reicon name="keys" class="size-3.5 shrink-0 opacity-70" />
+                  Generate ED25519
                 </button>
-                {#if session.isAdmin}
-                  <button class="button button-ghost" onclick={() => open(k)}>Edit</button>
-                  <button class="button button-ghost button-danger" onclick={() => (deleting = k)}>Delete</button>
-                {/if}
-              </td>
-            </tr>
+                <button type="button" class="listbox-option justify-start! gap-2.5!" onclick={() => generate('rsa')} role="menuitem">
+                  <Reicon name="keys" class="size-3.5 shrink-0 opacity-70" />
+                  Generate RSA
+                </button>
+                <button
+                  type="button"
+                  onclick={() => {
+                    menuOpen = false;
+                    adding = true;
+                    newName = newDescription = newValue = newPublic = '';
+                    addError = null;
+                  }}
+                  class="listbox-option justify-start! gap-2.5!"
+                  role="menuitem"
+                >
+                  <Reicon name="plus" class="size-3.5 shrink-0 opacity-70" />
+                  Add manually
+                </button>
+              </div>
+            {/if}
+          </div>
+        {/if}
+      {/snippet}
+
+      {#if data && data.keys.length === 0}
+        <Empty
+          title="No private keys yet"
+          description="Generate or add an SSH key to connect Coolify to servers and private repositories."
+          iconName="keys"
+        />
+      {:else if data}
+        <div>
+          <div
+            class="grid {rowGrid} items-center gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-2.5 text-[13px] font-medium text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-fg-faint"
+          >
+            <div class="pl-11">Private key</div>
+            <div class="hidden sm:block">Description</div>
+            <div class="text-center">Status</div>
+            <div class="w-7"></div>
+          </div>
+          {#each data.keys as key (key.uuid)}
+            {#if key.can_view}
+              <div class="border-b border-neutral-200 last:border-b-0 dark:border-white/[0.07]">
+                <div
+                  class="grid min-h-14 w-full {rowGrid} items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-neutral-50 dark:hover:bg-white/[0.025]"
+                >
+                  <div class="flex min-w-0 items-center gap-3">
+                    <div
+                      class="flex size-8 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-fg-dim"
+                    >
+                      <Reicon name="keys" class="size-4" />
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <h3 class="truncate text-[13px]! leading-4! font-semibold! text-black dark:text-fg">{key.name}</h3>
+                    </div>
+                  </div>
+                  <p class="hidden truncate text-[12px] text-neutral-500 sm:block dark:text-fg-dim">{key.description || '-'}</p>
+                  <div class="flex justify-center">
+                    {#if key.in_use}<StatusBadge label="In use" type="success" />{:else}<StatusBadge label="Unused" type="warning" />{/if}
+                  </div>
+                  <button type="button" class="icon-button" title="Edit private key" aria-label="Edit {key.name}" onclick={() => openEditor(key)}>
+                    <Reicon name="settings" class="size-3.5" />
+                  </button>
+                </div>
+              </div>
+            {:else}
+              <div
+                class="grid min-h-14 cursor-not-allowed {rowGrid} items-center gap-3 border-b border-neutral-200 px-4 py-2.5 opacity-65 last:border-b-0 dark:border-white/[0.07]"
+                title="You do not have permission to view this private key"
+              >
+                <div class="flex items-start gap-3">
+                  <div
+                    class="flex size-8 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-400 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-fg-faint"
+                  >
+                    <Reicon name="keys" class="size-4" />
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <h3 class="truncate text-[13px]! leading-4! font-semibold! text-black dark:text-fg">{key.name}</h3>
+                  </div>
+                </div>
+                <p class="hidden truncate text-[12px] text-neutral-500 sm:block dark:text-fg-dim">{key.description || '-'}</p>
+                <div class="flex flex-wrap justify-center gap-2">
+                  <StatusBadge label="View only" type="neutral" />
+                  {#if !key.in_use}<StatusBadge label="Unused" type="warning" />{/if}
+                </div>
+                <span class="size-7"></span>
+              </div>
+            {/if}
           {/each}
-        </tbody>
-      </table>
-    {/if}
-  </div>
+        </div>
+      {/if}
+    </SettingsSection>
+  </SecurityLayout>
 </div>
 
-{#if editor}
-  <Modal
-    title={editor.key ? 'Edit private key' : 'Add private key'}
-    description={editor.key ? 'Leave the key empty to keep the current one.' : 'OpenSSH or PEM (RSA) private keys without a passphrase.'}
-    onclose={() => (editor = null)}
-  >
-    <div class="field">
-      <label class="label" for="k-name">Name</label>
-      <input id="k-name" class="input" use:focusOnMount bind:value={name} placeholder={editor.key ? '' : 'Generated if empty'} />
-      {#if formError?.field('name')}<div class="field-error">{formError.field('name')}</div>{/if}
-    </div>
-    <div class="field">
-      <label class="label" for="k-desc">Description</label>
-      <input id="k-desc" class="input" bind:value={description} placeholder="Optional" />
-      {#if formError?.field('description')}<div class="field-error">{formError.field('description')}</div>{/if}
-    </div>
-    <div class="field">
-      <label class="label" for="k-key">Private key</label>
-      <textarea id="k-key" class="textarea" bind:value={privateKey} spellcheck="false" autocomplete="off"
-        placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-      {#if formError?.field('private_key')}<div class="field-error">{formError.field('private_key')}</div>{/if}
-    </div>
-    {#if editor.key}
-      <div class="field">
-        <span class="label">Public key</span>
-        <div class="code">{editor.key.public_key}</div>
+{#if editing}
+  <Modal title="Edit Private Key" onclose={() => (editing = null)}>
+    {#if editingKey}
+      <KeyForm
+        key={editingKey}
+        inUse={data?.keys.find((k) => k.uuid === editing?.uuid)?.in_use ?? false}
+        canEdit={session.isAdmin}
+        modalMode
+        onsaved={() => ((editing = null), load())}
+        ondeleted={() => ((editing = null), load())}
+      />
+    {:else}
+      <div class="flex w-full flex-col gap-4" aria-label="Loading private key editor">
+        <div class="grid gap-4 lg:grid-cols-2">
+          <FormInput id="loading-name" label="Name" required value={editing.name} disabled />
+          <FormInput id="loading-description" label="Description" value={editing.description} disabled />
+        </div>
       </div>
     {/if}
-    {#if formError && Object.keys(formError.errors).length === 0}
-      <div class="notice notice-error" style="margin-top:16px">{formError.message}</div>
-    {/if}
-    {#snippet actions()}
-      <button class="button" onclick={() => (editor = null)} disabled={busy}>Cancel</button>
-      <button class="button button-primary" onclick={save} disabled={busy}>{editor?.key ? 'Save' : 'Add key'}</button>
-    {/snippet}
   </Modal>
 {/if}
 
-{#if deleting}
-  {@const k = deleting}
-  <ConfirmDialog
-    title="Delete private key"
-    message={`Delete "${k.name}"? Keys used by servers, applications or Git integrations cannot be deleted.`}
-    onconfirm={async () => {
-      await api.del(`/security/keys/${k.uuid}`);
-      notify.ok('Private key deleted', k.name);
-      await load();
-    }}
-    onclose={() => (deleting = null)}
+{#if adding}
+  <Modal title="Add Private Key Manually" onclose={() => (adding = false)}>
+    <div class="application-settings-form">
+      <form class="flex flex-col gap-4" onsubmit={create}>
+        <div class="grid gap-4 lg:grid-cols-2">
+          <FormInput id="name" label="Name" required bind:value={newName} error={addError?.field('name')} />
+          <FormInput id="description" label="Description" bind:value={newDescription} error={addError?.field('description')} />
+          <div class="lg:col-span-2">
+            <FormTextarea
+              id="value"
+              rows={10}
+              monospace
+              placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+              label="Private key"
+              required
+              bind:value={newValue}
+              oninput={onValueInput}
+              error={addError?.field('private_key')}
+            />
+          </div>
+          <div class="lg:col-span-2">
+            <FormInput
+              id="publicKey"
+              readonly
+              label="Public key"
+              value={newPublic}
+              helper="Copy this value to ~/.ssh/authorized_keys on the target server."
+            />
+          </div>
+        </div>
+        <div class="flex justify-end border-t border-neutral-200 pt-4 dark:border-white/[0.08]">
+          <button type="submit" class="button button-highlighted" disabled={addBusy}>Continue</button>
+        </div>
+      </form>
+    </div>
+  </Modal>
+{/if}
+
+{#if cleaning}
+  <ConfirmModal
+    title="Confirm unused SSH Key Deletion?"
+    actions={['All unused SSH keys (marked with unused) are permanently deleted.']}
+    confirmWithText={false}
+    onconfirm={cleanup}
+    onclose={() => (cleaning = false)}
   />
 {/if}

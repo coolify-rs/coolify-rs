@@ -13,7 +13,7 @@ use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use coolify_compat::Encrypter;
-use coolify_compat::sshkey::{format_private_key, inspect};
+use coolify_compat::sshkey::{KeyKind, format_private_key, generate, inspect};
 use coolify_db::private_keys::{self, KeyRow, KeyUpdate, NewKey};
 use coolify_domain::ROOT_TEAM_ID;
 use serde_json::{Value, json};
@@ -175,6 +175,58 @@ pub async fn create(
     )
     .await?;
     Ok(created(json!({"uuid": uuid})).into_response())
+}
+
+/// Web UI list (`Security\PrivateKey\Index`): names, descriptions and
+/// whether each key is in use, without the key material.
+pub async fn ui_list(state: &AppState, ctx: &AuthCtx) -> ApiResult<Value> {
+    let keys = private_keys::list(&state.db, ctx.team_id).await?;
+    let mut items = Vec::with_capacity(keys.len());
+    for k in &keys {
+        items.push(json!({
+            "uuid": k.uuid,
+            "name": k.name,
+            "description": k.description,
+            "in_use": private_keys::in_use(&state.db, k.id).await?,
+            "can_view": can_view(ctx, k),
+        }));
+    }
+    Ok(json!({"keys": items, "can_create": ctx.is_team_admin()}))
+}
+
+/// `Index::generatePrivateKey`: a new key named like upstream's
+/// `generate_random_name()`, described "Created by Coolify".
+pub async fn ui_generate(state: &AppState, ctx: &AuthCtx, kind: KeyKind) -> ApiResult<String> {
+    require_admin(ctx)?;
+    let enc = encrypter(state)?;
+    let key = generate(kind).ok_or(ApiError::Internal)?;
+    let info = inspect(&key).ok_or(ApiError::Internal)?;
+    let name = random_name();
+    Ok(private_keys::create(
+        &state.db,
+        NewKey {
+            team_id: ctx.team_id,
+            name: &name,
+            description: "Created by Coolify",
+            private_key_encrypted: &enc.encrypt_string(&format_private_key(&key)),
+            fingerprint: &info.fingerprint,
+        },
+        state.now(),
+    )
+    .await?)
+}
+
+/// `PrivateKey::cleanupUnusedKeys`: `safeDelete` every key of the team.
+pub async fn ui_cleanup(state: &AppState, ctx: &AuthCtx) -> ApiResult<usize> {
+    require_admin(ctx)?;
+    let mut deleted = 0;
+    for k in private_keys::list(&state.db, ctx.team_id).await? {
+        if !private_keys::in_use(&state.db, k.id).await? {
+            private_keys::delete(&state.db, k.id).await?;
+            deleted += 1;
+        }
+    }
+    Ok(deleted)
 }
 
 fn model_validation(msg: &'static str) -> ApiError {

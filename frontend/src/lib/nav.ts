@@ -1,0 +1,165 @@
+// Port of the `$navSections` array in upstream components/navbar.blade.php
+// (labels, icons, URLs, active patterns and visibility rules unchanged).
+
+export interface NavLeaf {
+  label: string;
+  icon?: string;
+  /** Brand icons are masks of upstream public/svgs/<name>.svg. */
+  brandIcon?: string;
+  href: string;
+  /** Path patterns in Laravel `request()->is()` syntax (`*` wildcard). */
+  active: string[];
+  visible?: (ctx: NavContext) => boolean;
+  sectionStart?: boolean;
+  /** Ported in coolify-rs (others show the "not available yet" page). */
+  ported?: boolean;
+}
+
+export interface NavParent {
+  label: string;
+  icon: string;
+  children: NavLeaf[];
+  visible?: (ctx: NavContext) => boolean;
+}
+
+export type NavItem = NavLeaf | NavParent;
+
+export interface NavContext {
+  isAdmin: boolean;
+  isOwner: boolean;
+  isInstanceAdmin: boolean;
+}
+
+export const navSections: [string, NavItem[]][] = [
+  [
+    'Workspace',
+    [
+      { label: 'Dashboard', icon: 'dashboard', href: '/', active: ['', 'dashboard/*', 'canvas'], ported: true },
+      { label: 'Projects', icon: 'projects', href: '/projects', active: ['projects', 'projects/*', 'project/*'], ported: true },
+      {
+        label: 'Monitoring',
+        icon: 'graph',
+        children: [
+          { label: 'Analytics', icon: 'analytics', href: '/analytics', active: ['analytics'] },
+          { label: 'Metrics', icon: 'graph', href: '/metrics', active: ['metrics'] },
+        ],
+      },
+      { label: 'Terminal', icon: 'browser-terminal', href: '/terminal', active: ['terminal*'], visible: (c) => c.isAdmin },
+    ],
+  ],
+  [
+    'Infrastructure',
+    [
+      { label: 'Servers', icon: 'servers', href: '/servers', active: ['server/*', 'servers', 'servers/*'] },
+      {
+        label: 'Integrations',
+        icon: 'link',
+        children: [
+          { label: 'Sources', icon: 'sources', href: '/sources', active: ['sources', 'source/*'] },
+          { label: 'Destinations', icon: 'destinations', href: '/destinations', active: ['destinations', 'destination/*'] },
+          { label: 'Registries', icon: 'layers', href: '/registries', active: ['registries'], visible: (c) => c.isAdmin },
+          { label: 'S3 Storage', icon: 'storages', href: '/storages', active: ['storages', 'storages/*'] },
+        ],
+      },
+      {
+        label: 'Shared Variables',
+        icon: 'variables',
+        children: [
+          { label: 'Overview', icon: 'dashboard', href: '/shared-variables', active: ['shared-variables'] },
+          { label: 'Team', icon: 'teams', href: '/shared-variables/team', active: ['shared-variables/team*'] },
+          { label: 'Projects', icon: 'projects', href: '/shared-variables/projects', active: ['shared-variables/projects', 'shared-variables/project/*'] },
+          { label: 'Environments', icon: 'layers', href: '/shared-variables/environments', active: ['shared-variables/environments*'] },
+          { label: 'Servers', icon: 'servers', href: '/shared-variables/servers', active: ['shared-variables/servers', 'shared-variables/server/*'] },
+        ],
+      },
+    ],
+  ],
+  [
+    'Manage',
+    [
+      {
+        label: 'Team',
+        icon: 'teams',
+        children: [
+          { label: 'General', icon: 'settings', href: '/team', active: ['team'], ported: true },
+          { label: 'Members', icon: 'teams', href: '/team/members', active: ['team/members*'], ported: true },
+          { label: 'Audit log', icon: 'time-back', href: '/team/audit-log', active: ['team/audit-log'], visible: (c) => c.isAdmin },
+          { label: 'Admin View', icon: 'admin', href: '/team/admin', active: ['team/admin'], visible: (c) => c.isInstanceAdmin },
+          { label: 'Danger Zone', icon: 'danger', href: '/team/danger', active: ['team/danger'], visible: (c) => c.isOwner, sectionStart: true },
+        ],
+      },
+      {
+        label: 'Notifications',
+        icon: 'notifications',
+        children: [
+          { label: 'Email', icon: 'mail', href: '/notifications/email', active: ['notifications/email'] },
+          { label: 'Discord', brandIcon: 'discord', href: '/notifications/discord', active: ['notifications/discord'] },
+          { label: 'Telegram', brandIcon: 'telegram', href: '/notifications/telegram', active: ['notifications/telegram'] },
+          { label: 'Slack', brandIcon: 'slack', href: '/notifications/slack', active: ['notifications/slack'] },
+          { label: 'Pushover', brandIcon: 'pushover', href: '/notifications/pushover', active: ['notifications/pushover'] },
+          { label: 'Webhook', icon: 'destinations', href: '/notifications/webhook', active: ['notifications/webhook'] },
+        ],
+      },
+      {
+        label: 'Keys & Tokens',
+        icon: 'keys',
+        children: [
+          { label: 'Private Keys', icon: 'keys', href: '/security/private-key', active: ['security/private-key*'], ported: true },
+          { label: 'Cloud Tokens', icon: 'cloud', href: '/security/cloud-tokens', active: ['security/cloud-tokens*'], visible: (c) => c.isAdmin },
+          { label: 'Integration Tokens', icon: 'network', href: '/security/integration-tokens', active: ['security/integration-tokens'], visible: (c) => c.isAdmin },
+          { label: 'Cloud-Init Scripts', icon: 'file-content', href: '/security/cloud-init-scripts', active: ['security/cloud-init-scripts*'], visible: (c) => c.isAdmin },
+          { label: 'API Tokens', icon: 'code', href: '/security/api-tokens', active: ['security/api-tokens'] },
+        ],
+      },
+      { label: 'Tags', icon: 'tags', href: '/tags', active: ['tags*', 'canvas/tags'] },
+      {
+        label: 'Settings',
+        icon: 'settings',
+        visible: (c) => c.isInstanceAdmin,
+        children: [
+          { label: 'General', icon: 'settings', href: '/settings', active: ['settings'] },
+          { label: 'Advanced', icon: 'grid', href: '/settings/advanced', active: ['settings/advanced'] },
+          { label: 'Updates', icon: 'refresh3', href: '/settings/updates', active: ['settings/updates'] },
+          { label: 'Authentication', icon: 'keys', href: '/settings/oauth', active: ['settings/oauth*'], sectionStart: true },
+          { label: 'Email', icon: 'mail', href: '/settings/email', active: ['settings/email'] },
+          { label: 'Backup', icon: 'database', href: '/settings/backup', active: ['settings/backup'] },
+        ],
+      },
+    ],
+  ],
+];
+
+/** Laravel `request()->is($pattern)`: `*` matches anything (including `/`). */
+export function pathIs(path: string, patterns: string[]): boolean {
+  const p = path.replace(/^\/+|\/+$/g, '');
+  return patterns.some((pat) => {
+    const re = new RegExp('^' + pat.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$');
+    return re.test(p);
+  });
+}
+
+export function isParent(item: NavItem): item is NavParent {
+  return 'children' in item;
+}
+
+/** Visible sections, children filtered, as upstream's `->filter()->map()` does. */
+export function visibleSections(ctx: NavContext): [string, NavItem[]][] {
+  return navSections.map(([label, items]) => [
+    label,
+    items
+      .filter((i) => i.visible?.(ctx) ?? true)
+      .map((i) => (isParent(i) ? { ...i, children: i.children.filter((c) => c.visible?.(ctx) ?? true) } : i))
+      .filter((i) => !isParent(i) || i.children.length > 0),
+  ]);
+}
+
+/** Every URL the nav links to that coolify-rs implements. */
+export function isPortedPath(path: string): boolean {
+  for (const [, items] of navSections) {
+    for (const i of items) {
+      const leaves = isParent(i) ? i.children : [i];
+      for (const l of leaves) if (l.ported && pathIs(path, l.active)) return true;
+    }
+  }
+  return false;
+}

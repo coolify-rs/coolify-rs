@@ -35,9 +35,12 @@ Verified = contract tests **and** 0 mismatches in the differential run against t
 ## Implemented, verified by tests and a manual browser walkthrough
 
 - Browser login (bcrypt, TOTP 2FA with replay protection, throttling), sessions, CSRF, team switching, `/ui/api` bridge.
-- Web UI: sign-in, projects (list/create/edit/delete), environments (create/edit/delete/details), private keys
-  (list/add/edit/delete/copy public key), team (members, build-server fallback toggle), role-aware controls,
-  light/dark theme, phone layout. Objects created in the UI were read back through upstream PHP's API.
+- Web UI ported from upstream's Blade views (ADR 0008), compared by headless screenshots against the reference
+  instance at the same URLs: login and 2FA challenge, shell (topbar, breadcrumb with team/project/environment
+  switchers, drill-down sidebar, user menu, collapsed sidebar, phone sheet), dashboard, projects, project,
+  project settings, environment, environment settings, private keys (list, generate ED25519/RSA, add, edit, delete,
+  delete unused), team settings, members (roles, removal), appearance (theme, page width, navigation style).
+  The `/ui/*` read models and writes behind them are covered by `ui_pages.rs`.
 
 ## Implemented, not yet verified end-to-end
 

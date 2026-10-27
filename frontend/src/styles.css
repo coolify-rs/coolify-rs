@@ -1,0 +1,5 @@
+/* Upstream Coolify stylesheet (vendored, unmodified) built with Tailwind 4. */
+@import "./upstream/css/app.css";
+
+/* Scan coolify-rs components for the utility classes they use. */
+@source "./";

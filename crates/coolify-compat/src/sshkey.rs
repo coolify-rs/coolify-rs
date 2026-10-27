@@ -26,6 +26,34 @@ pub fn format_private_key(key: &str) -> String {
     format!("{}\n", key.trim())
 }
 
+/// Key types offered by "New private key" (upstream `generateSSHKey`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyKind {
+    Ed25519,
+    Rsa,
+}
+
+/// `generateSSHKey()`: Ed25519 in OpenSSH format, RSA (phpseclib's default
+/// 2048 bits) in PKCS#1 PEM.
+pub fn generate(kind: KeyKind) -> Option<String> {
+    let mut rng = rand::rngs::OsRng;
+    match kind {
+        KeyKind::Ed25519 => PrivateKey::random(&mut rng, ssh_key::Algorithm::Ed25519)
+            .ok()?
+            .to_openssh(ssh_key::LineEnding::LF)
+            .ok()
+            .map(|pem| pem.to_string()),
+        KeyKind::Rsa => {
+            use rsa::pkcs1::EncodeRsaPrivateKey;
+            rsa::RsaPrivateKey::new(&mut rng, 2048)
+                .ok()?
+                .to_pkcs1_pem(rsa::pkcs8::LineEnding::LF)
+                .ok()
+                .map(|pem| pem.to_string())
+        }
+    }
+}
+
 /// Parses a private key and derives the public key and fingerprint.
 /// Returns `None` for anything upstream would reject as invalid (and for the
 /// formats listed in the module docs).
@@ -62,6 +90,14 @@ fn rsa_key_data(key: &rsa::RsaPrivateKey) -> Option<KeyData> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn generated_keys_are_accepted() {
+        for kind in [super::KeyKind::Ed25519, super::KeyKind::Rsa] {
+            let pem = super::generate(kind).expect("generate");
+            assert!(super::inspect(&pem).is_some(), "{kind:?} key not accepted");
+        }
+    }
+
     use super::*;
 
     #[test]

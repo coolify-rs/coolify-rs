@@ -13,6 +13,7 @@ pub mod routes;
 pub mod serialize;
 pub mod session;
 pub mod state;
+pub mod ui;
 pub mod validation;
 
 pub use routes::router;

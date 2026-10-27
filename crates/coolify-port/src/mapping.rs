@@ -192,6 +192,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn repository_registry_loads() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../compat/mapping/registry.toml");
+        let reg = Registry::load(&path).expect("compat/mapping/registry.toml");
+        for id in ["ui.styles", "ui.frontend", "ui.read-models"] {
+            assert!(reg.components.iter().any(|c| c.id == id), "{id} missing");
+        }
+    }
+
+    #[test]
     fn globbing() {
         assert!(glob_match(
             "app/Policies/*.php",

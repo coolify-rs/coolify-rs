@@ -6,9 +6,14 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 
 - Only 28 of 321 upstream API operations are implemented. Others answer `501 {"message":"This endpoint is not
   implemented in coolify-rs yet."}`.
-- The web UI covers projects, environments, private keys and team viewing. Not available yet: registration and the
-  root setup window, password reset and forced password change, 2FA enrollment and recovery codes, passkeys, OAuth/SSO,
-  team invitations and member management, instance settings, API token management.
+- The web UI covers the dashboard, projects, environments, private keys, team settings, members and appearance.
+  Not available yet: registration and the root setup window, password reset and forced password change, 2FA
+  enrollment and recovery codes, passkeys, OAuth/SSO, team creation and invitations, instance settings, API token
+  management, and every page for servers, resources, sources, storages, notifications and tags (they open a "not
+  available in coolify-rs yet" page).
+- Within the ported pages: no canvas views, global search, project icons, team avatars or custom color themes;
+  an environment that has resources says so instead of listing them; the dashboard's server status does not include
+  the Traefik-outdated and Sentinel checks; table/grid choices are remembered per browser, not per user.
 - Browser sessions live in memory: a restart signs everyone out. Session limits: 10,000 sessions, 7-day idle
   (`SESSION_LIFETIME`), 30-day absolute.
 - Users must sign in with an existing Coolify account (created in upstream Coolify).

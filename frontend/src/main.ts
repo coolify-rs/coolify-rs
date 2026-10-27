@@ -1,15 +1,9 @@
 import { mount } from 'svelte';
-import './app.css';
+import './styles.css';
 import App from './App.svelte';
+import { applyStoredTheme } from './lib/layout.svelte';
 
-// Theme: saved choice, else the system preference (dark by default).
-try {
-  const saved = localStorage.getItem('theme');
-  const dark = saved ? saved === 'dark' : !window.matchMedia('(prefers-color-scheme: light)').matches;
-  document.documentElement.classList.toggle('dark', dark);
-} catch {
-  // Storage can be unavailable; keep the default dark theme.
-}
+applyStoredTheme();
 
 const target = document.getElementById('app');
 if (target) mount(App, { target });

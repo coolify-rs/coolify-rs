@@ -39,7 +39,7 @@ pub type Patch<T> = Option<Option<T>>;
 
 /// Resource tables counted by `Project::isEmpty` / `Environment::isEmpty`.
 /// All of them soft-delete, and Eloquent's counts exclude trashed rows.
-const RESOURCE_TABLES: &[&str] = &[
+pub const RESOURCE_TABLES: &[&str] = &[
     "applications",
     "standalone_redis",
     "standalone_postgresqls",

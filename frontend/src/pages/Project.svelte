@@ -1,179 +1,334 @@
 <script lang="ts">
-  import Icon from '../components/Icon.svelte';
-  import ProjectForm from '../components/ProjectForm.svelte';
-  import ConfirmDialog from '../components/ConfirmDialog.svelte';
-  import { ApiError, api, type Environment, type Project } from '../lib/api';
+  // Port of upstream livewire/project/show.blade.php (environments list).
+  import Reicon from '../components/Reicon.svelte';
+  import ViewToggle from '../components/ViewToggle.svelte';
+  import Empty from '../components/Empty.svelte';
+  import Dropdown from '../components/Dropdown.svelte';
+  import Pager from '../components/Pager.svelte';
+  import Modal from '../components/Modal.svelte';
+  import FormInput from '../components/FormInput.svelte';
+  import { api, uiApi, ApiError, type ProjectPageData } from '../lib/api';
   import { link, router } from '../lib/router.svelte';
-  import { session } from '../lib/session.svelte';
+  import { listView } from '../lib/listview.svelte';
+  import { compareEnvironmentNames, setProjectCrumbs } from '../lib/crumbs';
   import { notify } from '../lib/toast.svelte';
 
   let { uuid }: { uuid: string } = $props();
 
-  let project = $state<Project | null>(null);
-  let error = $state<ApiError | null>(null);
-  let editing = $state(false);
-  let deleting = $state(false);
-  let creatingEnv = $state(false);
-  let editingEnv = $state<Environment | null>(null);
-  let deletingEnv = $state<Environment | null>(null);
+  type E = ProjectPageData['environments'][number];
+  let data = $state<ProjectPageData | null>(null);
+  let missing = $state(false);
+  let search = $state('');
+  let sortBy = $state('default');
+  let page = $state(1);
+  let pageSize = $state(12);
+  const view = listView('project', 'grid');
 
-  async function load() {
-    try {
-      project = await api.get<Project>(`/projects/${encodeURIComponent(uuid)}`);
-      error = null;
-    } catch (e) {
-      error = e instanceof ApiError ? e : new ApiError(0, String(e));
-    }
-  }
+  // New environment form.
+  let creating = $state(false);
+  let newName = $state('');
+  let busy = $state(false);
+  let error = $state<ApiError | null>(null);
 
   $effect(() => {
-    uuid;
-    load();
+    uiApi
+      .project(uuid)
+      .then((d) => {
+        data = d;
+        setProjectCrumbs(d);
+        document.title = `${d.project.name.slice(0, 10)} > Environments | coolify-rs`;
+      })
+      .catch((e) => {
+        if (e instanceof ApiError && e.status === 404) missing = true;
+        else throw e;
+      });
   });
 
-  const base = $derived(`/projects/${encodeURIComponent(uuid)}`);
+  // Server order: created_at, then production, staging, development, then by name.
+  const ordered = $derived(
+    [...(data?.environments ?? [])]
+      .sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''))
+      .sort((a, b) => compareEnvironmentNames(a.name, b.name)),
+  );
+  const sortOptions = [
+    { value: 'default', label: 'Default' },
+    { value: 'name-asc', label: 'Name A–Z' },
+    { value: 'name-desc', label: 'Name Z–A' },
+    { value: 'resources', label: 'Most resources' },
+  ];
+  const filtered = $derived.by(() => {
+    const query = search.trim().toLowerCase();
+    const list = ordered.filter((e) => {
+      const searchable = [e.name, e.description].filter(Boolean).join(' ').toLowerCase();
+      return !query || searchable.includes(query);
+    });
+    return list.sort((a, b) => {
+      if (sortBy === 'name-desc') return b.name.localeCompare(a.name);
+      if (sortBy === 'resources') return b.resources - a.resources || a.name.localeCompare(b.name);
+      if (sortBy === 'name-asc') return a.name.localeCompare(b.name);
+      return 0;
+    });
+  });
+  const totalPages = $derived(Math.max(1, Math.ceil(filtered.length / pageSize)));
+  $effect.pre(() => {
+    if (page > totalPages) page = totalPages;
+  });
+  const paginated = $derived(filtered.slice((page - 1) * pageSize, page * pageSize));
 
-  async function update(v: { name: string; description: string }) {
-    await api.patch(base, { name: v.name, description: v.description.trim() ? v.description : null });
-    notify.ok('Project updated');
-    await load();
-  }
+  const href = (e: E) => `/project/${uuid}/environment/${e.uuid}`;
+  const settingsHref = (e: E) => (data?.can_update ? `/project/${uuid}/environment/${e.uuid}/edit` : null);
+  const addResourceHref = (e: E) => (data?.can_create ? `/project/${uuid}/environment/${e.uuid}/new` : null);
+  const iconLink =
+    'flex items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-black dark:text-fg-faint dark:hover:bg-white/[0.06] dark:hover:text-fg';
 
-  async function remove() {
-    await api.del(base);
-    notify.ok('Project deleted', project?.name);
-    router.go('/projects');
-  }
-
-  async function createEnv(v: { name: string }) {
-    await api.post(`${base}/environments`, { name: v.name });
-    notify.ok('Environment created', v.name);
-    await load();
-  }
-
-  async function updateEnv(env: Environment, v: { name: string; description: string }) {
-    const body: Record<string, string | null> = { description: v.description.trim() ? v.description : null };
-    if (v.name !== env.name) body.name = v.name;
-    await api.patch(`${base}/environments/${encodeURIComponent(env.uuid)}`, body);
-    notify.ok('Environment updated');
-    await load();
-  }
-
-  async function removeEnv(env: Environment) {
-    await api.del(`${base}/environments/${encodeURIComponent(env.uuid)}`);
-    notify.ok('Environment deleted', env.name);
-    await load();
+  async function createEnvironment(e: SubmitEvent) {
+    e.preventDefault();
+    busy = true;
+    error = null;
+    try {
+      const res = await api.post<{ uuid: string }>(`/projects/${encodeURIComponent(uuid)}/environments`, { name: newName });
+      creating = false;
+      router.go(`/project/${uuid}/environment/${res.uuid}`);
+    } catch (err) {
+      error = err instanceof ApiError ? err : new ApiError(0, String(err));
+      if (!Object.keys(error.errors).length) notify.error(error.message);
+    } finally {
+      busy = false;
+    }
   }
 </script>
 
-{#if error}
-  <div class="card"><div class="card-well"><div class="empty">
-    <div class="empty-title">{error.status === 404 ? 'Project not found' : 'Could not load the project'}</div>
-    <div class="empty-text">{error.message}</div>
-    <a class="button" href="/projects" use:link>Back to projects</a>
-  </div></div></div>
-{:else if project}
-  <div class="page-head">
-    <div>
-      <div class="summary"><a href="/projects" use:link>Projects</a></div>
-      <h1>{project.name}</h1>
-      <div class="summary">{project.description || 'No description'}</div>
-    </div>
-    {#if session.isAdmin}
-      <div class="row">
-        <button class="button" onclick={() => (editing = true)}>Edit</button>
-        <button class="button button-danger" onclick={() => (deleting = true)}>Delete</button>
-      </div>
-    {/if}
+{#if missing}
+  <div class="application-settings-form w-full">
+    <Empty title="Project not found" description="It may have been deleted, or it belongs to another team." iconName="projects" size="lg" />
   </div>
-
-  <div class="stack">
-    <div class="card">
-      <div class="card-header">
-        <div>
-          <div class="card-title">Environments</div>
-          <div class="card-description">Each project starts with a production environment.</div>
+{:else if data}
+  <div>
+    <div class="w-full">
+      <header class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div class="min-w-0">
+          <div class="flex min-w-0 items-center gap-1.5">
+            <h1 class="truncate text-[24px]! leading-7! font-semibold! tracking-tight!">{data.project.name}</h1>
+            {#if data.can_update}
+              <a
+                href="/project/{uuid}/edit"
+                use:link
+                class="flex size-7 shrink-0 {iconLink}"
+                title="Project settings"
+                aria-label="Open settings for {data.project.name}"
+              >
+                <Reicon name="settings" class="size-4" />
+              </a>
+            {/if}
+          </div>
+          <p class="mt-1 text-[13px] text-neutral-500 dark:text-fg-dim">
+            <span>{data.environments.length} {data.environments.length === 1 ? 'environment' : 'environments'}</span>
+            in this project
+          </p>
         </div>
-        {#if session.isAdmin}
-          <button class="button button-primary" onclick={() => (creatingEnv = true)}><Icon name="plus" /> New environment</button>
+        {#if data.can_update}
+          <div class="flex w-fit shrink-0 items-center gap-2">
+            <button type="button" class="button button-highlighted" onclick={() => ((creating = true), (newName = ''), (error = null))}>
+              <Reicon name="plus" class="size-3.5" />
+              New environment
+            </button>
+          </div>
         {/if}
-      </div>
-      <div class="card-well is-flush">
-        {#if project.environments.length === 0}
-          <div class="empty"><div class="empty-title">No environments</div></div>
-        {:else}
-          <table class="table">
-            <thead><tr><th>Name</th><th>Description</th><th class="actions"></th></tr></thead>
-            <tbody>
-              {#each project.environments as env (env.uuid)}
-                <tr class="clickable" onclick={() => router.go(`${base}/environments/${encodeURIComponent(env.uuid)}`)}>
-                  <td class="cell-strong">{env.name}</td>
-                  <td class="cell-faint truncate">{env.description || 'No description'}</td>
-                  <td class="actions">
-                    {#if session.isAdmin}
-                      <button class="button button-ghost" onclick={(e) => (e.stopPropagation(), (editingEnv = env))}>Edit</button>
-                      <button class="button button-ghost button-danger" onclick={(e) => (e.stopPropagation(), (deletingEnv = env))}>Delete</button>
-                    {/if}
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        {/if}
-      </div>
-    </div>
+      </header>
 
-    <div class="card">
-      <div class="card-header"><div class="card-title">Details</div></div>
-      <div class="card-well">
-        <dl class="kv">
-          <dt>UUID</dt><dd class="mono">{project.uuid}</dd>
-          <dt>Created</dt><dd>{new Date(project.created_at).toLocaleString()}</dd>
-          <dt>Updated</dt><dd>{new Date(project.updated_at).toLocaleString()}</dd>
-        </dl>
-      </div>
+      {#if data.environments.length === 0}
+        <Empty title="No environments yet" description="Add an environment to start organizing this project's resources." iconName="layers" />
+      {:else}
+        <div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="relative w-full sm:max-w-sm">
+            <Reicon
+              name="search"
+              class="pointer-events-none absolute top-1/2 left-2.5 z-10 size-3.5 -translate-y-1/2 text-neutral-400 dark:text-fg-faint"
+            />
+            <input
+              bind:value={search}
+              oninput={() => (page = 1)}
+              type="search"
+              placeholder="Search environments"
+              class="h-8! w-full rounded-lg! border-neutral-200! bg-white! py-0! pr-8! pl-8! text-[12px]! shadow-none! placeholder:text-neutral-400 focus:border-accent! focus:ring-0! dark:border-white/[0.08]! dark:bg-white/[0.035]! dark:text-fg! dark:placeholder:text-fg-faint"
+            />
+            {#if search}
+              <button
+                onclick={() => ((search = ''), (page = 1))}
+                type="button"
+                class="absolute top-1/2 right-2 flex size-5 -translate-y-1/2 items-center justify-center rounded text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-black dark:text-fg-faint dark:hover:bg-white/[0.07] dark:hover:text-fg"
+                aria-label="Clear search"
+              >
+                <span class="text-sm leading-none">×</span>
+              </button>
+            {/if}
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <Dropdown panelClass="w-48!">
+              {#snippet trigger({ open })}
+                <button type="button" class="button" aria-haspopup="listbox" aria-expanded={open}>
+                  <svg class="size-3.5 opacity-65" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path
+                      d="M8 5v14m0 0-3-3m3 3 3-3M16 19V5m0 0-3 3m3-3 3 3"
+                      stroke="currentColor"
+                      stroke-width="1.7"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                  Sort
+                </button>
+              {/snippet}
+              {#snippet children({ close })}
+                {#each sortOptions as option (option.value)}
+                  <button
+                    type="button"
+                    class="flex h-9 w-full items-center rounded-md px-2 text-left text-[12px] text-neutral-600 transition-colors hover:bg-neutral-100 hover:text-black dark:text-fg-dim dark:hover:bg-white/[0.06] dark:hover:text-fg"
+                    onclick={() => ((sortBy = option.value), close(), (page = 1))}
+                  >
+                    <span class="flex-1">{option.label}</span>
+                    {#if sortBy === option.value}
+                      <svg class="size-3.5 text-black dark:text-fg" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                        <path d="m2.5 6.25 2.1 2.1 4.9-5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+                      </svg>
+                    {/if}
+                  </button>
+                {/each}
+              {/snippet}
+            </Dropdown>
+            <ViewToggle bind:mode={() => view.mode, (m) => ((view.mode = m), (page = 1))} />
+          </div>
+        </div>
+
+        {#if view.mode === 'grid'}
+          <div>
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {#each paginated as e (e.uuid)}
+                <article
+                  class="group relative flex min-h-28 flex-col rounded-xl border border-neutral-200 bg-white p-3 shadow-sm transition-all hover:-translate-y-px hover:border-neutral-300 hover:shadow-md dark:border-white/[0.08] dark:bg-white/[0.05] dark:hover:border-white/[0.14]"
+                >
+                  <a href={href(e)} use:link class="absolute inset-0 rounded-xl" aria-label="Open {e.name}"></a>
+                  <div class="flex items-start gap-3">
+                    <div
+                      class="flex size-8 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-fg-dim"
+                    >
+                      <Reicon name="layers" class="size-4" />
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <h2 class="truncate text-[13px]! leading-4! font-semibold! text-black dark:text-fg">{e.name}</h2>
+                      <p class="mt-0.5 truncate text-[11px] text-neutral-500 dark:text-fg-faint">{e.description || 'Environment'}</p>
+                    </div>
+                  </div>
+                  <div class="mt-auto flex items-center justify-between gap-3 pt-4">
+                    <p class="min-w-0 truncate text-[11px] text-neutral-500 dark:text-fg-dim">
+                      {e.resources}
+                      {e.resources === 1 ? 'resource' : 'resources'}
+                    </p>
+                    <div class="relative z-10 flex shrink-0 items-center gap-0.5">
+                      {#if addResourceHref(e)}
+                        <a href={addResourceHref(e)} use:link class="size-7.5 {iconLink}" title="Add resource" aria-label="Add resource to {e.name}">
+                          <Reicon name="plus" class="size-3" />
+                        </a>
+                      {/if}
+                      {#if settingsHref(e)}
+                        <a
+                          href={settingsHref(e)}
+                          use:link
+                          class="size-7.5 {iconLink}"
+                          title="Environment settings"
+                          aria-label="Open settings for {e.name}"
+                        >
+                          <Reicon name="settings" class="size-3" />
+                        </a>
+                      {/if}
+                    </div>
+                  </div>
+                </article>
+              {/each}
+            </div>
+            {#if filtered.length > 0}
+              <Pager
+                total={filtered.length}
+                bind:page
+                bind:pageSize
+                storageKey="coolify.page-size.project-environments"
+                options={[12, 24, 48, 96]}
+                class="mt-3 rounded-xl border border-neutral-200 bg-white shadow-sm dark:border-white/[0.08] dark:bg-white/[0.05]"
+              />
+            {/if}
+          </div>
+        {:else}
+          <div class="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm dark:border-white/[0.08] dark:bg-white/[0.05]">
+            <div
+              class="environments-table-grid border-b border-neutral-200 bg-neutral-50 px-4 py-2.5 text-[11px] font-medium text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-fg-faint"
+            >
+              <div>Environment</div>
+              <div class="environment-resource-count">Resources</div>
+              <div class="environment-description">Description</div>
+              <div></div>
+            </div>
+            {#each paginated as e (e.uuid)}
+              <div
+                class="environments-table-grid group relative min-h-14 items-center border-b border-neutral-200 px-4 py-2.5 transition-colors last:border-b-0 hover:bg-neutral-50 dark:border-white/[0.07] dark:hover:bg-white/[0.025]"
+              >
+                <a href={href(e)} use:link class="absolute inset-0" aria-label="Open {e.name}"></a>
+                <div class="flex min-w-0 items-center gap-3">
+                  <div
+                    class="flex size-8 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.035] dark:text-fg-dim"
+                  >
+                    <Reicon name="layers" class="size-4" />
+                  </div>
+                  <a href={href(e)} use:link class="relative truncate text-[13px] font-semibold text-black hover:underline dark:text-fg">{e.name}</a>
+                </div>
+                <div class="environment-resource-count text-[12px] text-neutral-600 dark:text-fg-dim">{e.resources}</div>
+                <p class="environment-description truncate text-[12px] text-neutral-500 dark:text-fg-dim">{e.description || '-'}</p>
+                <div class="relative flex items-center justify-end gap-0.5">
+                  {#if addResourceHref(e)}
+                    <a href={addResourceHref(e)} use:link class="size-7 {iconLink}" title="Add resource" aria-label="Add resource to {e.name}">
+                      <Reicon name="plus" class="size-3.5" />
+                    </a>
+                  {/if}
+                  {#if settingsHref(e)}
+                    <a href={settingsHref(e)} use:link class="size-7 {iconLink}" title="Environment settings" aria-label="Open settings for {e.name}">
+                      <Reicon name="settings" class="size-3.5" />
+                    </a>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+            {#if filtered.length > 0}
+              <Pager
+                total={filtered.length}
+                bind:page
+                bind:pageSize
+                storageKey="coolify.page-size.project-environments"
+                options={[12, 24, 48, 96]}
+              />
+            {/if}
+          </div>
+        {/if}
+
+        {#if filtered.length === 0}
+          <div
+            class="flex min-h-52 flex-col items-center justify-center rounded-xl border border-neutral-200 bg-white px-6 text-center dark:border-white/[0.08] dark:bg-white/[0.05]"
+          >
+            <Reicon name="search" class="mb-3 size-6 text-neutral-300 dark:text-fg-faint" />
+            <p class="text-[13px] font-medium">No matching environments</p>
+            <p class="mt-1 text-[12px] text-neutral-500 dark:text-fg-dim">Try a different search.</p>
+          </div>
+        {/if}
+      {/if}
     </div>
   </div>
+{/if}
 
-  {#if editing}
-    <ProjectForm
-      title="Edit project"
-      submitLabel="Save"
-      initial={{ name: project.name, description: project.description ?? '' }}
-      onsubmit={update}
-      onclose={() => (editing = false)}
-    />
-  {/if}
-  {#if deleting}
-    <ConfirmDialog
-      title="Delete project"
-      message={`Delete "${project.name}" and its environments? Projects with resources cannot be deleted.`}
-      onconfirm={remove}
-      onclose={() => (deleting = false)}
-    />
-  {/if}
-  {#if creatingEnv}
-    <ProjectForm title="New environment" submitLabel="Create environment" withDescription={false} onsubmit={createEnv} onclose={() => (creatingEnv = false)} />
-  {/if}
-  {#if editingEnv}
-    {@const env = editingEnv}
-    <ProjectForm
-      title="Edit environment"
-      submitLabel="Save"
-      initial={{ name: env.name, description: env.description ?? '' }}
-      onsubmit={(v) => updateEnv(env, v)}
-      onclose={() => (editingEnv = null)}
-    />
-  {/if}
-  {#if deletingEnv}
-    {@const env = deletingEnv}
-    <ConfirmDialog
-      title="Delete environment"
-      message={`Delete the "${env.name}" environment? Environments with resources cannot be deleted.`}
-      onconfirm={() => removeEnv(env)}
-      onclose={() => (deletingEnv = null)}
-    />
-  {/if}
-{:else}
-  <div class="empty"><div class="empty-text">Loading…</div></div>
+{#if creating}
+  <Modal title="New Environment" onclose={() => (creating = false)}>
+    <form class="space-y-4" onsubmit={createEnvironment}>
+      <FormInput placeholder="staging" id="name" label="Name" required bind:value={newName} error={error?.field('name')} />
+      <footer class="flex justify-end border-t border-neutral-200 pt-4 dark:border-white/[0.08]">
+        <button type="submit" class="button button-highlighted" disabled={busy}>Create environment</button>
+      </footer>
+    </form>
+  </Modal>
 {/if}

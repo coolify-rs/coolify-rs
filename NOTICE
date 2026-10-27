@@ -19,12 +19,18 @@ retain that license; they are unmodified unless noted:
   compat/api/upstream-routes.json, compat/api/reference-route-list-4.5.0.json
   compat/baseline/supported-migrations.txt                (generated from Coolify source)
 
-frontend/src/app.css transcribes the design tokens and component anatomy of
-Coolify's DESIGN.md (Part 1, "portable design language").
+frontend/src/upstream/ contains files copied unmodified from Coolify main @ b5823c7:
+  css/app.css, css/fonts.css, css/utilities.css   (Apache-2.0, Copyright coolLabs Technologies)
+  fonts/*.woff2                                    (Inter, Geist Sans, Geist Mono; SIL Open Font License 1.1)
+frontend/src/upstream/reicons.ts is generated from resources/views/components/reicon.blade.php.
+frontend/public/svgs/{discord,telegram,slack,pushover}.svg are copied from Coolify's public/svgs
+(trademarks of their owners, used as navigation icons as upstream does).
+The Svelte pages in frontend/src reproduce the markup of Coolify's Blade views.
 
 Validation messages, naming patterns and error strings reproduced in
 crates/coolify-api and crates/coolify-domain are taken from Coolify for
 API compatibility.
 
 "Coolify" is a trademark of its owners; this project is not affiliated with
-or endorsed by coolLabs and does not use Coolify branding or logos.
+or endorsed by coolLabs and does not use Coolify branding or logos. The coolify-rs
+logo and wordmark are original.

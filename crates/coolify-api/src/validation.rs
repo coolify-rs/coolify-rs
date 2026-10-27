@@ -200,6 +200,29 @@ pub mod patterns {
         ),
     ];
 
+    /// `Livewire\Team\Index::messages()`: the combined messages plus its own
+    /// `name.required`.
+    pub const TEAM_MESSAGES: Messages = &[
+        ("name.required", "The Name field is required."),
+        (
+            "name.regex",
+            "The name may only contain letters (including Unicode), numbers, spaces, and these characters: - _ . / @ & ( ) # , : +",
+        ),
+        ("name.min", "The name must be at least :min characters."),
+        (
+            "name.max",
+            "The name may not be greater than :max characters.",
+        ),
+        (
+            "description.regex",
+            "The description may only contain letters (including Unicode), numbers, spaces, and common punctuation: - _ . , ! ? ( ) ' \" + = * / @ &",
+        ),
+        (
+            "description.max",
+            "The description may not be greater than :max characters.",
+        ),
+    ];
+
     pub const COMBINED_MESSAGES: Messages = &[
         (
             "name.regex",

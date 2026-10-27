@@ -1,4 +1,5 @@
-// Minimal history-API router: patterns like `/projects/:uuid`.
+// Minimal history-API router using upstream Coolify's URLs, so bookmarks and
+// links work the same against either server.
 
 export interface Match {
   name: string;
@@ -7,12 +8,17 @@ export interface Match {
 
 const routes: { name: string; pattern: string }[] = [
   { name: 'login', pattern: '/login' },
+  { name: 'dashboard', pattern: '/' },
   { name: 'projects', pattern: '/projects' },
-  { name: 'project', pattern: '/projects/:uuid' },
-  { name: 'environment', pattern: '/projects/:uuid/environments/:env' },
-  { name: 'keys', pattern: '/security/keys' },
+  { name: 'project', pattern: '/project/:uuid' },
+  { name: 'project-edit', pattern: '/project/:uuid/edit' },
+  { name: 'environment', pattern: '/project/:uuid/environment/:env' },
+  { name: 'environment-edit', pattern: '/project/:uuid/environment/:env/edit' },
+  { name: 'keys', pattern: '/security/private-key' },
+  { name: 'key', pattern: '/security/private-key/:uuid' },
   { name: 'team', pattern: '/team' },
-  { name: 'home', pattern: '/' },
+  { name: 'members', pattern: '/team/members' },
+  { name: 'appearance', pattern: '/profile/appearance' },
 ];
 
 function match(path: string): Match {
@@ -30,7 +36,7 @@ function match(path: string): Match {
     });
     if (ok) return { name: r.name, params };
   }
-  return { name: 'not-found', params: {} };
+  return { name: 'unported', params: {} };
 }
 
 class Router {
@@ -57,7 +63,7 @@ export function link(node: HTMLAnchorElement) {
   const onClick = (e: MouseEvent) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     const href = node.getAttribute('href');
-    if (!href || !href.startsWith('/')) return;
+    if (!href || !href.startsWith('/') || node.target) return;
     e.preventDefault();
     router.go(href);
   };

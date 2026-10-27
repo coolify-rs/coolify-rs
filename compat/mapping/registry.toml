@@ -218,12 +218,82 @@ divergences = [
 ]
 
 [[component]]
+id = "ui.styles"
+title = "Vendored upstream stylesheet, fonts and icon set"
+status = "verified"
+upstream.paths = [
+  "resources/css/app.css",
+  "resources/css/fonts.css",
+  "resources/css/utilities.css",
+  "resources/fonts/**",
+  "resources/views/components/reicon.blade.php",
+]
+rust.paths = ["frontend/src/upstream/**", "frontend/scripts/gen-reicons.mjs"]
+rust.packages = []
+
+[[component]]
 id = "ui.frontend"
-title = "Web UI (Svelte) following upstream DESIGN.md"
+title = "Web UI: Svelte ports of upstream layouts, navigation and pages"
 status = "implemented"
-upstream.paths = ["DESIGN.md", "resources/css/app.css"]
+upstream.paths = [
+  "resources/views/layouts/app.blade.php",
+  "resources/views/components/navbar.blade.php",
+  "resources/views/components/top-breadcrumb.blade.php",
+  "resources/views/components/top-user-menu.blade.php",
+  "resources/views/livewire/switch-team.blade.php",
+  "resources/views/auth/login.blade.php",
+  "resources/views/auth/two-factor-challenge.blade.php",
+  "resources/views/livewire/dashboard.blade.php",
+  "resources/views/livewire/project/index.blade.php",
+  "resources/views/livewire/project/show.blade.php",
+  "resources/views/livewire/project/edit.blade.php",
+  "resources/views/livewire/project/environment-edit.blade.php",
+  "resources/views/livewire/project/resource/index.blade.php",
+  "resources/views/livewire/security/private-key/index.blade.php",
+  "resources/views/livewire/security/private-key/show.blade.php",
+  "resources/views/livewire/security/private-key/create.blade.php",
+  "resources/views/livewire/team/index.blade.php",
+  "resources/views/livewire/team/member/index.blade.php",
+  "resources/views/livewire/team/member.blade.php",
+  "resources/views/components/theme-controls.blade.php",
+  "resources/views/components/forms/**",
+  "resources/views/components/modal-input.blade.php",
+  "resources/views/components/modal-confirmation.blade.php",
+  "resources/views/components/toast.blade.php",
+]
 rust.paths = ["frontend/src/**"]
-rust.packages = ["coolify-api"]
+rust.packages = []
+divergences = [
+  "no canvas views, global search, project icons, team avatars, invitations or custom color themes",
+  "environments with resources say resources are not available yet instead of listing them",
+  "list views remember table/grid per browser (upstream stores it per user)",
+]
+
+[[component]]
+id = "ui.read-models"
+title = "Session-guarded /ui read models and writes for the ported pages"
+status = "verified"
+upstream.paths = [
+  "app/Livewire/Dashboard.php",
+  "app/Livewire/Project/Show.php",
+  "app/Livewire/Security/PrivateKey/Index.php",
+  "app/Livewire/Team/Index.php",
+  "app/Livewire/Team/Member.php",
+  "app/Actions/User/RevokeUserTeamTokens.php",
+]
+upstream.symbols = [
+  "app/Models/PrivateKey.php::generateNewKeyPair()",
+  "app/Models/PrivateKey.php::cleanupUnusedKeys()",
+  "bootstrap/helpers/shared.php::generateSSHKey()",
+]
+upstream.tables = ["projects", "environments", "servers", "server_settings", "private_keys", "teams", "team_user", "personal_access_tokens"]
+rust.paths = ["crates/coolify-api/src/ui.rs", "crates/coolify-db/src/dashboard.rs", "crates/coolify-db/src/teams.rs", "crates/coolify-compat/src/sshkey.rs"]
+rust.tests = ["crates/coolify-api/tests/ui_pages.rs"]
+rust.packages = ["coolify-api", "coolify-db", "coolify-compat"]
+divergences = [
+  "server status omits the Traefik-outdated and Sentinel checks (Attention required comes only from a stopped proxy)",
+  "audit events (auditLog, Auditable) are not written, as for every coolify-rs write",
+]
 
 [[component]]
 id = "deployment.engine"

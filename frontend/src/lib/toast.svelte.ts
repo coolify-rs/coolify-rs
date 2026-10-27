@@ -1,21 +1,39 @@
+// Toast queue (port of upstream components/toast.blade.php behaviour:
+// 4s lifetime, paused while hovered).
+
+export type ToastType = 'success' | 'info' | 'warning' | 'danger' | 'default';
+
 export interface Toast {
   id: number;
-  kind: 'success' | 'error';
-  title: string;
+  type: ToastType;
+  message: string;
   description?: string;
+  copied?: boolean;
 }
 
 class Toasts {
   items = $state<Toast[]>([]);
   private next = 1;
+  private timers = new Map<number, ReturnType<typeof setTimeout>>();
 
-  push(kind: Toast['kind'], title: string, description?: string): void {
+  push(type: ToastType, message: string, description?: string): void {
     const id = this.next++;
-    this.items.push({ id, kind, title, description });
-    setTimeout(() => this.dismiss(id), 4000);
+    this.items.push({ id, type, message, description });
+    this.schedule(id, 4000);
+  }
+
+  schedule(id: number, delay: number): void {
+    clearTimeout(this.timers.get(id));
+    this.timers.set(id, setTimeout(() => this.dismiss(id), delay));
+  }
+
+  pause(id: number): void {
+    clearTimeout(this.timers.get(id));
   }
 
   dismiss(id: number): void {
+    clearTimeout(this.timers.get(id));
+    this.timers.delete(id);
     this.items = this.items.filter((t) => t.id !== id);
   }
 }
@@ -23,6 +41,7 @@ class Toasts {
 export const toasts = new Toasts();
 
 export const notify = {
-  ok: (title: string, description?: string) => toasts.push('success', title, description),
-  error: (title: string, description?: string) => toasts.push('error', title, description),
+  ok: (message: string, description?: string) => toasts.push('success', message, description),
+  error: (message: string, description?: string) => toasts.push('danger', message, description),
+  info: (message: string, description?: string) => toasts.push('info', message, description),
 };

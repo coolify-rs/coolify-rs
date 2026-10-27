@@ -1,129 +1,174 @@
 <script lang="ts">
+  // Port of upstream layouts/app.blade.php: desktop top bar and sidebar,
+  // mobile top bar with a slide-over sidebar, and the main column. The brand
+  // cell carries the coolify-rs wordmark and logo.
   import type { Snippet } from 'svelte';
-  import Icon from './Icon.svelte';
-  import { router, link } from '../lib/router.svelte';
+  import Navbar from './Navbar.svelte';
+  import Breadcrumb from './Breadcrumb.svelte';
+  import TeamSwitcher from './TeamSwitcher.svelte';
+  import UserMenu from './UserMenu.svelte';
+  import { layout } from '../lib/layout.svelte';
+  import { link, router } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
-  import { sessionApi } from '../lib/api';
-  import { notify } from '../lib/toast.svelte';
 
   let { children }: { children: Snippet } = $props();
 
-  let teamMenu = $state(false);
-  let userMenu = $state(false);
-  let dark = $state(document.documentElement.classList.contains('dark'));
+  const version = $derived(session.info?.version ?? '');
+  const collapsed = $derived(layout.collapsed);
 
-  const nav = [
-    { href: '/projects', label: 'Projects', icon: 'folder', match: ['projects', 'project', 'environment'] },
-    { href: '/security/keys', label: 'Private keys', icon: 'key', match: ['keys'] },
-    { href: '/team', label: 'Team', icon: 'users', match: ['team'] },
-  ];
+  // The sidebar animates its width only after the first paint.
+  let sidebarReady = $state(false);
+  $effect(() => {
+    requestAnimationFrame(() => (sidebarReady = true));
+  });
 
-  function toggleTheme() {
-    dark = !dark;
-    document.documentElement.classList.toggle('dark', dark);
-    try {
-      localStorage.setItem('theme', dark ? 'dark' : 'light');
-    } catch {
-      // Storage may be unavailable (private mode); the toggle still works.
-    }
+  // Close the mobile sheet on navigation.
+  $effect(() => {
+    void router.path;
+    layout.mobileOpen = false;
+  });
+
+  function markScrolled() {
+    document.documentElement.classList.toggle('is-scrolled', window.scrollY > 2);
   }
-
-  async function switchTeam(id: number) {
-    teamMenu = false;
-    try {
-      session.set(await sessionApi.switchTeam(id));
-      router.go('/projects');
-    } catch (e) {
-      notify.error('Could not switch team', String(e));
-    }
-  }
-
-  async function logout() {
-    userMenu = false;
-    try {
-      await sessionApi.logout();
-    } finally {
-      session.set(null);
-      router.go('/login', true);
-    }
-  }
-
-  function closeMenus(e: MouseEvent) {
-    if (!(e.target as HTMLElement).closest('.menu-wrap')) {
-      teamMenu = false;
-      userMenu = false;
-    }
-  }
+  $effect(markScrolled);
 </script>
 
-<svelte:window onclick={closeMenus} />
+<svelte:window onscroll={markScrolled} onkeydown={(e) => e.key === 'Escape' && (layout.mobileOpen = false)} />
 
-<div class="shell">
-  <div class="logo-cell">
-    <span class="wordmark">coolify-rs</span>
-    <span class="version">{session.info?.version}</span>
-  </div>
-  <header class="topbar">
-    <div class="menu-wrap">
-      <button class="button button-ghost" onclick={() => (teamMenu = !teamMenu)} aria-haspopup="menu">
-        {session.info?.current_team?.name ?? 'No team'}
-        <span class="cell-faint">{session.info?.current_team?.role}</span>
-      </button>
-      {#if teamMenu}
-        <div class="menu" role="menu">
-          <div class="menu-label">Switch team</div>
-          {#each session.info?.teams ?? [] as t (t.id)}
-            <button class="menu-option" role="menuitem" onclick={() => switchTeam(t.id)}>
-              {t.name}
-              {#if t.id === session.info?.current_team?.id}<span aria-label="current">✓</span>{/if}
-            </button>
-          {/each}
-        </div>
-      {/if}
+<div class="app-shell dark:text-inherit text-black" style="--sidebar-w: {collapsed ? 'var(--sidebar-collapsed-w)' : '14rem'}">
+  <!-- Desktop top bar -->
+  <header class="app-topbar hidden lg:flex fixed top-0 inset-x-0 z-50 h-12 items-center bg-white/95 dark:bg-panel/95 backdrop-blur">
+    <div
+      class="app-topbar-brand flex items-center gap-2 h-full shrink-0 border-r border-black/[0.06] bg-neutral-50 dark:border-white/[0.04] dark:bg-app transition-[width] duration-200 {collapsed
+        ? 'w-(--sidebar-collapsed-w) justify-center px-0 border-b'
+        : 'w-56 px-4'}"
+    >
+      <div class="flex items-baseline gap-1.5 min-w-0">
+        <a href="/" use:link title="coolify-rs" class="flex shrink-0 items-center hover:opacity-80 transition-opacity">
+          {#if collapsed}
+            <img src="/coolify-rs-logo.svg" alt="coolify-rs" class="size-5" />
+          {:else}
+            <span class="text-[15px] font-semibold tracking-tight text-black dark:text-white">coolify-rs</span>
+          {/if}
+        </a>
+        {#if !collapsed}
+          <span
+            class="text-xs opacity-90 min-w-0 truncate !text-[10.5px] font-medium text-neutral-400 dark:text-fg-faint !opacity-100 hover:!opacity-100 dark:hover:text-fg hover:text-black"
+            title="v{version}">v{version}</span
+          >
+        {/if}
+      </div>
     </div>
-    <button class="button button-ghost" onclick={toggleTheme} title="Toggle theme" aria-label="Toggle theme">
-      <Icon name={dark ? 'sun' : 'moon'} />
-    </button>
-    <div class="menu-wrap">
-      <button class="button button-ghost" onclick={() => (userMenu = !userMenu)} aria-haspopup="menu">
-        {session.info?.user.name}
-      </button>
-      {#if userMenu}
-        <div class="menu" role="menu">
-          <div class="menu-label">{session.info?.user.email}</div>
-          <button class="menu-option" role="menuitem" onclick={logout}>
-            Sign out <Icon name="logout" />
-          </button>
-        </div>
-      {/if}
+    <div class="flex h-full items-center gap-0.5 min-w-0 flex-1 border-b border-black/[0.06] pl-3 pr-4 dark:border-white/[0.04]">
+      <div class="relative flex min-w-0 flex-1 items-center">
+        <Breadcrumb />
+      </div>
     </div>
   </header>
-  <nav class="sidebar" aria-label="Main">
-    <div class="nav-section">Workspace</div>
-    {#each nav as item (item.href)}
+
+  <!-- Mobile slide-over sidebar -->
+  <div class="mobile-sidebar-sheet relative z-[1000] lg:hidden">
+    {#if layout.mobileOpen}
+      <div class="fixed inset-0 bg-black/50" role="presentation" onclick={() => (layout.mobileOpen = false)}></div>
+    {/if}
+    <div class="fixed inset-y-0 right-0 flex {layout.mobileOpen ? '' : 'pointer-events-none'}">
+      {#if layout.mobileOpen}
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Navigation menu"
+          class="relative flex h-full w-72 max-w-[85vw] min-w-0 flex-col overflow-hidden rounded-l-2xl border-l border-neutral-200 bg-white shadow-[-8px_0_30px_-6px_rgba(0,0,0,0.18)] dark:border-white/[0.12] dark:bg-panel dark:shadow-[-8px_0_30px_-4px_rgba(0,0,0,0.5)]"
+        >
+          <div class="flex h-12 shrink-0 items-center justify-between gap-1.5 border-b border-neutral-200 px-4 dark:border-white/[0.06]">
+            <div class="flex min-w-0 items-baseline gap-1.5">
+              <a
+                href="/"
+                use:link
+                title="coolify-rs"
+                class="text-[15px] font-semibold tracking-tight text-black transition-opacity hover:opacity-80 dark:text-white"
+              >
+                coolify-rs
+              </a>
+              <span
+                class="text-xs opacity-90 !text-[10.5px] font-medium text-neutral-400 dark:text-fg-faint !opacity-100 hover:!opacity-100 hover:text-black dark:hover:text-fg"
+                >v{version}</span
+              >
+            </div>
+            <button
+              type="button"
+              onclick={() => (layout.mobileOpen = false)}
+              aria-label="Close menu"
+              class="-mr-1.5 flex size-8 shrink-0 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-black active:scale-95 dark:text-fg-dim dark:hover:bg-white/[0.06] dark:hover:text-fg"
+            >
+              <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto pb-2 scrollbar">
+            <Navbar />
+          </div>
+        </div>
+      {/if}
+    </div>
+  </div>
+
+  <!-- Desktop sidebar (below the top bar) -->
+  <div
+    class="app-sidebar hidden lg:fixed lg:top-12 lg:bottom-0 lg:left-0 lg:z-40 lg:flex lg:flex-col min-w-0 {collapsed
+      ? 'lg:w-(--sidebar-collapsed-w)'
+      : 'lg:w-56'} {sidebarReady ? 'transition-[width] duration-200' : ''}"
+  >
+    <div class="flex min-h-0 grow min-w-0 flex-col overflow-visible">
+      <Navbar desktop />
+    </div>
+  </div>
+
+  <!-- Mobile top bar -->
+  <div
+    class="sticky top-0 z-40 flex items-center justify-between px-4 py-3 gap-x-4 sm:px-6 lg:hidden bg-white/95 dark:bg-panel/95 backdrop-blur-sm border-b border-neutral-200/60 dark:border-white/[0.06]"
+  >
+    <div class="flex min-w-0 flex-1 items-center gap-2.5">
       <a
-        href={item.href}
+        href="/"
         use:link
-        class="nav-item"
-        class:is-active={item.match.includes(router.current.name)}
-        aria-current={item.match.includes(router.current.name) ? 'page' : undefined}
+        class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-neutral-100 transition-opacity hover:opacity-80 dark:bg-white/[0.06]"
       >
-        <span class="nav-tile"><Icon name={item.icon} /></span>
-        {item.label}
+        <img src="/coolify-rs-logo.svg" alt="coolify-rs" class="w-[18px] h-[18px]" />
       </a>
-    {/each}
-  </nav>
-  <main class="main">
-    {#if session.info?.features.read_only}
-      <div class="notice" style="margin-bottom:16px">
-        coolify-rs is in read-only mode: the database schema does not match this build. Changes are disabled.
+      <div class="min-w-0">
+        <TeamSwitcher />
       </div>
-    {/if}
-    {#if session.info?.current_team?.two_factor_blocked}
-      <div class="notice notice-error" style="margin-bottom:16px">
-        This team requires two-factor authentication. Enable it for your account in Coolify, then sign in again.
-      </div>
-    {/if}
-    {@render children()}
+    </div>
+    <div class="flex shrink-0 items-center gap-1">
+      <UserMenu />
+      <button
+        type="button"
+        onclick={() => (layout.mobileOpen = !layout.mobileOpen)}
+        class="-mr-1 flex size-9 items-center justify-center rounded-md text-neutral-500 transition-transform duration-100 ease-out hover:bg-neutral-100 hover:text-black active:scale-90 dark:text-fg-dim dark:hover:bg-white/[0.06] dark:hover:text-fg"
+      >
+        <span class="sr-only">Open sidebar</span>
+        <svg class="size-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect x="3" y="5" width="18" height="14" rx="4" stroke="currentColor" stroke-width="1.6" />
+          <path d="M16 9v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <main
+    class="app-main min-h-screen bg-neutral-50 dark:bg-app px-5 py-6 sm:px-8 lg:px-10 lg:pt-[calc(3rem+1.75rem)] lg:pb-10 {collapsed
+      ? 'lg:ml-(--sidebar-collapsed-w)'
+      : 'lg:ml-56'} {sidebarReady ? 'transition-[margin] duration-200' : ''} {layout.pageWidth === 'centered' ? '' : 'app-main-wide'}"
+  >
+    <div class="w-full {layout.pageWidth === 'centered' ? 'mx-auto max-w-[1400px]' : 'max-w-none'}">
+      {#if session.info?.features.read_only}
+        <div class="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+          coolify-rs is in read-only mode: the database schema does not match this build. Changes are disabled.
+        </div>
+      {/if}
+      {@render children()}
+    </div>
   </main>
 </div>

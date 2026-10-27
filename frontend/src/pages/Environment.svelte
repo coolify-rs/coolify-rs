@@ -1,83 +1,111 @@
 <script lang="ts">
-  import { ApiError, api, type Environment } from '../lib/api';
+  // Port of upstream livewire/project/resource/index.blade.php. coolify-rs
+  // has no resource APIs yet, so an environment with resources says so
+  // instead of listing them.
+  import Reicon from '../components/Reicon.svelte';
+  import Empty from '../components/Empty.svelte';
+  import { uiApi, ApiError, type ProjectPageData } from '../lib/api';
   import { link } from '../lib/router.svelte';
+  import { setProjectCrumbs } from '../lib/crumbs';
 
   let { uuid, env }: { uuid: string; env: string } = $props();
 
-  type Details = Environment & Record<string, unknown>;
-  let details = $state<Details | null>(null);
-  let error = $state<ApiError | null>(null);
-
-  const resourceKinds = [
-    ['applications', 'Applications'],
-    ['services', 'Services'],
-    ['postgresqls', 'PostgreSQL'],
-    ['mysqls', 'MySQL'],
-    ['mariadbs', 'MariaDB'],
-    ['mongodbs', 'MongoDB'],
-    ['redis', 'Redis'],
-  ] as const;
+  let data = $state<ProjectPageData | null>(null);
+  let missing = $state(false);
+  const environment = $derived(data?.environments.find((e) => e.uuid === env));
 
   $effect(() => {
-    const path = `/projects/${encodeURIComponent(uuid)}/${encodeURIComponent(env)}`;
-    api
-      .get<Details>(path)
-      .then((d) => ((details = d), (error = null)))
-      .catch((e) => (error = e instanceof ApiError ? e : new ApiError(0, String(e))));
+    uiApi
+      .project(uuid)
+      .then((d) => {
+        const e = d.environments.find((x) => x.uuid === env);
+        if (!e) {
+          missing = true;
+          return;
+        }
+        data = d;
+        setProjectCrumbs(d, env);
+        document.title = `${e.name.slice(0, 10)} > Resources | coolify-rs`;
+      })
+      .catch((e) => {
+        if (e instanceof ApiError && e.status === 404) missing = true;
+        else throw e;
+      });
   });
 </script>
 
-<div class="page-head">
+{#if missing}
+  <div class="application-settings-form w-full">
+    <Empty title="Environment not found" description="It may have been deleted, or it belongs to another team." iconName="layers" size="lg" />
+  </div>
+{:else if data && environment}
   <div>
-    <div class="summary">
-      <a href="/projects" use:link>Projects</a> /
-      <a href={`/projects/${encodeURIComponent(uuid)}`} use:link>Project</a>
-    </div>
-    <h1>{details?.name ?? 'Environment'}</h1>
-    {#if details}<div class="summary">{details.description || 'No description'}</div>{/if}
-  </div>
-</div>
-
-{#if error}
-  <div class="card"><div class="card-well"><div class="empty">
-    {#if error.status === 501}
-      <div class="empty-title">Resources are not available in coolify-rs yet</div>
-      <div class="empty-text">
-        This environment contains applications, databases or services. Viewing them is not ported yet; manage them in Coolify.
-      </div>
-    {:else}
-      <div class="empty-title">{error.status === 404 ? 'Environment not found' : 'Could not load the environment'}</div>
-      <div class="empty-text">{error.message}</div>
-    {/if}
-  </div></div></div>
-{:else if details}
-  <div class="stack">
-    <div class="card">
-      <div class="card-header">
-        <div>
-          <div class="card-title">Resources</div>
-          <div class="card-description">Deploying resources from coolify-rs is not available yet.</div>
-        </div>
-      </div>
-      <div class="card-well">
-        <div class="empty">
-          <div class="empty-title">No resources</div>
-          <div class="empty-text">
-            {resourceKinds.map(([, label]) => label).join(', ')} appear here once they exist in this environment.
+    <div class="w-full">
+      <header class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div class="min-w-0">
+          <div class="flex min-w-0 items-center gap-1.5">
+            <h1 class="truncate text-[24px]! leading-7! font-semibold! tracking-tight!">{environment.name}</h1>
+            {#if data.can_update}
+              <a
+                href="/project/{uuid}/environment/{env}/edit"
+                use:link
+                class="flex size-7 shrink-0 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-black dark:text-fg-faint dark:hover:bg-white/[0.06] dark:hover:text-fg"
+                title="Environment settings"
+                aria-label="Open settings for {environment.name}"
+              >
+                <Reicon name="settings" class="size-4" />
+              </a>
+            {/if}
           </div>
+          <p class="mt-1 text-[13px] text-neutral-500 dark:text-fg-dim">
+            <span>{environment.resources} {environment.resources === 1 ? 'resource' : 'resources'}</span>
+            in
+            <a
+              href="/project/{uuid}"
+              use:link
+              class="font-medium text-neutral-700 underline-offset-2 hover:text-black hover:underline dark:text-fg dark:hover:text-white"
+              title="Show all environments in {data.project.name}">{data.project.name}</a
+            >
+          </p>
         </div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-header"><div class="card-title">Details</div></div>
-      <div class="card-well">
-        <dl class="kv">
-          <dt>UUID</dt><dd class="mono">{details.uuid}</dd>
-          {#if details.created_at}<dt>Created</dt><dd>{new Date(details.created_at).toLocaleString()}</dd>{/if}
-        </dl>
-      </div>
+        <div class="flex flex-wrap items-center gap-2 sm:shrink-0">
+          <a
+            href="/project/{uuid}/environment/{env}/shared-variables"
+            use:link
+            class="button whitespace-nowrap"
+            title="Shared variables for this environment"
+            aria-label="Shared variables for {environment.name}"
+          >
+            <Reicon name="variables" class="size-3.5" />
+            Shared variables
+          </a>
+          {#if data.can_create}
+            <a href="/project/{uuid}/environment/{env}/new" use:link class="button whitespace-nowrap button-highlighted">
+              <Reicon name="plus" class="size-3.5" />
+              New resource
+            </a>
+          {/if}
+        </div>
+      </header>
+
+      {#if environment.resources === 0}
+        <Empty title="No resources yet" description="Add an application, database, or service to this environment." iconName="layers">
+          {#snippet contents()}
+            {#if data?.can_create}
+              <a href="/project/{uuid}/environment/{env}/new" use:link class="button">
+                <Reicon name="plus" class="size-3.5" />
+                Add resource
+              </a>
+            {/if}
+          {/snippet}
+        </Empty>
+      {:else}
+        <Empty
+          title="Resources are not available in coolify-rs yet"
+          description="This environment has resources. Manage them in Coolify for now."
+          iconName="layers"
+        />
+      {/if}
     </div>
   </div>
-{:else}
-  <div class="empty"><div class="empty-text">Loading…</div></div>
 {/if}
