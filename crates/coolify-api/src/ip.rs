@@ -57,6 +57,50 @@ impl TrustedProxies {
         ip
     }
 
+    /// Symfony `getScheme()`, `getHost()` and `getPort()`: `X-Forwarded-*`
+    /// headers count only from a trusted proxy (upstream trusts every proxy;
+    /// see ADR 0006). The host is lower-cased and keeps IPv6 brackets.
+    pub fn request_origin(
+        &self,
+        peer: SocketAddr,
+        headers: &HeaderMap,
+    ) -> (String, String, Option<u16>) {
+        let trusted = self.trusts(peer.ip().to_canonical());
+        let header = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.split(',').next().unwrap_or(v).trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
+        let scheme = trusted
+            .then(|| header("x-forwarded-proto"))
+            .flatten()
+            .map(|p| p.to_ascii_lowercase())
+            .filter(|p| p == "http" || p == "https")
+            .unwrap_or_else(|| "http".into());
+        let raw = trusted
+            .then(|| header("x-forwarded-host"))
+            .flatten()
+            .or_else(|| header("host"))
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        // Split "host:port" / "[v6]:port".
+        let (host, mut port) = match raw.rfind(':') {
+            Some(i)
+                if !raw.ends_with(']')
+                    && (raw.starts_with('[') || raw[..i].find(':').is_none()) =>
+            {
+                (raw[..i].to_string(), raw[i + 1..].parse::<u16>().ok())
+            }
+            _ => (raw.clone(), None),
+        };
+        if trusted && let Some(p) = header("x-forwarded-port").and_then(|p| p.parse::<u16>().ok()) {
+            port = Some(p);
+        }
+        (scheme, host, port)
+    }
+
     /// Laravel `Request::ip()` under the configured trusted proxies.
     pub fn request_ip(&self, peer: SocketAddr, headers: &HeaderMap) -> IpAddr {
         let peer_ip = peer.ip().to_canonical();

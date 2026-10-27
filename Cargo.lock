@@ -399,6 +399,7 @@ dependencies = [
  "base64 0.22.1",
  "bcrypt",
  "cbc",
+ "chrono",
  "hex",
  "hmac",
  "rand",

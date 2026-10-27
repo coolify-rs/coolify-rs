@@ -327,7 +327,7 @@ pub async fn delete(
 
 /// `generate_random_name()`: upstream uses an alliterative adjective-noun
 /// generator plus a public id; the words differ here but the shape matches.
-fn random_name() -> String {
+pub(crate) fn random_name() -> String {
     use rand::seq::SliceRandom;
     const PAIRS: &[(&str, &str)] = &[
         ("brave", "badger"),

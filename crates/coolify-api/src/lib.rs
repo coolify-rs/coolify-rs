@@ -8,6 +8,7 @@ pub mod auth;
 pub mod fallback;
 pub mod input;
 pub mod ip;
+pub mod laravel_url;
 pub mod response;
 pub mod routes;
 pub mod serialize;

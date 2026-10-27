@@ -121,6 +121,12 @@ impl Encrypter {
         self.encrypt_bytes(plaintext.as_bytes())
     }
 
+    /// Equivalent of the `encrypt()` helper (`$serialize = true`) for a string:
+    /// the plaintext is PHP-serialized (`s:<bytes>:"...";`) before encryption.
+    pub fn encrypt_serialized(&self, plaintext: &str) -> String {
+        self.encrypt_bytes(format!("s:{}:\"{}\";", plaintext.len(), plaintext).as_bytes())
+    }
+
     /// Equivalent of `Crypt::decryptString`.
     pub fn decrypt_string(&self, payload: &str) -> Result<String, DecryptError> {
         let bytes = self.decrypt_bytes(payload)?;
@@ -212,6 +218,20 @@ mod tests {
         let enc = Encrypter::new(KEY).unwrap();
         let payload = enc.encrypt_string("s3cr3t value ✓");
         assert_eq!(enc.decrypt_string(&payload).unwrap(), "s3cr3t value ✓");
+    }
+
+    #[test]
+    fn serialized_round_trip() {
+        let enc = Encrypter::new(KEY).unwrap();
+        let payload = enc.encrypt_serialized(r#"{"server_uuid":"abc"}"#);
+        assert_eq!(
+            enc.decrypt_string(&payload).unwrap(),
+            r#"s:21:"{"server_uuid":"abc"}";"#
+        );
+        assert_eq!(
+            enc.decrypt_maybe_serialized(&payload).unwrap(),
+            r#"{"server_uuid":"abc"}"#
+        );
     }
 
     #[test]

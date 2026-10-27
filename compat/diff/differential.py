@@ -21,6 +21,7 @@ import argparse
 import json
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -42,11 +43,17 @@ class Client:
             r.add_header("Content-Type", ctype)
         for k, v in (headers or {}).items():
             r.add_header(k, v)
-        try:
-            resp = urllib.request.urlopen(r, timeout=30)
-            return resp.status, resp.headers.get("Content-Type", ""), resp.read()
-        except urllib.error.HTTPError as e:
-            return e.code, e.headers.get("Content-Type", ""), e.read()
+        for _ in range(5):
+            try:
+                resp = urllib.request.urlopen(r, timeout=30)
+                return resp.status, resp.headers.get("Content-Type", ""), resp.read()
+            except urllib.error.HTTPError as e:
+                # Upstream's `throttle:api` (200/min); coolify-rs has no API rate limit yet.
+                if e.code == 429 and e.headers.get("Retry-After"):
+                    time.sleep(int(e.headers["Retry-After"]) + 1)
+                    continue
+                return e.code, e.headers.get("Content-Type", ""), e.read()
+        return 429, "", b"rate limited"
 
 
 def norm(body: bytes, names=()) -> str:
@@ -265,6 +272,102 @@ def main():
             r = client.req("DELETE", f"/api/v1/security/keys/{uuid}", w)
             record(label, r[0] == 200 and r[2] == b'{"message":"Private Key deleted."}', r, r)
             same(f"{label}: gone on both", "GET", f"/api/v1/security/keys/{uuid}", "acme_owner_read")
+
+    # --- servers (read side, create, update, delete; no SSH) --------------------------
+    skey_path = new_key("ed25519")
+    r = ref.req("POST", "/api/v1/security/keys", w, {"name": "diff servers key", "private_key": skey_path})
+    skey = json.loads(r[2]).get("uuid") if r[0] == 201 else None
+    for tok in ("root_root", "root_read", "acme_owner_root", "acme_owner_read", "acme_member_read", "carol_root"):
+        same(f"servers: list [{tok}]", "GET", "/api/v1/servers", tok)
+    same("servers: show missing", "GET", "/api/v1/servers/nope", "acme_owner_read")
+    bad_bodies = [
+        {"ip": ""},
+        {"ip": None, "private_key_uuid": None, "name": None, "port": None, "user": "", "description": None},
+        {"ip": "bad host!", "private_key_uuid": "x"},
+        {"ip": "1.2.3.4", "private_key_uuid": "x", "port": 70000, "user": "bad user", "name": "a\nb",
+         "server_role": "x", "is_build_server": "maybe", "extra": 1},
+        {"name": 5, "ip": 5, "private_key_uuid": 5, "user": 5, "server_role": 5, "proxy_type": 5, "description": 5},
+        {"ip": "1.2.3.4", "private_key_uuid": "nope"},
+        {"ip": "1.2.3.4", "private_key_uuid": skey, "proxy_type": "apache"},
+        {"ip": "1.2.3.4", "private_key_uuid": skey, "server_role": "deployment"},
+        {"ip": "1.2.3.4", "private_key_uuid": skey, "server_role": "both", "is_build_server": True},
+    ]
+    for b in bad_bodies:
+        same(f"servers: create invalid {b}", "POST", "/api/v1/servers", w, b)
+    same("servers: member cannot create", "POST", "/api/v1/servers", "acme_member_read", {"ip": "1.2.3.4"})
+
+    def srv_norm(body, uuid):
+        t = body.decode("utf-8", "replace").replace(uuid, "<uuid>")
+        t = TS_RE.sub('"<ts>"', t)
+        t = re.sub(r'"sentinel_token":"[^"]+"', '"sentinel_token":"<tok>"', t)
+        t = re.sub(r'(198\.51\.100\.|2001:db8::|192\.0\.2\.)(1|2)\d', r"\1NN", t)
+        t = re.sub(r'"(id|server_id)":\d+', r'"\1":<id>', t)
+        return t
+
+    srv_cases = [
+        {"name": "diff srv", "description": "d <b>x</b>", "ip": "198.51.100.%d", "private_key_uuid": skey},
+        {"name": "diff srv v6", "ip": "[2001:DB8::%d]", "private_key_uuid": skey, "proxy_type": "caddy",
+         "server_role": "build", "user": " admin ", "port": "2222"},
+    ]
+    made = []
+    for i, c in enumerate(srv_cases):
+        pair = {}
+        for label, client, n in (("ref", ref, 10 + i), ("sub", sub, 20 + i)):
+            body = json.loads(json.dumps(c).replace("%d", str(n)))
+            r = client.req("POST", "/api/v1/servers", w, body)
+            pair[label] = (r, json.loads(r[2]).get("uuid") if r[0] == 201 else None)
+        (r1, u1), (r2, u2) = pair["ref"], pair["sub"]
+        record(f"servers: create {i}", r1[0] == r2[0] == 201, r1, r2)
+        if u1 and u2:
+            made.append((u1, u2))
+            for tok in ("acme_owner_read", "acme_owner_root"):
+                same(f"servers: cross-read php-created {i} [{tok}]", "GET", f"/api/v1/servers/{u1}", tok)
+                same(f"servers: cross-read rust-created {i} [{tok}]", "GET", f"/api/v1/servers/{u2}", tok)
+                ra_ = ref.req("GET", f"/api/v1/servers/{u1}", tok)
+                rb_ = ref.req("GET", f"/api/v1/servers/{u2}", tok)
+                record(f"servers: rows written alike {i} [{tok}]", srv_norm(ra_[2], u1) == srv_norm(rb_[2], u2), ra_, rb_)
+    same("servers: list after creates", "GET", "/api/v1/servers", "acme_owner_root")
+    if made:
+        u1, u2 = made[0]
+        steps = [
+            {"name": "patched <i>x</i>", "description": None},
+            {"port": "2200", "user": " deploy "},
+            {"ip": "[2001:DB8::%d]"},
+            {"server_role": "build"},
+            {"is_build_server": False},
+            {"is_terminal_enabled": None},
+            {"concurrent_builds": "4", "server_timezone": "Europe/Berlin", "backup_compression_cpu_percentage": 50},
+            {"wildcard_domain": "https://apps.example.com"},
+            {"server_disk_usage_check_frequency": "@daily"},
+            {"server_disk_usage_check_frequency": "61 * * * *"},
+            {"proxy_type": "caddy"},
+            {"name": None, "user": None, "port": None},
+        ]
+        for step in steps:
+            out = []
+            for client, uuid, n in ((ref, u1, 30), (sub, u2, 31)):
+                body = json.loads(json.dumps(step).replace("%d", str(n)))
+                r = client.req("PATCH", f"/api/v1/servers/{uuid}", w, body)
+                show = ref.req("GET", f"/api/v1/servers/{uuid}", "acme_owner_root")
+                out.append((r, srv_norm(r[2], uuid), srv_norm(show[2], uuid).replace("::3", "::3")))
+            (ra, na, sa), (rb, nb, sb) = out
+            sa = re.sub(r"2001:db8::3\d", "2001:db8::N", sa)
+            sb = re.sub(r"2001:db8::3\d", "2001:db8::N", sb)
+            record(f"servers: update {step}", ra[0] == rb[0] and na == nb and sa == sb, ra, rb)
+        same("servers: update missing", "PATCH", "/api/v1/servers/nope", w, {"name": "x"})
+        L = json.loads(ref.req("GET", "/api/v1/servers", "root_read")[2])[0]["uuid"]
+        same("servers: local server cannot be deleted", "DELETE", f"/api/v1/servers/{L}", "root_root")
+        u3 = made[-1][0]
+        for q in ("?delete_from_provider=maybe", "?delete_from_provider=yes", "?force=1"):
+            same(f"servers: delete {q}", "DELETE", f"/api/v1/servers/{u3}{q}", w)
+        for label, client, (a_uuid, b_uuid) in (("rust deletes php servers", sub, (made[0][0], made[-1][0])),
+                                                ("php deletes rust servers", ref, (made[0][1], made[-1][1]))):
+            for uuid in dict.fromkeys((a_uuid, b_uuid)):
+                r = client.req("DELETE", f"/api/v1/servers/{uuid}", w)
+                record(f"{label} {uuid[:6]}", r[0] == 200 and r[2] == b'{"message":"Server deleted."}', r, r)
+                same(f"{label} {uuid[:6]}: gone on both", "GET", f"/api/v1/servers/{uuid}", "acme_owner_read")
+    if skey:
+        ref.req("DELETE", f"/api/v1/security/keys/{skey}", w)
 
     # --- IP allowlist through a proxy hop (needs DB access) ---------------------------
     if a.db_url:

@@ -168,3 +168,13 @@ pub async fn delete(db: &Db, id: i64) -> DbResult<()> {
         .await?;
     Ok(())
 }
+
+/// `$server->privateKey?->uuid`.
+pub async fn uuid_by_id(db: &Db, id: i64) -> DbResult<Option<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT uuid FROM private_keys WHERE id = $1")
+            .bind(id)
+            .fetch_optional(db.pool())
+            .await?,
+    )
+}

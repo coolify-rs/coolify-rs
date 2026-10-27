@@ -8,6 +8,7 @@
 pub mod misc;
 pub mod private_keys;
 pub mod projects;
+pub mod servers;
 pub mod teams;
 
 use axum::Router;
@@ -212,6 +213,36 @@ pub const ROUTES: &[RouteSpec] = &[
         group: Group::Main,
         abilities: W,
     },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/{uuid}",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/servers/{uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/servers/{uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
 ];
 
 /// Prefix of the browser-session bridge: `/ui/api/v1/...` mirrors the main
@@ -306,6 +337,19 @@ pub fn router(state: AppState) -> Router {
             on_get(projects::environment_details),
         ),
         ("GET", "api/v1/security/keys", on_get(private_keys::list)),
+        ("GET", "api/v1/servers", on_get(servers::list)),
+        ("POST", "api/v1/servers", on_post(servers::create)),
+        ("GET", "api/v1/servers/{uuid}", on_get(servers::show)),
+        (
+            "DELETE",
+            "api/v1/servers/{uuid}",
+            on(axum::routing::MethodFilter::DELETE, servers::delete),
+        ),
+        (
+            "PATCH",
+            "api/v1/servers/{uuid}",
+            on(axum::routing::MethodFilter::PATCH, servers::update),
+        ),
         (
             "POST",
             "api/v1/security/keys",

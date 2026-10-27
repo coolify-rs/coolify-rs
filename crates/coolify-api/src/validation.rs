@@ -21,6 +21,21 @@ pub enum Rule {
     /// Maximum length in characters.
     Max(usize),
     Regex(&'static Regex),
+    /// `not_regex:`.
+    NotRegex(&'static Regex),
+    /// `integer` (`filter_var($v, FILTER_VALIDATE_INT)`).
+    Integer,
+    /// `between:min,max` on a field with a numeric rule (size = the number).
+    Between(i64, i64),
+    /// `min:n` / `max:n` on a field with a numeric rule.
+    MinNum(i64),
+    MaxNum(i64),
+    /// `url` (`Str::isUrl` with the default protocols).
+    Url,
+    /// `in:a,b,c` (string comparison).
+    In(&'static [&'static str]),
+    /// A rule object: returns the failure message (`:attribute` substituted).
+    Custom(fn(&Value) -> Option<&'static str>),
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +51,12 @@ fn attribute(name: &str) -> String {
     name.replace('_', " ")
 }
 
+fn message_between(field: &str, messages: Messages, min: i64, max: i64) -> String {
+    message(field, "between", messages, None)
+        .replace(":min", &min.to_string())
+        .replace(":max", &max.to_string())
+}
+
 fn message(field: &str, rule: &str, messages: Messages, param: Option<usize>) -> String {
     let key = format!("{field}.{rule}");
     let template = messages
@@ -49,13 +70,85 @@ fn message(field: &str, rule: &str, messages: Messages, param: Option<usize>) ->
             "boolean" => "The :attribute field must be true or false.".into(),
             "min" => "The :attribute field must be at least :min characters.".into(),
             "max" => "The :attribute field must not be greater than :max characters.".into(),
+            "integer" => "The :attribute field must be an integer.".into(),
+            "between" => "The :attribute field must be between :min and :max.".into(),
+            "in" => "The selected :attribute is invalid.".into(),
+            "min.numeric" => "The :attribute field must be at least :min.".into(),
+            "max.numeric" => "The :attribute field must not be greater than :max.".into(),
+            "url" => "The :attribute field must be a valid URL.".into(),
             _ => "The :attribute field format is invalid.".into(),
         });
-    let p = param.map(|p| p.to_string()).unwrap_or_default();
-    template
-        .replace(":attribute", &attribute(field))
-        .replace(":min", &p)
-        .replace(":max", &p)
+    let template = template.replace(":attribute", &attribute(field));
+    match param {
+        Some(p) => template
+            .replace(":min", &p.to_string())
+            .replace(":max", &p.to_string()),
+        None => template,
+    }
+}
+
+/// PHP `filter_var($v, FILTER_VALIDATE_INT)` for JSON values.
+fn is_php_int(v: &Value) -> bool {
+    match v {
+        Value::Bool(b) => *b,
+        Value::Number(n) => {
+            n.is_i64()
+                || n.as_f64()
+                    .is_some_and(|f| f.fract() == 0.0 && f.abs() < 9.2e18)
+        }
+        Value::String(s) => {
+            let t = s.trim();
+            let digits = t.strip_prefix(['-', '+']).unwrap_or(t);
+            !digits.is_empty()
+                && digits.chars().all(|c| c.is_ascii_digit())
+                && (digits == "0" || !digits.starts_with('0'))
+                && digits.parse::<i64>().is_ok()
+        }
+        _ => false,
+    }
+}
+
+/// PHP `is_numeric` value of a JSON value, if numeric.
+fn php_number(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => {
+            let t = s.trim();
+            (!t.is_empty() && !t.starts_with(['x', 'X']) && !t.contains("0x"))
+                .then(|| t.parse::<f64>().ok())
+                .flatten()
+                .filter(|f| f.is_finite())
+        }
+        _ => None,
+    }
+}
+
+/// Laravel `getSize` without a numeric rule: element count for arrays,
+/// otherwise `mb_strlen` of the PHP string form.
+fn php_size(v: &Value) -> usize {
+    match v {
+        Value::Array(a) => a.len(),
+        Value::Object(o) => o.len(),
+        other => php_string(other).chars().count(),
+    }
+}
+
+/// The subject `preg_match` sees, or `None` for non-string non-numeric values.
+fn regex_subject(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+fn php_string(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Bool(true) => "1".into(),
+        Value::Bool(false) | Value::Null => String::new(),
+        other => other.to_string(),
+    }
 }
 
 fn is_laravel_boolean(v: &Value) -> bool {
@@ -88,29 +181,32 @@ pub fn validate(
 
     for f in fields {
         let value = input.get(f.name);
-        let required = f.rules.iter().any(|r| matches!(r, Rule::Required));
         let nullable = f.rules.iter().any(|r| matches!(r, Rule::Nullable));
-        match value {
-            None | Some(Value::Null) => {
-                if required {
-                    push(f.name, message(f.name, "required", messages, None));
-                    continue;
-                }
-                if value.is_none() || nullable {
-                    continue;
-                }
-            }
-            _ => {}
-        }
+        // Missing key, or null on a nullable field: only implicit rules run.
+        let implicit_only = match value {
+            None => true,
+            Some(Value::Null) => nullable,
+            _ => false,
+        };
         let v = value.unwrap_or(&Value::Null);
+        // Laravel evaluates rules in declared order and stops after a failed
+        // implicit rule (`required`); other failures do not stop it.
         for rule in &f.rules {
+            if let Rule::Required = rule {
+                if v.is_null() {
+                    push(f.name, message(f.name, "required", messages, None));
+                    break;
+                }
+                continue;
+            }
+            if implicit_only {
+                continue;
+            }
             match rule {
                 Rule::Required | Rule::Nullable => {}
                 Rule::String => {
                     if !v.is_string() {
                         push(f.name, message(f.name, "string", messages, None));
-                        // Size and pattern rules on non-strings are not reproduced (see KNOWN_LIMITATIONS).
-                        break;
                     }
                 }
                 Rule::Boolean => {
@@ -119,18 +215,67 @@ pub fn validate(
                     }
                 }
                 Rule::Min(n) => {
-                    if v.as_str().is_some_and(|s| s.chars().count() < *n) {
+                    if php_size(v) < *n {
                         push(f.name, message(f.name, "min", messages, Some(*n)));
                     }
                 }
                 Rule::Max(n) => {
-                    if v.as_str().is_some_and(|s| s.chars().count() > *n) {
+                    if php_size(v) > *n {
                         push(f.name, message(f.name, "max", messages, Some(*n)));
                     }
                 }
+                // validateRegex / validateNotRegex: values that are neither
+                // strings nor numbers fail both.
                 Rule::Regex(re) => {
-                    if !v.as_str().is_some_and(|s| re.is_match(s)) {
+                    if !regex_subject(v).is_some_and(|s| re.is_match(&s)) {
                         push(f.name, message(f.name, "regex", messages, None));
+                    }
+                }
+                Rule::NotRegex(re) => {
+                    if regex_subject(v).is_none_or(|s| re.is_match(&s)) {
+                        push(f.name, message(f.name, "not_regex", messages, None));
+                    }
+                }
+                Rule::Integer => {
+                    if !is_php_int(v) {
+                        push(f.name, message(f.name, "integer", messages, None));
+                    }
+                }
+                Rule::Between(min, max) => {
+                    // Laravel's getSize: the number when numeric, else the string length.
+                    let size =
+                        php_number(v).unwrap_or_else(|| php_string(v).chars().count() as f64);
+                    if size < *min as f64 || size > *max as f64 {
+                        push(f.name, message_between(f.name, messages, *min, *max));
+                    }
+                }
+                Rule::MinNum(n) | Rule::MaxNum(n) => {
+                    let size =
+                        php_number(v).unwrap_or_else(|| php_string(v).chars().count() as f64);
+                    let (failed, rule) = match rule {
+                        Rule::MinNum(_) => (size < *n as f64, "min.numeric"),
+                        _ => (size > *n as f64, "max.numeric"),
+                    };
+                    if failed {
+                        let msg = message(f.name, rule, messages, None)
+                            .replace(":min", &n.to_string())
+                            .replace(":max", &n.to_string());
+                        push(f.name, msg);
+                    }
+                }
+                Rule::Url => {
+                    if !v.as_str().is_some_and(crate::laravel_url::is_url) {
+                        push(f.name, message(f.name, "url", messages, None));
+                    }
+                }
+                Rule::In(options) => {
+                    if !options.contains(&php_string(v).as_str()) {
+                        push(f.name, message(f.name, "in", messages, None));
+                    }
+                }
+                Rule::Custom(check) => {
+                    if let Some(msg) = check(v) {
+                        push(f.name, msg.replace(":attribute", &attribute(f.name)));
                     }
                 }
             }
