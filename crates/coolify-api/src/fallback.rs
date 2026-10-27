@@ -69,8 +69,9 @@ fn is_api_path(path: &str) -> bool {
     path == "/api" || path.starts_with("/api/") || path.starts_with("/ui/")
 }
 
-/// Content Security Policy for the UI: same-origin only, no inline scripts.
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+/// Content Security Policy for the UI: same-origin only, no inline scripts. Monaco
+/// (components/forms/monaco-editor.blade.php) starts its web worker from a blob URL.
+const CSP: &str = "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; \
                    img-src 'self' data:; connect-src 'self'; font-src 'self' data:; \
                    frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
 

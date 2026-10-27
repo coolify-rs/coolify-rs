@@ -391,6 +391,7 @@ export interface DatabaseFormExtras {
 }
 
 export interface DestinationServer {
+  id?: number;
   uuid: string;
   name: string;
   description: string | null;
@@ -425,4 +426,110 @@ export const dbUi = {
     uuid: string,
     body: { password: string; delete_volumes: boolean; delete_configurations: boolean; docker_cleanup: boolean },
   ) => request<{ message: string }>('POST', `/ui/databases/${encodeURIComponent(uuid)}/delete`, body),
+};
+
+/** What the application pages poll besides the record. */
+export interface ApplicationState {
+  can_update: boolean;
+  can_deploy: boolean;
+  running_deployment_url: string | null;
+  configuration_changed: boolean;
+  server_timezone: string;
+  custom_labels: string | null;
+  server_ip: string | null;
+  server_id: number | null;
+}
+
+export interface DeploymentListItem {
+  deployment_uuid: string;
+  status: string;
+  commit: string | null;
+  commit_message: string | null;
+  is_webhook: boolean;
+  is_api: boolean;
+  rollback: boolean;
+  pull_request_id: number;
+  server_name: string | null;
+  created_at: string | null;
+  finished_at: string | null;
+}
+
+export interface DeploymentFilterOption {
+  value: string;
+  label: string;
+}
+
+export interface DeploymentPage {
+  count: number;
+  deployments: DeploymentListItem[];
+  status_options: DeploymentFilterOption[];
+  source_options: DeploymentFilterOption[];
+  server_options: DeploymentFilterOption[];
+  pull_requests: number[];
+}
+
+export interface DeploymentLine {
+  text: string;
+  command: boolean;
+  hidden: boolean;
+  stderr: boolean;
+  timestamp: string | null;
+}
+
+export interface DeploymentDetail {
+  deployment_uuid: string;
+  status: string;
+  commit: string | null;
+  server_name: string | null;
+  created_at: string | null;
+  finished_at: string | null;
+  is_keep_alive: boolean;
+  debug: boolean;
+  lines: DeploymentLine[];
+}
+
+/** The answer of a deploy or restart: the deployment to open, or the toast upstream shows instead. */
+export interface QueueAnswer {
+  deployment_uuid?: string;
+  toast?: 'error' | 'success';
+  title?: string;
+  message?: string;
+}
+
+const appPath = (uuid: string) => `/ui/applications/${encodeURIComponent(uuid)}`;
+
+/** Session endpoints behind the application pages (crates/coolify-api/src/ui_applications.rs). */
+export const appUi = {
+  get: (uuid: string) => api.get<ApplicationRecord>(`/applications/${encodeURIComponent(uuid)}`),
+  state: (uuid: string) => request<ApplicationState>('GET', `${appPath(uuid)}/state`),
+  /** `Project\New\DockerImage::submit`. 422 errors use the keys image_name, image_tag, image_sha256. */
+  createDockerImage: (body: {
+    project_uuid: string;
+    environment_uuid: string;
+    destination_uuid: string;
+    image_name: string;
+    image_tag: string;
+    image_sha256: string;
+  }) => request<{ uuid: string }>('POST', '/ui/applications', body),
+  update: (uuid: string, body: Record<string, unknown>) => request<{ message: string }>('PATCH', appPath(uuid), body),
+  settings: (uuid: string, body: Record<string, unknown>) => request<{ message: string | null }>('POST', `${appPath(uuid)}/settings`, body),
+  deploy: (uuid: string, force = false) => request<QueueAnswer>('POST', `${appPath(uuid)}/deploy`, { force }),
+  restart: (uuid: string) => request<QueueAnswer>('POST', `${appPath(uuid)}/restart`, {}),
+  stop: (uuid: string) => request<{ message: string }>('POST', `${appPath(uuid)}/stop`, {}),
+  toggleDebug: (uuid: string) => request<{ debug: boolean }>('POST', `${appPath(uuid)}/debug`, {}),
+  internalHostname: (uuid: string) => request<{ hostname: string | null }>('GET', `${appPath(uuid)}/internal-hostname`),
+  deployments: (uuid: string, q: { skip: number; take: number; search?: string; order?: string; filters?: string[]; pullRequestId?: number | null }) => {
+    const p = new URLSearchParams({ skip: String(q.skip), take: String(q.take) });
+    if (q.search) p.set('search', q.search);
+    if (q.order) p.set('order', q.order);
+    if (q.filters?.length) p.set('filters', q.filters.join(','));
+    if (q.pullRequestId) p.set('pull_request_id', String(q.pullRequestId));
+    return request<DeploymentPage>('GET', `${appPath(uuid)}/deployments?${p}`);
+  },
+  /** `all`: every line including hidden ones (`downloadAllLogs`), for users who can update. */
+  deployment: (uuid: string, dep: string, all = false) =>
+    request<DeploymentDetail>('GET', `${appPath(uuid)}/deployments/${encodeURIComponent(dep)}${all ? '?all=1' : ''}`),
+  cancel: (uuid: string, dep: string) => request<{ status: string }>('POST', `${appPath(uuid)}/deployments/${encodeURIComponent(dep)}/cancel`, {}),
+  remove: (uuid: string, body: { password: string; delete_volumes: boolean; delete_configurations: boolean; delete_connected_networks: boolean; docker_cleanup: boolean }) =>
+    request<{ message: string }>('POST', `${appPath(uuid)}/delete`, body),
 };

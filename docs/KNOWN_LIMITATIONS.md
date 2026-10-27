@@ -35,6 +35,12 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   `PATCH /databases/{uuid}` are not ported (501, or disabled in the UI). After a start coolify-rs does not run Docker
   cleanup, and `Str::slug` in container labels does not transliterate non-ASCII names.
   Reachability changes do not send the Reachable/Unreachable notifications.
+- Applications: Docker image applications only, in the API and the UI (new-resource "Docker Image" form, General
+  page, Deployment Logs list and log viewer, Danger zone, heading actions). HTTP Basic Authentication, custom Docker
+  run options, pre/post-deployment commands, "Force start" of a queued deployment and the other application pages
+  (Domains, Environment Variables, Storage, Advanced, Healthcheck, Runtime Logs, Terminal, …) are not ported (the UI
+  says so or opens the "not available" page). Log export does not apply upstream's secret redaction beyond what the
+  deployment already wrote redacted.
 - Server status in the UI and in `/ui/*` omits the Sentinel and Traefik-update checks.
 - `sentinel_custom_url` for a new server falls back to the request's scheme and host; `X-Forwarded-*` count only
   from trusted proxies (upstream trusts every proxy).

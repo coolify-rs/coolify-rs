@@ -15,6 +15,7 @@ pub mod serialize;
 pub mod session;
 pub mod state;
 pub mod ui;
+pub mod ui_applications;
 pub mod ui_databases;
 pub mod validation;
 

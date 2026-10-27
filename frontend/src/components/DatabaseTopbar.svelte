@@ -13,7 +13,9 @@
     status,
     healthcheckUrl,
     restartLimit = null,
+    statusTitle = 'Database status',
   }: {
+    statusTitle?: string;
     label: string;
     items: { label: string; href: string; active: boolean }[];
     status: string;
@@ -57,7 +59,7 @@
       </button>
       <!-- Below xl, the page heading shows the status. -->
       <div class="hidden xl:flex">
-        <DatabaseStatusSummary {status} {healthcheckUrl} {restartLimit} />
+        <DatabaseStatusSummary {status} {healthcheckUrl} {restartLimit} title={statusTitle} />
       </div>
     </div>
 

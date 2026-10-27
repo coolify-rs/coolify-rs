@@ -184,7 +184,17 @@ impl Jobs {
                     .and_then(Value::as_str)
                     .is_some_and(|v| !v.is_empty() && v != "0")
             };
-            if truthy("com.docker.compose.oneoff") {
+            // `filter_var(..., FILTER_VALIDATE_BOOLEAN)`: compose writes `False` for regular containers.
+            let oneoff = labels
+                .get("com.docker.compose.oneoff")
+                .and_then(Value::as_str)
+                .is_some_and(|v| {
+                    matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "on" | "yes"
+                    )
+                });
+            if oneoff {
                 continue;
             }
             let is_app = labels

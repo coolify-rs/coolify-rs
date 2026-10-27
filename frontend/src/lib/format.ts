@@ -6,3 +6,80 @@ export function monthDayYear(ts: string | null | undefined): string {
   if (!m) return '-';
   return `${MONTHS[Number(m[2]) - 1]} ${Number(m[3])}, ${m[1]}`;
 }
+
+/** A stored timestamp (`YYYY-MM-DD HH:MM:SS`, ISO, with or without a zone) as a Date, read as UTC. */
+export function parseTimestamp(ts: string | null | undefined): Date | null {
+  if (!ts) return null;
+  let s = ts.trim().replace(' ', 'T');
+  if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s)) s += 'Z';
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function zoned(d: Date, timeZone: string): Record<string, string> {
+  let fmt: Intl.DateTimeFormat;
+  try {
+    fmt = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' });
+  } catch {
+    return zoned(d, 'UTC');
+  }
+  const parts: Record<string, string> = {};
+  for (const p of fmt.formatToParts(d)) parts[p.type] = p.value;
+  return parts;
+}
+
+/** `formatDateInServerTimezone()`: `Y-m-d H:i:s T` in the server's timezone. */
+export function serverTime(ts: string | null | undefined, timeZone: string): string {
+  const d = parseTimestamp(ts);
+  if (!d) return '';
+  const p = zoned(d, timeZone || 'UTC');
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second} ${p.timeZoneName}`;
+}
+
+/** `decode_remote_command_output()`'s line timestamp: `Y-M-d H:i:s` in the server's timezone. */
+export function logTime(ts: string | null | undefined, timeZone: string): string {
+  const d = parseTimestamp(ts);
+  if (!d) return '';
+  const p = zoned(d, timeZone || 'UTC');
+  return `${p.year}-${MONTHS[Number(p.month) - 1]}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
+}
+
+const UNITS: [string, string, number][] = [
+  ['year', 'y', 365 * 86400],
+  ['month', 'mo', 30 * 86400],
+  ['week', 'w', 7 * 86400],
+  ['day', 'd', 86400],
+  ['hour', 'h', 3600],
+  ['minute', 'm', 60],
+  ['second', 's', 1],
+];
+
+/** Carbon `diffForHumans()` against now: `5 minutes ago`, or `5m` with `short` (absolute). */
+export function diffForHumans(ts: string | null | undefined, short = false): string {
+  const d = parseTimestamp(ts);
+  if (!d) return '';
+  const diff = Math.round((Date.now() - d.getTime()) / 1000);
+  const abs = Math.abs(diff);
+  const [unit, abbr, size] = UNITS.find(([, , s]) => abs >= s) ?? UNITS[UNITS.length - 1];
+  const n = Math.max(1, Math.floor(abs / size));
+  if (short) return `${n}${abbr}`;
+  const text = `${n} ${unit}${n === 1 ? '' : 's'}`;
+  return diff >= 0 ? `${text} ago` : `${text} from now`;
+}
+
+/** `calculateDuration()`: `%Im %Ss`, with hours and days when present. */
+export function duration(start: string | null | undefined, end: string | null | undefined): string | null {
+  const a = parseTimestamp(start);
+  const b = end === 'now' ? new Date() : parseTimestamp(end);
+  if (!a || !b) return null;
+  let secs = Math.floor(Math.abs(b.getTime() - a.getTime()) / 1000);
+  const days = Math.floor(secs / 86400);
+  secs -= days * 86400;
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  if (days > 0) return `${days}d ${pad(h)}h ${pad(m)}m ${pad(s)}s`;
+  if (h > 0) return `${pad(h)}h ${pad(m)}m ${pad(s)}s`;
+  return `${pad(m)}m ${pad(s)}s`;
+}

@@ -20,6 +20,7 @@
   import ServerSection from './pages/ServerSection.svelte';
   import ResourceNew from './pages/ResourceNew.svelte';
   import Database from './pages/Database.svelte';
+  import Application from './pages/Application.svelte';
   import Unported from './pages/Unported.svelte';
   import { router } from './lib/router.svelte';
   import { session } from './lib/session.svelte';
@@ -95,9 +96,13 @@
     {:else if router.current.name === 'environment-edit'}
       {#key router.path}<EnvironmentEdit uuid={params.uuid} env={params['env']} />{/key}
     {:else if router.current.name === 'resource-new'}
-      {#key router.path}<ResourceNew uuid={params.uuid} env={params['env']} />{/key}
+      {#key router.path + router.search}<ResourceNew uuid={params.uuid} env={params['env']} />{/key}
     {:else if router.current.name === 'database' || router.current.name === 'database-section'}
       {#key router.path}<Database uuid={params.uuid} env={params['env']} db={params['db']} section={params['section'] ?? 'general'} />{/key}
+    {:else if router.current.name === 'application' || router.current.name === 'application-section'}
+      {#key router.path}<Application uuid={params.uuid} env={params['env']} app={params['app']} section={params['section'] ?? 'general'} />{/key}
+    {:else if router.current.name === 'application-deployment'}
+      {#key params['app']}<Application uuid={params.uuid} env={params['env']} app={params['app']} section="deployment" dep={params['dep']} />{/key}
     {:else if router.current.name === 'keys'}
       <Keys />
     {:else if router.current.name === 'key'}

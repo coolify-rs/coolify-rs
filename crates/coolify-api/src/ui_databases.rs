@@ -94,6 +94,7 @@ pub async fn destinations(
             .map(|(uuid, name, network)| json!({"uuid": uuid, "name": name, "network": network}))
             .collect();
         servers.push(json!({
+            "id": s.id,
             "uuid": s.uuid,
             "name": s.record.get("name"),
             "description": s.record.get("description"),

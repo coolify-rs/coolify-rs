@@ -242,3 +242,22 @@ impl Jobs {
         .await;
     }
 }
+
+impl Jobs {
+    /// `InternalAccess::loadCurrentInternalHostname`: the first running container, else the first one.
+    pub async fn application_container_name(&self, a: &ApplicationRow) -> Option<String> {
+        let row = servers::find_by_id(&self.0.db, a.server_id()?)
+            .await
+            .ok()
+            .flatten()?;
+        let t = ServerInfo::from_row(&row).target(self).await.ok()?;
+        let containers = self.application_containers(&t, &a.uuid, false).await.ok()?;
+        let running = containers
+            .iter()
+            .find(|c| c.get("State").and_then(Value::as_str) == Some("running"));
+        running
+            .or(containers.first())
+            .and_then(|c| c.get("Names").and_then(Value::as_str))
+            .map(str::to_owned)
+    }
+}

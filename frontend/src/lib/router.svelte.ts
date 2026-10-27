@@ -15,6 +15,9 @@ const routes: { name: string; pattern: string }[] = [
   { name: 'environment', pattern: '/project/:uuid/environment/:env' },
   { name: 'environment-edit', pattern: '/project/:uuid/environment/:env/edit' },
   { name: 'resource-new', pattern: '/project/:uuid/environment/:env/new' },
+  { name: 'application', pattern: '/project/:uuid/environment/:env/application/:app' },
+  { name: 'application-deployment', pattern: '/project/:uuid/environment/:env/application/:app/deployment/:dep' },
+  { name: 'application-section', pattern: '/project/:uuid/environment/:env/application/:app/:section' },
   { name: 'database', pattern: '/project/:uuid/environment/:env/database/:db' },
   { name: 'database-section', pattern: '/project/:uuid/environment/:env/database/:db/:section' },
   { name: 'keys', pattern: '/security/private-key' },
@@ -50,18 +53,31 @@ function match(path: string): Match {
 
 class Router {
   path = $state(window.location.pathname);
+  /** The query string (`?type=docker-image&…`), or ''. */
+  search = $state(window.location.search);
   current = $derived(match(this.path));
 
   constructor() {
-    window.addEventListener('popstate', () => (this.path = window.location.pathname));
+    window.addEventListener('popstate', () => {
+      this.path = window.location.pathname;
+      this.search = window.location.search;
+    });
   }
 
   go(to: string, replace = false): void {
-    if (to === this.path) return;
+    const q = to.indexOf('?');
+    const path = q === -1 ? to : to.slice(0, q);
+    const search = q === -1 ? '' : to.slice(q);
+    if (path === this.path && search === this.search) return;
     if (replace) history.replaceState(null, '', to);
     else history.pushState(null, '', to);
-    this.path = to;
+    this.path = path;
+    this.search = search;
     window.scrollTo(0, 0);
+  }
+
+  query(key: string): string | null {
+    return new URLSearchParams(this.search).get(key);
   }
 }
 

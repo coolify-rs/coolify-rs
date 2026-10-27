@@ -1,0 +1,180 @@
+<script lang="ts">
+  // Port of upstream livewire/project/application/configuration.blade.php (+
+  // Project\Application\Configuration), deployment/index.blade.php and
+  // deployment/show.blade.php: the heading, the application menu (shown by the
+  // main sidebar) and the section. General, Deployment Logs and Danger zone are
+  // ported; the other sections show the "not available in coolify-rs yet" page
+  // in the same frame.
+  import Empty from '../components/Empty.svelte';
+  import ApplicationHeading from '../components/ApplicationHeading.svelte';
+  import ApplicationGeneral from '../components/ApplicationGeneral.svelte';
+  import DatabaseDanger from '../components/DatabaseDanger.svelte';
+  import DeploymentHistory from '../components/DeploymentHistory.svelte';
+  import DeploymentLogs from '../components/DeploymentLogs.svelte';
+  import Unported from './Unported.svelte';
+  import { appUi, dbUi, uiApi, ApiError, type ApplicationRecord, type ApplicationState, type DeploymentDetail } from '../lib/api';
+  import { applicationNavContext, applicationSection } from '../lib/applicationMenu';
+  import { setProjectCrumbs } from '../lib/crumbs';
+  import { strnatcmp } from '../lib/natsort';
+  import { page } from '../lib/page.svelte';
+  import { router } from '../lib/router.svelte';
+  import { session } from '../lib/session.svelte';
+
+  let {
+    uuid,
+    env,
+    app,
+    section,
+    dep = null,
+  }: { uuid: string; env: string; app: string; section: string; dep?: string | null } = $props();
+
+  let record = $state<ApplicationRecord | null>(null);
+  let appState = $state<ApplicationState | null>(null);
+  let resources = $state<{ label: string; href: string; active: boolean }[]>([]);
+  let missing = $state(false);
+  let shownDep = $state<string | null>(null);
+  let detail = $state<DeploymentDetail | null>(null);
+  let switching = $state(false);
+
+  const active = $derived(dep ? 'deployment' : applicationSection(section));
+  const base = $derived(`/project/${uuid}/environment/${env}/application/${app}`);
+  const canUpdate = $derived(appState?.can_update ?? false);
+  const timezone = $derived(appState?.server_timezone ?? 'UTC');
+  const serverName = $derived(record?.destination?.server?.name ?? '');
+
+  const limit10 = (s: string) => (s.length > 10 ? `${s.slice(0, 10)}...` : s);
+
+  async function refresh() {
+    const [r, s] = await Promise.all([appUi.get(app), appUi.state(app)]);
+    record = r;
+    appState = s;
+  }
+
+  async function load() {
+    let r: ApplicationRecord;
+    try {
+      r = await appUi.get(app);
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 403)) {
+        missing = true;
+        return;
+      }
+      throw e;
+    }
+    appState = await appUi.state(app);
+    if (dep) {
+      try {
+        detail = await appUi.deployment(app, dep);
+        shownDep = dep;
+      } catch (e) {
+        // Deployment missing: back to the deployments index.
+        if (e instanceof ApiError && e.status === 404) {
+          router.go(`${base}/deployment`, true);
+          return;
+        }
+        throw e;
+      }
+    }
+    record = r;
+    const suffix = dep ? 'Deployment' : active === 'deployment' ? 'Deployments' : 'Configuration';
+    document.title = `${limit10(r.name ?? '')} > ${suffix} | coolify-rs`;
+    const bp = r.build_pack ?? '';
+    page.navContext = applicationNavContext(base, active, {
+      canAccessTerminal: session.isAdmin,
+      gitBased: r.source_type != null && r.source_type !== '' && bp !== 'dockerimage',
+      dockerImage: bp === 'dockerimage',
+      compose: bp === 'dockercompose',
+    });
+    uiApi.project(uuid).then((d) => setProjectCrumbs(d, env));
+    dbUi
+      .resources(uuid, env)
+      .then((res) => {
+        const apps = (res.applications ?? []).map((a) => ({
+          label: a.name,
+          href: `/project/${uuid}/environment/${env}/application/${a.uuid}`,
+          active: a.uuid === app,
+        }));
+        const dbs = res.databases.map((d) => ({ label: d.name, href: `/project/${uuid}/environment/${env}/database/${d.uuid}`, active: false }));
+        resources = [...apps, ...dbs].sort((a, b) => strnatcmp(a.label.toLowerCase(), b.label.toLowerCase()));
+      })
+      .catch(() => {
+        resources = record ? [{ label: record.name, href: base, active: true }] : [];
+      });
+  }
+
+  // `selectDeployment(uuid)`: swap the shown deployment in place.
+  async function selectDeployment(next: string) {
+    switching = true;
+    try {
+      detail = await appUi.deployment(app, next);
+      shownDep = next;
+      history.replaceState(history.state, '', `${base}/deployment/${next}`);
+    } finally {
+      switching = false;
+    }
+  }
+
+  $effect(() => {
+    load();
+    // Heading: `wire:poll.10000ms="checkStatus"`.
+    const poll = setInterval(() => record && refresh().catch(() => {}), 10000);
+    return () => clearInterval(poll);
+  });
+</script>
+
+{#if missing}
+  <div class="application-settings-form w-full">
+    <Empty title="Application not found" description="It may have been deleted, or it belongs to another team." iconName="layers" size="lg" />
+  </div>
+{:else if record && appState}
+  {#if dep && detail && shownDep}
+    <div class="flex min-h-[calc(100dvh-7.5rem)] flex-col">
+      <ApplicationHeading {record} {appState} {base} {resources} onrefresh={() => refresh().catch(() => {})} />
+      <section class="application-settings-workspace mt-4 flex min-h-0 w-full max-w-none flex-1 lg:mt-0">
+        <div class="grid min-h-0 min-w-0 flex-1 gap-8 xl:grid-cols-[210px_minmax(0,1fr)] xl:gap-8">
+          <aside class="application-settings-navigation in-main-nav min-w-0"></aside>
+          <div class="flex min-h-0 min-w-0 flex-col gap-4 xl:h-full xl:pt-px 2xl:grid 2xl:grid-cols-[30rem_minmax(0,1fr)] 2xl:items-start">
+            <DeploymentHistory uuid={app} {base} {serverName} {timezone} embedded selected={shownDep} onselect={selectDeployment} />
+            <div class={switching ? 'opacity-60' : ''}>
+              {#key shownDep}
+                <DeploymentLogs
+                  uuid={app}
+                  dep={shownDep}
+                  initial={detail}
+                  {canUpdate}
+                  {timezone}
+                  onfinished={() => refresh().catch(() => {})}
+                />
+              {/key}
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  {:else if !dep}
+    <div>
+      <ApplicationHeading {record} {appState} {base} {resources} onrefresh={() => refresh().catch(() => {})} />
+
+      <section class="application-settings-workspace mt-4 w-full max-w-none lg:mt-0">
+        <div class="grid min-w-0 gap-8 xl:grid-cols-[210px_minmax(0,1fr)] xl:gap-8">
+          <aside class="application-settings-navigation in-main-nav min-w-0"></aside>
+          <div class="min-w-0">
+            {#if active === 'general'}
+              {#if ['dockerimage'].includes(record.build_pack ?? '')}
+                <ApplicationGeneral {record} {appState} {base} onsaved={() => refresh().catch(() => {})} />
+              {:else}
+                <Unported description="The settings of this build pack are not ported to coolify-rs yet." />
+              {/if}
+            {:else if active === 'deployment'}
+              <DeploymentHistory uuid={app} {base} {serverName} {timezone} />
+            {:else if active === 'danger'}
+              <DatabaseDanger kind="application" {record} canDelete={canUpdate} back="/project/{uuid}/environment/{env}" />
+            {:else}
+              <Unported />
+            {/if}
+          </div>
+        </div>
+      </section>
+    </div>
+  {/if}
+{/if}

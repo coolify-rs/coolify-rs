@@ -4,6 +4,7 @@
   // Only PostgreSQL can be created by coolify-rs; every other resource is
   // listed as upstream lists it and says it is not available yet. Service
   // templates are not loaded, and the deploy canvas is left out (ADR 0008).
+  import NewDockerImage from '../components/NewDockerImage.svelte';
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
   import Callout from '../components/Callout.svelte';
@@ -181,6 +182,11 @@
   let selectedType = $state('postgresql');
   // Database types coolify-rs can create (SQLite is not ported).
   const portedDatabases = ['postgresql', 'mysql', 'mariadb', 'redis', 'keydb', 'dragonfly', 'mongodb', 'clickhouse'];
+  // Application types coolify-rs can create.
+  const portedApplications = ['docker-image'];
+  // `Create::mount()`: `?type=…&destination=…` renders that type's form.
+  const formType = $derived(router.query('type'));
+  const formDestination = $derived(router.query('destination') ?? '');
   let search = $state('');
   let resourceType = $state('all');
   let searchInput: HTMLInputElement | undefined = $state();
@@ -257,8 +263,8 @@
 
   async function setType(type: string) {
     if (selecting) return;
-    if (!portedDatabases.includes(type)) {
-      notify.info('Not available in coolify-rs yet', 'Only databases (except SQLite) can be created in coolify-rs. Use Coolify for this resource for now.');
+    if (!portedDatabases.includes(type) && !portedApplications.includes(type)) {
+      notify.info('Not available in coolify-rs yet', 'This resource type cannot be created in coolify-rs yet. Use Coolify for this resource for now.');
       return;
     }
     selectedType = type;
@@ -284,8 +290,14 @@
     step = 'destinations';
   }
 
-  function setDestination(uuid: string) {
-    destinationUuid = uuid;
+  function setDestination(destination: string) {
+    destinationUuid = destination;
+    // `whatToDoNext()`: application types continue on their own form.
+    if (portedApplications.includes(selectedType)) {
+      const serverId = server?.id ?? '';
+      router.go(`/project/${uuid}/environment/${env}/new?type=${selectedType}&destination=${destination}&server_id=${serverId}`);
+      return;
+    }
     if (selectedType === 'postgresql') {
       step = 'select-postgresql-type';
       return;
@@ -356,6 +368,10 @@
 {#if missing}
   <div class="application-settings-form w-full">
     <Empty title="Environment not found" description="It may have been deleted, or it belongs to another team." iconName="layers" size="lg" />
+  </div>
+{:else if project && formType === 'docker-image' && formDestination}
+  <div>
+    <NewDockerImage project={uuid} {env} destination={formDestination} />
   </div>
 {:else if project}
   <div>

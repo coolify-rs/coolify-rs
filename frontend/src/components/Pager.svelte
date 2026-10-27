@@ -11,6 +11,8 @@
     pageSize = $bindable(10),
     storageKey,
     options = [10, 25, 50, 100],
+    separator = '-',
+    sizeSelect = true,
     class: cls = '',
   }: {
     total: number;
@@ -18,6 +20,9 @@
     pageSize?: number;
     storageKey?: string;
     options?: number[];
+    /** components/table-pagination.blade.php uses an en dash. */
+    separator?: string;
+    sizeSelect?: boolean;
     class?: string;
   } = $props();
 
@@ -67,11 +72,12 @@
 </script>
 
 <footer
-  hidden={total <= Math.min(...options)}
+  hidden={sizeSelect ? total <= Math.min(...options) : totalPages <= 1}
   class="pager flex min-h-11 items-center justify-between border-t border-neutral-200 px-4 text-[11px] text-neutral-500 dark:border-white/[0.08] dark:text-fg-faint {cls}"
 >
   <div class="flex items-center gap-3">
-    <span class="inline-flex h-7 items-center whitespace-nowrap tabular-nums">{rangeStart}-{rangeEnd} of {total}</span>
+    <span class="inline-flex h-7 items-center whitespace-nowrap tabular-nums">{rangeStart}{separator}{rangeEnd} of {total}</span>
+    {#if sizeSelect}
     <div class="mb-0! flex h-7 items-center gap-1.5 text-[11px] text-neutral-500 dark:text-fg-dim">
       {#if !customizing}
         <Dropdown panelClass="min-w-24!">
@@ -143,6 +149,7 @@
         />
       {/if}
     </div>
+    {/if}
   </div>
   <div class="flex items-center gap-1">
     <button type="button" onclick={() => (page = Math.max(1, page - 1))} disabled={page === 1} class={pagerButton} aria-label="Previous page">

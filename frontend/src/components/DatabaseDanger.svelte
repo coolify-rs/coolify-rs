@@ -1,17 +1,27 @@
 <script lang="ts">
   // Port of upstream livewire/project/shared/danger.blade.php (+ Shared\Danger)
-  // for a standalone database.
+  // for a standalone database or an application.
   import Callout from './Callout.svelte';
   import DangerZone from './DangerZone.svelte';
   import ConfirmModal from './ConfirmModal.svelte';
   import SettingsSection from './SettingsSection.svelte';
-  import { dbUi, ApiError, type DatabaseRecord } from '../lib/api';
+  import { dbUi, appUi, ApiError } from '../lib/api';
   import { router } from '../lib/router.svelte';
 
-  let { record, canDelete, back }: { record: DatabaseRecord; canDelete: boolean; back: string } = $props();
+  let {
+    record,
+    canDelete,
+    back,
+    kind = 'database',
+  }: {
+    record: { uuid: string; name: string | null; server_status?: unknown };
+    canDelete: boolean;
+    back: string;
+    kind?: 'database' | 'application';
+  } = $props();
 
   let deleting = $state(false);
-  const resourceName = $derived(record.name ?? 'Database');
+  const resourceName = $derived(record.name ?? (kind === 'application' ? 'Application' : 'Database'));
   const functional = $derived(record.server_status !== false);
 
   // Livewire `Shared\Danger`: every option starts selected. Connected networks only
@@ -25,12 +35,14 @@
 
   async function remove(password: string, selected: string[]): Promise<string | void> {
     try {
-      await dbUi.remove(record.uuid, {
+      const body = {
         password,
         delete_volumes: selected.includes('delete_volumes'),
         delete_configurations: selected.includes('delete_configurations'),
         docker_cleanup: selected.includes('docker_cleanup'),
-      });
+      };
+      if (kind === 'application') await appUi.remove(record.uuid, { ...body, delete_connected_networks: selected.includes('delete_connected_networks') });
+      else await dbUi.remove(record.uuid, body);
       router.go(back);
     } catch (e) {
       if (e instanceof ApiError && e.message === 'The provided password is incorrect.') return e.message;
