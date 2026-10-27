@@ -243,6 +243,18 @@ pub const ROUTES: &[RouteSpec] = &[
         group: Group::Main,
         abilities: W,
     },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/{uuid}/validate",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/{uuid}/validate",
+        group: Group::Main,
+        abilities: W,
+    },
 ];
 
 /// Prefix of the browser-session bridge: `/ui/api/v1/...` mirrors the main
@@ -340,6 +352,16 @@ pub fn router(state: AppState) -> Router {
         ("GET", "api/v1/servers", on_get(servers::list)),
         ("POST", "api/v1/servers", on_post(servers::create)),
         ("GET", "api/v1/servers/{uuid}", on_get(servers::show)),
+        (
+            "GET",
+            "api/v1/servers/{uuid}/validate",
+            on_get(misc::post_required),
+        ),
+        (
+            "POST",
+            "api/v1/servers/{uuid}/validate",
+            on_post(servers::validate_server),
+        ),
         (
             "DELETE",
             "api/v1/servers/{uuid}",

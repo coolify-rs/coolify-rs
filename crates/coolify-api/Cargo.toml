@@ -17,6 +17,8 @@ chrono.workspace = true
 coolify-compat.workspace = true
 coolify-db.workspace = true
 coolify-domain.workspace = true
+coolify-jobs.workspace = true
+coolify-remote.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -28,6 +30,7 @@ tracing.workspace = true
 [dev-dependencies]
 coolify-db = { workspace = true, features = ["testing"] }
 http-body-util.workspace = true
+tempfile.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 

@@ -14,7 +14,7 @@ Upstream references are relative to the upstream repository root.
 | `services` | 57 | 0 | not started |
 | `applications` | 52 | 0 | not started |
 | `databases` | 47 | 0 | not started |
-| `servers` | 44 | 5 | list, show, create, update, delete verified (183/183 differential); no SSH: `instant_validate`, proxy changes, `?force` with resources and cloud-provider deletes answer 501; resources, domains and the rest not started |
+| `servers` | 44 | 7 | list, show, create, update, delete, validate (`POST` + `GET` → 405) verified (194/194 differential; validation job 8/8 in `validate_diff.py`); `install=true`, `instant_validate`, proxy changes, `?force` with resources and cloud-provider deletes answer 501; resources, domains and the rest not started |
 | `projects` | 18 | 10 | verified for project/environment CRUD; canvas links and project-level shared variables not started |
 | `teams` / `team` | 12 | 8 | verified for reads and `PATCH /team`; team invitations not started |
 | `notifications` | 12 | 0 | not started |
@@ -58,7 +58,9 @@ Upstream references are relative to the upstream repository root.
 |---|---|---|
 | Web UI beyond the ported areas; registration/root setup window, password reset, 2FA enrollment, passkeys, OAuth | Livewire (272 components), Fortify, Socialite | started (ADR 0007, 0008): login, dashboard, projects, environments, keys, team, members, appearance |
 | Teams, invitations, roles | `app/Livewire/Team`, `TeamPolicy` | API reads verified; UI settings and member roles verified; invitations not started |
-| Servers: validation, SSH, proxy, Sentinel, Cloudflare tunnel, transfers | `ServersController`, `SshMultiplexingHelper`, `app/Actions/Server` | records verified (API + UI: list, new server by IP, General, Danger Zone); everything that connects to a server not started (milestone 4) |
+| Servers: validation, SSH, proxy, Sentinel, Cloudflare tunnel, transfers | `ServersController`, `SshMultiplexingHelper`, `app/Actions/Server` | records verified (API + UI: list, new server by IP, General, Danger Zone); SSH execution and validation verified (API + UI dialog, `validate_diff.py`); install, proxy, Sentinel, transfers not started |
+| Remote execution (`instant_remote_process`, `parseCommandsByLineForSudo`, `SshRetryable`) | `bootstrap/helpers/remoteProcess.php`, `sudo.php`, `app/Traits/SshRetryable.php` | verified: upstream's unit cases + live test host | `coolify-remote` tests |
+| Log redaction (`SensitiveDataRedactor::redactText`) and the `validation_logs` purifier | `app/Services/Security`, `config/purify.php` | verified: upstream's unit cases + reference container output | `coolify-compat` tests |
 | Private keys | `SecurityController`, `PrivateKey` | verified (API + UI) |
 | Git sources (GitHub/GitLab/Gitea/Bitbucket apps, webhooks) | `app/Http/Controllers/Webhook/*` | |
 | Applications and build packs (nixpacks, railpack, dockerfile, compose, static, image) | `ApplicationDeploymentJob` (6,479 lines) | critical, large |

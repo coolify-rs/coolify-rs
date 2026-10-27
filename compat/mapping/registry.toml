@@ -162,7 +162,7 @@ rust.packages = ["coolify-compat"]
 
 [[component]]
 id = "api.servers.subroutes"
-title = "Server sub-routes (resources, domains, proxy, Sentinel, registries, transfers, validation)"
+title = "Server sub-routes (resources, domains, proxy, Sentinel, registries, transfers)"
 status = "planned"
 upstream.paths = ["app/Http/Controllers/Api/Server*.php", "app/Policies/ServerPolicy.php"]
 upstream.tables = ["swarm_dockers"]
@@ -254,7 +254,7 @@ rust.paths = [
 rust.tests = ["crates/coolify-api/tests/servers.rs"]
 rust.packages = ["coolify-api", "coolify-db", "coolify-compat"]
 divergences = [
-  "instant_validate, proxy type changes, force deletes with resources, provider deletes and ?resources answer 501 (no SSH)",
+  "instant_validate, proxy type changes, force deletes with resources, provider deletes and ?resources answer 501",
   "Sentinel URL fallback trusts X-Forwarded-* only from trusted proxies",
   "generated server names use different words than nubs/random-name-generator",
   "the force delete runs in the request, not in a queued DeleteServer job",
@@ -359,6 +359,61 @@ upstream.tables = ["application_deployment_queues", "applications", "application
 
 [[component]]
 id = "remote.execution"
-title = "SSH remote execution and multiplexing"
-status = "planned"
+title = "SSH remote execution (instant_remote_process), sudo rewrite, retries"
+status = "verified"
 upstream.paths = ["bootstrap/helpers/remoteProcess.php", "app/Helpers/SshMultiplexingHelper.php", "bootstrap/helpers/sudo.php", "app/Helpers/SshRetryHandler.php", "app/Traits/SshRetryable.php"]
+rust.paths = ["crates/coolify-remote/src/**", "compat/testing-host/**", "scripts/testing-host-up.sh"]
+rust.tests = ["crates/coolify-remote/tests/fake_ssh.rs", "crates/coolify-remote/tests/live_ssh.rs"]
+rust.packages = ["coolify-remote"]
+divergences = [
+  "host keys pinned per server on first use instead of StrictHostKeyChecking=no (ADR 0009)",
+  "key files exist only for the length of a command; no ControlMaster multiplexing yet",
+  "system ssh spawned with an argv array, cleared environment, -F /dev/null, BatchMode, no agent or forwarding",
+  "stdout/stderr capped at 16 MiB / 1 MiB",
+]
+
+[[component]]
+id = "server.validation"
+title = "Server validation: POST /servers/{uuid}/validate, ValidateServer, the Livewire validation dialog"
+status = "verified"
+upstream.paths = [
+  "app/Actions/Server/ValidateServer.php",
+  "app/Actions/Server/ValidatePrerequisites.php",
+  "app/Livewire/Server/ValidateAndInstall.php",
+  "resources/views/livewire/server/validate-and-install.blade.php",
+  "resources/views/components/process-dialog.blade.php",
+  "resources/views/components/checkpoint-item.blade.php",
+  "app/Services/Security/SensitiveDataRedactor.php",
+  "config/purify.php",
+]
+upstream.symbols = [
+  "app/Http/Controllers/Api/ServersController.php::validate_server()",
+  "app/Models/Server.php::validateConnection()",
+  "app/Models/Server.php::validateOS()",
+  "app/Models/Server.php::supportedOsFromOsRelease()",
+  "app/Models/Server.php::validateDockerEngine()",
+  "app/Models/Server.php::validateDockerCompose()",
+  "app/Models/Server.php::validateDockerEngineVersion()",
+  "app/Models/Server.php::dockerEngineVersionError()",
+  "app/Models/Server.php::setValidationLogsAttribute()",
+  "bootstrap/helpers/docker.php::parseDockerEngineVersion()",
+  "bootstrap/helpers/docker.php::dockerEngineVersionFromJson()",
+  "bootstrap/helpers/docker.php::checkMinimumDockerEngineVersion()",
+]
+upstream.tables = ["servers", "server_settings", "private_keys"]
+rust.paths = [
+  "crates/coolify-jobs/src/**",
+  "crates/coolify-compat/src/redact.rs",
+  "crates/coolify-compat/src/purify.rs",
+  "frontend/src/components/ValidateServer.svelte",
+  "frontend/src/components/ProcessDialog.svelte",
+  "frontend/src/components/CheckpointItem.svelte",
+]
+rust.tests = ["crates/coolify-api/tests/validate.rs", "compat/diff/validate_diff.py"]
+rust.packages = ["coolify-jobs", "coolify-compat", "coolify-api"]
+divergences = [
+  "install=true and servers linked to Vultr/DigitalOcean/Hostinger answer 501",
+  "jobs run in-process (lost on restart); one validation per server at a time",
+  "the UI does not install, does not ask before revalidating, and starts neither the proxy nor Sentinel afterwards",
+  "Reachable/Unreachable notifications and audit_events rows are not written",
+]

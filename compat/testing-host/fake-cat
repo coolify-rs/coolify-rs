@@ -1,0 +1,7 @@
+#!/bin/sh
+# cat, except that /etc/os-release describes an unsupported distribution.
+if [ "$*" = "/etc/os-release" ]; then
+  printf 'NAME=Gentoo\nID=gentoo\nPRETTY_NAME="Gentoo Linux"\n'
+else
+  exec /bin/cat "$@"
+fi

@@ -9,6 +9,8 @@ pub mod encrypter;
 pub mod password;
 pub mod php_json;
 pub mod php_serialize;
+pub mod purify;
+pub mod redact;
 pub mod sanctum;
 pub mod sshkey;
 pub mod timezones;

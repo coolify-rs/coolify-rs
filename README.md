@@ -3,15 +3,18 @@
 A Rust implementation of [Coolify](https://github.com/coollabsio/coolify)'s API and data model, plus a migration
 engine that tracks upstream Coolify and ports its changes. *Working name; not affiliated with coolLabs.*
 
-**Status: early.** 33 of 321 upstream API operations are implemented and verified against the official
-`coollabsio/coolify` image built from upstream `main` @ b5823c7 (`sha-b5823c7`). A web UI that reproduces upstream's interface covers what is ported (dashboard, projects, environments, private keys, team). There is no deployment engine or server management yet. See
+**Status: early.** 35 of 321 upstream API operations are implemented and verified against the official
+`coollabsio/coolify` image built from upstream `main` @ b5823c7 (`sha-b5823c7`). A web UI that reproduces upstream's interface covers what is ported (dashboard, projects, environments, private keys, team). Servers can be added and validated over SSH; there is no deployment engine, proxy management or resource management yet. See
 [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md) and [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 
 ## What works
 
 - Upstream-compatible `/api`: token auth chain (Sanctum tokens, team binding, API switch, IP allowlist, abilities),
-  teams, projects and environments, private keys, servers (records only, no SSH yet), health/version/disable. Response bodies are byte-identical to
-  upstream for all 183 differential cases.
+  teams, projects and environments, private keys, servers (records and validation), health/version/disable. Response bodies are byte-identical to
+  upstream for all 194 differential cases.
+- Remote execution over the system OpenSSH client with pinned host keys, ephemeral key files and a cleared environment
+  (ADR 0009). Server validation (API and UI) writes the same rows and messages as upstream for every scenario of the
+  SSH test host (8/8, `compat/diff/validate_diff.py`).
 - Web UI (`frontend/`, Svelte): a port of upstream Coolify's interface (same layout, navigation, URLs, markup and
   vendored stylesheet; coolify-rs's own name and logo) for sign-in with 2FA, team switching, the dashboard, projects,
   environments, private keys (including key generation), team settings and member roles, and appearance settings.
@@ -62,6 +65,9 @@ Configuration: `DATABASE_URL` or upstream's `DB_HOST/DB_PORT/DB_DATABASE/DB_USER
 `COOLIFY_RS_LISTEN` (default `0.0.0.0:8080`); `COOLIFY_VERSION` (reported by `/api/v1/version`, default `4.5.1-dev.b5823c777`);
 `COOLIFY_RS_TRUSTED_PROXIES` (IPs/CIDRs whose `X-Forwarded-For` is trusted; default none);
 `COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA`; `COOLIFY_RS_LOG_FORMAT=pretty|json`; `RUST_LOG`.
+Remote execution: `COOLIFY_RS_DATA_DIR` (default `/data/coolify-rs`; pinned host keys, short-lived key files);
+`COOLIFY_RS_SSH_HOST_KEYS=pin|ignore` (default `pin`; `ignore` is upstream's behaviour); `COOLIFY_RS_SSH_MAX_CONCURRENCY`
+(default 32); `SSH_COMMAND_TIMEOUT` (seconds, default 3600); `COOLIFY_RS_SSH_BINARY` (default `ssh`). Needs OpenSSH 7.6+.
 
 ## Differential testing against upstream
 
@@ -72,7 +78,12 @@ git clone --bare --no-single-branch https://github.com/coollabsio/coolify .upstr
 # start coolify-rs on :18080 against the reference database (password in compat/reference/secrets/reference.envfile)
 # (COOLIFY_RS_TRUSTED_PROXIES=127.0.0.1 enables the allowlist cases via --db-url)
 python3 compat/diff/differential.py --tokens compat/reference/secrets/tokens.json [--db-url postgres://...]
+./scripts/testing-host-up.sh         # SSH test host on 127.0.0.1:2223 (also joins the reference network)
+python3 compat/diff/validate_diff.py # server validation: reference vs coolify-rs (needs COOLIFY_RS_DATA_DIR set)
 ```
+
+The live SSH tests run when `COOLIFY_RS_TEST_SSH=127.0.0.1:2223` and
+`COOLIFY_RS_TEST_SSH_KEY=compat/testing-host/secrets/id_ed25519` are set.
 
 ## Upstream migration engine
 

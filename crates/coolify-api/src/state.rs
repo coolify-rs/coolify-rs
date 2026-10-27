@@ -29,6 +29,8 @@ pub struct Inner {
     pub ui_dir: Option<PathBuf>,
     /// Add `Secure` to the session cookie (set when served over HTTPS).
     pub secure_cookies: bool,
+    /// Background work on servers; `None` when remote execution is not configured.
+    pub jobs: Option<coolify_jobs::Jobs>,
 }
 
 /// Optional settings; `Default` is suitable for tests.
@@ -38,6 +40,7 @@ pub struct Options {
     pub ui_dir: Option<PathBuf>,
     pub secure_cookies: bool,
     pub session_idle: Duration,
+    pub remote: Option<coolify_remote::Remote>,
 }
 
 impl Default for Options {
@@ -48,6 +51,7 @@ impl Default for Options {
             secure_cookies: false,
             // Upstream SESSION_LIFETIME default: 10080 minutes.
             session_idle: Duration::from_secs(10080 * 60),
+            remote: None,
         }
     }
 }
@@ -70,7 +74,11 @@ impl AppState {
         trusted_proxies: TrustedProxies,
         o: Options,
     ) -> Self {
+        let jobs = o
+            .remote
+            .map(|r| coolify_jobs::Jobs::new(db.clone(), r, o.encrypter.clone()));
         Self(Arc::new(Inner {
+            jobs,
             db,
             version,
             trusted_proxies,

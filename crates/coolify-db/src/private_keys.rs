@@ -60,6 +60,18 @@ pub async fn list(db: &Db, team_id: TeamId) -> DbResult<Vec<KeyRow>> {
     rows.iter().map(|r| to_row(r)).collect()
 }
 
+/// `PrivateKey::where('team_id', $teamId)->find($id)`.
+pub async fn find_by_id(db: &Db, team_id: TeamId, id: i64) -> DbResult<Option<KeyRow>> {
+    let r: Option<String> = sqlx::query_scalar(
+        "SELECT row_to_json(k)::text FROM private_keys k WHERE k.team_id = $1 AND k.id = $2 LIMIT 1",
+    )
+    .bind(team_id)
+    .bind(id)
+    .fetch_optional(db.pool())
+    .await?;
+    r.as_deref().map(to_row).transpose()
+}
+
 pub async fn find(db: &Db, team_id: TeamId, uuid: &str) -> DbResult<Option<KeyRow>> {
     let row: Option<String> = sqlx::query_scalar(
         "SELECT row_to_json(k)::text FROM private_keys k WHERE k.team_id = $1 AND k.uuid = $2 LIMIT 1",

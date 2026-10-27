@@ -39,7 +39,12 @@ jobs:
         run: cargo fmt --all --check
       - name: clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: SSH test host (remote execution and server validation tests)
+        run: ./scripts/testing-host-up.sh
       - name: test (unit, integration, API contract against the upstream baseline schema)
+        env:
+          COOLIFY_RS_TEST_SSH: 127.0.0.1:2223
+          COOLIFY_RS_TEST_SSH_KEY: ${{ github.workspace }}/compat/testing-host/secrets/id_ed25519
         run: cargo test --workspace --all-features --locked
 
   frontend:

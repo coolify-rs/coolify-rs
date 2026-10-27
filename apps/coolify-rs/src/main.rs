@@ -19,6 +19,7 @@ use coolify_api::ip::TrustedProxies;
 use coolify_api::state::Options;
 use coolify_compat::Encrypter;
 use coolify_db::{Db, DbConfig};
+use coolify_remote::{HostKeyPolicy, Remote, RemoteConfig};
 use std::path::PathBuf;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::timeout::TimeoutLayer;
@@ -53,6 +54,7 @@ struct Config {
     ui_dir: Option<PathBuf>,
     secure_cookies: bool,
     session_idle: Duration,
+    remote: RemoteConfig,
 }
 
 fn env(key: &str) -> Option<String> {
@@ -85,6 +87,29 @@ fn urlencode(s: &str) -> String {
             _ => format!("%{b:02X}"),
         })
         .collect()
+}
+
+/// Remote execution (ADR 0009). `SSH_COMMAND_TIMEOUT` is upstream's variable.
+fn remote_config() -> Result<RemoteConfig> {
+    let mut r =
+        RemoteConfig::new(env("COOLIFY_RS_DATA_DIR").unwrap_or_else(|| "/data/coolify-rs".into()));
+    r.host_keys = match env("COOLIFY_RS_SSH_HOST_KEYS").as_deref() {
+        None | Some("pin") => HostKeyPolicy::Pin,
+        Some("ignore") => HostKeyPolicy::Ignore,
+        Some(other) => anyhow::bail!("COOLIFY_RS_SSH_HOST_KEYS must be pin or ignore, not {other}"),
+    };
+    if let Some(n) = env("COOLIFY_RS_SSH_MAX_CONCURRENCY") {
+        r.max_concurrency = n.parse().context("COOLIFY_RS_SSH_MAX_CONCURRENCY")?;
+    }
+    if let Some(secs) = env("SSH_COMMAND_TIMEOUT") {
+        let secs: i64 = secs.parse().context("SSH_COMMAND_TIMEOUT (seconds)")?;
+        // Upstream falls back to 3600 for zero or negative values.
+        r.command_timeout = Duration::from_secs(if secs > 0 { secs.unsigned_abs() } else { 3600 });
+    }
+    if let Some(bin) = env("COOLIFY_RS_SSH_BINARY") {
+        r.ssh_binary = PathBuf::from(bin);
+    }
+    Ok(r)
 }
 
 impl Config {
@@ -136,6 +161,7 @@ impl Config {
                     .unwrap_or(10080)
                     * 60,
             ),
+            remote: remote_config()?,
         })
     }
 }
@@ -263,6 +289,16 @@ async fn main() -> Result<()> {
                     "session cookies are not marked Secure; set COOLIFY_RS_SECURE_COOKIES=true behind HTTPS"
                 );
             }
+            let remote = match Remote::new(cfg.remote.clone()) {
+                Ok(r) => {
+                    tracing::info!(data_dir = %cfg.remote.data_dir.display(), host_keys = ?cfg.remote.host_keys, "remote execution enabled");
+                    Some(r)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "remote execution disabled (set COOLIFY_RS_DATA_DIR to a writable directory)");
+                    None
+                }
+            };
             let state = AppState::with_options(
                 db,
                 cfg.version,
@@ -272,6 +308,7 @@ async fn main() -> Result<()> {
                     ui_dir: cfg.ui_dir,
                     secure_cookies: cfg.secure_cookies,
                     session_idle: cfg.session_idle,
+                    remote,
                 },
             );
             let listener = tokio::net::TcpListener::bind(cfg.listen).await?;

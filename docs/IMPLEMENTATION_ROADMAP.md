@@ -37,6 +37,13 @@ then server create/update/delete without validation side effects.
 
 ## Milestone 4: remote execution core (high risk, security review required)
 
+Done (session 6): threat model and ADR 0009, `coolify-remote` (system `ssh`, argv only, TOFU pins, ephemeral keys,
+deadlines, output caps, upstream retries and sudo rewrite), the SSH test host, server validation (API, job, UI dialog)
+verified against the reference. Remaining: ControlMaster multiplexing and `audit_events` rows (with the deployment
+engine), installing prerequisites/Docker (`install=true`).
+
+Original plan:
+
 Typed command builder (argv-level escaping, no string concatenation), SSH via the system `ssh` binary with explicit
 options, ControlMaster multiplexing, timeouts/retries (exit 255 only), TOFU host-key pinning, audit log. Server
 validation (`POST /servers/{uuid}/validate`) as the first consumer. Requires the threat-model review in

@@ -52,7 +52,7 @@ secret visibility, token privilege, terminal session security, IP allowlist.
 - **Spoofable client IP (upstream).** `TrustProxies::$proxies = '*'` makes `X-Forwarded-For` authoritative for any
   peer, so the API IP allowlist (and IP-keyed rate limits) can be bypassed when the app is reachable directly.
   coolify-rs diverges (ADR 0006).
-- **No SSH host-key verification (upstream).** Recorded for the remote-execution milestone.
+- **No SSH host-key verification (upstream).** coolify-rs pins host keys on first use (ADR 0009).
 - Upstream tests run on SQLite and are not run in upstream CI, so security regressions are caught only by review.
 
 ## 4. Encryption at rest (compatibility requirement)
@@ -76,10 +76,10 @@ coolify-rs implements this format in `crates/coolify-compat/src/encrypter.rs`:
 | Compromised or demoted member's token | High | Membership and role re-checked on every request (implemented) |
 | Token theft from DB | Medium | Only sha256 stored; constant-time comparison (implemented) |
 | Secret exposure in logs | High | Secret-bearing types redact `Debug`; tracing never logs bearer tokens or request bodies (implemented for tokens/keys) |
-| Command injection via deployment inputs | High | Typed command builder with argv-level escaping (planned with the deployment slice; no shell exec exists yet) |
+| Command injection via deployment inputs | High | argv-only `ssh` spawning and quoted remote scripts (implemented for server validation, section 7); deployment inputs planned |
 | SSRF via webhook/S3/git URLs | High | Port `SafeWebhookUrl` semantics incl. DNS pinning (planned) |
 | Malicious Git repos / Dockerfiles | High | Builds happen on managed servers, never in the control plane (design rule) |
-| SSH MITM | Medium | TOFU host-key pinning (planned improvement over upstream; KNOWN_LIMITATIONS) |
+| SSH MITM | Medium | TOFU host-key pinning per server (implemented; section 7, ADR 0009) |
 | Resource exhaustion | Medium | Request body limit (2 MiB), timeouts, DB pool limits (implemented); rate limiting (planned) |
 | Insecure deserialization | Low | Only PHP serialized *strings* are parsed; anything else is rejected (implemented) |
 | Schema drift / migration failure | High | Startup schema guard compares the DB `migrations` table with the known upstream set; read-only by default (implemented) |
@@ -103,7 +103,35 @@ coolify-rs implements this format in `crates/coolify-compat/src/encrypter.rs`:
 - UI responses carry `Content-Security-Policy: default-src 'self'` (no inline scripts), `X-Frame-Options: DENY`,
   `nosniff`, `Referrer-Policy: same-origin`.
 
-## 7. Rules for contributors and automation
+## 7. Remote execution (coolify-rs)
+
+Design in ADR 0009. Code: `crates/coolify-remote`. Review done before implementation (2026-10-27).
+
+Assets: SSH private keys (root-equivalent access to every managed server), the control-plane host and its
+secrets (`APP_KEY`, database credentials), and the integrity of commands sent to servers.
+
+Actors: a team admin (may set a server's IP, user, port and key; may trigger validation), a team member (read
+only), a compromised or hostile managed server, a network attacker between the control plane and a server.
+
+| Threat | Control |
+|---|---|
+| Shell injection on the control plane through server fields | No local shell: `ssh` is spawned with an argv array; values are separate arguments; destination after `--` |
+| Option injection (`-oProxyCommand=…` as user or host) | `-l user -p port -- host`; whatever the database holds, the executor accepts only hosts of `[A-Za-z0-9.:_%-]` and users of `[A-Za-z0-9._-]` (upstream's API rule) that do not start with `-`, and ports 1–65535 |
+| Injection into the remote script | Scripts are fixed templates; any dynamic value goes through `shell::quote` (POSIX single quotes); the sudo rewrite is a port of upstream's, tested with upstream's cases |
+| Operator SSH config or environment changing behaviour | `-F /dev/null`; environment cleared except `PATH` and a private `HOME`; `IdentityAgent=none` |
+| Secrets leaking to `ssh`/`ProxyCommand` children | Cleared environment (no `APP_KEY`, `DB_PASSWORD`, `DATABASE_URL`) |
+| Key theft from disk | Decrypted only for a run, written 0600 in a 0700 directory under a random name, removed afterwards (and swept at startup); zeroized in memory; never in `Debug` or logs |
+| MITM / server impersonation | TOFU host-key pin per server; mismatch fails closed; pin reset only on IP/port change, server deletion, or by the operator |
+| Hostile server attacking the control plane | Agent and X11 forwarding off, all forwardings cleared, no local commands; stdout/stderr size caps; output decoded lossily and parsed strictly; deadlines on every run |
+| Stored XSS through `validation_logs` | SSH error text is HTML-escaped before it is stored (as upstream); the UI renders `validation_logs` through an allowlist sanitizer (text, `br`, `div`/`span` with class, `a` with http(s) href) |
+| Using validation to probe or brute-force hosts | Needs team admin + `write` token; connection check makes one attempt; one validation per server at a time; global SSH concurrency limit. Reaching private addresses stays possible by design (servers on a LAN), as upstream |
+| Resource exhaustion | Concurrency semaphore, deadlines, `kill_on_drop` |
+| Command or output disclosure in logs | Audit events carry server uuid, operation name, attempt, exit code and duration only |
+
+Residual risks: OpenSSH client vulnerabilities (keep the system package updated); TOFU accepts whatever key the
+first connection sees; background jobs are lost on restart; `audit_events` rows are not written yet.
+
+## 8. Rules for contributors and automation
 
 - Never log secret values; types holding secrets must not derive `Debug`.
 - Never interpolate untrusted input into a shell string; use argv arrays.

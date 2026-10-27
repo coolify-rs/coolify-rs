@@ -174,8 +174,17 @@ redirect (KNOWN_LIMITATIONS.md).
 
 ### Servers
 
-Not yet implemented. Recon notes: `PATCH /servers/{uuid}` returns **201**; server `id` is always hidden;
-`is_coolify_host` appended (id 0); delete of server 0 is refused.
+List, show, create, update and delete are implemented (see FEATURE_INVENTORY.md and tests/servers.rs):
+`PATCH /servers/{uuid}` returns **201**; server `id` is always hidden; `is_coolify_host` appended (id 0); delete of
+server 0 is refused.
+
+| Method | Path | Ability | Behaviour |
+|---|---|---|---|
+| POST | `/servers/{uuid}/validate` | write | 404 `Server not found.`; 403 for members; 422 for a transferred server or a non-boolean `install`; `install=true` needs `deploy` (403 `Missing required permissions: deploy. Installing the server ...`) and then answers 501 (not ported); otherwise **201** `{"message":"Validation started."}` and `ValidateServer` runs in the background |
+| GET | `/servers/{uuid}/validate` | write | 405 `{"message":"This endpoint has changed to a POST request."}` |
+
+The job writes `servers.validation_logs` (redacted and purified like upstream's mutator), `server_settings.is_reachable`,
+`is_usable`, `docker_version(_checked_at)` and `compose_version(_checked_at)` with upstream's dirty-check semantics.
 
 ## 6b. Browser-session bridge (coolify-rs)
 

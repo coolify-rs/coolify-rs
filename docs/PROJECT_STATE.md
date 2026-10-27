@@ -36,6 +36,11 @@ Verified = contract tests **and** 0 mismatches in the differential run against t
   server shared variables), `PATCH /servers/{uuid}` (Laravel `url`, PHP timezone list, poliander/cron ported),
   `DELETE /servers/{uuid}` (soft delete plus the force-delete cleanup). Rows written by either side are equal
   after normalization and upstream decrypts coolify-rs's secrets.
+- Remote execution (`coolify-remote`, ADR 0009) and server validation: `POST /servers/{uuid}/validate` and the UI
+  dialog run upstream's `ValidateServer` steps over the system `ssh`; for each scenario of the SSH test host (root,
+  real sudo, missing jq, missing Docker, old Docker, unreadable version, unsupported OS, refused login) the rows
+  written match the reference's (`compat/diff/validate_diff.py`, 8/8). `validation_logs` go through ports of
+  upstream's redactor and purifier.
 
 ## Implemented, verified by tests and a manual browser walkthrough
 
@@ -45,7 +50,8 @@ Verified = contract tests **and** 0 mismatches in the differential run against t
   switchers, drill-down sidebar, user menu, collapsed sidebar, phone sheet), dashboard, servers (list, new server
   by IP, General with the server menu, switcher and status chip, Danger Zone with password confirmation), projects, project,
   project settings, environment, environment settings, private keys (list, generate ED25519/RSA, add, edit, delete,
-  delete unused), team settings, members (roles, removal), appearance (theme, page width, navigation style).
+  delete unused), team settings, members (roles, removal), appearance (theme, page width, navigation style),
+  the server validation dialog (running, complete, failed) and the previous validation output.
   The `/ui/*` read models and writes behind them are covered by `ui_pages.rs`.
 
 ## Implemented, not yet verified end-to-end
@@ -58,17 +64,19 @@ Verified = contract tests **and** 0 mismatches in the differential run against t
 ## Evidence (reproduce)
 
 ```bash
-docker compose up -d --wait && ./scripts/test.sh          # 109 tests, fmt + clippy clean
+docker compose up -d --wait && ./scripts/testing-host-up.sh
+COOLIFY_RS_TEST_SSH=127.0.0.1:2223 COOLIFY_RS_TEST_SSH_KEY=compat/testing-host/secrets/id_ed25519 ./scripts/test.sh  # 171 tests
 (cd frontend && npm ci && npm run check && npm run build)  # UI type-check + build
 ./scripts/reference-up.sh && ./scripts/reference-seed.sh   # upstream sha-b5823c7 reference
 # coolify-rs on :18080 against the reference DB with APP_KEY (reference) and COOLIFY_RS_TRUSTED_PROXIES=127.0.0.1, then:
 python3 compat/diff/differential.py --tokens compat/reference/secrets/tokens.json --db-url postgres://coolify:...@127.0.0.1:15432/coolify
+python3 compat/diff/validate_diff.py                       # coolify-rs started with COOLIFY_RS_DATA_DIR
 ./scripts/verify-encrypter-interop.sh
 cargo test -p coolify-port --test route_parser_reference   # parser == artisan route:list (321 routes)
 ```
 
-Results on 2026-10-27: 124/124 tests passed; 183/183 differential cases matched on `main`; interop PASS; UI
-type-check clean; container image builds and serves UI + API.
+Results on 2026-10-27: 171/171 tests passed (live SSH tests included); 194/194 differential cases and 8/8
+validation scenarios matched on `main`; interop PASS; UI type-check clean; container image builds (with OpenSSH).
 
 ## Migration ledger
 
@@ -80,7 +88,7 @@ type-check clean; container image builds and serves UI + API.
 
 ## Architectural decisions
 
-ADRs 0001–0006 in `docs/decisions/`.
+ADRs 0001–0009 in `docs/decisions/`.
 
 ## Active branches
 
@@ -98,10 +106,11 @@ None.
 
 ## Next concrete actions
 
-1. Remote execution core (milestone 4, security review first), then server validation; `/resources` and
-   `/domains` with the resource models.
-2. Persist sessions in a `coolify_rs` schema; 2FA enrollment and recovery codes; API token management UI.
-3. Layer B template for "new column on a mapped table"; classifier calibration.
+1. `audit_events` rows (cross-cutting; upstream writes them for server validation and most writes).
+2. `/servers/{uuid}/resources` and `/domains` with the resource models; then the deployment engine (milestone 5),
+   with SSH multiplexing.
+3. Persist sessions in a `coolify_rs` schema; 2FA enrollment and recovery codes; API token management UI.
+4. Layer B template for "new column on a mapped table"; classifier calibration.
 
 ## Local environment notes
 

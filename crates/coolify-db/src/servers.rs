@@ -328,6 +328,7 @@ pub enum ColumnValue {
     Text(Option<String>),
     Int(i64),
     Bool(bool),
+    Time(chrono::NaiveDateTime),
 }
 
 fn bind_all<'q>(
@@ -339,6 +340,7 @@ fn bind_all<'q>(
             ColumnValue::Text(t) => q.bind(t),
             ColumnValue::Int(i) => q.bind(*i),
             ColumnValue::Bool(b) => q.bind(*b),
+            ColumnValue::Time(t) => q.bind(*t),
         };
     }
     q
@@ -380,6 +382,52 @@ pub async fn update_columns(
         .execute(db.pool())
         .await?;
     Ok(())
+}
+
+/// Which row an [`update_if_changed`] targets.
+#[derive(Debug, Clone, Copy)]
+pub enum Row {
+    Server(i64),
+    Settings(i64),
+}
+
+/// A model `save()` after attribute changes: writes the columns and
+/// `updated_at` only when at least one value differs from the stored row
+/// (Eloquent's dirty check). The changed columns are written all together,
+/// like `update([...])` with several attributes.
+pub async fn update_if_changed(
+    db: &Db,
+    row: Row,
+    values: &[(&'static str, ColumnValue)],
+    now: chrono::NaiveDateTime,
+) -> DbResult<bool> {
+    if values.is_empty() {
+        return Ok(false);
+    }
+    db.ensure_writable()?;
+    let (table, key) = match row {
+        Row::Server(id) => ("servers", id),
+        Row::Settings(id) => ("server_settings", id),
+    };
+    let key_col = if matches!(row, Row::Server(_)) {
+        "id"
+    } else {
+        "server_id"
+    };
+    let changed = values
+        .iter()
+        .enumerate()
+        .map(|(i, (col, _))| format!("\"{col}\" IS DISTINCT FROM ${}", i + 3))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    let sql = format!(
+        "UPDATE {table} SET {}, updated_at = $1 WHERE {key_col} = $2 AND ({changed})",
+        set_clause(values, 3)
+    );
+    let done = bind_all(sqlx::query(&sql).bind(now).bind(key), values)
+        .execute(db.pool())
+        .await?;
+    Ok(done.rows_affected() > 0)
 }
 
 /// `$server->settings()->update($values)`: a query-builder update, so it

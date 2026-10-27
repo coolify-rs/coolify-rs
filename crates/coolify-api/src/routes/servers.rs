@@ -34,7 +34,7 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 
 use crate::auth::AuthCtx;
-use crate::input::{Input, query_param, validated_json};
+use crate::input::{Input, lenient_json, query_param, validated_json};
 use crate::response::{ApiError, ApiResult, created, ok};
 use crate::serialize::{php_truthy, serialize_record};
 use crate::state::AppState;
@@ -838,6 +838,8 @@ pub async fn update(
             C::Int(_) => C::Int(raw(col).as_i64().unwrap_or(i64::MIN)),
             C::Text(_) => C::Text(raw_str(col)),
             C::Bool(_) => C::Bool(raw(col).as_bool().unwrap_or(false)),
+            // Not produced by this form.
+            C::Time(_) => return changes.push((col, new)),
         };
         if original != new {
             changes.push((col, new));
@@ -967,6 +969,12 @@ pub async fn update(
 
     let now = state.now();
     servers::update_columns(&state.db, s.id, &changes, now).await?;
+    // A new address means a new host: drop the pinned host key.
+    if changes.iter().any(|(c, _)| *c == "ip" || *c == "port")
+        && let Some(jobs) = &state.jobs
+    {
+        jobs.remote().forget_host_key(&s.uuid);
+    }
     if let Some(role) = role {
         servers::update_settings(
             &state.db,
@@ -1113,7 +1121,84 @@ pub async fn delete(
         return Err(ApiError::NotPorted);
     }
     servers::delete(&state.db, s.id, state.now()).await?;
+    if let Some(jobs) = &state.jobs {
+        jobs.remote().forget_host_key(&s.uuid);
+    }
     Ok(ok(json!({"message": "Server deleted."})).into_response())
+}
+
+/// `ServersController::validate_server`: starts `ValidateServer` in the
+/// background. Installing (`install=true`) is not ported.
+pub async fn validate_server(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> ApiResult {
+    let s = servers::find(&state.db, ctx.team_id, &uuid)
+        .await?
+        .ok_or(NOT_FOUND)?;
+    // `authorize('update', $server)`.
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Unauthorized);
+    }
+    if is_transferred(&s) {
+        return Err(ApiError::Message(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "This server was transferred to another Coolify instance and cannot be revalidated here.",
+        ));
+    }
+    let input = lenient_json(&headers, &uri, &body);
+    let present: Vec<&str> = input.keys().map(String::as_str).collect();
+    validate(
+        &input,
+        &[Field {
+            name: "install",
+            rules: vec![Rule::Boolean],
+        }],
+        crate::validation::CUSTOM_API_MESSAGES,
+        &present,
+    )?;
+    let install = input_bool(&input, "install");
+    if install {
+        deploy_forbidden(
+            &ctx,
+            "Missing required permissions: deploy. Installing the server runs commands on it and starts the proxy, so it needs a token with the deploy permission.",
+        )?;
+        // Installing prerequisites, Docker and the proxy is not ported.
+        return Err(ApiError::NotPorted);
+    }
+    // Refreshing a cloud provider's state before validating is not ported.
+    let linked = [
+        "vultr_instance_id",
+        "digitalocean_droplet_id",
+        "hostinger_virtual_machine_id",
+    ]
+    .iter()
+    .any(|k| s.record.get(*k).is_some_and(php_truthy));
+    let Some(jobs) = state.jobs.as_ref().filter(|_| !linked) else {
+        return Err(ApiError::NotPorted);
+    };
+    jobs.spawn_validation(s.id, s.team_id, s.uuid.clone(), coolify_jobs::Wording::Api);
+    tracing::info!(
+        target: "audit",
+        event = "api.server.validated",
+        team_id = ctx.team_id,
+        server_uuid = %s.uuid,
+        install,
+        "server validation started"
+    );
+    Ok(created(json!({"message": "Validation started."})).into_response())
+}
+
+pub(crate) fn is_transferred(s: &ServerRow) -> bool {
+    s.record
+        .get("server_metadata")
+        .and_then(|m| m.pointer("/transfer/status"))
+        .and_then(Value::as_str)
+        == Some("transferred")
 }
 
 #[cfg(test)]

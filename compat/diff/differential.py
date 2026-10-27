@@ -360,6 +360,13 @@ def main():
         u3 = made[-1][0]
         for q in ("?delete_from_provider=maybe", "?delete_from_provider=yes", "?force=1"):
             same(f"servers: delete {q}", "DELETE", f"/api/v1/servers/{u3}{q}", w)
+        # Validation responses that start no job (compat/diff/validate_diff.py covers the job).
+        same("servers: validate missing", "POST", "/api/v1/servers/nope/validate", w)
+        same("servers: validate with GET", "GET", f"/api/v1/servers/{u3}/validate", w)
+        same("servers: validate install not boolean", "POST", f"/api/v1/servers/{u3}/validate", w, {"install": "maybe"})
+        same("servers: validate install without deploy", "POST", f"/api/v1/servers/{u3}/validate", w, {"install": True})
+        same("servers: member cannot validate", "POST", f"/api/v1/servers/{u3}/validate", "acme_member_write_legacy")
+        same("servers: read token cannot validate", "POST", f"/api/v1/servers/{u3}/validate", "acme_owner_read")
         for label, client, (a_uuid, b_uuid) in (("rust deletes php servers", sub, (made[0][0], made[-1][0])),
                                                 ("php deletes rust servers", ref, (made[0][1], made[-1][1]))):
             for uuid in dict.fromkeys((a_uuid, b_uuid)):

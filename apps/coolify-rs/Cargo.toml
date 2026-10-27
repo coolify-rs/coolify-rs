@@ -14,6 +14,7 @@ clap.workspace = true
 coolify-api.workspace = true
 coolify-compat.workspace = true
 coolify-db.workspace = true
+coolify-remote.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tower.workspace = true

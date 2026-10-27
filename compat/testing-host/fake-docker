@@ -1,0 +1,16 @@
+#!/bin/sh
+# Stand-in for the Docker CLI: answers the commands server validation runs.
+version="${FAKE_DOCKER_VERSION:-28.0.1}"
+banner() { [ -n "$FAKE_DOCKER_BANNER" ] && echo "Welcome to the test host!"; }
+case "$*" in
+  "version --format json")
+    banner
+    printf '{"Client":{"Version":"%s"},"Server":{"Version":"%s","ApiVersion":"1.48"}}\n' "$version" "$version" ;;
+  "version")
+    banner
+    printf 'Client:\n Version: %s\n\nServer: Docker Engine - Community\n Engine:\n  Version: %s\n' "$version" "$version" ;;
+  "compose version") echo "Docker Compose version v2.38.2" ;;
+  "compose version --short") echo "2.38.2" ;;
+  "network create"*) exit 0 ;;
+  *) echo "fake docker: unsupported: $*" >&2; exit 1 ;;
+esac

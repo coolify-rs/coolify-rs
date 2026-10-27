@@ -69,6 +69,7 @@ const TOKENS: &[(&str, i64, &str, &str, Option<&str>)] = &[
 pub struct Harness {
     pub tdb: TestDb,
     pub app: Router,
+    pub state: AppState,
     tokens: Vec<(String, String)>,
 }
 
@@ -88,15 +89,25 @@ impl Harness {
     }
 
     async fn build(tdb: TestDb) -> Self {
-        Self::build_with(tdb, None).await
+        Self::build_with(tdb, None, None).await
     }
 
     /// A harness that also serves the web UI from `dir`.
     pub async fn with_ui(dir: std::path::PathBuf) -> Self {
-        Self::build_with(TestDb::new(SEED).await, Some(dir)).await
+        Self::build_with(TestDb::new(SEED).await, Some(dir), None).await
     }
 
-    async fn build_with(tdb: TestDb, ui_dir: Option<std::path::PathBuf>) -> Self {
+    /// A harness with remote execution (background jobs) enabled.
+    #[allow(dead_code)]
+    pub async fn with_remote(remote: coolify_remote::Remote) -> Self {
+        Self::build_with(TestDb::new(SEED).await, None, Some(remote)).await
+    }
+
+    async fn build_with(
+        tdb: TestDb,
+        ui_dir: Option<std::path::PathBuf>,
+        remote: Option<coolify_remote::Remote>,
+    ) -> Self {
         let mut tokens = Vec::new();
         for (i, (name, user, team, abilities, expires)) in TOKENS.iter().enumerate() {
             let plain = format!("{name}-secret-{i:02}");
@@ -122,11 +133,17 @@ impl Harness {
             Options {
                 encrypter: Some(Encrypter::new(APP_KEY).unwrap()),
                 ui_dir,
+                remote,
                 ..Options::default()
             },
         );
-        let app = coolify_api::router(state);
-        Self { tdb, app, tokens }
+        let app = coolify_api::router(state.clone());
+        Self {
+            tdb,
+            app,
+            state,
+            tokens,
+        }
     }
 
     pub fn token(&self, name: &str) -> &str {

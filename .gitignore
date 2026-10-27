@@ -4,3 +4,4 @@
 /.migration-runs/
 *.local.toml
 /compat/diff/last-report.json
+/compat/testing-host/secrets/

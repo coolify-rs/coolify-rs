@@ -16,6 +16,8 @@ coolify-compat = { path = "crates/coolify-compat" }
 coolify-db = { path = "crates/coolify-db" }
 coolify-api = { path = "crates/coolify-api" }
 coolify-port = { path = "crates/coolify-port" }
+coolify-remote = { path = "crates/coolify-remote" }
+coolify-jobs = { path = "crates/coolify-jobs" }
 
 anyhow = "1"
 axum = "0.8"
@@ -30,6 +32,7 @@ rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 regex = "1"
+fancy-regex = "0.14"
 bcrypt = "0.19"
 sha1 = "0.10"
 ssh-key = { version = "0.6", features = ["std", "ed25519", "rand_core"] }
@@ -40,11 +43,12 @@ subtle = "2"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "chrono", "json", "macros", "migrate"] }
 tempfile = "3"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "time", "process", "fs"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "time", "process", "fs", "io-util", "sync"] }
 toml = "0.8"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace", "request-id", "timeout", "cors", "limit", "fs", "set-header"] }
 tracing = "0.1"
+zeroize = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 http-body-util = "0.1"
 
