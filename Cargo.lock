@@ -464,11 +464,13 @@ dependencies = [
 name = "coolify-jobs"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "coolify-compat",
  "coolify-db",
  "coolify-domain",
  "coolify-remote",
+ "md-5",
  "regex",
  "serde",
  "serde_json",

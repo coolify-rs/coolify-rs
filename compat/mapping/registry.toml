@@ -417,3 +417,64 @@ divergences = [
   "the UI does not install, does not ask before revalidating, and starts neither the proxy nor Sentinel afterwards",
   "Reachable/Unreachable notifications and audit_events rows are not written",
 ]
+
+[[component]]
+id = "databases.postgresql"
+title = "Standalone PostgreSQL: API, lifecycle jobs, status checks and the UI pages"
+status = "verified"
+upstream.paths = [
+  "app/Http/Controllers/Api/DatabasesController.php",
+  "app/Models/StandalonePostgresql.php",
+  "app/Actions/Database/StartDatabase.php",
+  "app/Actions/Database/StartPostgresql.php",
+  "app/Actions/Database/StopDatabase.php",
+  "app/Actions/Database/RestartDatabase.php",
+  "app/Jobs/DatabaseStartJob.php",
+  "app/Jobs/DeleteResourceJob.php",
+  "app/Services/DatabaseStartCommandExecutor.php",
+  "app/Services/ResourceStatusRefresher.php",
+  "app/Actions/Docker/GetContainersStatus.php",
+  "app/Traits/ExecutesDatabaseStartCommands.php",
+  "app/Traits/HasDatabaseHealthCheck.php",
+  "app/Livewire/Project/Resource/Index.php",
+  "app/Livewire/Project/Resource/Create.php",
+  "app/Livewire/Project/New/Select.php",
+  "app/Livewire/Project/Database/Configuration.php",
+  "app/Livewire/Project/Database/Heading.php",
+  "app/Livewire/Project/Database/Postgresql/General.php",
+  "app/Livewire/Project/Shared/Danger.php",
+  "resources/views/livewire/project/resource/index.blade.php",
+  "resources/views/livewire/project/new/select.blade.php",
+  "resources/views/livewire/project/database/**",
+  "resources/views/components/database/configuration-sidebar.blade.php",
+  "vendor/symfony/yaml/Dumper.php",
+  "vendor/symfony/yaml/Inline.php",
+  "vendor/symfony/yaml/Escaper.php",
+]
+upstream.symbols = [
+  "bootstrap/helpers/databases.php::create_standalone_postgresql()",
+  "bootstrap/helpers/docker.php::defaultDatabaseLabels()",
+  "bootstrap/helpers/docker.php::dockerStopCommand()",
+  "bootstrap/helpers/docker.php::serverDockerConfigPrefix()",
+  "bootstrap/helpers/shared.php::queryDatabaseByUuidWithinTeam()",
+  "bootstrap/helpers/shared.php::coolifyDefaultEnvironmentVariables()",
+]
+upstream.tables = ["standalone_postgresqls", "local_persistent_volumes", "activity_log", "standalone_dockers"]
+rust.paths = [
+  "crates/coolify-db/src/databases.rs",
+  "crates/coolify-jobs/src/databases.rs",
+  "crates/coolify-api/src/routes/databases.rs",
+  "crates/coolify-api/src/ui_databases.rs",
+  "crates/coolify-compat/src/yaml.rs",
+  "frontend/src/pages/Database.svelte",
+  "frontend/src/pages/ResourceNew.svelte",
+  "frontend/src/pages/Environment.svelte",
+  "frontend/src/components/Database*.svelte",
+]
+rust.tests = ["crates/coolify-api/tests/databases.rs", "crates/coolify-compat/tests/symfony_yaml.rs", "compat/diff/databases_diff.py"]
+rust.packages = ["coolify-db", "coolify-jobs", "coolify-api", "coolify-compat"]
+divergences = [
+  "only PostgreSQL; other engines, PATCH, backups, environment variables, storages, tags, imports, logs answer 501",
+  "public TCP proxy, SSL and init script upload are not ported (501, disabled in the UI)",
+  "jobs run in-process; no Docker cleanup after stop; Str::slug does not transliterate non-ASCII",
+]

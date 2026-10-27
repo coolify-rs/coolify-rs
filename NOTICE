@@ -25,6 +25,8 @@ frontend/src/upstream/ contains files copied unmodified from Coolify main @ b582
 frontend/src/upstream/reicons.ts is generated from resources/views/components/reicon.blade.php.
 frontend/public/svgs/{discord,telegram,slack,pushover}.svg are copied from Coolify's public/svgs
 (trademarks of their owners, used as navigation icons as upstream does).
+frontend/public/svgs/resources/*.svg (database and source logos) are copied from Coolify's
+public/svgs/resources; the logos are trademarks of their owners.
 The Svelte pages in frontend/src reproduce the markup of Coolify's Blade views.
 
 Validation messages, naming patterns and error strings reproduced in

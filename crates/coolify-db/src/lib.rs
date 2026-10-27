@@ -12,6 +12,7 @@
 
 pub mod auth;
 pub mod dashboard;
+pub mod databases;
 pub mod instance;
 pub mod private_keys;
 pub mod projects;

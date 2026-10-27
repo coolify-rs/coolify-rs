@@ -3,18 +3,21 @@
 A Rust implementation of [Coolify](https://github.com/coollabsio/coolify)'s API and data model, plus a migration
 engine that tracks upstream Coolify and ports its changes. *Working name; not affiliated with coolLabs.*
 
-**Status: early.** 35 of 321 upstream API operations are implemented and verified against the official
-`coollabsio/coolify` image built from upstream `main` @ b5823c7 (`sha-b5823c7`). A web UI that reproduces upstream's interface covers what is ported (dashboard, projects, environments, private keys, team). Servers can be added and validated over SSH; there is no deployment engine, proxy management or resource management yet. See
+**Status: early.** 45 of 321 upstream API operations are implemented and verified against the official
+`coollabsio/coolify` image built from upstream `main` @ b5823c7 (`sha-b5823c7`). A web UI that reproduces upstream's interface covers what is ported (dashboard, projects, environments, private keys, team). Servers can be added and validated over SSH, and PostgreSQL databases can be created, started, stopped, restarted and deleted on them; there is no deployment engine (applications), service templates or proxy management yet. See
 [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md) and [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 
 ## What works
 
 - Upstream-compatible `/api`: token auth chain (Sanctum tokens, team binding, API switch, IP allowlist, abilities),
-  teams, projects and environments, private keys, servers (records and validation), health/version/disable. Response bodies are byte-identical to
+  teams, projects and environments, private keys, servers (records and validation), PostgreSQL databases (list, show, create, start, stop, restart, delete), health/version/disable. Response bodies are byte-identical to
   upstream for all 194 differential cases.
 - Remote execution over the system OpenSSH client with pinned host keys, ephemeral key files and a cleared environment
   (ADR 0009). Server validation (API and UI) writes the same rows and messages as upstream for every scenario of the
   SSH test host (8/8, `compat/diff/validate_diff.py`).
+- PostgreSQL databases run on managed servers: the Docker Compose file coolify-rs writes is byte-identical to the one
+  upstream writes for the same database, and rows, responses and errors match (41/41, `compat/diff/databases_diff.py`,
+  run against a real VM). Container statuses are refreshed every minute, as upstream's server check does.
 - Web UI (`frontend/`, Svelte): a port of upstream Coolify's interface (same layout, navigation, URLs, markup and
   vendored stylesheet; coolify-rs's own name and logo) for sign-in with 2FA, team switching, the dashboard, projects,
   environments, private keys (including key generation), team settings and member roles, and appearance settings.
@@ -80,6 +83,7 @@ git clone --bare --no-single-branch https://github.com/coollabsio/coolify .upstr
 python3 compat/diff/differential.py --tokens compat/reference/secrets/tokens.json [--db-url postgres://...]
 ./scripts/testing-host-up.sh         # SSH test host on 127.0.0.1:2223 (also joins the reference network)
 python3 compat/diff/validate_diff.py # server validation: reference vs coolify-rs (needs COOLIFY_RS_DATA_DIR set)
+python3 compat/diff/databases_diff.py --server <uuid> --vm <orbstack machine>  # databases on a real, validated server
 ```
 
 The live SSH tests run when `COOLIFY_RS_TEST_SSH=127.0.0.1:2223` and

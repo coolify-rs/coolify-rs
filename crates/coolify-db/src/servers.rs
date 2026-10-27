@@ -70,6 +70,17 @@ pub async fn list_by_name(db: &Db, team_id: TeamId) -> DbResult<Vec<ServerRow>> 
     rows.iter().map(|(s, st)| row(s, st.as_deref())).collect()
 }
 
+/// `$destination->server` (belongsTo; soft-deleted servers excluded).
+pub async fn find_by_id(db: &Db, id: i64) -> DbResult<Option<ServerRow>> {
+    let r: Option<(String, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT row_to_json(s)::text, {SETTINGS} FROM servers s WHERE s.id = $1 AND s.deleted_at IS NULL LIMIT 1"
+    ))
+    .bind(id)
+    .fetch_optional(db.pool())
+    .await?;
+    r.map(|(s, st)| row(&s, st.as_deref())).transpose()
+}
+
 /// UUIDs of every server that is not soft-deleted (all teams).
 pub async fn live_uuids(db: &Db) -> DbResult<Vec<String>> {
     Ok(
@@ -340,7 +351,7 @@ pub enum ColumnValue {
     Time(chrono::NaiveDateTime),
 }
 
-fn bind_all<'q>(
+pub(crate) fn bind_all<'q>(
     mut q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
     values: &'q [(&'static str, ColumnValue)],
 ) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
@@ -355,7 +366,7 @@ fn bind_all<'q>(
     q
 }
 
-fn set_clause(values: &[(&'static str, ColumnValue)], first_param: usize) -> String {
+pub(crate) fn set_clause(values: &[(&'static str, ColumnValue)], first_param: usize) -> String {
     values
         .iter()
         .enumerate()

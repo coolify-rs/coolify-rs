@@ -49,6 +49,13 @@ options, ControlMaster multiplexing, timeouts/retries (exit 255 only), TOFU host
 validation (`POST /servers/{uuid}/validate`) as the first consumer. Requires the threat-model review in
 SECURITY_MODEL.md and an isolated test host container (upstream's `docker/testing-host` is a good model).
 
+## Milestone 4b: standalone databases (session 7)
+
+Done: PostgreSQL end to end (API, Compose generation byte-identical to upstream, start/stop/restart/delete jobs with
+activity logs, status refresh and minute status checks, UI: environment resource list, new-resource picker, database
+page). Next: the other engines (Redis, MySQL, MariaDB, MongoDB, KeyDB, Dragonfly, ClickHouse) follow the same pattern;
+then the public TCP proxy, environment variables, `PATCH /databases/{uuid}`, backups.
+
 ## Milestone 5: deployment engine
 
 Explicit state machine over `application_deployment_queues` (status strings and log JSON unchanged), queue admission

@@ -322,6 +322,10 @@ async fn main() -> Result<()> {
                     remote,
                 },
             );
+            if let Some(jobs) = &state.jobs {
+                // Container statuses of databases, every minute (upstream's ServerManagerJob).
+                jobs.spawn_status_poller();
+            }
             let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
             axum::serve(
                 listener,

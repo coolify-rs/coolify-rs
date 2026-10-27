@@ -5,6 +5,8 @@
 //! restarts, and one validation per server runs at a time.
 
 pub mod checks;
+pub mod databases;
+pub mod server;
 mod validate;
 
 use std::collections::{HashMap, HashSet};
@@ -42,6 +44,8 @@ struct Inner {
     encrypter: Option<Encrypter>,
     running: Mutex<HashSet<i64>>,
     progress: Mutex<HashMap<i64, Progress>>,
+    /// Databases with a start or restart in progress (`DatabaseOperationReservation`).
+    db_ops: Mutex<HashSet<String>>,
 }
 
 impl Jobs {
@@ -52,6 +56,7 @@ impl Jobs {
             encrypter,
             running: Mutex::new(HashSet::new()),
             progress: Mutex::new(HashMap::new()),
+            db_ops: Mutex::new(HashSet::new()),
         }))
     }
 
@@ -59,7 +64,7 @@ impl Jobs {
         &self.0.remote
     }
 
-    fn now() -> NaiveDateTime {
+    pub(crate) fn now() -> NaiveDateTime {
         Utc::now().naive_utc().trunc_subsecs(0)
     }
 

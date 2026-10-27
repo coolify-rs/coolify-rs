@@ -5,68 +5,16 @@
 //! and in what happens after success (proxy start, server details), which
 //! coolify-rs does not port.
 
-use coolify_compat::DecryptError;
-use coolify_db::private_keys;
-use coolify_db::records::Record;
 use coolify_db::servers::{self, ColumnValue, Row};
-use coolify_remote::{PrivateKey, RunOptions, Target};
-use serde_json::Value;
+use coolify_remote::{RunOptions, Target};
 
 use crate::checks::{self, Wording};
+use crate::server::ServerInfo as Server;
 use crate::{Jobs, Progress};
-
-/// Upstream `Server::PLACEHOLDER_IPS`.
-const PLACEHOLDER_IPS: &[&str] = &["1.2.3.4", "0.0.0.0", "::"];
-
-struct Server {
-    id: i64,
-    team_id: i64,
-    uuid: String,
-    ip: String,
-    user: String,
-    port: i64,
-    private_key_id: Option<i64>,
-    settings: Record,
-}
-
-impl Server {
-    fn setting_bool(&self, key: &str) -> Option<bool> {
-        self.settings.get(key).and_then(Value::as_bool)
-    }
-    fn is_build_server(&self) -> bool {
-        match self.settings.get("server_role").and_then(Value::as_str) {
-            Some(role) => role == "build",
-            None => self.setting_bool("is_build_server") == Some(true),
-        }
-    }
-    /// `skipServer()`.
-    fn skipped(&self) -> bool {
-        self.ip.is_empty()
-            || PLACEHOLDER_IPS.contains(&self.ip.as_str())
-            || self.setting_bool("force_disabled") == Some(true)
-    }
-}
 
 /// `Server::setValidationLogsAttribute`: redacted, then purified.
 fn stored_logs(message: &str) -> String {
     coolify_compat::purify::validation_logs(&coolify_compat::redact::redact_text(message, &[], &[]))
-}
-
-fn str_of(r: &Record, k: &str) -> String {
-    match r.get(k) {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) => n.to_string(),
-        _ => String::new(),
-    }
-}
-
-/// Laravel `DecryptException` messages.
-fn decrypt_message(e: &DecryptError) -> &'static str {
-    match e {
-        DecryptError::InvalidPayload => "The payload is invalid.",
-        DecryptError::InvalidMac => "The MAC is invalid.",
-        DecryptError::DecryptionFailed => "Could not decrypt the data.",
-    }
 }
 
 pub(crate) async fn run(
@@ -84,24 +32,10 @@ pub(crate) async fn run(
     if row.id != server_id {
         return Err("Server not found.".into());
     }
-    let r = &row.record;
-    let s = Server {
-        id: row.id,
-        team_id: row.team_id,
-        uuid: row.uuid.clone(),
-        ip: str_of(r, "ip"),
-        user: str_of(r, "user"),
-        port: r.get("port").and_then(Value::as_i64).unwrap_or(22),
-        private_key_id: r.get("private_key_id").and_then(Value::as_i64),
-        settings: row.settings.clone().unwrap_or_default(),
-    };
+    let s = Server::from_row(&row);
+    let transferred = s.transferred;
     let v = Validation { jobs, s, wording };
 
-    let transferred = r
-        .get("server_metadata")
-        .and_then(|m| m.pointer("/transfer/status"))
-        .and_then(Value::as_str)
-        == Some("transferred");
     if transferred {
         v.server_columns(&[
             (
@@ -161,38 +95,8 @@ impl Validation<'_> {
         Err(message)
     }
 
-    /// `PrivateKey::where('team_id', $server->team_id)->findOrFail($server->private_key_id)`, decrypted.
     async fn target(&self) -> Result<Target, String> {
-        let key_id = self.s.private_key_id.unwrap_or_default();
-        let key = private_keys::find_by_id(&self.jobs.0.db, self.s.team_id, key_id)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| {
-                format!("No query results for model [App\\Models\\PrivateKey] {key_id}")
-            })?;
-        let enc = self
-            .jobs
-            .0
-            .encrypter
-            .as_ref()
-            .ok_or("No application encryption key has been specified.")?;
-        let pem = enc
-            .decrypt_string(&key.private_key_encrypted)
-            .map_err(|e| decrypt_message(&e).to_owned())?;
-        Ok(Target {
-            server_uuid: self.s.uuid.clone(),
-            host: self.s.ip.clone(),
-            port: self.s.port,
-            user: self.s.user.clone(),
-            key: PrivateKey::new(key.uuid, pem),
-            connection_timeout: self
-                .s
-                .settings
-                .get("connection_timeout")
-                .and_then(Value::as_i64),
-            cloudflare_tunnel: self.s.setting_bool("is_cloudflare_tunnel") == Some(true),
-            force_disabled: self.s.setting_bool("force_disabled") == Some(true),
-        })
+        self.s.target(self.jobs).await
     }
 
     async fn steps(&self) -> Result<(), String> {

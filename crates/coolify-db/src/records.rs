@@ -217,6 +217,91 @@ pub static SERVER: ModelSpec = ModelSpec {
     ],
 };
 
+/// `standalone_dockers` (a destination).
+pub static STANDALONE_DOCKER: ModelSpec = ModelSpec {
+    table: "standalone_dockers",
+    known: &[
+        "id",
+        "name",
+        "uuid",
+        "network",
+        "server_id",
+        "created_at",
+        "updated_at",
+    ],
+    hidden: &[],
+    timestamps: &["created_at", "updated_at"],
+    datetimes: &["created_at", "updated_at"],
+};
+
+/// `standalone_postgresqls`. `postgres_password` (encrypted) and
+/// `init_scripts` are model-hidden; the API layer re-adds them for
+/// `can_read_sensitive`.
+pub static STANDALONE_POSTGRESQL: ModelSpec = ModelSpec {
+    table: "standalone_postgresqls",
+    known: &[
+        "id",
+        "uuid",
+        "name",
+        "description",
+        "postgres_user",
+        "postgres_password",
+        "postgres_db",
+        "postgres_initdb_args",
+        "postgres_host_auth_method",
+        "init_scripts",
+        "status",
+        "image",
+        "is_public",
+        "public_port",
+        "ports_mappings",
+        "limits_memory",
+        "limits_memory_swap",
+        "limits_memory_swappiness",
+        "limits_memory_reservation",
+        "limits_cpus",
+        "limits_cpuset",
+        "limits_cpu_shares",
+        "started_at",
+        "destination_type",
+        "destination_id",
+        "environment_id",
+        "created_at",
+        "updated_at",
+        "postgres_conf",
+        "is_log_drain_enabled",
+        "is_include_timestamps",
+        "deleted_at",
+        "config_hash",
+        "custom_docker_run_options",
+        "last_online_at",
+        "enable_ssl",
+        "ssl_mode",
+        "restart_count",
+        "last_restart_at",
+        "last_restart_type",
+        "public_port_timeout",
+        "health_check_enabled",
+        "health_check_interval",
+        "health_check_timeout",
+        "health_check_retries",
+        "health_check_start_period",
+        "redact_all_env_values_in_logs",
+        "include_coolify_default_variables",
+    ],
+    hidden: &["postgres_password", "init_scripts"],
+    timestamps: &[
+        "started_at",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+        "last_online_at",
+        "last_restart_at",
+    ],
+    // SoftDeletes plus the `last_restart_at` datetime cast.
+    datetimes: &["created_at", "updated_at", "deleted_at", "last_restart_at"],
+};
+
 /// `server_settings` (hidden attributes applied by the API layer, as for servers).
 pub static SERVER_SETTING: ModelSpec = ModelSpec {
     table: "server_settings",

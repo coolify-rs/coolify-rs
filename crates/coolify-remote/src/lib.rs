@@ -11,5 +11,6 @@ pub mod sudo;
 pub mod text;
 
 pub use exec::{
-    HostKeyPolicy, PrivateKey, Remote, RemoteConfig, RemoteError, RunOptions, SetupError, Target,
+    HostKeyPolicy, PrivateKey, Remote, RemoteConfig, RemoteError, RunOptions, SetupError, Stream,
+    Tap, Target,
 };

@@ -59,6 +59,8 @@ pub enum ApiError {
     Unauthorized,
     /// `{"message": ...}` with an arbitrary status.
     Message(StatusCode, &'static str),
+    /// `abort($status, $message)`: Laravel's exception handler, pretty-printed JSON.
+    Abort(StatusCode, &'static str),
     /// 422 `{"message":"Validation failed.","errors":{...}}`
     Validation(serde_json::Map<String, Value>),
     /// 422 Laravel `ValidationException` (message = first error).
@@ -93,7 +95,17 @@ impl From<coolify_db::DbError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if let Self::Abort(status, m) = self {
+            let body = php_json::encode_pretty(&json!({"message": m}));
+            let mut res = (status, body).into_response();
+            res.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            return res;
+        }
         let (status, body) = match self {
+            Self::Abort(..) => unreachable!("handled above"),
             Self::Unauthenticated => (
                 StatusCode::UNAUTHORIZED,
                 json!({"message": "Unauthenticated."}),

@@ -163,6 +163,26 @@ impl RemoteError {
     }
 }
 
+/// Which output stream a streamed chunk came from (Symfony Process `out`/`err`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stream {
+    Out,
+    Err,
+}
+
+impl Stream {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Stream::Out => "out",
+            Stream::Err => "err",
+        }
+    }
+}
+
+/// Receives output while a command runs, in chunks that end at a line break
+/// (the last chunk may not).
+pub type Tap = tokio::sync::mpsc::UnboundedSender<(Stream, String)>;
+
 #[derive(Debug, Clone)]
 pub struct Remote {
     cfg: Arc<RemoteConfig>,
@@ -261,7 +281,7 @@ impl Remote {
         let mut last = RemoteError::new("SSH command failed with exit code: ", None);
         for attempt in 0..attempts {
             match self
-                .run_once(target, &script, timeout, opts.op, attempt + 1)
+                .run_once(target, &script, timeout, opts.op, attempt + 1, None)
                 .await
             {
                 Ok(stdout) => return Ok(command_output(&stdout)),
@@ -279,6 +299,27 @@ impl Remote {
             }
         }
         Err(last)
+    }
+
+    /// One attempt with live output, as upstream's `DatabaseStartCommandExecutor`
+    /// runs a database start. Returns stdout when the command succeeds.
+    pub async fn run_streaming(
+        &self,
+        target: &Target,
+        commands: &[String],
+        opts: RunOptions,
+        tap: Tap,
+    ) -> Result<String, RemoteError> {
+        let mut lines: Vec<String> = commands.to_vec();
+        if target.is_non_root() && !opts.no_sudo {
+            lines = parse_commands_by_line_for_sudo(&lines, &target.user);
+        }
+        let script = Zeroizing::new(lines.join("\n"));
+        let timeout = opts.timeout.unwrap_or(self.cfg.command_timeout);
+        let out = self
+            .run_once(target, &script, timeout, opts.op, 1, Some(&tap))
+            .await?;
+        Ok(sanitize_utf8(&out))
     }
 
     /// `instant_remote_process(..., throwError: false)`: failures become no output.
@@ -415,6 +456,7 @@ impl Remote {
         timeout: Duration,
         op: &'static str,
         attempt: u32,
+        tap: Option<&Tap>,
     ) -> Result<Vec<u8>, RemoteError> {
         let known_hosts = self.check_target(t)?;
         let _permit = self
@@ -444,8 +486,8 @@ impl Remote {
             };
             let (_, out, err) = tokio::join!(
                 write,
-                read_capped(stdout, STDOUT_CAP),
-                read_capped(stderr, STDERR_CAP)
+                read_capped(stdout, STDOUT_CAP, tap.map(|t| (t, Stream::Out))),
+                read_capped(stderr, STDERR_CAP, tap.map(|t| (t, Stream::Err)))
             );
             let status = child.wait().await;
             (status, out, err)
@@ -541,15 +583,39 @@ fn exit_code(status: std::process::ExitStatus) -> Option<i32> {
 }
 
 /// Reads up to `cap` bytes and discards the rest, so the child never blocks on a full pipe.
-async fn read_capped(mut r: impl AsyncRead + Unpin, cap: usize) -> Vec<u8> {
+async fn read_capped(
+    mut r: impl AsyncRead + Unpin,
+    cap: usize,
+    tap: Option<(&Tap, Stream)>,
+) -> Vec<u8> {
     let mut out = Vec::new();
+    let mut pending: Vec<u8> = Vec::new();
     let mut buf = [0u8; 8192];
+    let send = |bytes: &[u8]| {
+        if let Some((t, stream)) = tap
+            && !bytes.is_empty()
+        {
+            let _ = t.send((stream, sanitize_utf8(bytes)));
+        }
+    };
     loop {
         match r.read(&mut buf).await {
-            Ok(0) | Err(_) => return out,
+            Ok(0) | Err(_) => {
+                send(&pending);
+                return out;
+            }
             Ok(n) => {
                 let room = cap.saturating_sub(out.len());
                 out.extend_from_slice(&buf[..n.min(room)]);
+                if tap.is_some() {
+                    pending.extend_from_slice(&buf[..n]);
+                    // Whole lines only, so a secret is never split between two chunks.
+                    if let Some(end) = pending.iter().rposition(|b| *b == b'\n' || *b == b'\r') {
+                        let rest = pending.split_off(end + 1);
+                        send(&pending);
+                        pending = rest;
+                    }
+                }
             }
         }
     }

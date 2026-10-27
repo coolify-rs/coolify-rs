@@ -28,6 +28,24 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/ui/timezones", get(timezones))
         .route("/ui/servers/{uuid}/delete", post(delete_server_form))
         .route(
+            "/ui/projects/{project}/environments/{env}/resources",
+            get(crate::ui_databases::resources),
+        )
+        .route("/ui/destinations", get(crate::ui_databases::destinations))
+        .route("/ui/databases", post(crate::ui_databases::create))
+        .route(
+            "/ui/databases/{uuid}",
+            axum::routing::patch(crate::ui_databases::update),
+        )
+        .route(
+            "/ui/databases/{uuid}/state",
+            get(crate::ui_databases::state),
+        )
+        .route(
+            "/ui/databases/{uuid}/delete",
+            post(crate::ui_databases::delete),
+        )
+        .route(
             "/ui/servers/{uuid}/validation",
             get(validation_state).post(start_validation),
         )
@@ -614,7 +632,10 @@ async fn create_server_form(
 /// `disable_two_step_confirmation`; the password step unless that, or the user
 /// has no password or signs in through SSO (`shouldSkipPasswordConfirmation`;
 /// coolify-rs keeps no "recently confirmed" session flag).
-async fn confirmation_steps(state: &AppState, user_id: i64) -> Result<(bool, bool), ApiError> {
+pub(crate) async fn confirmation_steps(
+    state: &AppState,
+    user_id: i64,
+) -> Result<(bool, bool), ApiError> {
     let disabled = coolify_db::users::two_step_confirmation_disabled(&state.db).await?;
     if disabled {
         return Ok((false, false));
@@ -628,7 +649,7 @@ async fn confirmation_steps(state: &AppState, user_id: i64) -> Result<(bool, boo
 }
 
 /// `verifyPasswordConfirmation`.
-async fn password_confirmed(
+pub(crate) async fn password_confirmed(
     state: &AppState,
     user_id: i64,
     password: Option<&str>,

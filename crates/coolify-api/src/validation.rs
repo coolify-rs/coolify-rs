@@ -34,6 +34,10 @@ pub enum Rule {
     Url,
     /// `in:a,b,c` (string comparison).
     In(&'static [&'static str]),
+    /// `numeric` (PHP `is_numeric`).
+    Numeric,
+    /// `array`.
+    Array,
     /// A rule object: returns the failure message (`:attribute` substituted).
     Custom(fn(&Value) -> Option<&'static str>),
 }
@@ -76,6 +80,8 @@ fn message(field: &str, rule: &str, messages: Messages, param: Option<usize>) ->
             "min.numeric" => "The :attribute field must be at least :min.".into(),
             "max.numeric" => "The :attribute field must not be greater than :max.".into(),
             "url" => "The :attribute field must be a valid URL.".into(),
+            "numeric" => "The :attribute field must be a number.".into(),
+            "array" => "The :attribute field must be an array.".into(),
             _ => "The :attribute field format is invalid.".into(),
         });
     let template = template.replace(":attribute", &attribute(field));
@@ -271,6 +277,21 @@ pub fn validate(
                 Rule::In(options) => {
                     if !options.contains(&php_string(v).as_str()) {
                         push(f.name, message(f.name, "in", messages, None));
+                    }
+                }
+                Rule::Numeric => {
+                    let numeric = match v {
+                        Value::Number(_) => true,
+                        Value::String(s) => coolify_compat::yaml::php_is_numeric(s),
+                        _ => false,
+                    };
+                    if !numeric {
+                        push(f.name, message(f.name, "numeric", messages, None));
+                    }
+                }
+                Rule::Array => {
+                    if !(v.is_array() || v.is_object()) {
+                        push(f.name, message(f.name, "array", messages, None));
                     }
                 }
                 Rule::Custom(check) => {

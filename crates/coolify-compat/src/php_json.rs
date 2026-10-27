@@ -14,6 +14,46 @@ pub fn encode(value: &Value) -> String {
     out
 }
 
+/// `json_encode($v, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)`, as Laravel's
+/// exception handler renders `abort()` responses for JSON clients.
+pub fn encode_pretty(value: &Value) -> String {
+    let mut out = String::new();
+    write_pretty(&mut out, value, 0);
+    out
+}
+
+fn write_pretty(out: &mut String, v: &Value, depth: usize) {
+    let pad = |n: usize| "    ".repeat(n);
+    match v {
+        Value::Array(items) if !items.is_empty() => {
+            out.push_str("[\n");
+            for (i, item) in items.iter().enumerate() {
+                out.push_str(&pad(depth + 1));
+                write_pretty(out, item, depth + 1);
+                out.push_str(if i + 1 < items.len() { ",\n" } else { "\n" });
+            }
+            out.push_str(&pad(depth));
+            out.push(']');
+        }
+        Value::Object(map) if !map.is_empty() => {
+            out.push_str("{\n");
+            for (i, (k, item)) in map.iter().enumerate() {
+                out.push_str(&pad(depth + 1));
+                out.push_str(&encode(&Value::String(k.clone())).replace("\\/", "/"));
+                out.push_str(": ");
+                write_pretty(out, item, depth + 1);
+                out.push_str(if i + 1 < map.len() { ",\n" } else { "\n" });
+            }
+            out.push_str(&pad(depth));
+            out.push('}');
+        }
+        Value::Array(_) => out.push_str("[]"),
+        Value::Object(_) => out.push_str("{}"),
+        Value::String(_) => out.push_str(&encode(v).replace("\\/", "/")),
+        other => out.push_str(&encode(other)),
+    }
+}
+
 fn write_value(out: &mut String, v: &Value) {
     match v {
         Value::Null => out.push_str("null"),
@@ -73,6 +113,19 @@ fn write_string(out: &mut String, s: &str) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn pretty_print_like_laravel_abort() {
+        // Bytes from the reference (`abort(403, ...)` with Accept: application/json).
+        assert_eq!(
+            encode_pretty(&json!({"message": "Missing required permissions: deploy"})),
+            "{\n    \"message\": \"Missing required permissions: deploy\"\n}"
+        );
+        assert_eq!(
+            encode_pretty(&json!({"a": [1, {"b": "x/y"}], "c": [], "d": {}})),
+            "{\n    \"a\": [\n        1,\n        {\n            \"b\": \"x/y\"\n        }\n    ],\n    \"c\": [],\n    \"d\": {}\n}"
+        );
+    }
 
     #[test]
     fn matches_php_default_flags() {

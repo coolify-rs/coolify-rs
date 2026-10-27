@@ -12,7 +12,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   management, and every page for servers, resources, sources, storages, notifications and tags (they open a "not
   available in coolify-rs yet" page).
 - Within the ported pages: no canvas views, global search, project icons, team avatars or custom color themes;
-  an environment that has resources says so instead of listing them; the dashboard's server status does not include
+  applications and services in an environment are counted, not listed; the dashboard's server status does not include
   the Traefik-outdated and Sentinel checks; table/grid choices are remembered per browser, not per user.
 - Browser sessions live in memory: a restart signs everyone out. Session limits: 10,000 sessions, 7-day idle
   (`SESSION_LIFETIME`), 30-day absolute.
@@ -27,6 +27,10 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   "install them manually" messages, and after success coolify-rs neither fetches the server details nor starts the
   proxy or Sentinel (upstream does all three).
 - Validation jobs run inside the coolify-rs process: a restart drops a running validation (upstream's queue keeps it).
+- Databases: only PostgreSQL. Making a database public (TCP proxy), SSL, init script upload, environment variables,
+  file storages, backups, imports, container logs, terminal, metrics, tags, custom Docker run options at start, and
+  `PATCH /databases/{uuid}` are not ported (501, or disabled in the UI). After a start coolify-rs does not run Docker
+  cleanup, and `Str::slug` in container labels does not transliterate non-ASCII names.
   Reachability changes do not send the Reachable/Unreachable notifications.
 - Server status in the UI and in `/ui/*` omits the Sentinel and Traefik-update checks.
 - `sentinel_custom_url` for a new server falls back to the request's scheme and host; `X-Forwarded-*` count only
@@ -52,6 +56,8 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 | Remote output size | unbounded | stdout capped at 16 MiB, stderr at 1 MiB | memory safety against a hostile server |
 | Validation throttle on Coolify Cloud | per-IP and per-team limits | none | coolify-rs is self-hosted only (upstream applies none there either) |
 | Environment details with resources | applications/databases/services serialized with sensitive-field rules | `501` | refusing is safer than partial or unfiltered data |
+| `abort()` responses for clients that do not ask for JSON | Laravel's HTML error page | the JSON body upstream sends to JSON clients (pretty-printed, as upstream) | API clients |
+| Database start/stop/restart/delete jobs | Redis queue (Horizon), activity rows | tokio tasks in the coolify-rs process; same activity rows | a restart of coolify-rs drops a running job |
 | Validation of non-string values for string fields | Laravel continues evaluating min/max/regex | only "must be a string" is reported | rare; documented |
 | Concurrent duplicate environment names | unique index violation → 500 | 409 | improvement |
 | Multi-row writes (project create/delete) | model hooks, no transaction | single transaction | improvement; same end state |
