@@ -263,11 +263,31 @@ export interface ServerDetail {
   validation_logs?: string | null;
 }
 
+/** Checkpoints of a validation (`ValidateAndInstall` properties); `null` = not reached. */
+export interface ValidationProgress {
+  running: boolean;
+  uptime: boolean | null;
+  supported_os_type: boolean | null;
+  prerequisites_installed: boolean | null;
+  docker_installed: boolean | null;
+  docker_compose_installed: boolean | null;
+  docker_version: boolean | null;
+  error: string | null;
+}
+
+export interface ValidationState {
+  progress: ValidationProgress | null;
+  validation_logs: string | null;
+  available: boolean;
+}
+
 export const serversUi = {
   timezones: () => request<string[]>('GET', '/ui/timezones'),
   list: () => request<ServersPageData>('GET', '/ui/servers'),
   form: () => request<{ keys: { id: number; name: string }[]; name: string }>('GET', '/ui/servers/form'),
   create: (body: Record<string, unknown>) => request<{ uuid: string }>('POST', '/ui/servers', body),
+  validation: (uuid: string) => request<ValidationState>('GET', `/ui/servers/${encodeURIComponent(uuid)}/validation`),
+  validate: (uuid: string) => request<{ started: boolean }>('POST', `/ui/servers/${encodeURIComponent(uuid)}/validation`),
   remove: (uuid: string, password: string, actions: string[]) =>
     request<{ message: string }>('POST', `/ui/servers/${encodeURIComponent(uuid)}/delete`, { password, actions }),
 };

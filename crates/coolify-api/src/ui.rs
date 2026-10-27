@@ -28,6 +28,10 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/ui/timezones", get(timezones))
         .route("/ui/servers/{uuid}/delete", post(delete_server_form))
         .route(
+            "/ui/servers/{uuid}/validation",
+            get(validation_state).post(start_validation),
+        )
+        .route(
             "/ui/team/members/{id}",
             axum::routing::delete(remove_member),
         )
@@ -643,6 +647,77 @@ async fn password_confirmed(
 }
 
 /// `Livewire\Server\Delete::delete($password, $selectedActions)`.
+/// `Livewire\Server\Show::validateServer` followed by `ValidateAndInstall`
+/// without installing: runs the validation job with the component's wording.
+async fn start_validation(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    use axum::http::StatusCode;
+    let server = coolify_db::servers::find(&state.db, ctx.team_id, &uuid)
+        .await?
+        .ok_or(ApiError::Message(
+            StatusCode::NOT_FOUND,
+            "Server not found.",
+        ))?;
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Unauthorized);
+    }
+    if crate::routes::servers::is_transferred(&server) {
+        return Err(ApiError::Message(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "This server was transferred to another Coolify instance. Manage it from the target instance instead.",
+        ));
+    }
+    // Refreshing a cloud provider's state first is not ported.
+    let linked = [
+        "vultr_instance_id",
+        "digitalocean_droplet_id",
+        "hostinger_virtual_machine_id",
+    ]
+    .iter()
+    .any(|k| {
+        server
+            .record
+            .get(*k)
+            .is_some_and(crate::serialize::php_truthy)
+    });
+    let Some(jobs) = state.jobs.as_ref().filter(|_| !linked) else {
+        return Err(ApiError::NotPorted);
+    };
+    let started = jobs.spawn_validation(
+        server.id,
+        server.team_id,
+        server.uuid.clone(),
+        coolify_jobs::Wording::Ui,
+    );
+    tracing::info!(target: "audit", event = "server.validated", team_id = ctx.team_id, server_uuid = %server.uuid, "server validation started");
+    Ok(ok(json!({"started": started})).into_response())
+}
+
+/// Checkpoints of the latest validation and the stored `validation_logs`.
+async fn validation_state(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    use axum::http::StatusCode;
+    let server = coolify_db::servers::find(&state.db, ctx.team_id, &uuid)
+        .await?
+        .ok_or(ApiError::Message(
+            StatusCode::NOT_FOUND,
+            "Server not found.",
+        ))?;
+    let progress = state.jobs.as_ref().and_then(|j| j.progress(server.id));
+    Ok(ok(json!({
+        "progress": progress,
+        "validation_logs": server.record.get("validation_logs"),
+        "available": state.jobs.is_some(),
+    }))
+    .into_response())
+}
+
 async fn delete_server_form(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,

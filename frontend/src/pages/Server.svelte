@@ -1,8 +1,7 @@
 <script lang="ts">
-  // Port of upstream livewire/server/show.blade.php (General). Validating the
-  // connection, fetching server details and cloud provider links need SSH or
-  // provider APIs, which coolify-rs does not have yet; the localhost server's
-  // page is not ported.
+  // Port of upstream livewire/server/show.blade.php (General). Validation runs
+  // over SSH (ADR 0009); fetching server details and cloud provider links are
+  // not ported yet, nor is the localhost server's page.
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
   import FormInput from '../components/FormInput.svelte';
@@ -12,8 +11,11 @@
   import SettingsSection from '../components/SettingsSection.svelte';
   import ConfirmModal from '../components/ConfirmModal.svelte';
   import ServerLayout from '../components/ServerLayout.svelte';
+  import ProcessDialog from '../components/ProcessDialog.svelte';
+  import ValidateServer from '../components/ValidateServer.svelte';
+  import { sanitizeHtml } from '../lib/sanitize';
   import Unported from './Unported.svelte';
-  import { api, serversUi, ApiError, type ServerDetail, type ServerFacts } from '../lib/api';
+  import { api, serversUi, ApiError, type ServerDetail, type ServerFacts, type ValidationProgress } from '../lib/api';
   import { loadServerContext } from '../lib/serverPage.svelte';
   import { session } from '../lib/session.svelte';
   import { notify } from '../lib/toast.svelte';
@@ -33,6 +35,10 @@
   let saving = $state(false);
   let error = $state<ApiError | null>(null);
   let confirmBoth = $state(false);
+  let validating = $state(false);
+  let progress = $state<ValidationProgress | null>(null);
+  let validationLogs = $state<string | null>(null);
+  let poll: ReturnType<typeof setTimeout> | undefined;
 
   const canEdit = $derived(session.isAdmin);
   const dirty = $derived(!!form && !!saved && JSON.stringify(form) !== JSON.stringify(saved));
@@ -61,6 +67,8 @@
     form = { ...f };
     role = d.settings.server_role ?? (d.settings.is_build_server ? 'build' : 'both');
     committedRole = role;
+    const v = await serversUi.validation(uuid);
+    validationLogs = v.validation_logs;
   }
   $effect(() => {
     void uuid;
@@ -115,6 +123,45 @@
     saveRole(next);
   }
 
+  /** `validateServer`, then the component's checkpoints until the job ends. */
+  async function validate() {
+    clearTimeout(poll);
+    progress = null;
+    validating = true;
+    try {
+      await serversUi.validate(uuid);
+    } catch (e) {
+      validating = false;
+      if (e instanceof ApiError && e.status === 501) {
+        notify.info('Not available in coolify-rs yet', 'Validating this server needs a feature coolify-rs does not have yet.');
+      } else {
+        notify.error('Cannot revalidate', e instanceof ApiError ? e.message : String(e));
+      }
+      return;
+    }
+    watch();
+  }
+
+  async function watch() {
+    const v = await serversUi.validation(uuid);
+    progress = v.progress;
+    validationLogs = v.validation_logs;
+    if (v.progress?.running) {
+      poll = setTimeout(watch, 1000);
+      return;
+    }
+    if (v.progress && !v.progress.error) {
+      notify.ok('Server validated.');
+      await load();
+    } else {
+      // The flags may have changed either way.
+      const ctx = await loadServerContext(uuid, 'general');
+      if (ctx) facts = ctx.facts;
+    }
+  }
+
+  $effect(() => () => clearTimeout(poll));
+
   const err = (k: string) => error?.field(k);
 </script>
 
@@ -148,7 +195,8 @@
               type="button"
               class="button"
               {...facts?.functional ? {} : { ishighlighted: '' }}
-              onclick={() => notify.info('Not available in coolify-rs yet', 'Validating a server needs SSH, which coolify-rs does not run yet.')}
+              disabled={!canEdit}
+              onclick={validate}
             >
               <Reicon name={facts?.functional ? 'refresh' : 'alert-circle'} class="size-3.5" />
               {facts?.functional ? 'Revalidate connection' : 'Validate connection'}
@@ -253,9 +301,23 @@
             </div>
           </div>
         </SettingsSection>
+
+        {#if validationLogs}
+          <SettingsSection title="Previous validation output" description="The latest output produced while checking this server.">
+            <div class="max-h-72 overflow-auto rounded-lg bg-neutral-950 p-4 font-mono text-xs leading-5 text-neutral-300">
+              {@html sanitizeHtml(validationLogs)}
+            </div>
+          </SettingsSection>
+        {/if}
       </form>
     {/if}
   </ServerLayout>
+{/if}
+
+{#if validating}
+  <ProcessDialog title="Validate and configure" closeWithX mobileFullscreen size="xl" onclose={() => (validating = false)}>
+    <ValidateServer {progress} canRetry={canEdit} onretry={validate} onclose={() => (validating = false)} />
+  </ProcessDialog>
 {/if}
 
 {#if confirmBoth}
