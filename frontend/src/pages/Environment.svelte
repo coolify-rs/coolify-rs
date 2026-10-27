@@ -1,11 +1,18 @@
 <script lang="ts">
   // Port of upstream livewire/project/resource/index.blade.php. coolify-rs
-  // has no resource APIs yet, so an environment with resources says so
-  // instead of listing them.
+  // lists the environment's databases it can show (`dbUi.resources`); the
+  // other resources (applications, services, unported database kinds) are
+  // counted in a note instead of listed. Upstream's canvas view is left out.
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
-  import { uiApi, ApiError, type ProjectPageData } from '../lib/api';
+  import Dropdown from '../components/Dropdown.svelte';
+  import Pager from '../components/Pager.svelte';
+  import ViewToggle from '../components/ViewToggle.svelte';
+  import ResourceLogo from '../components/ResourceLogo.svelte';
+  import ResourceStatus, { statusLabel, statusState } from '../components/ResourceStatus.svelte';
+  import { uiApi, dbUi, ApiError, type ProjectPageData, type DatabaseRecord } from '../lib/api';
   import { link } from '../lib/router.svelte';
+  import { listView } from '../lib/listview.svelte';
   import { setProjectCrumbs } from '../lib/crumbs';
 
   let { uuid, env }: { uuid: string; env: string } = $props();
@@ -13,6 +20,10 @@
   let data = $state<ProjectPageData | null>(null);
   let missing = $state(false);
   const environment = $derived(data?.environments.find((e) => e.uuid === env));
+
+  // The environment's resources: null while loading, 'unavailable' when the
+  // read model is not there (the page then says resources cannot be shown).
+  let resources = $state<{ databases: DatabaseRecord[]; unported: number } | 'unavailable' | null>(null);
 
   $effect(() => {
     uiApi
@@ -31,8 +42,170 @@
         if (e instanceof ApiError && e.status === 404) missing = true;
         else throw e;
       });
+    dbUi
+      .resources(uuid, env)
+      .then((r) => (resources = r))
+      .catch((e) => {
+        if (e instanceof ApiError && e.status === 404) resources = 'unavailable';
+        else throw e;
+      });
   });
+
+  // toSearchableArray() in app/Livewire/Project/Resource/Index.php, for databases.
+  interface Item {
+    uuid: string;
+    name: string;
+    type: string;
+    typeLabel: string;
+    databaseType: string;
+    description: string | null;
+    status: string;
+    restartLimitReached: boolean;
+    restartCount: number;
+    maxRestartCount: number;
+    hrefLink: string;
+    server: string;
+    tags: { id: number | string; name: string }[];
+  }
+
+  function toItem(db: DatabaseRecord): Item {
+    const limitReached = String(db.status ?? '').startsWith('exited') && db.restart_limit_reached === true;
+    const restartCount = Number(db.restart_count ?? 0);
+    const maxRestartCount = Number(db.max_restart_count ?? 0);
+    const tags = Array.isArray(db.tags) ? (db.tags as { id: number | string; name: string }[]) : [];
+    return {
+      uuid: db.uuid,
+      name: db.name,
+      type: 'database',
+      typeLabel: 'Database',
+      databaseType: db.database_type,
+      description: db.description ?? null,
+      status: db.status ?? '',
+      restartLimitReached: limitReached,
+      restartCount: limitReached ? Math.max(restartCount, maxRestartCount) : restartCount,
+      maxRestartCount,
+      hrefLink: `/project/${uuid}/environment/${env}/database/${db.uuid}`,
+      server: db.destination?.server?.name || 'Unknown',
+      tags,
+    };
+  }
+
+  const items = $derived(resources && resources !== 'unavailable' ? resources.databases.map(toItem) : []);
+  const unported = $derived(resources && resources !== 'unavailable' ? resources.unported : 0);
+  // Upstream's `$environment->isEmpty()`: the resource list when there is one, else the project's count.
+  const isEmpty = $derived(
+    resources && resources !== 'unavailable' ? items.length + unported === 0 : environment?.resources === 0,
+  );
+
+  let search = $state('');
+  let typeFilters = $state<string[]>([]);
+  let tagFilters = $state<string[]>([]);
+  let serverFilters = $state<string[]>([]);
+  let statusFilters = $state<string[]>([]);
+  let sortBy = $state('name-asc');
+  let page = $state(1);
+  let pageSize = $state(10);
+  const view = listView('environment', 'table');
+
+  type FilterKey = 'typeFilters' | 'tagFilters' | 'serverFilters' | 'statusFilters';
+  type Option = { value: string; label: string };
+
+  function uniqueOptions(options: Option[]): Option[] {
+    return [...new Map(options.filter((o) => o.value).map((o) => [o.value, o])).values()].sort((a, b) => a.label.localeCompare(b.label));
+  }
+
+  const filterGroups = $derived<{ key: FilterKey; label: string; options: Option[] }[]>([
+    { key: 'typeFilters', label: 'Resource types', options: uniqueOptions(items.map((i) => ({ value: i.type, label: i.typeLabel }))) },
+    { key: 'tagFilters', label: 'Tags', options: uniqueOptions(items.flatMap((i) => i.tags.map((t) => ({ value: t.name, label: t.name })))) },
+    { key: 'serverFilters', label: 'Servers', options: uniqueOptions(items.map((i) => ({ value: i.server, label: i.server }))) },
+    { key: 'statusFilters', label: 'Statuses', options: uniqueOptions(items.map((i) => ({ value: statusState(i), label: statusLabel(i) }))) },
+  ]);
+
+  function selected(key: FilterKey): string[] {
+    return { typeFilters, tagFilters, serverFilters, statusFilters }[key];
+  }
+  function setSelected(key: FilterKey, value: string[]) {
+    if (key === 'typeFilters') typeFilters = value;
+    else if (key === 'tagFilters') tagFilters = value;
+    else if (key === 'serverFilters') serverFilters = value;
+    else statusFilters = value;
+  }
+  function toggleFilter(key: FilterKey, value: string) {
+    const current = selected(key);
+    setSelected(key, current.includes(value) ? current.filter((v) => v !== value) : [...current, value]);
+    page = 1;
+  }
+  function clearFilters() {
+    typeFilters = [];
+    tagFilters = [];
+    serverFilters = [];
+    statusFilters = [];
+    page = 1;
+  }
+
+  const activeFilterCount = $derived(typeFilters.length + tagFilters.length + serverFilters.length + statusFilters.length);
+  const filterButtonText = $derived.by(() => {
+    const labels = filterGroups.flatMap((g) => g.options.filter((o) => selected(g.key).includes(o.value)).map((o) => o.label));
+    if (labels.length === 0) return 'Filter';
+    if (labels.length === 1) return labels[0];
+    return `${labels[0]} +${labels.length - 1}`;
+  });
+
+  const sortOptions = [
+    { value: 'name-asc', label: 'Name A–Z' },
+    { value: 'name-desc', label: 'Name Z–A' },
+    { value: 'type', label: 'Resource type' },
+    { value: 'status', label: 'Status' },
+  ];
+
+  const filtered = $derived.by(() => {
+    const query = search.trim().toLowerCase();
+    const list = items.filter((item) => {
+      const matchesType = typeFilters.length === 0 || typeFilters.includes(item.type);
+      const matchesTags = tagFilters.length === 0 || item.tags.some((t) => tagFilters.includes(t.name));
+      const matchesServer = serverFilters.length === 0 || serverFilters.includes(item.server);
+      const matchesStatus = statusFilters.length === 0 || statusFilters.includes(statusState(item));
+      const searchable = [item.name, item.description, item.typeLabel, item.status, item.server, ...item.tags.map((t) => t.name)]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return matchesType && matchesTags && matchesServer && matchesStatus && (!query || searchable.includes(query));
+    });
+    return list.sort((a, b) => {
+      if (sortBy === 'name-desc') return b.name.localeCompare(a.name);
+      if (sortBy === 'type') return a.typeLabel.localeCompare(b.typeLabel) || a.name.localeCompare(b.name);
+      if (sortBy === 'status') return statusLabel(a).localeCompare(statusLabel(b)) || a.name.localeCompare(b.name);
+      return a.name.localeCompare(b.name);
+    });
+  });
+  const totalPages = $derived(Math.max(1, Math.ceil(filtered.length / pageSize)));
+  $effect.pre(() => {
+    if (page > totalPages) page = totalPages;
+  });
+  const paginated = $derived(filtered.slice((page - 1) * pageSize, page * pageSize));
+
+  const tagLink =
+    'relative max-w-24 truncate rounded-md border border-neutral-200 bg-neutral-50 px-1.5 py-0.5 text-[10px] text-neutral-500 hover:text-black dark:border-white/[0.08] dark:bg-white/[0.035] dark:text-fg-faint dark:hover:text-fg';
 </script>
+
+{#snippet noMatches(cls: string)}
+  <div class="flex min-h-52 flex-col items-center justify-center px-6 text-center {cls}">
+    <Reicon name="search" class="mb-3 size-6 text-neutral-300 dark:text-fg-faint" />
+    <p class="text-[13px] font-medium">No matching resources</p>
+    <p class="mt-1 text-[12px] text-neutral-500 dark:text-fg-dim">Try a different search or filter.</p>
+  </div>
+{/snippet}
+
+{#snippet unportedNote()}
+  {#if unported > 0}
+    <p class="mt-3 flex items-center gap-1.5 text-[12px] text-neutral-500 dark:text-fg-dim">
+      <Reicon name="info-circle" class="size-3.5 shrink-0 text-neutral-400 dark:text-fg-faint" />
+      {unported}
+      {unported === 1 ? 'other resource is' : 'other resources are'} not available in coolify-rs yet. Manage {unported === 1 ? 'it' : 'them'} in Coolify
+      for now.
+    </p>
+  {/if}
+{/snippet}
 
 {#if missing}
   <div class="application-settings-form w-full">
@@ -88,7 +261,7 @@
         </div>
       </header>
 
-      {#if environment.resources === 0}
+      {#if isEmpty}
         <Empty title="No resources yet" description="Add an application, database, or service to this environment." iconName="layers">
           {#snippet contents()}
             {#if data?.can_create}
@@ -99,12 +272,257 @@
             {/if}
           {/snippet}
         </Empty>
-      {:else}
+      {:else if resources === 'unavailable' || (resources && items.length === 0)}
         <Empty
           title="Resources are not available in coolify-rs yet"
           description="This environment has resources. Manage them in Coolify for now."
           iconName="layers"
         />
+      {:else if resources}
+        <div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="relative w-full sm:max-w-sm">
+            <Reicon
+              name="search"
+              class="pointer-events-none absolute top-1/2 left-2.5 z-10 size-3.5 -translate-y-1/2 text-neutral-400 dark:text-fg-faint"
+            />
+            <input
+              bind:value={search}
+              oninput={() => (page = 1)}
+              type="search"
+              placeholder="Search resources"
+              class="h-8! w-full rounded-lg! border-neutral-200! bg-white! py-0! pr-8! pl-8! text-[12px]! shadow-none! placeholder:text-neutral-400 focus:border-accent! focus:ring-0! dark:border-white/[0.08]! dark:bg-white/[0.035]! dark:text-fg! dark:placeholder:text-fg-faint"
+            />
+            {#if search}
+              <button
+                onclick={() => ((search = ''), (page = 1))}
+                type="button"
+                class="absolute top-1/2 right-2 flex size-5 -translate-y-1/2 items-center justify-center rounded text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-black dark:text-fg-faint dark:hover:bg-white/[0.07] dark:hover:text-fg"
+                aria-label="Clear search"
+              >
+                <span class="text-sm leading-none">×</span>
+              </button>
+            {/if}
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <Dropdown panelClass="w-64! overflow-hidden! p-0!">
+              {#snippet trigger({ open })}
+                <button
+                  type="button"
+                  class="button max-w-64 {activeFilterCount > 0 ? 'button-highlighted' : ''}"
+                  title={activeFilterCount > 0 ? filterButtonText : 'Filter'}
+                  aria-haspopup="listbox"
+                  aria-expanded={open}
+                >
+                  <svg class="size-3.5 opacity-65" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M4 6h16M7 12h10M10 18h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+                  </svg>
+                  <span class="truncate">{activeFilterCount > 0 ? filterButtonText : 'Filter'}</span>
+                  {#if activeFilterCount > 0}
+                    <span
+                      class="shrink-0 rounded-full bg-neutral-100 px-1.5 py-0.5 text-[10px] font-medium text-neutral-500 dark:bg-white/[0.07] dark:text-fg-dim"
+                      >{activeFilterCount}</span
+                    >
+                  {/if}
+                </button>
+              {/snippet}
+              {#snippet children()}
+                <div class="max-h-80 overflow-y-auto p-1">
+                  {#each filterGroups as group (group.key)}
+                    {#if group.options.length > 0}
+                      <div>
+                        <div class="px-2 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-400 dark:text-fg-faint">
+                          {group.label}
+                        </div>
+                        {#each group.options as option (`${group.key}-${option.value}`)}
+                          {@const on = selected(group.key).includes(option.value)}
+                          <button type="button" class="listbox-option" onclick={() => toggleFilter(group.key, option.value)}>
+                            <span class="min-w-0 flex-1 truncate">{option.label}</span>
+                            <span
+                              class="flex size-4 shrink-0 items-center justify-center rounded-[5px] border {on
+                                ? 'border-coollabs bg-coollabs text-white dark:border-brand dark:bg-brand dark:text-white'
+                                : 'border-neutral-300 bg-white dark:border-white/[0.14] dark:bg-white/[0.045]'}"
+                            >
+                              {#if on}
+                                <svg class="size-3" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                                  <path
+                                    d="m2.25 6.15 2.35 2.3 5.15-5"
+                                    stroke="currentColor"
+                                    stroke-width="1.8"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                  />
+                                </svg>
+                              {/if}
+                            </span>
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  {/each}
+                </div>
+                <div class="border-t border-neutral-200 bg-white p-1 dark:border-white/10 dark:bg-raised">
+                  <button type="button" class="listbox-option justify-center! text-center!" onclick={clearFilters}>Clear filters</button>
+                </div>
+              {/snippet}
+            </Dropdown>
+
+            <Dropdown panelClass="w-48!">
+              {#snippet trigger({ open })}
+                <button type="button" class="button" aria-haspopup="listbox" aria-expanded={open}>
+                  <svg class="size-3.5 opacity-65" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path
+                      d="M8 5v14m0 0-3-3m3 3 3-3M16 19V5m0 0-3 3m3-3 3 3"
+                      stroke="currentColor"
+                      stroke-width="1.7"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                  Sort
+                </button>
+              {/snippet}
+              {#snippet children({ close })}
+                {#each sortOptions as option (option.value)}
+                  <button
+                    type="button"
+                    class="flex h-9 w-full items-center rounded-md px-2 text-left text-[12px] text-neutral-600 transition-colors hover:bg-neutral-100 hover:text-black dark:text-fg-dim dark:hover:bg-white/[0.06] dark:hover:text-fg"
+                    onclick={() => ((sortBy = option.value), close(), (page = 1))}
+                  >
+                    <span class="flex-1">{option.label}</span>
+                    {#if sortBy === option.value}
+                      <svg class="size-3.5 text-black dark:text-fg" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                        <path d="m2.5 6.25 2.1 2.1 4.9-5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+                      </svg>
+                    {/if}
+                  </button>
+                {/each}
+              {/snippet}
+            </Dropdown>
+
+            <ViewToggle bind:mode={() => view.mode, (m) => ((view.mode = m), (page = 1))} />
+          </div>
+        </div>
+
+        {#if view.mode === 'grid'}
+          <div>
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {#each paginated as item (item.uuid)}
+                <article
+                  class="group relative flex min-h-28 flex-col rounded-xl border border-neutral-200 bg-white p-3 shadow-sm transition-all hover:-translate-y-px hover:border-neutral-300 hover:shadow-md dark:border-white/[0.08] dark:bg-white/[0.05] dark:hover:border-white/[0.14]"
+                >
+                  <a href={item.hrefLink} use:link class="absolute inset-0 rounded-xl" aria-label="Open {item.name}"></a>
+                  <div class="flex items-start gap-3">
+                    <div
+                      class="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-fg-dim"
+                    >
+                      <ResourceLogo databaseType={item.databaseType} />
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <div class="flex min-w-0 items-center gap-1.5">
+                        <h2 class="truncate text-[13px]! leading-4! font-semibold! text-black dark:text-fg">{item.name}</h2>
+                      </div>
+                      <p class="mt-0.5 text-[11px] text-neutral-500 dark:text-fg-faint">{item.typeLabel}</p>
+                    </div>
+                    <ResourceStatus {item} />
+                  </div>
+                  <div class="mt-auto flex min-w-0 flex-col gap-0.5 pt-4">
+                    <p class="min-h-4 truncate text-[11px] text-neutral-500 dark:text-fg-faint">
+                      {#if item.description}<span>{item.description}</span>{/if}
+                    </p>
+                  </div>
+                </article>
+              {/each}
+            </div>
+
+            {#if filtered.length === 0}
+              {@render noMatches(
+                'rounded-xl border border-neutral-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.05]',
+              )}
+            {:else}
+              <Pager
+                total={filtered.length}
+                bind:page
+                bind:pageSize
+                storageKey="coolify.page-size.environment-resources"
+                class="mt-3 rounded-xl border border-neutral-200 bg-white shadow-sm dark:border-white/[0.08] dark:bg-white/[0.05]"
+              />
+            {/if}
+          </div>
+        {:else}
+          <div class="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm dark:border-white/[0.08] dark:bg-white/[0.05]">
+            <div
+              class="environment-resource-grid border-b border-neutral-200 bg-neutral-50 px-4 py-2.5 text-[11px] font-medium text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-fg-faint"
+            >
+              <div>Resource</div>
+              <div class="resource-type">Type</div>
+              <div>Status</div>
+              <div class="resource-domain">Domain</div>
+              <div class="resource-server">Server</div>
+              <div class="resource-tags">Tags</div>
+            </div>
+
+            {#each paginated as item (item.uuid)}
+              <div
+                class="environment-resource-grid group relative min-h-14 items-center border-b border-neutral-200 px-4 py-2.5 transition-colors last:border-b-0 hover:bg-neutral-50 dark:border-white/[0.07] dark:hover:bg-white/[0.025]"
+              >
+                <a href={item.hrefLink} use:link class="absolute inset-0" aria-label="Open {item.name}"></a>
+                <div class="flex min-w-0 items-center gap-3">
+                  <div
+                    class="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.035] dark:text-fg-dim"
+                  >
+                    <ResourceLogo databaseType={item.databaseType} />
+                  </div>
+                  <div class="min-w-0">
+                    <div class="flex min-w-0 items-center gap-1.5">
+                      <a
+                        href={item.hrefLink}
+                        use:link
+                        class="relative block truncate text-[13px] font-semibold text-black hover:underline dark:text-fg">{item.name}</a
+                      >
+                    </div>
+                    {#if item.description?.trim()}
+                      <p class="truncate text-[11px] text-neutral-500 dark:text-fg-faint">{item.description}</p>
+                    {/if}
+                    <div class="mobile-resource-domain min-w-0"></div>
+                  </div>
+                </div>
+
+                <div class="resource-type truncate text-[12px] text-neutral-600 dark:text-fg-dim">{item.typeLabel}</div>
+
+                <div>
+                  <ResourceStatus {item} />
+                </div>
+
+                <div class="resource-domain min-w-0">
+                  <span class="text-[12px] text-neutral-400 dark:text-fg-faint">-</span>
+                </div>
+
+                <div class="resource-server truncate text-[12px] text-neutral-600 dark:text-fg-dim">{item.server}</div>
+
+                <div class="resource-tags flex min-w-0 items-center gap-1 overflow-hidden">
+                  {#each item.tags.slice(0, 2) as tag (tag.id)}
+                    <a href="/tags/{tag.name}" use:link class={tagLink}>{tag.name}</a>
+                  {/each}
+                  {#if item.tags.length > 2}
+                    <span class="text-[10px] text-neutral-400 dark:text-fg-faint">+{item.tags.length - 2}</span>
+                  {/if}
+                  {#if item.tags.length === 0}
+                    <span class="text-[12px] text-neutral-400 dark:text-fg-faint">-</span>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+
+            {#if filtered.length === 0}
+              {@render noMatches('')}
+            {:else}
+              <Pager total={filtered.length} bind:page bind:pageSize storageKey="coolify.page-size.environment-resources" />
+            {/if}
+          </div>
+        {/if}
+
+        {@render unportedNote()}
       {/if}
     </div>
   </div>

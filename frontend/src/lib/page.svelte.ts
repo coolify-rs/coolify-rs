@@ -25,6 +25,8 @@ export interface NavContextItem {
   /** Shown greyed out, not a link ("Validate the server connection first."). */
   disabled?: boolean;
   beta?: boolean;
+  /** Sections of the active page the entry lists below itself (`.nav-children`), by element id. */
+  children?: { id: string; label: string }[];
 }
 
 /** A resource menu the main sidebar shows instead of the main menu

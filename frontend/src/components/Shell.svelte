@@ -69,6 +69,9 @@
           {#if page.server}<ServerTopbar server={page.server} />{/if}
         </div>
       </div>
+      <!-- Resource pages teleport into these (layouts/app.blade.php). -->
+      <div id="configuration-warning-hud-slot" class="relative shrink-0"></div>
+      <div id="resource-action-hud-slot" class="hidden shrink-0 items-center xl:flex"></div>
     </div>
   </header>
 
@@ -147,6 +150,7 @@
       </div>
     </div>
     <div class="flex shrink-0 items-center gap-1">
+      <div id="configuration-warning-hud-slot-mobile" class="relative shrink-0"></div>
       <UserMenu />
       <button
         type="button"

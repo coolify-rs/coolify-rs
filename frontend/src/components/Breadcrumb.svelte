@@ -7,7 +7,10 @@
   import { router, link } from '../lib/router.svelte';
 
   const context = $derived(dashboardContext(router.path));
-  const switchers = $derived(router.current.name.startsWith('project') || router.current.name.startsWith('environment') ? page.switchers : []);
+  // Pages inside a project (its environments and their resources) show the switchers they set.
+  const inProject = (name: string) =>
+    ['project', 'environment', 'resource', 'database'].some((prefix) => name.startsWith(prefix));
+  const switchers = $derived(inProject(router.current.name) ? page.switchers : []);
 
   // Hide the section name when the page heading right below already says it.
   let titleRepeats = $state(false);

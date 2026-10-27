@@ -1,8 +1,7 @@
 <script lang="ts">
   // Port of upstream components/process-dialog.blade.php (the dialog; the
   // trigger is rendered by the caller), teleported to <body> as upstream does.
-  // The running/finished/failed chips
-  // only show for activity logs, which the validation dialog has none of.
+  // The running/finished/failed chips show only around an activity log.
   import type { Snippet } from 'svelte';
   import Reicon from './Reicon.svelte';
   import { portal } from '../lib/portal';
@@ -58,6 +57,23 @@
         <header class="flex-nowrap!">
           <div class="flex min-w-0 flex-1 items-center gap-2">
             <h3 id="process-dialog-title" class="min-w-0 truncate">{title}</h3>
+            <!-- Shown by the vendored CSS from the activity monitor's data-activity-status. -->
+            <div
+              class="process-dialog-status process-dialog-status-running text-accent! inline-flex items-center justify-center gap-2 text-[13px] text-neutral-500 dark:text-fg-dim"
+              role="status"
+              aria-live="polite"
+            >
+              <svg class="loading-indicator shrink-0 animate-spin size-3" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle class="opacity-20" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" />
+                <path class="opacity-80" d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              </svg>
+            </div>
+            <span class="process-dialog-status process-dialog-status-finished items-center gap-1.5 text-xs text-neutral-500 dark:text-fg-dim" role="status">
+              <span class="size-2 rounded-full bg-success"></span>Finished
+            </span>
+            <span class="process-dialog-status process-dialog-status-failed items-center gap-1.5 text-xs text-neutral-500 dark:text-fg-dim" role="status">
+              <span class="size-2 rounded-full bg-error"></span>Failed
+            </span>
           </div>
           <button
             type="button"

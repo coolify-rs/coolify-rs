@@ -59,6 +59,19 @@
 
   const modKeyLabel = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+';
   const navClass = (l: NavLeaf | NavItem) => ['menu-item', itemActive(l) && 'menu-item-active', centerWhenCollapsed].filter(Boolean).join(' ');
+
+  // `window.scrollToSettingsSection` (resources/js/app.js): scroll, then a short highlight.
+  let activeSection = $state('');
+  function scrollToSection(id: string) {
+    activeSection = id;
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el.classList.remove('is-section-highlight');
+    void el.offsetWidth;
+    el.classList.add('is-section-highlight');
+    setTimeout(() => el.classList.remove('is-section-highlight'), 500);
+  }
 </script>
 
 <nav
@@ -130,6 +143,19 @@
                         <span class="menu-item-label">{item.label}</span>
                         {#if item.beta}<BetaBadge class="ml-auto shrink-0" />{/if}
                       </a>
+                      {#if item.active && item.children?.length}
+                        <div class="nav-children flex flex-col gap-0.5 py-1">
+                          {#each item.children as child (child.id)}
+                            <button
+                              type="button"
+                              class="menu-subitem {activeSection === child.id ? 'menu-subitem-active' : ''}"
+                              onclick={() => scrollToSection(child.id)}
+                            >
+                              <span class="menu-item-label text-left">{child.label}</span>
+                            </button>
+                          {/each}
+                        </div>
+                      {/if}
                     {/if}
                   {/each}
                 {/each}

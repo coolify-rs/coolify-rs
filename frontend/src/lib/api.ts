@@ -291,3 +291,98 @@ export const serversUi = {
   remove: (uuid: string, password: string, actions: string[]) =>
     request<{ message: string }>('POST', `/ui/servers/${encodeURIComponent(uuid)}/delete`, { password, actions }),
 };
+
+/** A standalone database as `GET /databases/{uuid}` presents it (PostgreSQL only so far). */
+export interface DatabaseRecord {
+  uuid: string;
+  name: string;
+  description: string | null;
+  /** `status:health`, e.g. `running:healthy`, `exited:unhealthy`. */
+  status: string;
+  database_type: string;
+  image: string;
+  postgres_user: string;
+  postgres_password?: string;
+  postgres_db: string;
+  postgres_initdb_args: string | null;
+  postgres_host_auth_method: string | null;
+  postgres_conf: string | null;
+  init_scripts?: { index: number; filename: string; content: string }[] | null;
+  ports_mappings: string | null;
+  is_public: boolean;
+  public_port: number | null;
+  public_port_timeout: number | null;
+  is_log_drain_enabled: boolean;
+  custom_docker_run_options: string | null;
+  enable_ssl: boolean;
+  ssl_mode: string;
+  internal_db_url?: string;
+  external_db_url?: string | null;
+  server_status: boolean;
+  restart_count: number;
+  last_online_at: string | null;
+  created_at: string;
+  updated_at: string;
+  destination?: {
+    uuid: string;
+    name: string;
+    network: string;
+    server?: { uuid: string; name: string; ip: string; settings: Record<string, unknown> };
+  };
+  environment?: { uuid: string; name: string; project: { uuid: string; name: string } };
+  [key: string]: unknown;
+}
+
+/** One log entry of a start (`activity_log.description`). */
+export interface ActivityEntry {
+  type: 'out' | 'err' | 'stdout' | 'stderr';
+  output: string;
+  timestamp: number;
+  order: number;
+}
+
+export interface DatabaseState {
+  /** Latest start (or restart) of the database. */
+  activity: { id: number; status: 'queued' | 'in_progress' | 'finished' | 'error'; entries: ActivityEntry[] } | null;
+  /** The saved configuration differs from the one the container was started with (`isConfigurationChanged`). */
+  configuration_changed: boolean;
+  /** `can('update', $database)`: admins and owners. */
+  can_update: boolean;
+}
+
+export interface DestinationServer {
+  uuid: string;
+  name: string;
+  description: string | null;
+  ip: string;
+  functional: boolean;
+  is_build: boolean;
+  destinations: { uuid: string; name: string; network: string }[];
+}
+
+export const dbUi = {
+  /** Resources of an environment. `unported` counts applications, services and database kinds coolify-rs cannot show yet. */
+  resources: (project: string, env: string) =>
+    request<{ databases: DatabaseRecord[]; unported: number }>(
+      'GET',
+      `/ui/projects/${encodeURIComponent(project)}/environments/${encodeURIComponent(env)}/resources`,
+    ),
+  /** Servers of the team that can host resources, with their destinations (the new-resource picker). */
+  destinations: () => request<{ servers: DestinationServer[] }>('GET', '/ui/destinations'),
+  /** `Project\Resource\Create` for a database: creates it and returns its UUID. Only `postgresql` is ported (others: 501). */
+  create: (body: { project_uuid: string; environment_uuid: string; destination_uuid: string; type: string; database_image?: string }) =>
+    request<{ uuid: string }>('POST', '/ui/databases', body),
+  get: (uuid: string) => api.get<DatabaseRecord>(`/databases/${encodeURIComponent(uuid)}`),
+  state: (uuid: string) => request<DatabaseState>('GET', `/ui/databases/${encodeURIComponent(uuid)}/state`),
+  /** The General form (`Postgresql\General::submit`). 422 errors are keyed by the snake_case field names. */
+  update: (uuid: string, body: Record<string, unknown>) =>
+    request<{ message: string }>('PATCH', `/ui/databases/${encodeURIComponent(uuid)}`, body),
+  start: (uuid: string) => api.post<{ message: string }>(`/databases/${encodeURIComponent(uuid)}/start`, {}),
+  stop: (uuid: string) => api.post<{ message: string }>(`/databases/${encodeURIComponent(uuid)}/stop`, {}),
+  restart: (uuid: string) => api.post<{ message: string }>(`/databases/${encodeURIComponent(uuid)}/restart`, {}),
+  /** Danger zone delete with password confirmation (`ConfirmModal` steps). */
+  remove: (
+    uuid: string,
+    body: { password: string; delete_volumes: boolean; delete_configurations: boolean; docker_cleanup: boolean },
+  ) => request<{ message: string }>('POST', `/ui/databases/${encodeURIComponent(uuid)}/delete`, body),
+};

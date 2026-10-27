@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   // Port of upstream components/modal-confirmation.blade.php: optional
   // checkbox step, the warning + type-the-name step, and the password step.
   // The server verifies the password; `onconfirm` returns an error message to
@@ -14,6 +15,8 @@
     id: string;
     label: string;
     defaultWarning?: string;
+    /** Selected when the modal opens (the Livewire property's default). */
+    checked?: boolean;
   }
 
   let {
@@ -50,7 +53,8 @@
 
   // svelte-ignore state_referenced_locally
   let step = $state(checkboxes.length ? 1 : 2);
-  let selected = $state<string[]>([]);
+  // The options' defaults, read once when the modal opens.
+  let selected = $state<string[]>(untrack(() => checkboxes.filter((c) => c.checked).map((c) => c.id)));
   let typed = $state('');
   let password = $state('');
   let passwordError = $state('');

@@ -4,16 +4,17 @@
   import Helper from './Helper.svelte';
 
   let {
+    id,
     title,
     description,
     flush = false,
     actions,
     badges,
     children,
-  }: { title: string; description?: string; flush?: boolean; actions?: Snippet; badges?: Snippet; children: Snippet } = $props();
+  }: { id?: string; title: string; description?: string; flush?: boolean; actions?: Snippet; badges?: Snippet; children: Snippet } = $props();
 </script>
 
-<section class="application-settings-section" data-settings-section-title={title}>
+<section {id} class="application-settings-section" data-settings-section-title={title}>
   <header>
     <div class="min-w-0 py-0.5 {badges ? 'flex flex-wrap items-center gap-2' : ''}">
       {#if description}
