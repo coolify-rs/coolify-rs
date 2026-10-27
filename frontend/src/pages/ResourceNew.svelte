@@ -178,6 +178,9 @@
   let missing = $state(false);
 
   let step = $state<'type' | 'servers' | 'destinations' | 'select-postgresql-type'>('type');
+  let selectedType = $state('postgresql');
+  // Database types coolify-rs can create (SQLite is not ported).
+  const portedDatabases = ['postgresql', 'mysql', 'mariadb', 'redis', 'keydb', 'dragonfly', 'mongodb', 'clickhouse'];
   let search = $state('');
   let resourceType = $state('all');
   let searchInput: HTMLInputElement | undefined = $state();
@@ -254,10 +257,11 @@
 
   async function setType(type: string) {
     if (selecting) return;
-    if (type !== 'postgresql') {
-      notify.info('Not available in coolify-rs yet', 'Only PostgreSQL databases can be created in coolify-rs. Use Coolify for this resource for now.');
+    if (!portedDatabases.includes(type)) {
+      notify.info('Not available in coolify-rs yet', 'Only databases (except SQLite) can be created in coolify-rs. Use Coolify for this resource for now.');
       return;
     }
+    selectedType = type;
     selecting = true;
     try {
       if (serversPromise) await serversPromise;
@@ -282,10 +286,19 @@
 
   function setDestination(uuid: string) {
     destinationUuid = uuid;
-    step = 'select-postgresql-type';
+    if (selectedType === 'postgresql') {
+      step = 'select-postgresql-type';
+      return;
+    }
+    // Other databases are created right away (`resource.create` without an image).
+    createDatabase(selectedType);
   }
 
-  async function setPostgresqlType(image: string) {
+  function setPostgresqlType(image: string) {
+    createDatabase('postgresql', image);
+  }
+
+  async function createDatabase(type: string, image?: string) {
     if (creating) return;
     creating = true;
     try {
@@ -293,8 +306,8 @@
         project_uuid: uuid,
         environment_uuid: env,
         destination_uuid: destinationUuid,
-        type: 'postgresql',
-        database_image: image,
+        type,
+        ...(image ? { database_image: image } : {}),
       });
       router.go(`/project/${uuid}/environment/${env}/database/${dbUuid}`);
     } catch (e) {

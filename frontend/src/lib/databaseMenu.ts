@@ -27,7 +27,7 @@ export const CONFIGURATION_SECTIONS = [
 export function databaseNavContext(
   base: string,
   active: string,
-  opts: { canUpdate: boolean; canAccessTerminal: boolean; backups: boolean },
+  opts: { canUpdate: boolean; canAccessTerminal: boolean; backups: boolean; initScripts: boolean },
 ): NavContext {
   const item = (label: string, section: string, icon: string, extra: Partial<Entry> = {}): Entry => ({
     label,
@@ -37,13 +37,13 @@ export function databaseNavContext(
     ...extra,
   });
   const items: Record<string, Entry> = {
-    // `$pageSections` of components/database/configuration-sidebar.blade.php (PostgreSQL).
+    // `$pageSections` of components/database/configuration-sidebar.blade.php (init scripts: PostgreSQL only).
     'General': item('General', 'general', 'settings', {
       children: [
         { id: 'database-details-section', label: 'Database details' },
         { id: 'access-section', label: 'Access' },
         { id: 'container-section', label: 'Container' },
-        { id: 'initialization-scripts-section', label: 'Initialization scripts' },
+        ...(opts.initScripts ? [{ id: 'initialization-scripts-section', label: 'Initialization scripts' }] : []),
       ],
     }),
     'Environment Variables': item('Environment Variables', 'environment-variables', 'variables'),

@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::StartContext;
 use super::common::{
     CONFIGURATION_DIR, b64, database_labels, finish_commands, healthcheck, limits, networks,
-    volume_entries,
+    php_filled, volume_entries,
 };
 use super::env::add_coolify_variables;
 
@@ -80,10 +80,7 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
     add_coolify_variables(&mut env, ctx);
 
     // add_custom_redis
-    let conf = d
-        .str("redis_conf")
-        .filter(|c| !c.is_empty())
-        .map(str::to_owned);
+    let conf = php_filled(d.str("redis_conf")).map(str::to_owned);
     if let Some(c) = &conf {
         commands.push(format!(
             "echo '{}' | base64 -d | tee {dir}/redis.conf > /dev/null",

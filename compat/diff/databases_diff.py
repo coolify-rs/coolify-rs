@@ -54,6 +54,44 @@ KINDS = {
                    dict(postgres_user="x"), dict(redis_password="a" * 130)],
         "fixed": {"redis_password": "Same-Pass_2"},
     },
+    "keydb": {
+        "table": "standalone_keydbs", "model": "StandaloneKeydb", "secrets": ["keydb_password"],
+        "rich": {"keydb_conf": b64("maxmemory 100mb")},
+        "errors": [dict(keydb_password="a b", foo=1), dict(keydb_conf="not base64!"), dict(redis_password="x")],
+        "fixed": {"keydb_password": "Same-Pass_2"},
+    },
+    "dragonfly": {
+        "table": "standalone_dragonflies", "model": "StandaloneDragonfly", "secrets": ["dragonfly_password"],
+        "rich": {"dragonfly_password": "Rich-Pass_1"},
+        "errors": [dict(dragonfly_password="a b", foo=1), dict(redis_conf="x")],
+        "fixed": {"dragonfly_password": "Same-Pass_2"},
+    },
+    "mongodb": {
+        "table": "standalone_mongodbs", "model": "StandaloneMongodb", "secrets": ["mongo_initdb_root_password"],
+        "rich": {"mongo_conf": b64("net:\n  bindIpAll: true\n"), "mongo_initdb_root_username": "admin_u", "mongo_initdb_database": "app_db"},
+        "errors": [dict(mongo_initdb_root_username="1bad", mongo_initdb_root_password="a b"), dict(mongo_conf="not base64!"),
+                   dict(mysql_user="x")],
+        "fixed": {"mongo_initdb_root_password": "Same-Pass_2"},
+    },
+    "mysql": {
+        "table": "standalone_mysqls", "model": "StandaloneMysql", "secrets": ["mysql_root_password", "mysql_password"],
+        "rich": {"mysql_conf": b64("[mysqld]\nmax_connections=50\n"), "mysql_user": "app_u", "mysql_database": "app_db"},
+        "errors": [dict(mysql_user="1bad", mysql_password="a b", mysql_root_password=""), dict(mysql_conf="not base64!"),
+                   dict(mariadb_user="x")],
+        "fixed": {"mysql_password": "Same-Pass_2", "mysql_root_password": "Same-Root_3"},
+    },
+    "mariadb": {
+        "table": "standalone_mariadbs", "model": "StandaloneMariadb", "secrets": ["mariadb_root_password", "mariadb_password"],
+        "rich": {"mariadb_conf": b64("[mysqld]\nmax_connections=50\n"), "mariadb_user": "app_u", "mariadb_database": "app_db"},
+        "errors": [dict(mariadb_user="1bad", mariadb_password="a b"), dict(mariadb_conf="not base64!"), dict(mysql_user="x")],
+        "fixed": {"mariadb_password": "Same-Pass_2", "mariadb_root_password": "Same-Root_3"},
+    },
+    "clickhouse": {
+        "table": "standalone_clickhouses", "model": "StandaloneClickhouse", "secrets": ["clickhouse_admin_password"],
+        "rich": {"clickhouse_admin_user": "admin_u"},
+        "errors": [dict(clickhouse_admin_user="1bad", clickhouse_admin_password="a b"), dict(clickhouse_conf="x")],
+        "fixed": {"clickhouse_admin_password": "Same-Pass_2"},
+    },
 }
 
 
@@ -85,6 +123,21 @@ def sql(query):
 def record(name, ok, detail=""):
     results.append(ok)
     print(("PASS " if ok else "FAIL ") + name + ("" if ok else f"\n  {detail}"[:3000]))
+
+
+def json_diff(a, b):
+    """The status codes and the keys whose values or order differ."""
+    try:
+        ja, jb = json.loads(a[1]), json.loads(b[1])
+    except ValueError:
+        return f"ref {a}\n  rs  {b}"
+    if not (isinstance(ja, dict) and isinstance(jb, dict)):
+        return f"ref {a}\n  rs  {b}"
+    keys = [k for k in dict.fromkeys([*ja, *jb]) if ja.get(k) != jb.get(k)]
+    out = [f"status {a[0]} / {b[0]}"] + [f"{k}: {json.dumps(ja.get(k))[:300]} | {json.dumps(jb.get(k))[:300]}" for k in keys]
+    if list(ja) != list(jb):
+        out.append(f"key order differs: {list(ja)} / {list(jb)}")
+    return "\n  ".join(out)
 
 
 def same(name, method, path, body=None, tok="acme_owner_write"):
@@ -158,7 +211,7 @@ def main():
         for tok in ["acme_owner_read", "acme_owner_root", "acme_member_read"]:
             for u in (ua, ub):
                 ra_, rb_ = call("ref", "GET", f"/api/v1/databases/{u}", tok=tok), call("rs", "GET", f"/api/v1/databases/{u}", tok=tok)
-                record(f"show {u[:6]} [{tok}]", ra_ == rb_, f"ref {ra_}\n  rs  {rb_}")
+                record(f"show {u[:6]} [{tok}]", ra_ == rb_, json_diff(ra_, rb_))
             same(f"list [{tok}]", "GET", "/api/v1/databases", tok=tok)
         same("show missing", "GET", "/api/v1/databases/nope", tok="acme_owner_read")
         for action in ["start", "stop", "restart"]:

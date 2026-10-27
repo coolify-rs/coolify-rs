@@ -53,8 +53,9 @@ SECURITY_MODEL.md and an isolated test host container (upstream's `docker/testin
 
 Done: PostgreSQL end to end (API, Compose generation byte-identical to upstream, start/stop/restart/delete jobs with
 activity logs, status refresh and minute status checks, UI: environment resource list, new-resource picker, database
-page). Next: the other engines (Redis, MySQL, MariaDB, MongoDB, KeyDB, Dragonfly, ClickHouse) follow the same pattern;
-then the public TCP proxy, environment variables, `PATCH /databases/{uuid}`, backups.
+page). Then the other engines (Redis, MySQL, MariaDB, MongoDB, KeyDB, Dragonfly, ClickHouse) with database environment
+variables at start and per-engine General forms, each verified on the VM (session 8). Next: the public TCP proxy, the
+Environment Variables page, `PATCH /databases/{uuid}`, backups.
 
 ## Milestone 5: deployment engine
 

@@ -348,6 +348,22 @@ export interface DatabaseState {
   configuration_changed: boolean;
   /** `can('update', $database)`: admins and owners. */
   can_update: boolean;
+  /** The database type: `postgresql`, `redis`, `keydb`, ... */
+  kind?: string;
+  /** What the General form and Connection block read besides the record. */
+  form?: DatabaseFormExtras;
+}
+
+export interface DatabaseFormExtras {
+  /** `isCredentialLocked()`: the password variable is shown once (Redis, KeyDB, Dragonfly). */
+  credential_locked: boolean;
+  /** Redis: the REDIS_USERNAME / REDIS_PASSWORD values (admins only; the password is null when locked). */
+  redis_username?: string;
+  redis_password?: string | null;
+  /** Redis: the image version is 6.0 or later (the username field is shown). */
+  redis_version_6?: boolean;
+  shared_redis_username?: boolean;
+  shared_redis_password?: boolean;
 }
 
 export interface DestinationServer {
@@ -374,7 +390,7 @@ export const dbUi = {
     request<{ uuid: string }>('POST', '/ui/databases', body),
   get: (uuid: string) => api.get<DatabaseRecord>(`/databases/${encodeURIComponent(uuid)}`),
   state: (uuid: string) => request<DatabaseState>('GET', `/ui/databases/${encodeURIComponent(uuid)}/state`),
-  /** The General form (`Postgresql\General::submit`). 422 errors are keyed by the snake_case field names. */
+  /** The General form (`<Type>\General::submit`). 422 errors are keyed by the snake_case field names. */
   update: (uuid: string, body: Record<string, unknown>) =>
     request<{ message: string }>('PATCH', `/ui/databases/${encodeURIComponent(uuid)}`, body),
   start: (uuid: string) => api.post<{ message: string }>(`/databases/${encodeURIComponent(uuid)}/start`, {}),

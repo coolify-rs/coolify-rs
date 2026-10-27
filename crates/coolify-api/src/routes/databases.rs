@@ -203,10 +203,13 @@ pub(crate) async fn present(
     let mut r = dbs::present(d.kind, d.raw.clone());
     let status = coolify_jobs::databases::normalize_status(d.str("status").unwrap_or_default());
     r.insert("status".into(), Value::String(status));
-    r.insert(
-        "database_type".into(),
-        Value::String(d.kind.type_name().into()),
-    );
+    // StandaloneKeydb does not append `database_type`.
+    if d.kind != Kind::Keydb {
+        r.insert(
+            "database_type".into(),
+            Value::String(d.kind.type_name().into()),
+        );
+    }
     r.insert(
         "server_status".into(),
         Value::Bool(server.as_ref().is_some_and(server_functional)),
@@ -520,7 +523,13 @@ macro_rules! create_handlers {
 
 create_handlers! {
     create_postgresql => Kind::Postgresql,
+    create_mysql => Kind::Mysql,
+    create_mariadb => Kind::Mariadb,
+    create_mongodb => Kind::Mongodb,
     create_redis => Kind::Redis,
+    create_clickhouse => Kind::Clickhouse,
+    create_dragonfly => Kind::Dragonfly,
+    create_keydb => Kind::Keydb,
 }
 
 async fn create_database(

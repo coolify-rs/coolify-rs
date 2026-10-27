@@ -198,10 +198,36 @@ pub async fn state(
         let entries: Value = serde_json::from_str(&description).unwrap_or(Value::Array(vec![]));
         json!({"id": id, "status": props.get("status").cloned().unwrap_or(Value::Null), "entries": entries})
     });
+    // What the General form and the Connection block read besides the record.
+    let creds = crate::routes::databases::credentials(&state, &d).await?;
+    let shared = |key: &str| creds.variables.iter().any(|v| v.key == key && v.is_shared);
+    let mut form = json!({"credential_locked": creds.locked});
+    if d.kind == Kind::Redis && ctx.is_team_admin() {
+        form["redis_username"] = json!(creds.redis_username());
+        form["redis_password"] = if creds.locked {
+            Value::Null
+        } else {
+            json!(
+                creds
+                    .variables
+                    .iter()
+                    .find(|v| v.key == "REDIS_PASSWORD")
+                    .and_then(|v| v.value.clone())
+            )
+        };
+    }
+    if d.kind == Kind::Redis {
+        form["redis_version_6"] =
+            json!(redis_version_at_least_6(d.str("image").unwrap_or_default()));
+        form["shared_redis_username"] = json!(shared("REDIS_USERNAME"));
+        form["shared_redis_password"] = json!(shared("REDIS_PASSWORD"));
+    }
     Ok(ok(json!({
         "activity": activity,
         "configuration_changed": configuration_changed,
         "can_update": ctx.is_team_admin(),
+        "kind": d.kind.name_prefix(),
+        "form": form,
     }))
     .into_response())
 }
@@ -339,7 +365,235 @@ const GENERAL_MESSAGES: Messages = &[
     ),
 ];
 
-/// `Postgresql\General::submit`.
+/// How a credential or configuration field of a General form is validated.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Check {
+    /// `databaseIdentifierRules` (pattern only when the value changed).
+    Identifier,
+    /// `databasePasswordRules` (pattern only when the value changed).
+    Password,
+    /// `nullable`.
+    Conf,
+}
+
+/// A type-specific field of a General form: column, check, and the label its messages use.
+#[derive(Clone, Copy)]
+struct KindField {
+    column: &'static str,
+    check: Check,
+    label: &'static str,
+}
+
+const fn field(column: &'static str, check: Check, label: &'static str) -> KindField {
+    KindField {
+        column,
+        check,
+        label,
+    }
+}
+
+/// The type-specific fields of `<Type>\General::rules()`, in order.
+fn kind_fields(kind: Kind) -> Vec<KindField> {
+    use Check::{Conf, Identifier as Id, Password as Pw};
+    match kind {
+        Kind::Postgresql => vec![
+            field("postgres_user", Id, "Postgres User"),
+            field("postgres_password", Pw, "Postgres Password"),
+            field("postgres_db", Id, "Postgres Database"),
+        ],
+        Kind::Redis => vec![
+            field("redis_conf", Conf, ""),
+            field("redis_username", Id, "Redis Username"),
+            field("redis_password", Pw, "Redis Password"),
+        ],
+        Kind::Keydb => vec![
+            field("keydb_conf", Conf, ""),
+            field("keydb_password", Pw, "KeyDB Password"),
+        ],
+        Kind::Dragonfly => vec![field("dragonfly_password", Pw, "Dragonfly Password")],
+        Kind::Mongodb => vec![
+            field("mongo_conf", Conf, ""),
+            field("mongo_initdb_root_username", Id, "Root Username"),
+            field("mongo_initdb_root_password", Pw, "Root Password"),
+            field("mongo_initdb_database", Id, "MongoDB Database"),
+        ],
+        Kind::Mysql => vec![
+            field("mysql_root_password", Pw, "Root Password"),
+            field("mysql_user", Id, "MySQL User"),
+            field("mysql_password", Pw, "MySQL Password"),
+            field("mysql_database", Id, "MySQL Database"),
+            field("mysql_conf", Conf, ""),
+        ],
+        Kind::Mariadb => vec![
+            field("mariadb_root_password", Pw, "Root Password"),
+            field("mariadb_user", Id, "MariaDB User"),
+            field("mariadb_password", Pw, "MariaDB Password"),
+            field("mariadb_database", Id, "MariaDB Database"),
+            field("mariadb_conf", Conf, ""),
+        ],
+        Kind::Clickhouse => vec![
+            field("clickhouse_admin_user", Id, "Admin User"),
+            field("clickhouse_admin_password", Pw, "Admin Password"),
+        ],
+        Kind::Sqlite => vec![],
+    }
+}
+
+/// `$validationAttributes` of the General forms that define them (column => label).
+fn validation_attributes(kind: Kind) -> &'static [(&'static str, &'static str)] {
+    const COMMON: [(&str, &str); 7] = [
+        ("name", "Name"),
+        ("description", "Description"),
+        ("image", "Image"),
+        ("ports_mappings", "Port Mapping"),
+        ("is_public", "Is Public"),
+        ("public_port", "Public Port"),
+        ("public_port_timeout", "Public Port Timeout"),
+    ];
+    type Attrs = Vec<(Kind, Vec<(&'static str, &'static str)>)>;
+    static ATTRS: LazyLock<Attrs> = LazyLock::new(|| {
+        let with = |extra: &[(&'static str, &'static str)]| {
+            let mut v = COMMON.to_vec();
+            v.extend_from_slice(extra);
+            v
+        };
+        vec![
+            (
+                Kind::Redis,
+                with(&[
+                    ("redis_conf", "Redis Configuration"),
+                    ("custom_docker_run_options", "Custom Docker Options"),
+                    ("redis_username", "Redis Username"),
+                    ("redis_password", "Redis Password"),
+                ]),
+            ),
+            (
+                Kind::Mongodb,
+                with(&[
+                    ("mongo_conf", "Mongo Configuration"),
+                    ("mongo_initdb_root_username", "Root Username"),
+                    ("mongo_initdb_root_password", "Root Password"),
+                    ("mongo_initdb_database", "Database"),
+                    ("custom_docker_run_options", "Custom Docker Run Options"),
+                ]),
+            ),
+            (
+                Kind::Mysql,
+                with(&[
+                    ("mysql_root_password", "Root Password"),
+                    ("mysql_user", "User"),
+                    ("mysql_password", "Password"),
+                    ("mysql_database", "Database"),
+                    ("mysql_conf", "MySQL Configuration"),
+                    ("custom_docker_run_options", "Custom Docker Run Options"),
+                ]),
+            ),
+            (
+                Kind::Mariadb,
+                with(&[
+                    ("mariadb_root_password", "Root Password"),
+                    ("mariadb_user", "User"),
+                    ("mariadb_password", "Password"),
+                    ("mariadb_database", "Database"),
+                    ("mariadb_conf", "MariaDB Configuration"),
+                    ("custom_docker_run_options", "Custom Docker Options"),
+                ]),
+            ),
+        ]
+    });
+    ATTRS
+        .iter()
+        .find(|(k, _)| *k == kind)
+        .map_or(&[], |(_, v)| v.as_slice())
+}
+
+/// `<Type>\General::messages()` with its `$validationAttributes` (PostgreSQL keeps its own list).
+fn general_messages(kind: Kind) -> Messages {
+    static CACHE: LazyLock<Vec<(Kind, Messages)>> = LazyLock::new(|| {
+        Kind::ALL
+            .into_iter()
+            .filter(|k| *k != Kind::Postgresql)
+            .map(|k| {
+                let mut m: Vec<(String, String)> = Vec::new();
+                let mut push = |k: &str, v: &str| m.push((k.to_owned(), v.to_owned()));
+                for (k, v) in patterns::COMBINED_MESSAGES {
+                    push(k, v);
+                }
+                push("ports_mappings.regex", PORT_MAPPINGS_MESSAGE);
+                // The forms with a `name.required` override (and attributes).
+                if matches!(k, Kind::Redis | Kind::Mongodb | Kind::Mysql | Kind::Mariadb) {
+                    push("name.required", "The Name field is required.");
+                }
+                for f in kind_fields(k) {
+                    let regex = match f.check {
+                        Check::Identifier => format!(
+                                "The {} may only contain letters, digits, and underscores, and must start with a letter or underscore.",
+                                f.label
+                            ),
+                        Check::Password => format!(
+                                "The {} may not contain shell-unsafe characters (backtick, $, ;, |, &, <, >, \\, quotes, spaces, or control characters).",
+                                f.label
+                            ),
+                        Check::Conf => continue,
+                    };
+                    push(&format!("{}.regex", f.column), &regex);
+                    push(
+                        &format!("{}.min", f.column),
+                        &format!("The {} must be at least :min character.", f.label),
+                    );
+                    push(
+                        &format!("{}.max", f.column),
+                        &format!("The {} may not be greater than :max characters.", f.label),
+                    );
+                }
+                push("image.required", "The Docker Image field is required.");
+                if matches!(k, Kind::Keydb | Kind::Dragonfly | Kind::Clickhouse) {
+                    push("image.string", "The Docker Image must be a string.");
+                }
+                push("public_port.integer", "The Public Port must be an integer.");
+                push("public_port.min.numeric", "The Public Port must be at least 1.");
+                push("public_port.max.numeric", "The Public Port must not exceed 65535.");
+                push(
+                    "public_port_timeout.integer",
+                    "The Public Port Timeout must be an integer.",
+                );
+                push(
+                    "public_port_timeout.min.numeric",
+                    "The Public Port Timeout must be at least 1.",
+                );
+                for (col, label) in validation_attributes(k) {
+                    push(&format!("attribute:{col}"), label);
+                }
+                let leaked: Vec<(&'static str, &'static str)> = m
+                    .into_iter()
+                    .map(|(a, b)| (&*Box::leak(a.into_boxed_str()), &*Box::leak(b.into_boxed_str())))
+                    .collect();
+                (k, &*Box::leak(leaked.into_boxed_slice()))
+            })
+            .collect()
+    });
+    if kind == Kind::Postgresql {
+        return GENERAL_MESSAGES;
+    }
+    CACHE
+        .iter()
+        .find(|(k, _)| *k == kind)
+        .map_or(GENERAL_MESSAGES, |(_, m)| m)
+}
+
+const PORT_MAPPINGS_MESSAGE: &str = "Port mappings must be a comma-separated list of port pairs or ranges with optional IP and protocol (e.g. 3000:3000, 8080:80/udp, 127.0.0.1:8080:80, [::1]::80).";
+
+/// PHP `version_compare($v, '6.0', '>=')` for an image tag (leading number).
+fn redis_version_at_least_6(image: &str) -> bool {
+    let tag = image.split(':').nth(1).unwrap_or("0.0");
+    tag.chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse::<u64>()
+        .is_ok_and(|n| n >= 6)
+}
+
+/// `<Type>\General::submit`.
 pub async fn update(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -352,95 +606,121 @@ pub async fn update(
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
-    if d.kind != Kind::Postgresql {
+    if !d.kind.ported() {
         return Err(ApiError::NotPorted);
     }
+    let kind = d.kind;
     let mut map = match serde_json::from_slice::<Value>(&body) {
         Ok(Value::Object(m)) => m,
         _ => Map::new(),
     };
-    // submit(): spaces out of port mappings, an empty public port means none.
+    // submit(): spaces out of port mappings, an empty public port means none (not in Redis).
     if let Some(Value::String(p)) = map.get("ports_mappings") {
         let v = p.replace(' ', "").trim().to_owned();
         map.insert("ports_mappings".into(), Value::String(v));
     }
-    if map
-        .get("public_port")
-        .is_some_and(|v| v.as_str() == Some(""))
+    if kind != Kind::Redis
+        && map
+            .get("public_port")
+            .is_some_and(|v| v.as_str() == Some(""))
     {
         map.insert("public_port".into(), Value::Null);
     }
-    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-    let current_password = d
-        .str("postgres_password")
-        .and_then(|c| enc.decrypt_string(c).ok())
-        .unwrap_or_default();
-    let changed = |k: &str, current: Option<&str>| map.get(k).and_then(Value::as_str) != current;
-    let id_rules = |enforce: bool| {
-        let mut r = vec![Rule::Required, Rule::String, Rule::Min(1), Rule::Max(63)];
-        if enforce {
-            r.push(Rule::Regex(&DB_IDENTIFIER));
-        }
-        r
-    };
-    let mut pw_rules = vec![Rule::Required, Rule::String, Rule::Min(1), Rule::Max(128)];
-    if changed("postgres_password", Some(&current_password)) {
-        pw_rules.push(Rule::Regex(&DB_PASSWORD));
+    if kind == Kind::Mongodb
+        && map
+            .get("mongo_conf")
+            .is_some_and(|v| v.as_str().is_none_or(str::is_empty))
+    {
+        map.insert("mongo_conf".into(), Value::Null);
     }
-    let mut name_field = patterns::name(true);
-    name_field.rules.retain(|_| true);
+    let creds = crate::routes::databases::credentials(&state, &d).await?;
+    let started = d.str("started_at").is_some();
+    // The values the model holds now (the `!==` of the conditional patterns).
+    let current = |column: &str| -> Option<String> {
+        match column {
+            "redis_username" => Some(creds.redis_username()),
+            "redis_password" => creds
+                .variables
+                .iter()
+                .find(|v| v.key == "REDIS_PASSWORD")
+                .and_then(|v| v.value.clone()),
+            c if kind.encrypted_columns().contains(&c) => Some(creds.secret(c)),
+            c => d.str(c).map(str::to_owned),
+        }
+    };
+    let changed =
+        |column: &str| map.get(column).and_then(Value::as_str) != current(column).as_deref();
+    let locked = kind == Kind::Redis && creds.locked;
+    let mut fields: Vec<Field> = vec![patterns::name(true), patterns::description()];
+    let mut redis_fields: Vec<Field> = Vec::new();
+    for f in kind_fields(kind) {
+        let rules = match f.check {
+            Check::Conf => vec![Rule::Nullable],
+            Check::Password if f.column == "redis_password" && locked => vec![Rule::Nullable],
+            check => {
+                let max = if check == Check::Identifier { 63 } else { 128 };
+                let mut r = vec![Rule::Required, Rule::String, Rule::Min(1), Rule::Max(max)];
+                if changed(f.column) {
+                    r.push(Rule::Regex(if check == Check::Identifier {
+                        &DB_IDENTIFIER
+                    } else {
+                        &DB_PASSWORD
+                    }));
+                }
+                r
+            }
+        };
+        let field = Field {
+            name: f.column,
+            rules,
+        };
+        // Redis validates its credentials after the common fields.
+        if kind == Kind::Redis && f.check != Check::Conf {
+            redis_fields.push(field);
+        } else {
+            fields.push(field);
+        }
+    }
+    let image_rules = if matches!(kind, Kind::Keydb | Kind::Dragonfly | Kind::Clickhouse) {
+        vec![Rule::Required, Rule::String]
+    } else {
+        vec![Rule::Required]
+    };
+    fields.extend([
+        Field {
+            name: "image",
+            rules: image_rules,
+        },
+        Field {
+            name: "ports_mappings",
+            rules: vec![Rule::Nullable, Rule::String, Rule::Regex(&PORT_MAPPINGS)],
+        },
+        Field {
+            name: "is_public",
+            rules: vec![Rule::Nullable, Rule::Boolean],
+        },
+        Field {
+            name: "public_port",
+            rules: vec![
+                Rule::Nullable,
+                Rule::Integer,
+                Rule::MinNum(1),
+                Rule::MaxNum(65535),
+            ],
+        },
+        Field {
+            name: "public_port_timeout",
+            rules: vec![Rule::Nullable, Rule::Integer, Rule::MinNum(1)],
+        },
+        Field {
+            name: "is_log_drain_enabled",
+            rules: vec![Rule::Nullable, Rule::Boolean],
+        },
+    ]);
+    fields.extend(redis_fields);
     let input = Input(map.clone());
     let keys: Vec<&str> = map.keys().map(String::as_str).collect();
-    validate(
-        &input,
-        &[
-            name_field,
-            patterns::description(),
-            Field {
-                name: "postgres_user",
-                rules: id_rules(changed("postgres_user", d.str("postgres_user"))),
-            },
-            Field {
-                name: "postgres_password",
-                rules: pw_rules,
-            },
-            Field {
-                name: "postgres_db",
-                rules: id_rules(changed("postgres_db", d.str("postgres_db"))),
-            },
-            Field {
-                name: "image",
-                rules: vec![Rule::Required],
-            },
-            Field {
-                name: "ports_mappings",
-                rules: vec![Rule::Nullable, Rule::String, Rule::Regex(&PORT_MAPPINGS)],
-            },
-            Field {
-                name: "is_public",
-                rules: vec![Rule::Nullable, Rule::Boolean],
-            },
-            Field {
-                name: "public_port",
-                rules: vec![
-                    Rule::Nullable,
-                    Rule::Integer,
-                    Rule::MinNum(1),
-                    Rule::MaxNum(65535),
-                ],
-            },
-            Field {
-                name: "public_port_timeout",
-                rules: vec![Rule::Nullable, Rule::Integer, Rule::MinNum(1)],
-            },
-            Field {
-                name: "is_log_drain_enabled",
-                rules: vec![Rule::Nullable, Rule::Boolean],
-            },
-        ],
-        GENERAL_MESSAGES,
-        &keys,
-    )?;
+    validate(&input, &fields, general_messages(kind), &keys)?;
     // Making the database public (TCP proxy) and log drains are not ported.
     let flag = |k: &str| map.get(k).is_some_and(crate::serialize::php_truthy);
     if (flag("is_public") && !d.bool("is_public"))
@@ -454,6 +734,8 @@ pub async fn update(
         Some(Value::Null) | None => None,
         Some(other) => Some(other.to_string()),
     };
+    // Credentials only the first start reads (KeyDB, Dragonfly, ClickHouse) are kept after it.
+    let before_start_only = matches!(kind, Kind::Keydb | Kind::Dragonfly | Kind::Clickhouse);
     let mut values: Vec<(&'static str, ColumnValue)> = Vec::new();
     for key in ["name", "description"] {
         if map.contains_key(key) {
@@ -463,21 +745,43 @@ pub async fn update(
             ));
         }
     }
-    for key in [
-        "postgres_user",
-        "postgres_db",
-        "postgres_initdb_args",
-        "postgres_host_auth_method",
-        "postgres_conf",
-        "image",
-        "ports_mappings",
-        "custom_docker_run_options",
-    ] {
-        if map.contains_key(key) {
-            // `portsMappings` mutator: '' is stored as null.
-            let v = text(key).filter(|v| !(key == "ports_mappings" && v.is_empty()));
-            values.push((key, ColumnValue::Text(v)));
+    let mut columns: Vec<&'static str> = Vec::new();
+    for f in kind_fields(kind) {
+        if kind == Kind::Redis && f.check != Check::Conf {
+            continue;
         }
+        if f.check != Check::Conf && before_start_only && started {
+            continue;
+        }
+        columns.push(f.column);
+    }
+    if kind == Kind::Postgresql {
+        columns.extend([
+            "postgres_initdb_args",
+            "postgres_host_auth_method",
+            "postgres_conf",
+        ]);
+    }
+    columns.extend(["image", "ports_mappings", "custom_docker_run_options"]);
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    let now = state.now();
+    let mut encrypted: Vec<(&'static str, String)> = Vec::new();
+    for key in columns {
+        if !map.contains_key(key) {
+            continue;
+        }
+        if kind.encrypted_columns().contains(&key) {
+            // The `encrypted` cast compares decrypted values.
+            if let Some(p) = text(key)
+                && Some(p.as_str()) != current(key).as_deref()
+            {
+                encrypted.push((key, p));
+            }
+            continue;
+        }
+        // `portsMappings` mutator: '' is stored as null.
+        let v = text(key).filter(|v| !(key == "ports_mappings" && v.is_empty()));
+        values.push((key, ColumnValue::Text(v)));
     }
     let int_or_null = |k: &str| match map.get(k) {
         Some(Value::Number(n)) => n.as_i64().filter(|v| *v != 0),
@@ -492,32 +796,52 @@ pub async fn update(
             ));
         }
     }
-    let now = state.now();
-    let mut changed_any = dbs::update_if_changed(&state.db, d.kind, d.id, &values, now).await?;
-    // The `encrypted` cast compares decrypted values.
-    if let Some(Value::String(p)) = map.get("postgres_password")
-        && *p != current_password
-    {
-        changed_any |= dbs::update_if_changed(
-            &state.db,
-            d.kind,
-            d.id,
-            &[(
-                "postgres_password",
-                ColumnValue::Text(Some(enc.encrypt_string(p))),
-            )],
-            now,
-        )
-        .await?;
+    for (key, plain) in &encrypted {
+        values.push((key, ColumnValue::Text(Some(enc.encrypt_string(plain)))));
+        // The KeyDB and Dragonfly `saving` hooks: a new password is quoted the current way.
+        if matches!(kind, Kind::Keydb | Kind::Dragonfly) {
+            values.push(("legacy_password_quoting", ColumnValue::Bool(false)));
+        }
     }
-    let _ = changed_any;
-    if d.str("config_hash").is_none()
+    dbs::update_if_changed(&state.db, kind, d.id, &values, now).await?;
+
+    if kind == Kind::Redis {
+        // `runtime_environment_variables()->updateOrCreate(...)` for the username (Redis 6+) and
+        // the password (unless it is locked: the form never loads it).
+        let mut writes: Vec<(&str, Option<String>)> = Vec::new();
+        if redis_version_at_least_6(&text("image").unwrap_or_default()) {
+            writes.push(("REDIS_USERNAME", text("redis_username")));
+        }
+        if !creds.locked {
+            writes.push(("REDIS_PASSWORD", text("redis_password")));
+        }
+        for (key, value) in writes {
+            let existing = creds.variables.iter().find(|v| v.key == key);
+            if existing.is_some_and(|v| {
+                v.value.as_deref() == value.as_deref().map(str::trim).filter(|v| !v.is_empty())
+            }) {
+                continue;
+            }
+            let cipher = value.as_deref().map(|v| enc.encrypt_serialized(v.trim()));
+            coolify_db::environment_variables::upsert(
+                &state.db,
+                kind.morph(),
+                d.id,
+                key,
+                cipher.as_deref(),
+                value.as_deref().is_some_and(is_shared_reference),
+                &state.version,
+                now,
+            )
+            .await?;
+        }
+    } else if d.str("config_hash").is_none()
         && let Some(fresh) = dbs::find_in_team(&state.db, ctx.team_id, &uuid).await?
     {
         let hash = crate::routes::databases::config_hash(&state, &fresh).await?;
         dbs::update_if_changed(
             &state.db,
-            d.kind,
+            kind,
             d.id,
             &[("config_hash", ColumnValue::Text(Some(hash)))],
             now,
@@ -525,6 +849,15 @@ pub async fn update(
         .await?;
     }
     Ok(ok(json!({"message": "Database updated."})).into_response())
+}
+
+/// `EnvironmentVariable::isSharedReference` (the `saving` hook sets `is_shared` from it).
+fn is_shared_reference(value: &str) -> bool {
+    static RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?s)^\{\{\s*(?:team|project|environment|server)\..*\}\}$")
+            .unwrap_or_else(|_| unreachable!())
+    });
+    !value.trim().is_empty() && RE.is_match(value.trim())
 }
 
 /// `Shared\Danger::delete`, with the page's confirmation steps.

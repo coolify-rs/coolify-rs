@@ -41,9 +41,7 @@ impl Credentials {
     pub fn connection_password(&self, d: &DatabaseRow) -> String {
         let legacy = d.bool("legacy_password_quoting");
         if !legacy
-            && let Some(v) = self
-                .variable("REDIS_PASSWORD")
-                .or_else(|| password_variable(d.kind).and_then(|k| self.variable(k)))
+            && let Some(v) = self.variable("REDIS_PASSWORD")
             && let Some(p) = v.resolved.as_deref().filter(|p| !p.is_empty())
         {
             return p.to_owned();
@@ -65,15 +63,6 @@ impl Credentials {
             .and_then(|v| v.value.clone())
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| "default".into())
-    }
-}
-
-/// The variable whose value is the server password of KeyDB and Dragonfly.
-fn password_variable(kind: Kind) -> Option<&'static str> {
-    match kind {
-        Kind::Keydb => Some("KEYDB_PASSWORD"),
-        Kind::Dragonfly => Some("DRAGONFLY_PASSWORD"),
-        _ => None,
     }
 }
 
@@ -99,11 +88,15 @@ pub async fn credentials(db: &Db, enc: &Encrypter, d: &DatabaseRow) -> Result<Cr
         Err(e) => return Err(e),
     };
     let mut locked = false;
-    let password_key = match d.kind {
-        Kind::Redis => Some("REDIS_PASSWORD"),
-        k => password_variable(k),
-    };
-    if let Some(v) = password_key.and_then(|k| variables.iter().find(|v| v.key == k)) {
+    // Redis, KeyDB and Dragonfly read their server password from REDIS_PASSWORD.
+    let password_key =
+        matches!(d.kind, Kind::Redis | Kind::Keydb | Kind::Dragonfly).then_some("REDIS_PASSWORD");
+    // KeyDB and Dragonfly look at `serverPasswordEnvironmentVariable()`, which legacy databases do not have.
+    let legacy_ignored = d.kind != Kind::Redis && d.bool("legacy_password_quoting");
+    if let Some(v) = password_key
+        .filter(|_| !legacy_ignored)
+        .and_then(|k| variables.iter().find(|v| v.key == k))
+    {
         let references: Vec<(String, String)> = SHARED_REFERENCE
             .captures_iter(v.value.as_deref().unwrap_or_default())
             .map(|c| (c[1].to_owned(), c[2].to_owned()))

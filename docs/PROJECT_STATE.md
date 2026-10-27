@@ -41,10 +41,12 @@ Verified = contract tests **and** 0 mismatches in the differential run against t
   real sudo, missing jq, missing Docker, old Docker, unreadable version, unsupported OS, refused login) the rows
   written match the reference's (`compat/diff/validate_diff.py`, 8/8). `validation_logs` go through ports of
   upstream's redactor and purifier.
-- PostgreSQL databases: `GET /databases`, `GET /databases/{uuid}`, `POST /databases/postgresql`, start, stop, restart,
-  `DELETE /databases/{uuid}`, and the UI flow (environment resources, new resource, database page). On a real VM the
-  Compose file coolify-rs writes is byte-identical to upstream's; rows, responses and errors match (41/41,
-  `compat/diff/databases_diff.py`); deletion removes the same container, volume, directory and rows.
+- Databases (PostgreSQL, MySQL, MariaDB, MongoDB, Redis, KeyDB, Dragonfly, ClickHouse): `GET /databases`,
+  `GET /databases/{uuid}`, `POST /databases/{engine}`, start, stop, restart, `DELETE /databases/{uuid}`, database
+  environment variables at start (Redis keeps its credentials there), and the UI flow (environment resources, new
+  resource, database page with each engine's General form). On a real VM the Compose file coolify-rs writes is
+  byte-identical to upstream's for every engine; rows, variables, responses, errors and `config_hash` match
+  (`compat/diff/databases_diff.py --kind <engine>`); deletion removes the same container, volume, directory and rows.
 - End to end on a real machine (OrbStack Ubuntu 26.04 VM, Docker 29.1.3, Compose 2.40.3 from Ubuntu packages):
   coolify-rs added and validated the VM through its API and through the UI dialog; upstream validating the same row
   wrote identical columns for root, a sudo user, missing jq, a stopped Docker daemon and a refused login (5/5). A
@@ -74,7 +76,7 @@ Verified = contract tests **and** 0 mismatches in the differential run against t
 
 ```bash
 docker compose up -d --wait && ./scripts/testing-host-up.sh
-COOLIFY_RS_TEST_SSH=127.0.0.1:2223 COOLIFY_RS_TEST_SSH_KEY=compat/testing-host/secrets/id_ed25519 ./scripts/test.sh  # 174 tests
+COOLIFY_RS_TEST_SSH=127.0.0.1:2223 COOLIFY_RS_TEST_SSH_KEY=compat/testing-host/secrets/id_ed25519 ./scripts/test.sh  # 177 tests
 (cd frontend && npm ci && npm run check && npm run build)  # UI type-check + build
 ./scripts/reference-up.sh && ./scripts/reference-seed.sh   # upstream sha-b5823c7 reference
 # coolify-rs on :18080 against the reference DB with APP_KEY (reference) and COOLIFY_RS_TRUSTED_PROXIES=127.0.0.1, then:
@@ -85,8 +87,9 @@ python3 compat/diff/databases_diff.py --server <uuid> --vm <orbstack machine>
 cargo test -p coolify-port --test route_parser_reference   # parser == artisan route:list (321 routes)
 ```
 
-Results on 2026-10-28: 174/174 tests passed (live SSH tests included); 194/194 differential cases, 8/8
-validation scenarios and 41/41 database checks (real VM) matched on `main`; interop PASS; UI type-check clean; container image builds (with OpenSSH).
+Results on 2026-10-28: 177/177 tests passed; 194/194 differential cases, 8/8 validation scenarios and every
+database check (real VM: PostgreSQL 41/41, Redis 42/42, KeyDB 40/40, Dragonfly 39/39, MongoDB 40/40, MySQL 40/40,
+MariaDB 40/40, ClickHouse 39/39) matched on `main`; interop PASS; UI type-check clean; container image builds (with OpenSSH).
 
 ## Migration ledger
 
@@ -117,7 +120,7 @@ None.
 ## Next concrete actions
 
 1. `audit_events` rows (cross-cutting; upstream writes them for server validation and most writes).
-2. The other database engines (same pattern as PostgreSQL), the public TCP proxy and `PATCH /databases/{uuid}`;
+2. The public TCP proxy, the database Environment Variables page and `PATCH /databases/{uuid}`;
    then the deployment engine (milestone 5), with SSH multiplexing.
 3. Persist sessions in a `coolify_rs` schema; 2FA enrollment and recovery codes; API token management UI.
 4. Layer B template for "new column on a mapped table"; classifier calibration.

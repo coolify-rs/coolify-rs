@@ -1,6 +1,6 @@
 <script lang="ts">
   // Port of upstream livewire/project/database/configuration.blade.php (+
-  // Project\Database\Configuration) for PostgreSQL: the heading, the database
+  // Project\Database\Configuration): the heading, the database
   // menu (shown by the main sidebar) and the section. General and Danger zone
   // are ported; the other sections and the Backups / Runtime Logs / Terminal /
   // Files pages show the "not available in coolify-rs yet" page in the same frame.
@@ -26,7 +26,7 @@
   const active = $derived(databaseSection(section));
   const base = $derived(`/project/${uuid}/environment/${env}/database/${db}`);
   const canUpdate = $derived(dbState?.can_update ?? false);
-  const postgres = $derived((record?.database_type ?? '').includes('postgres'));
+  const kind = $derived(dbState?.kind ?? '');
 
   async function loadState(): Promise<DatabaseState> {
     try {
@@ -63,7 +63,9 @@
     page.navContext = databaseNavContext(base, active, {
       canUpdate: dbState.can_update,
       canAccessTerminal: session.isAdmin,
-      backups: true,
+      // `isBackupSolutionAvailable()`: not for Redis, KeyDB and Dragonfly.
+      backups: !['redis', 'keydb', 'dragonfly'].includes(dbState.kind ?? ''),
+      initScripts: (dbState.kind ?? 'postgresql') === 'postgresql',
     });
     uiApi.project(uuid).then((d) => setProjectCrumbs(d, env));
     dbUi
@@ -99,10 +101,16 @@
         <aside class="application-settings-navigation in-main-nav min-w-0"></aside>
         <div class="min-w-0">
           {#if active === 'general'}
-            {#if !postgres}
+            {#if kind === '' || kind === 'sqlite'}
               <Unported description="The settings of this database type are not ported to coolify-rs yet." />
             {:else if dbState}
-              <DatabaseGeneral {record} {canUpdate} onsaved={() => refresh().catch(() => {})} />
+              <DatabaseGeneral
+                {record}
+                {kind}
+                extras={dbState.form ?? { credential_locked: false }}
+                {canUpdate}
+                onsaved={() => refresh().catch(() => {})}
+              />
             {/if}
           {:else if active === 'danger'}
             {#if dbState}

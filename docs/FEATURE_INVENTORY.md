@@ -13,7 +13,7 @@ Upstream references are relative to the upstream repository root.
 |---|---|---|---|
 | `services` | 57 | 0 | not started |
 | `applications` | 52 | 0 | not started |
-| `databases` | 47 | 10 | PostgreSQL: list, show, create, start, stop, restart (POST + GET → 405), delete verified (41/41 `databases_diff.py` on a real VM, byte-identical Compose file); other engines, PATCH, backups, envs, storages, tags, imports, logs, move/clone answer 501 |
+| `databases` | 47 | 17 | list, show, create (PostgreSQL, MySQL, MariaDB, MongoDB, Redis, ClickHouse, Dragonfly, KeyDB), start, stop, restart (POST + GET → 405), delete verified (`databases_diff.py --kind <engine>` on a real VM, byte-identical Compose files); SQLite, PATCH, backups, envs, storages, tags, imports, logs, move/clone answer 501 |
 | `servers` | 44 | 7 | list, show, create, update, delete, validate (`POST` + `GET` → 405) verified (194/194 differential; validation job 8/8 in `validate_diff.py`); `install=true`, `instant_validate`, proxy changes, `?force` with resources and cloud-provider deletes answer 501; resources, domains and the rest not started |
 | `projects` | 18 | 10 | verified for project/environment CRUD; canvas links and project-level shared variables not started |
 | `teams` / `team` | 12 | 8 | verified for reads and `PATCH /team`; team invitations not started |
@@ -65,7 +65,7 @@ Upstream references are relative to the upstream repository root.
 | Git sources (GitHub/GitLab/Gitea/Bitbucket apps, webhooks) | `app/Http/Controllers/Webhook/*` | |
 | Applications and build packs (nixpacks, railpack, dockerfile, compose, static, image) | `ApplicationDeploymentJob` (6,479 lines) | critical, large |
 | Deployment queue, logs, cancellation, previews | `application_deployment_queues`, `bootstrap/helpers/applications.php` | |
-| Standalone databases (9 engines), public proxy | `app/Actions/Database/*` | PostgreSQL verified (StartPostgresql, StopDatabase, RestartDatabase, DeleteResourceJob, status refresh and the database part of GetContainersStatus; UI: environment resource list, new-resource picker, database page); public TCP proxy, SSL, init scripts upload, env vars, backups and the other 8 engines not started |
+| Standalone databases (9 engines), public proxy | `app/Actions/Database/*` | 8 engines verified (Start* actions with environment variables, StopDatabase, RestartDatabase, DeleteResourceJob, status refresh and the database part of GetContainersStatus; UI: environment resource list, new-resource picker, database page with each engine's General form); SQLite, public TCP proxy, SSL, init scripts upload, the env var page and backups not started |
 | Symfony YAML dump (`Yaml::dump($compose, 10)`) | symfony/yaml 7 | verified against the reference image (48 golden cases) | `symfony_yaml.rs` |
 | One-click services (386 compose templates) | `templates/compose`, `bootstrap/helpers/parsers.php` | |
 | Domains, Traefik/Caddy labels, TLS (ACME) | `bootstrap/helpers/docker.php`, `proxy.php` | |

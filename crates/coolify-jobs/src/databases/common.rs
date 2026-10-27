@@ -257,3 +257,28 @@ pub(crate) fn finish_commands(
     commands.push(format!("docker compose -f {dir}/docker-compose.yml up -d"));
     commands.push("echo 'Database started.'".into());
 }
+
+/// PHP `! is_null($v) && ! empty($v)` for a string attribute (`"0"` is empty).
+pub(crate) fn php_filled(v: Option<&str>) -> Option<&str> {
+    v.filter(|s| !s.is_empty() && *s != "0")
+}
+
+/// The `ports` entries (`ports_mappings_array`).
+pub(crate) fn ports(
+    d: &coolify_db::databases::DatabaseRow,
+) -> Option<coolify_compat::yaml::PhpValue> {
+    d.str("ports_mappings")
+        .map(|p| coolify_compat::yaml::PhpValue::strings(p.split(',').map(str::to_owned)))
+}
+
+/// `! is_null($this->database->limits_cpuset)`: an empty string is kept.
+pub(crate) fn cpuset(
+    d: &coolify_db::databases::DatabaseRow,
+) -> Option<coolify_compat::yaml::PhpValue> {
+    match d.raw.get("limits_cpuset") {
+        Some(serde_json::Value::String(c)) => {
+            Some(coolify_compat::yaml::PhpValue::from(c.as_str()))
+        }
+        _ => None,
+    }
+}

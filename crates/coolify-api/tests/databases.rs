@@ -363,7 +363,7 @@ async fn unported_parts_answer_501() {
         501
     );
     assert_eq!(
-        h.call("POST", "/api/v1/databases/mongodb", W, Some(base))
+        h.call("POST", "/api/v1/databases/sqlite", W, Some(base))
             .await
             .status,
         501

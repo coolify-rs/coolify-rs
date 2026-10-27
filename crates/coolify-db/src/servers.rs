@@ -376,6 +376,10 @@ pub(crate) fn set_clause(values: &[(&'static str, ColumnValue)], first_param: us
                 ColumnValue::Int(_) if *col != "private_key_id" => "::integer",
                 _ => "",
             };
+            // A NULL is written as a literal: a text-typed NULL parameter does not fit integer columns.
+            if matches!(v, ColumnValue::Text(None)) {
+                return format!("\"{col}\" = NULL");
+            }
             format!("\"{col}\" = ${}{cast}", first_param + i)
         })
         .collect::<Vec<_>>()

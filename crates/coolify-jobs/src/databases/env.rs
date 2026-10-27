@@ -266,7 +266,8 @@ pub fn add_coolify_variables(list: &mut Vec<String>, ctx: &StartContext<'_>) {
 }
 
 static SHARED_REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)^\{\{\s*(?:team|project|environment|server)\..*\}\}$").unwrap_or_else(|_| unreachable!())
+    Regex::new(r"(?s)^\{\{\s*(?:team|project|environment|server)\..*\}\}$")
+        .unwrap_or_else(|_| unreachable!())
 });
 
 /// The `json_encode(... ->get('value')->makeVisible('value')->sort())` part of
@@ -278,7 +279,9 @@ pub fn config_hash_values(variables: &[Var]) -> String {
     idx.sort_by(|a, b| variables[*a].cipher.cmp(&variables[*b].cipher));
     let value = |i: usize| {
         let v = &variables[i].value;
-        let shared = v.as_deref().is_some_and(|x| SHARED_REFERENCE.is_match(x.trim()));
+        let shared = v
+            .as_deref()
+            .is_some_and(|x| SHARED_REFERENCE.is_match(x.trim()));
         serde_json::json!({
             "value": v,
             "is_shared": shared,

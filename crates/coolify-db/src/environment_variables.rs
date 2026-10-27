@@ -179,3 +179,57 @@ pub async fn references_locked_shared(
     }
     Ok(false)
 }
+
+/// `$resource->runtime_environment_variables()->updateOrCreate(['key' => $key], ['value' => ...])`:
+/// updates the first variable with that key or creates it. `is_shared` is what the model's
+/// `saving` hook derives from the value.
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert(
+    db: &Db,
+    resource_type: &str,
+    resource_id: i64,
+    key: &str,
+    value_encrypted: Option<&str>,
+    is_shared: bool,
+    version: &str,
+    now: NaiveDateTime,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    let id: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 AND key = $3 ORDER BY id LIMIT 1",
+    )
+    .bind(resource_type)
+    .bind(resource_id)
+    .bind(key)
+    .fetch_optional(db.pool())
+    .await?;
+    match id {
+        Some(id) => {
+            sqlx::query("UPDATE environment_variables SET value = $1, is_shared = $2, updated_at = $3 WHERE id = $4")
+                .bind(value_encrypted)
+                .bind(is_shared)
+                .bind(now)
+                .bind(id)
+                .execute(db.pool())
+                .await?;
+        }
+        None => {
+            let mut tx = db.pool().begin().await?;
+            insert(
+                &mut tx,
+                resource_type,
+                resource_id,
+                &NewVariable {
+                    key: key.to_owned(),
+                    value_encrypted: value_encrypted.map(str::to_owned),
+                    is_shared,
+                    version: version.to_owned(),
+                },
+                now,
+            )
+            .await?;
+            tx.commit().await?;
+        }
+    }
+    Ok(())
+}

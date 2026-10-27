@@ -268,7 +268,43 @@ pub const ROUTES: &[RouteSpec] = &[
     },
     RouteSpec {
         method: "POST",
+        uri: "api/v1/databases/mysql",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/databases/mariadb",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/databases/mongodb",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
         uri: "api/v1/databases/redis",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/databases/clickhouse",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/databases/dragonfly",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/databases/keydb",
         group: Group::Main,
         abilities: W,
     },
@@ -428,8 +464,38 @@ pub fn router(state: AppState) -> Router {
         ),
         (
             "POST",
+            "api/v1/databases/mysql",
+            on_post(databases::create_mysql),
+        ),
+        (
+            "POST",
+            "api/v1/databases/mariadb",
+            on_post(databases::create_mariadb),
+        ),
+        (
+            "POST",
+            "api/v1/databases/mongodb",
+            on_post(databases::create_mongodb),
+        ),
+        (
+            "POST",
             "api/v1/databases/redis",
             on_post(databases::create_redis),
+        ),
+        (
+            "POST",
+            "api/v1/databases/clickhouse",
+            on_post(databases::create_clickhouse),
+        ),
+        (
+            "POST",
+            "api/v1/databases/dragonfly",
+            on_post(databases::create_dragonfly),
+        ),
+        (
+            "POST",
+            "api/v1/databases/keydb",
+            on_post(databases::create_keydb),
         ),
         ("GET", "api/v1/databases/{uuid}", on_get(databases::show)),
         (

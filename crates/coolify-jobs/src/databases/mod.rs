@@ -17,9 +17,13 @@ use serde_json::{Value, json};
 use crate::Jobs;
 use crate::server::ServerInfo;
 
+mod clickhouse;
 mod common;
 pub mod connection;
 pub mod env;
+mod keydb;
+mod mongodb;
+mod mysql;
 mod postgresql;
 mod redis;
 
@@ -52,6 +56,10 @@ pub fn start_commands(ctx: &StartContext<'_>) -> Result<(Vec<String>, String), S
     match ctx.db.kind {
         Kind::Postgresql => Ok(postgresql::start_commands(ctx)),
         Kind::Redis => Ok(redis::start_commands(ctx)),
+        Kind::Keydb | Kind::Dragonfly => Ok(keydb::start_commands(ctx)),
+        Kind::Mongodb => Ok(mongodb::start_commands(ctx)),
+        Kind::Mysql | Kind::Mariadb => Ok(mysql::start_commands(ctx)),
+        Kind::Clickhouse => Ok(clickhouse::start_commands(ctx)),
         _ => Err("Database start failed.".into()),
     }
 }

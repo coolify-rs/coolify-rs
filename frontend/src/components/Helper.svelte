@@ -3,6 +3,7 @@
   // trigger) that shows a tooltip on hover, focus or tap.
   import type { Snippet } from 'svelte';
   import Reicon from './Reicon.svelte';
+  import { sanitizeHtml } from '../lib/sanitize';
 
   let { helper, label = 'More information', trigger }: { helper: string; label?: string; trigger?: Snippet } = $props();
 
@@ -78,7 +79,8 @@
       onmouseenter={() => clearTimeout(hideTimer)}
       onmouseleave={hide}
     >
-      <div class="px-3 py-2.5 text-[13px] leading-5">{helper}</div>
+      <!-- eslint-disable-next-line svelte/no-at-html-tags -- upstream prints helpers with {!! !!}; sanitized -->
+      <div class="px-3 py-2.5 text-[13px] leading-5">{@html sanitizeHtml(helper)}</div>
     </div>
   {/if}
 </div>

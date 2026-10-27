@@ -27,8 +27,11 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   "install them manually" messages, and after success coolify-rs neither fetches the server details nor starts the
   proxy or Sentinel (upstream does all three).
 - Validation jobs run inside the coolify-rs process: a restart drops a running validation (upstream's queue keeps it).
-- Databases: only PostgreSQL. Making a database public (TCP proxy), SSL, init script upload, environment variables,
-  file storages, backups, imports, container logs, terminal, metrics, tags, custom Docker run options at start, and
+- Databases: every engine but SQLite. Environment variables are read at start (shared `{{team.X}}`-style references
+  resolve; secret manager `{{vault.X}}` references stop the start with a message), but the Environment Variables page is
+  not ported. Upstream stores `config_hash` only when the database page is open after a start; coolify-rs stores it after
+  every start. The ClickHouse "current data is not in the data volume" check is not ported. Making a database public
+  (TCP proxy), SSL, init script upload, file storages, backups, imports, container logs, terminal, metrics, tags, custom Docker run options at start, and
   `PATCH /databases/{uuid}` are not ported (501, or disabled in the UI). After a start coolify-rs does not run Docker
   cleanup, and `Str::slug` in container labels does not transliterate non-ASCII names.
   Reachability changes do not send the Reachable/Unreachable notifications.

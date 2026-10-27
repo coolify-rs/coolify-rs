@@ -84,7 +84,13 @@ fn message(field: &str, rule: &str, messages: Messages, param: Option<usize>) ->
             "array" => "The :attribute field must be an array.".into(),
             _ => "The :attribute field format is invalid.".into(),
         });
-    let template = template.replace(":attribute", &attribute(field));
+    // `attribute:{field}` entries rename the field (Livewire `$validationAttributes`).
+    let attr_key = format!("attribute:{field}");
+    let name = messages
+        .iter()
+        .find(|(k, _)| *k == attr_key)
+        .map_or_else(|| attribute(field), |(_, v)| (*v).to_owned());
+    let template = template.replace(":attribute", &name);
     match param {
         Some(p) => template
             .replace(":min", &p.to_string())

@@ -1,6 +1,6 @@
-//! Standalone databases (`standalone_postgresqls`, ...). Only PostgreSQL is
-//! ported; the other kinds are listed so lookups by UUID and team listings
-//! can tell that a resource exists and answer "not ported" for it.
+//! Standalone databases (`standalone_postgresqls`, ...). SQLite is not ported;
+//! it is listed so lookups by UUID and team listings can tell that a resource
+//! exists and answer "not ported" for it.
 
 use chrono::NaiveDateTime;
 use coolify_domain::{TeamId, new_public_id};
@@ -84,7 +84,7 @@ impl Kind {
     }
 
     pub fn ported(self) -> bool {
-        matches!(self, Kind::Postgresql | Kind::Redis)
+        !matches!(self, Kind::Sqlite)
     }
 
     /// The ported kinds, in upstream's order.
@@ -519,7 +519,11 @@ pub async fn update_if_changed(
     let changed = values
         .iter()
         .enumerate()
-        .map(|(i, (col, _))| format!("\"{col}\" IS DISTINCT FROM ${}", i + 3))
+        .map(|(i, (col, v))| match v {
+            ColumnValue::Text(None) => format!("\"{col}\" IS NOT NULL"),
+            ColumnValue::Int(_) => format!("\"{col}\" IS DISTINCT FROM ${}::integer", i + 3),
+            _ => format!("\"{col}\" IS DISTINCT FROM ${}", i + 3),
+        })
         .collect::<Vec<_>>()
         .join(" OR ");
     let status_touch = if values.iter().any(|(c, _)| *c == "status") {
