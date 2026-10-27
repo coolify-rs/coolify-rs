@@ -431,6 +431,7 @@ dependencies = [
  "ssh-key",
  "subtle",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]
@@ -474,6 +475,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tracing",
