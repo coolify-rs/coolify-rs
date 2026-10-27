@@ -31,13 +31,19 @@ Verified = contract tests **and** 0 mismatches in the differential run against t
 - Schema guard: a 4.5.0 database is read-only; the `main` database is writable.
 - Private keys CRUD (OpenSSH Ed25519/ECDSA/RSA and RSA PEM; public key and fingerprint identical to upstream's
   phpseclib output; keys encrypted with `APP_KEY` and readable by upstream).
+- Servers: `GET /servers`, `GET /servers/{uuid}` (accessors, casts, hidden and sensitive settings, decrypted
+  Sentinel token), `POST /servers` (settings row with double-encrypted Sentinel token, default Docker destination,
+  server shared variables), `PATCH /servers/{uuid}` (Laravel `url`, PHP timezone list, poliander/cron ported),
+  `DELETE /servers/{uuid}` (soft delete plus the force-delete cleanup). Rows written by either side are equal
+  after normalization and upstream decrypts coolify-rs's secrets.
 
 ## Implemented, verified by tests and a manual browser walkthrough
 
 - Browser login (bcrypt, TOTP 2FA with replay protection, throttling), sessions, CSRF, team switching, `/ui/api` bridge.
 - Web UI ported from upstream's Blade views (ADR 0008), compared by headless screenshots against the reference
   instance at the same URLs: login and 2FA challenge, shell (topbar, breadcrumb with team/project/environment
-  switchers, drill-down sidebar, user menu, collapsed sidebar, phone sheet), dashboard, projects, project,
+  switchers, drill-down sidebar, user menu, collapsed sidebar, phone sheet), dashboard, servers (list, new server
+  by IP, General with the server menu, switcher and status chip, Danger Zone with password confirmation), projects, project,
   project settings, environment, environment settings, private keys (list, generate ED25519/RSA, add, edit, delete,
   delete unused), team settings, members (roles, removal), appearance (theme, page width, navigation style).
   The `/ui/*` read models and writes behind them are covered by `ui_pages.rs`.
@@ -61,7 +67,7 @@ python3 compat/diff/differential.py --tokens compat/reference/secrets/tokens.jso
 cargo test -p coolify-port --test route_parser_reference   # parser == artisan route:list (321 routes)
 ```
 
-Results on 2026-10-27: 109/109 tests passed; 131/131 differential cases matched on `main`; interop PASS; UI
+Results on 2026-10-27: 124/124 tests passed; 183/183 differential cases matched on `main`; interop PASS; UI
 type-check clean; container image builds and serves UI + API.
 
 ## Migration ledger
@@ -92,7 +98,8 @@ None.
 
 ## Next concrete actions
 
-1. Servers read endpoints (`GET /servers`, `/servers/{uuid}`, `/resources`, `/domains`) and a servers UI.
+1. Remote execution core (milestone 4, security review first), then server validation; `/resources` and
+   `/domains` with the resource models.
 2. Persist sessions in a `coolify_rs` schema; 2FA enrollment and recovery codes; API token management UI.
 3. Layer B template for "new column on a mapped table"; classifier calibration.
 

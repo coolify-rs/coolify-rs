@@ -25,7 +25,11 @@ projects/environments, PHP-compatible JSON, differential harness, migration engi
 Done: sessions, login with 2FA, projects, environments, private keys, team view. Next with each backend slice: its
 pages. Separately: 2FA enrollment, recovery codes, password reset, API tokens, invitations, instance settings.
 
-## Milestone 3: servers and private keys (read side first; private keys done in session 3)
+## Milestone 3: servers and private keys (private keys session 3; server records session 5)
+
+Done: list, show, create, update, delete without connecting to the server, and the server UI pages for them.
+Remaining: `/servers/{uuid}/resources` and `/domains` (need the resource models).
+
 
 Private keys API (needs encrypter, `read:sensitive` exposure, fingerprinting via an SSH key library), then servers
 read endpoints (`GET /servers`, `/servers/{uuid}`, `/resources`, `/domains`) and `ServerSetting` serialization rules,

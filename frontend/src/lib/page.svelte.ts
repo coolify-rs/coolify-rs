@@ -16,8 +16,40 @@ export interface Switcher {
   items: SwitcherItem[];
 }
 
+/** An entry of a resource menu (e.g. upstream components/server/sidebar.blade.php). */
+export interface NavContextItem {
+  label: string;
+  icon: string;
+  href: string;
+  active?: boolean;
+  /** Shown greyed out, not a link ("Validate the server connection first."). */
+  disabled?: boolean;
+  beta?: boolean;
+}
+
+/** A resource menu the main sidebar shows instead of the main menu
+ *  (upstream `registerMainNavContext` + `#main-nav-context-{depth}`). */
+export interface NavContext {
+  label: string;
+  backTitle: string;
+  ariaLabel: string;
+  groups: NavContextItem[][];
+}
+
+/** Server context in the top bar (switcher and status), see ServerTopbar. */
+export interface ServerTopbar {
+  uuid: string;
+  name: string;
+  functional: boolean;
+  proxySet: boolean;
+  proxyStatus: string | null;
+  servers: { uuid: string; name: string; functional: boolean }[];
+}
+
 class PageState {
   switchers = $state<Switcher[]>([]);
+  navContext = $state<NavContext | null>(null);
+  server = $state<ServerTopbar | null>(null);
 }
 
 export const page = new PageState();

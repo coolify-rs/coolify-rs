@@ -1,48 +1,85 @@
 <script lang="ts">
-  // Port of upstream components/modal-confirmation.blade.php (the type-the-
-  // name step; coolify-rs has no password re-confirmation step).
+  // Port of upstream components/modal-confirmation.blade.php: optional
+  // checkbox step, the warning + type-the-name step, and the password step.
+  // The server verifies the password; `onconfirm` returns an error message to
+  // stay on the password step, or nothing when done.
   import Reicon from './Reicon.svelte';
   import Callout from './Callout.svelte';
+  import Checkbox from './Checkbox.svelte';
   import { ApiError } from '../lib/api';
   import { notify } from '../lib/toast.svelte';
+  import { session } from '../lib/session.svelte';
+
+  interface CheckboxOption {
+    id: string;
+    label: string;
+    defaultWarning?: string;
+  }
 
   let {
     title = 'Are you sure?',
     actions = [],
+    checkboxes = [],
     warningMessage = 'This operation is permanent and cannot be undone. Please think again before proceeding!',
     confirmWithText = true,
+    confirmWithPassword = false,
     confirmationText = 'Confirm Deletion',
     confirmationLabel = 'Please confirm the execution of the actions by entering the Name below',
     shortConfirmationLabel = 'Name',
-    step2ButtonText = 'Confirm',
+    step1ButtonText = 'Continue',
+    step2ButtonText = 'Continue',
+    step3ButtonText = 'Confirm',
     onconfirm,
     onclose,
   }: {
     title?: string;
     actions?: string[];
+    checkboxes?: CheckboxOption[];
     warningMessage?: string;
     confirmWithText?: boolean;
+    confirmWithPassword?: boolean;
     confirmationText?: string;
     confirmationLabel?: string;
     shortConfirmationLabel?: string;
+    step1ButtonText?: string;
     step2ButtonText?: string;
-    onconfirm: () => Promise<void>;
+    step3ButtonText?: string;
+    onconfirm: (password: string, selected: string[]) => Promise<string | void>;
     onclose: () => void;
   } = $props();
 
+  // svelte-ignore state_referenced_locally
+  let step = $state(checkboxes.length ? 1 : 2);
+  let selected = $state<string[]>([]);
   let typed = $state('');
+  let password = $state('');
+  let passwordError = $state('');
   let submitting = $state(false);
   let copied = $state(false);
+
+  // "Continue" on step 2 becomes "Confirm" when there is no password step.
+  const effectiveStep2 = $derived(!confirmWithPassword && step2ButtonText === 'Continue' ? 'Confirm' : step2ButtonText);
 
   async function submit() {
     submitting = true;
     try {
-      await onconfirm();
+      const error = await onconfirm(password, selected);
+      if (typeof error === 'string') {
+        passwordError = error;
+        password = '';
+        submitting = false;
+        return;
+      }
       onclose();
     } catch (e) {
       notify.error(e instanceof ApiError ? e.message : String(e), e instanceof ApiError ? e.details : undefined);
       submitting = false;
     }
+  }
+
+  function setAction(id: string, checked: boolean) {
+    selected = selected.filter((s) => s !== id);
+    if (checked) selected.push(id);
   }
 
   async function copy() {
@@ -79,59 +116,110 @@
       </button>
     </header>
     <div class="application-settings-section-body min-h-0 flex-1 overflow-y-auto" style="-webkit-overflow-scrolling: touch;">
-      <div>
-        <Callout type="danger" title="Warning" class="mb-4">{warningMessage}</Callout>
-        <div class="mb-2 text-[12px] font-medium text-neutral-700 dark:text-fg-dim">The following actions will be performed:</div>
-        <ul class="mb-4 space-y-2">
-          {#each actions as action, i (i)}
-            <li class="flex items-start gap-2 text-[12px] leading-5 text-red-600 dark:text-red-400">
-              <span class="shrink-0" aria-hidden="true">-</span>
-              <span>{action}</span>
-            </li>
-          {/each}
-        </ul>
-        {#if confirmWithText}
-          <div class="mb-4">
-            <h4 class="mb-1 text-[12px] font-semibold">Confirm actions</h4>
-            <p class="mb-2 text-[12px] leading-5 text-neutral-500 dark:text-fg-dim">{confirmationLabel}</p>
-            <div class="relative mb-2">
-              <div class="relative">
-                <input type="text" value={confirmationText} readonly class="input" />
-                <button
-                  type="button"
-                  title="Copy to clipboard"
-                  aria-label="Copy to clipboard"
-                  class="icon-button group shrink-0 absolute top-1/2 right-2 -translate-y-1/2"
-                  onclick={copy}
-                >
-                  <span class="inline-flex transition-transform duration-150 ease-out group-active:scale-75">
-                    {#if copied}
-                      <Reicon name="check" class="size-3.5 text-success" />
-                    {:else}
-                      <Reicon name="copy" class="size-3.5" />
-                    {/if}
-                  </span>
-                </button>
-              </div>
+      {#if step === 1}
+        <div>
+          {#each checkboxes as c (c.id)}
+            <div class="flex justify-between items-center mb-2">
+              <Checkbox fullWidth id={c.id} label={c.label} checked={selected.includes(c.id)} onchange={(v) => setAction(c.id, v)} />
             </div>
-            <label for="userConfirmationText" class="mt-4 mb-1.5 block text-[12px] font-medium text-neutral-700 dark:text-fg-dim">
-              {shortConfirmationLabel}
-            </label>
-            <input id="userConfirmationText" type="text" bind:value={typed} class="input w-full" />
+          {/each}
+          <div class="mt-4 flex flex-wrap justify-end gap-2 border-t border-neutral-200 pt-4 dark:border-white/[0.08]">
+            <button type="button" class="button button-error w-auto" onclick={() => (step = 2)}>{step1ButtonText}</button>
           </div>
-        {/if}
-        <div class="mt-4 flex flex-wrap justify-end gap-2 border-t border-neutral-200 pt-4 dark:border-white/[0.08]">
-          <button type="button" class="button" onclick={onclose}>Cancel</button>
-          <button
-            type="button"
-            class="button button-error w-auto"
-            disabled={submitting || (confirmWithText && typed !== confirmationText)}
-            onclick={submit}
-          >
-            {step2ButtonText}
-          </button>
         </div>
-      </div>
+      {:else if step === 2}
+        <div>
+          <Callout type="danger" title="Warning" class="mb-4">{@html warningMessage}</Callout>
+          <div class="mb-2 text-[12px] font-medium text-neutral-700 dark:text-fg-dim">The following actions will be performed:</div>
+          <ul class="mb-4 space-y-2">
+            {#each actions as action, i (i)}
+              <li class="flex items-start gap-2 text-[12px] leading-5 text-red-600 dark:text-red-400">
+                <span class="shrink-0" aria-hidden="true">-</span>
+                <span>{action}</span>
+              </li>
+            {/each}
+            {#each checkboxes as c (c.id)}
+              {#if selected.includes(c.id)}
+                <li class="flex items-start gap-2 text-[12px] leading-5 text-red-600 dark:text-red-400">
+                  <span class="shrink-0" aria-hidden="true">-</span>
+                  <span>{c.label}</span>
+                </li>
+              {:else if c.defaultWarning}
+                <li class="flex items-start gap-2 text-[12px] leading-5 text-red-600 dark:text-red-400">
+                  <span class="shrink-0" aria-hidden="true">-</span>
+                  <span>{c.defaultWarning}</span>
+                </li>
+              {/if}
+            {/each}
+          </ul>
+          {#if confirmWithText}
+            <div class="mb-4">
+              <h4 class="mb-1 text-[12px] font-semibold">Confirm actions</h4>
+              <p class="mb-2 text-[12px] leading-5 text-neutral-500 dark:text-fg-dim">{confirmationLabel}</p>
+              <div class="relative mb-2">
+                <div class="relative">
+                  <input type="text" value={confirmationText} readonly class="input" />
+                  <button
+                    type="button"
+                    title="Copy to clipboard"
+                    aria-label="Copy to clipboard"
+                    class="icon-button group shrink-0 absolute top-1/2 right-2 -translate-y-1/2"
+                    onclick={copy}
+                  >
+                    <span class="inline-flex transition-transform duration-150 ease-out group-active:scale-75">
+                      {#if copied}<Reicon name="check" class="size-3.5 text-success" />{:else}<Reicon name="copy" class="size-3.5" />{/if}
+                    </span>
+                  </button>
+                </div>
+              </div>
+              <label for="userConfirmationText" class="mt-4 mb-1.5 block text-[12px] font-medium text-neutral-700 dark:text-fg-dim">
+                {shortConfirmationLabel}
+              </label>
+              <input id="userConfirmationText" type="text" bind:value={typed} class="input w-full" />
+            </div>
+          {/if}
+          <div class="mt-4 flex flex-wrap justify-end gap-2 border-t border-neutral-200 pt-4 dark:border-white/[0.08]">
+            {#if checkboxes.length}
+              <button type="button" class="button" onclick={() => (step = 1)}>Back</button>
+            {:else}
+              <button type="button" class="button" onclick={onclose}>Cancel</button>
+            {/if}
+            <button
+              type="button"
+              class="button button-error w-auto"
+              disabled={submitting || (confirmWithText && typed !== confirmationText)}
+              onclick={() => (confirmWithPassword ? (step = 3) : submit())}
+            >
+              {effectiveStep2}
+            </button>
+          </div>
+        </div>
+      {:else}
+        <div>
+          <Callout type="danger" title="Final Confirmation" class="mb-4">Please enter your password to confirm this destructive action.</Callout>
+          <div class="flex flex-col gap-2 mb-4">
+            <label for="password-confirm" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Your Password</label>
+            <!-- Enter must not submit the action (upstream @keydown.enter.prevent). -->
+            <form onsubmit={(e) => e.preventDefault()}>
+              <input type="text" name="username" autocomplete="username" value={session.info?.user.email ?? ''} style="display: none;" />
+              <input
+                type="password"
+                id="password-confirm"
+                bind:value={password}
+                class="w-full input"
+                placeholder="Enter your password"
+                autocomplete="current-password"
+                onkeydown={(e) => e.key === 'Enter' && e.preventDefault()}
+              />
+            </form>
+            {#if passwordError}<p class="mt-1 text-sm text-red-500">{passwordError}</p>{/if}
+          </div>
+          <div class="mt-4 flex flex-wrap justify-end gap-2 border-t border-neutral-200 pt-4 dark:border-white/[0.08]">
+            <button type="button" class="button" onclick={() => (step = 2)}>Back</button>
+            <button type="button" class="button button-error w-auto" disabled={!password || submitting} onclick={submit}>{step3ButtonText}</button>
+          </div>
+        </div>
+      {/if}
     </div>
   </div>
 </div>

@@ -50,7 +50,7 @@ export const navSections: [string, NavItem[]][] = [
   [
     'Infrastructure',
     [
-      { label: 'Servers', icon: 'servers', href: '/servers', active: ['server/*', 'servers', 'servers/*'] },
+      { label: 'Servers', icon: 'servers', href: '/servers', active: ['server/*', 'servers', 'servers/*'], ported: true },
       {
         label: 'Integrations',
         icon: 'link',

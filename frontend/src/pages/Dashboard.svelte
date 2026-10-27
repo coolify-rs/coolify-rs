@@ -146,7 +146,7 @@
           <SectionHeading title="Servers" href={data && data.servers.length > limit ? '/servers' : null}>
             {#snippet titleAction()}
               {#if data?.can_create}
-                <a href="/server/new" use:link class={titleIconButton} title="New server" aria-label="New server">
+                <a href="/servers/new" use:link class={titleIconButton} title="New server" aria-label="New server">
                   <Reicon name="plus" class="size-3" />
                 </a>
               {/if}
@@ -177,7 +177,7 @@
               <Empty title="No servers yet" description="Connect infrastructure for your deployments." iconName="servers" size="sm">
                 {#snippet contents()}
                   {#if data?.can_create}
-                    <a href="/server/new" use:link class="button button-highlighted">
+                    <a href="/servers/new" use:link class="button button-highlighted">
                       <Reicon name="plus" class="size-3.5" />
                       New server
                     </a>

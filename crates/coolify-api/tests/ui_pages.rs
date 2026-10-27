@@ -369,3 +369,93 @@ async fn member_roles_and_removal() {
         .assert(404, r#"{"message":"Member not found."}"#);
     h.finish().await;
 }
+
+#[tokio::test]
+async fn servers_form_create_list_and_delete() {
+    let h = Harness::new().await;
+    let alice = Ui::login(&h, "alice@example.test").await;
+    let r = alice
+        .send(
+            "POST",
+            "/ui/keys/generate",
+            Some(json!({"type": "ed25519"})),
+        )
+        .await;
+    assert_eq!(r.status, 201, "{}", r.body);
+    let form = alice.get("/ui/servers/form").await;
+    let key_id = form["keys"][0]["id"].as_i64().unwrap();
+    assert_eq!(form["name"].as_str().unwrap().split('-').count(), 3);
+
+    // Livewire ByIp messages.
+    let r = alice
+        .send("POST", "/ui/servers", Some(json!({"name": "web", "ip": "", "user": "", "port": 0, "server_role": "x", "private_key_id": key_id})))
+        .await;
+    assert_eq!(
+        r.json()["errors"],
+        json!({
+            "ip": ["The IP Address/Domain is required."],
+            "user": ["The User field is required."],
+            "port": ["The Port field must be between 1 and 65535."],
+            "server_role": ["The selected Server Role is invalid."]
+        })
+    );
+    let body = json!({"name": "web", "ip": "10.9.9.9", "user": "root", "port": 22, "server_role": "both", "private_key_id": key_id});
+    let r = alice.send("POST", "/ui/servers", Some(body.clone())).await;
+    assert_eq!(r.status, 201, "{}", r.body);
+    let uuid = r.json()["uuid"].as_str().unwrap().to_string();
+    alice.send("POST", "/ui/servers", Some(body)).await.assert(
+        422,
+        r#"{"message":"A server with this IP\/Domain already exists."}"#,
+    );
+    // ByIp sets the proxy status before the type, and saves the default role
+    // without touching the settings row.
+    let (proxy, role_updated): (String, bool) = sqlx::query_as(
+        "SELECT s.proxy::text, ss.updated_at > ss.created_at FROM servers s JOIN server_settings ss ON ss.server_id = s.id WHERE s.uuid = $1",
+    )
+    .bind(&uuid)
+    .fetch_one(h.tdb.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        proxy,
+        r#"{"redirect_enabled":true,"status":"exited","type":"TRAEFIK"}"#
+    );
+    assert!(!role_updated);
+
+    let list = alice.get("/ui/servers").await;
+    let s = &list["servers"][0];
+    assert_eq!(s["status"], "Validation required");
+    assert_eq!(s["functional"], false);
+    assert_eq!(list["confirm"], json!({"text": true, "password": true}));
+
+    // Deleting from the UI asks for the account password.
+    alice
+        .send(
+            "POST",
+            &format!("/ui/servers/{uuid}/delete"),
+            Some(json!({"password": "nope"})),
+        )
+        .await
+        .assert(422, r#"{"message":"The provided password is incorrect."}"#);
+    let bob = Ui::login(&h, "bob@example.test").await;
+    assert_eq!(
+        bob.send(
+            "POST",
+            &format!("/ui/servers/{uuid}/delete"),
+            Some(json!({"password": common::PASSWORD}))
+        )
+        .await
+        .status,
+        403
+    );
+    alice
+        .send(
+            "POST",
+            &format!("/ui/servers/{uuid}/delete"),
+            Some(json!({"password": common::PASSWORD})),
+        )
+        .await
+        .assert(200, r#"{"message":"Server deleted."}"#);
+    assert_eq!(alice.get("/ui/servers").await["servers"], json!([]));
+    h.finish().await;
+}

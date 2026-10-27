@@ -218,3 +218,56 @@ export const teamUi = {
   setRole: (id: number, role: Role) => request<{ message: string }>('POST', `/ui/team/members/${id}/role`, { role }),
   remove: (id: number) => request<{ message: string }>('DELETE', `/ui/team/members/${id}`),
 };
+
+/** One server as `GET /ui/servers` describes it (facts the server pages need). */
+export interface ServerFacts {
+  uuid: string;
+  name: string;
+  description: string | null;
+  status: string;
+  status_type: 'success' | 'warning' | 'error';
+  functional: boolean;
+  transferred: boolean;
+  is_coolify_host: boolean;
+  is_localhost: boolean;
+  is_build: boolean;
+  is_swarm: boolean;
+  is_swarm_worker: boolean;
+  proxy_set: boolean;
+  proxy_status: string | null;
+  cloud: boolean;
+  resources: number;
+}
+
+export interface ServersPageData {
+  servers: ServerFacts[];
+  can_create: boolean;
+  confirm: { text: boolean; password: boolean };
+}
+
+/** `GET /servers/{uuid}` (bridge) fields the general page edits. */
+export interface ServerDetail {
+  uuid: string;
+  name: string;
+  description: string | null;
+  ip: string;
+  user: string;
+  port: number;
+  settings: {
+    connection_timeout: number;
+    server_timezone: string;
+    wildcard_domain: string | null;
+    server_role: 'deployment' | 'build' | 'both' | null;
+    is_build_server: boolean;
+  };
+  validation_logs?: string | null;
+}
+
+export const serversUi = {
+  timezones: () => request<string[]>('GET', '/ui/timezones'),
+  list: () => request<ServersPageData>('GET', '/ui/servers'),
+  form: () => request<{ keys: { id: number; name: string }[]; name: string }>('GET', '/ui/servers/form'),
+  create: (body: Record<string, unknown>) => request<{ uuid: string }>('POST', '/ui/servers', body),
+  remove: (uuid: string, password: string, actions: string[]) =>
+    request<{ message: string }>('POST', `/ui/servers/${encodeURIComponent(uuid)}/delete`, { password, actions }),
+};

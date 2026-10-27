@@ -4,7 +4,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 
 ## Scope
 
-- Only 28 of 321 upstream API operations are implemented. Others answer `501 {"message":"This endpoint is not
+- Only 33 of 321 upstream API operations are implemented. Others answer `501 {"message":"This endpoint is not
   implemented in coolify-rs yet."}`.
 - The web UI covers the dashboard, projects, environments, private keys, team settings, members and appearance.
   Not available yet: registration and the root setup window, password reset and forced password change, 2FA
@@ -17,6 +17,14 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Browser sessions live in memory: a restart signs everyone out. Session limits: 10,000 sessions, 7-day idle
   (`SESSION_LIFETIME`), 30-day absolute.
 - Users must sign in with an existing Coolify account (created in upstream Coolify).
+- Servers are records only: coolify-rs never connects to a server. `instant_validate`, changing `proxy_type`,
+  `DELETE ?force=true` on a server with resources, `delete_from_provider`, deleting a transferred server and
+  `GET /servers/{uuid}?resources=1` answer 501; `/servers/{uuid}/resources`, `/domains` and the other server
+  sub-routes are not ported. Servers created by coolify-rs stay "Validation required" until upstream validates them.
+- Server status in the UI and in `/ui/*` omits the Sentinel and Traefik-update checks.
+- `sentinel_custom_url` for a new server falls back to the request's scheme and host; `X-Forwarded-*` count only
+  from trusted proxies (upstream trusts every proxy).
+- The new-server page offers only "IP address or domain" (no cloud provisioning).
 - No deployment engine, SSH execution, proxy management, backups, scheduler, notifications or webhooks yet.
 - coolify-rs cannot bootstrap a new installation: it requires a database created by upstream Coolify at the baseline
   (`main` @ b5823c7, 473 migrations); it runs no upstream DDL. A 4.5.0 database is served read-only until upstream

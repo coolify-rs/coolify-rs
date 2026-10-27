@@ -19,6 +19,12 @@ const routes: { name: string; pattern: string }[] = [
   { name: 'team', pattern: '/team' },
   { name: 'members', pattern: '/team/members' },
   { name: 'appearance', pattern: '/profile/appearance' },
+  { name: 'servers', pattern: '/servers' },
+  { name: 'server-new', pattern: '/servers/new' },
+  { name: 'server-new-type', pattern: '/servers/new/:type' },
+  { name: 'server', pattern: '/server/:uuid' },
+  { name: 'server-section', pattern: '/server/:uuid/:section' },
+  { name: 'server-section', pattern: '/server/:uuid/:section/:sub' },
 ];
 
 function match(path: string): Match {

@@ -2,6 +2,7 @@
   // Port of upstream components/forms/listbox.blade.php (single select): a
   // trigger button and a fixed-position option panel.
   import Helper from './Helper.svelte';
+  import Reicon from './Reicon.svelte';
 
   interface Option {
     value: V;
@@ -20,6 +21,9 @@
     disabled = false,
     placeholder = 'Select…',
     emptyText = 'No options available.',
+    searchable = false,
+    searchPlaceholder = 'Search…',
+    searchEmptyText = 'No matching options',
     onchange,
   }: {
     id: string;
@@ -31,6 +35,9 @@
     disabled?: boolean;
     placeholder?: string;
     emptyText?: string;
+    searchable?: boolean;
+    searchPlaceholder?: string;
+    searchEmptyText?: string;
     onchange?: (v: V) => void;
   } = $props();
 
@@ -41,6 +48,15 @@
   let trigger: HTMLButtonElement | undefined = $state();
   let panel: HTMLDivElement | undefined = $state();
 
+  let query = $state('');
+  const visible = $derived.by(() => {
+    const q = query.toLowerCase().trim();
+    if (!searchable || q === '') return options;
+    return options.filter((o) => [o.label, String(o.value), o.description].some((t) => String(t ?? '').toLowerCase().includes(q)));
+  });
+  function focusSearch(node: HTMLInputElement) {
+    queueMicrotask(() => node.focus());
+  }
   const current = $derived(options.find((o) => String(o.value) === String(value))?.label ?? placeholder);
 
   function position() {
@@ -62,6 +78,7 @@
 
   function toggle() {
     open = !open;
+    query = '';
     positioned = false;
     if (open) requestAnimationFrame(position);
   }
@@ -113,14 +130,38 @@
       <div
         bind:this={panel}
         id="{id}-panel"
-        class="listbox-panel"
+        class="listbox-panel{searchable ? ' searchable-listbox-panel' : ''}"
         style="position: fixed; z-index: 9999; visibility: {positioned ? 'visible' : 'hidden'}; {panelStyle}"
         role="listbox"
       >
-        {#if options.length === 0}
-          <div class="px-3 py-2 text-[13px] text-neutral-500 dark:text-fg-dim">{emptyText}</div>
+        {#if searchable}
+          <div class="searchable-listbox-search">
+            <Reicon name="search" class="pointer-events-none absolute top-1/2 left-3 size-3 -translate-y-1/2 text-neutral-400 dark:text-fg-faint" />
+            <input
+              use:focusSearch
+              type="search"
+              bind:value={query}
+              autocomplete="off"
+              placeholder={searchPlaceholder}
+              class="searchable-listbox-search-input"
+              onkeydown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  const matches = visible.filter((o) => !o.disabled);
+                  if (matches.length === 1) choose(matches[0]);
+                } else if (e.key === 'Escape') {
+                  e.stopPropagation();
+                  open = false;
+                }
+              }}
+            />
+          </div>
         {/if}
-        {#each options as o (String(o.value))}
+        <div class={searchable ? 'searchable-listbox-options' : 'contents'}>
+        {#if visible.length === 0}
+          <div class="px-3 py-2 text-[13px] text-neutral-500 dark:text-fg-dim">{options.length === 0 || !searchable ? emptyText : searchEmptyText}</div>
+        {/if}
+        {#each visible as o (String(o.value))}
           <div>
             <button
               type="button"
@@ -147,6 +188,7 @@
             </button>
           </div>
         {/each}
+        </div>
       </div>
     {/if}
   </div>

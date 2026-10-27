@@ -59,6 +59,17 @@ pub async fn list(db: &Db, team_id: TeamId) -> DbResult<Vec<ServerRow>> {
     rows.iter().map(|(s, st)| row(s, st.as_deref())).collect()
 }
 
+/// `Server::ownedByCurrentTeam()`: the team's servers ordered by name.
+pub async fn list_by_name(db: &Db, team_id: TeamId) -> DbResult<Vec<ServerRow>> {
+    let rows: Vec<(String, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT row_to_json(s)::text, {SETTINGS} FROM servers s WHERE s.team_id = $1 AND s.deleted_at IS NULL ORDER BY s.name"
+    ))
+    .bind(team_id)
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter().map(|(s, st)| row(s, st.as_deref())).collect()
+}
+
 /// `Server::whereTeamId($teamId)->whereUuid($uuid)->first()`.
 pub async fn find(db: &Db, team_id: TeamId, uuid: &str) -> DbResult<Option<ServerRow>> {
     let r: Option<(String, Option<String>)> = sqlx::query_as(&format!(
@@ -143,6 +154,9 @@ pub struct NewServer {
     /// `COOLIFY_SERVER_UUID` and `COOLIFY_SERVER_NAME` shared variables, encrypted.
     pub shared_vars: [(&'static str, String); 2],
     pub server_role: &'static str,
+    /// The API always writes the role; the web form (`ByIp`) saves the
+    /// settings model, which writes only when the role differs from `both`.
+    pub always_write_role: bool,
 }
 
 /// `Team::createServerWithinLimit` with the `Server::created` and
@@ -209,15 +223,17 @@ pub async fn create(db: &Db, n: &NewServer, now: chrono::NaiveDateTime) -> DbRes
         .bind(now)
         .execute(&mut *tx)
         .await?;
-    sqlx::query(
-        "UPDATE server_settings SET server_role = $2, is_build_server = $3, updated_at = $4 WHERE server_id = $1",
-    )
-    .bind(id)
-    .bind(n.server_role)
-    .bind(n.server_role == "build")
-    .bind(now)
-    .execute(&mut *tx)
-    .await?;
+    if n.always_write_role || n.server_role != "both" {
+        sqlx::query(
+            "UPDATE server_settings SET server_role = $2, is_build_server = $3, updated_at = $4 WHERE server_id = $1",
+        )
+        .bind(id)
+        .bind(n.server_role)
+        .bind(n.server_role == "build")
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     Ok(id)
 }
@@ -394,5 +410,15 @@ pub async fn has_enabled_runners(db: &Db, server_id: i64) -> DbResult<bool> {
     )
     .bind(server_id)
     .fetch_one(db.pool())
+    .await?)
+}
+
+/// `PrivateKey::ownedAndOnlySShKeys()->where('id', '!=', 0)`: `(id, name)`.
+pub async fn ssh_keys_for_form(db: &Db, team_id: TeamId) -> DbResult<Vec<(i64, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT id, name FROM private_keys WHERE team_id = $1 AND is_git_related = false AND id <> 0",
+    )
+    .bind(team_id)
+    .fetch_all(db.pool())
     .await?)
 }

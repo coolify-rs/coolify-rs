@@ -7,6 +7,8 @@
   import Breadcrumb from './Breadcrumb.svelte';
   import TeamSwitcher from './TeamSwitcher.svelte';
   import UserMenu from './UserMenu.svelte';
+  import ServerTopbar from './ServerTopbar.svelte';
+  import { page } from '../lib/page.svelte';
   import { layout } from '../lib/layout.svelte';
   import { link, router } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
@@ -63,6 +65,9 @@
     <div class="flex h-full items-center gap-0.5 min-w-0 flex-1 border-b border-black/[0.06] pl-3 pr-4 dark:border-white/[0.04]">
       <div class="relative flex min-w-0 flex-1 items-center">
         <Breadcrumb />
+        <div id="server-topbar-context" class="min-w-0">
+          {#if page.server}<ServerTopbar server={page.server} />{/if}
+        </div>
       </div>
     </div>
   </header>

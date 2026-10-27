@@ -7,6 +7,8 @@
   import { router, link } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
   import { layout } from '../lib/layout.svelte';
+  import { page } from '../lib/page.svelte';
+  import BetaBadge from './BetaBadge.svelte';
 
   let { desktop = false }: { desktop?: boolean } = $props();
 
@@ -21,10 +23,16 @@
   // The submenu of the current page opens on every navigation, as upstream's re-rendered navbar does.
   let submenu = $state('');
   let navSwap = $state('');
+  // -1: main menu or a submenu; 0: the page's resource menu (starts open).
+  let navLevel = $state(-1);
   $effect.pre(() => {
     submenu = activeSubmenu;
     navSwap = '';
   });
+  $effect.pre(() => {
+    navLevel = page.navContext ? 0 : -1;
+  });
+  const showContext = $derived(!!page.navContext && navLevel === 0);
 
   const collapsed = $derived(layout.collapsed);
   const centerWhenCollapsed = $derived(collapsed ? 'lg:justify-center lg:px-0' : '');
@@ -82,8 +90,57 @@
   </div>
 
   <ul role="list" class="sidebar-menu -mx-1 flex min-h-0 flex-1 flex-col gap-y-0.5 overflow-y-auto px-1 pb-2">
+    {#if showContext && page.navContext}
+      {@const ctx = page.navContext}
+      <li class="contents">
+        <ul role="list" class="flex flex-col gap-y-0.5 {navSwap && 'nav-swap-' + navSwap}">
+          <li class="mb-1">
+            <button
+              type="button"
+              onclick={() => {
+                navLevel = -1;
+                navSwap = 'back';
+              }}
+              title={ctx.backTitle}
+              aria-label={ctx.backTitle}
+              class="menu-item menu-back bg-transparent! hover:bg-neutral-100! dark:hover:bg-white/[0.06]! {centerWhenCollapsed}"
+            >
+              <span class="menu-back-icon flex shrink-0 items-center justify-center">
+                <Reicon name="chevron-down" class="size-3 rotate-90 text-coollabs dark:text-fg-dim" />
+              </span>
+              <span class="flex-1 truncate pr-6 text-center font-medium text-black dark:text-fg {hideWhenCollapsed}">{ctx.label}</span>
+            </button>
+          </li>
+          <li class="nav-context min-w-0">
+            <div class="nav-context-menu">
+              <nav aria-label={ctx.ariaLabel} class="grid grid-cols-1 gap-0.5">
+                {#each ctx.groups as group, gi (gi)}
+                  {#if gi > 0}
+                    <div class="my-2 border-t border-neutral-200 dark:border-white/[0.06]" aria-hidden="true"></div>
+                  {/if}
+                  {#each group as item (item.label)}
+                    {#if item.disabled}
+                      <span class="menu-item cursor-not-allowed opacity-40" aria-disabled="true" title="Validate the server connection first.">
+                        <Reicon name={item.icon} class="menu-item-icon" />
+                        <span class="menu-item-label">{item.label}</span>
+                      </span>
+                    {:else}
+                      <a class="menu-item {item.active ? 'menu-item-active' : ''}" use:link href={item.href}>
+                        <Reicon name={item.icon} class="menu-item-icon" />
+                        <span class="menu-item-label">{item.label}</span>
+                        {#if item.beta}<BetaBadge class="ml-auto shrink-0" />{/if}
+                      </a>
+                    {/if}
+                  {/each}
+                {/each}
+              </nav>
+            </div>
+          </li>
+        </ul>
+      </li>
+    {/if}
     {#each submenus as parent (parent.label)}
-      {#if submenu === parent.label}
+      {#if !showContext && submenu === parent.label}
         <li class="contents">
           <ul role="list" class="flex flex-col gap-y-0.5 {navSwap && 'nav-swap-' + navSwap}">
             <li class="mb-1">
@@ -133,7 +190,7 @@
         </li>
       {/if}
     {/each}
-    {#if !submenu}
+    {#if !showContext && !submenu}
       <li class="contents">
         <ul role="list" class="flex flex-col gap-y-0.5 {navSwap && 'nav-swap-' + navSwap}">
           {#each sections as [sectionLabel, items], si (sectionLabel)}

@@ -69,14 +69,14 @@ const SETTING_ENCRYPTED: &[&str] = &["sentinel_token", "logdrain_custom_config"]
 use coolify_compat::cron::translate_cron_expression as translate_cron;
 
 /// `Server::ip()` getter: `preg_replace('/[^0-9a-zA-Z.:%-]/', '', $value)`.
-fn ip_accessor(v: &str) -> String {
+pub(crate) fn ip_accessor(v: &str) -> String {
     v.chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '%' | '-'))
         .collect()
 }
 
 /// `Server::user()` getter: `INVALID_SERVER_USERNAME_CHARACTERS_PATTERN` removed.
-fn user_accessor(v: &str) -> String {
+pub(crate) fn user_accessor(v: &str) -> String {
     v.chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
         .collect()
@@ -97,7 +97,7 @@ fn port_accessor(v: &Value) -> Value {
 }
 
 /// The schemaless `proxy` attribute after the `retrieved` hook.
-fn proxy_attribute(raw: Option<&Value>) -> Value {
+pub(crate) fn proxy_attribute(raw: Option<&Value>) -> Value {
     let mut proxy = match raw {
         Some(Value::Object(m)) => m.clone(),
         _ => Map::new(),
@@ -128,7 +128,7 @@ fn apply_server_accessors(r: &mut Record) {
     }
 }
 
-fn effective_role_is_build(settings: &Record) -> bool {
+pub(crate) fn effective_role_is_build(settings: &Record) -> bool {
     match settings.get("server_role").and_then(Value::as_str) {
         Some(role) => role == "build",
         None => settings.get("is_build_server").is_some_and(php_truthy),
@@ -308,7 +308,7 @@ fn valid_hostname(v: &str) -> bool {
 }
 
 /// `ValidServerIp`: IPv4, IPv6 (optionally bracketed) or a hostname.
-fn valid_server_ip(v: &Value) -> Option<&'static str> {
+pub(crate) fn valid_server_ip(v: &Value) -> Option<&'static str> {
     let s = v.as_str()?;
     // `empty($value)`: "" and "0" pass.
     if s.is_empty() || s == "0" {
@@ -405,7 +405,7 @@ fn filled(input: &Input, key: &str) -> bool {
     }
 }
 
-fn as_php_string(v: &Value) -> String {
+pub(crate) fn as_php_string(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Bool(true) => "1".into(),
@@ -449,7 +449,7 @@ fn proxy_type_valid(t: &str) -> bool {
 }
 
 /// `ServerSetting::generateSentinelUrl()` for a new server.
-async fn sentinel_url(
+pub(crate) async fn sentinel_url(
     state: &AppState,
     ip: &str,
     peer: SocketAddr,
@@ -604,6 +604,7 @@ pub async fn create(
         proxy: proxy.to_string(),
         docker_uuid: new_public_id(),
         server_role: role,
+        always_write_role: true,
     };
     servers::create(&state.db, &new, state.now()).await?;
     Ok(created(json!({"uuid": new.uuid})).into_response())

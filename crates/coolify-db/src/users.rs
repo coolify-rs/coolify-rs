@@ -100,3 +100,22 @@ pub async fn set_current_team(db: &Db, user_id: i64, team_id: TeamId) -> DbResul
         .await?;
     Ok(())
 }
+
+/// `instance_settings.disable_two_step_confirmation`.
+pub async fn two_step_confirmation_disabled(db: &Db) -> DbResult<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT COALESCE((SELECT disable_two_step_confirmation FROM instance_settings WHERE id = 0), false)",
+    )
+    .fetch_one(db.pool())
+    .await?)
+}
+
+/// `User::hasSsoIdentity()`.
+pub async fn has_sso_identity(db: &Db, user_id: i64) -> DbResult<bool> {
+    Ok(
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM oauth_identities WHERE user_id = $1)")
+            .bind(user_id)
+            .fetch_one(db.pool())
+            .await?,
+    )
+}

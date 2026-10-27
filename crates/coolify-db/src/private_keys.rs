@@ -178,3 +178,14 @@ pub async fn uuid_by_id(db: &Db, id: i64) -> DbResult<Option<String>> {
             .await?,
     )
 }
+
+/// `Rule::exists('private_keys', 'id')->where('team_id', $teamId)`.
+pub async fn exists_in_team(db: &Db, team_id: TeamId, id: i64) -> DbResult<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM private_keys WHERE id = $1 AND team_id = $2)",
+    )
+    .bind(id)
+    .bind(team_id)
+    .fetch_one(db.pool())
+    .await?)
+}

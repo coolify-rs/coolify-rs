@@ -23,6 +23,10 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/ui/keys/cleanup", post(cleanup_keys))
         .route("/ui/keys/inspect", post(inspect_key))
         .route("/ui/team", get(team_data).patch(update_team))
+        .route("/ui/servers", get(servers_data).post(create_server_form))
+        .route("/ui/servers/form", get(server_form_data))
+        .route("/ui/timezones", get(timezones))
+        .route("/ui/servers/{uuid}/delete", post(delete_server_form))
         .route(
             "/ui/team/members/{id}",
             axum::routing::delete(remove_member),
@@ -325,4 +329,388 @@ async fn remove_member(
     member_guard(&state, &ctx, id, coolify_domain::Role::Admin).await?;
     coolify_db::teams::remove_member(&state.db, ctx.team_id, id).await?;
     Ok(ok(json!({"message": "Member removed."})).into_response())
+}
+
+/// Server facts the server pages need (`Server::isFunctional()` and friends).
+fn server_facts(s: &coolify_db::servers::ServerRow) -> Value {
+    let settings = s.settings.clone().unwrap_or_default();
+    let flag = |k: &str| settings.get(k).and_then(Value::as_bool).unwrap_or(false);
+    let transferred = s
+        .record
+        .get("server_metadata")
+        .and_then(|m| m.pointer("/transfer/status"))
+        .and_then(Value::as_str)
+        == Some("transferred");
+    let functional =
+        flag("is_reachable") && flag("is_usable") && !flag("force_disabled") && !transferred;
+    let is_build = crate::routes::servers::effective_role_is_build(&settings);
+    let proxy_type = s
+        .record
+        .get("proxy")
+        .and_then(|p| p.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let proxy_status = s
+        .record
+        .get("proxy")
+        .and_then(|p| p.get("status"))
+        .and_then(Value::as_str);
+    let proxy_set = !proxy_type.is_empty()
+        && proxy_type != "NONE"
+        && functional
+        && !flag("is_swarm_worker")
+        && !is_build;
+    let (status, status_type) = if transferred {
+        ("Transferred away", "error")
+    } else if flag("force_disabled") {
+        ("Disabled", "error")
+    } else if functional && proxy_set && proxy_status != Some("running") {
+        ("Attention required", "warning")
+    } else if functional {
+        ("Ready", "success")
+    } else {
+        ("Validation required", "error")
+    };
+    let ip = s.record.get("ip").and_then(Value::as_str).unwrap_or("");
+    let cloud = [
+        "hetzner_server_id",
+        "vultr_instance_id",
+        "digitalocean_droplet_id",
+        "hostinger_virtual_machine_id",
+    ]
+    .iter()
+    .any(|k| s.record.get(*k).is_some_and(crate::serialize::php_truthy));
+    json!({
+        "uuid": s.uuid,
+        "name": s.record.get("name"),
+        "description": s.record.get("description"),
+        "status": status,
+        "status_type": status_type,
+        "functional": functional,
+        "transferred": transferred,
+        "is_coolify_host": s.id == 0,
+        "is_localhost": ip == "host.docker.internal" || s.id == 0,
+        "is_build": is_build,
+        "is_swarm": flag("is_swarm_manager") || flag("is_swarm_worker"),
+        "is_swarm_worker": flag("is_swarm_worker"),
+        "proxy_set": proxy_set,
+        "proxy_status": proxy_status,
+        "cloud": cloud,
+    })
+}
+
+/// Servers index (`Livewire\Server\Index`) and the server switcher.
+async fn servers_data(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+) -> ApiResult {
+    let rows = coolify_db::servers::list_by_name(&state.db, ctx.team_id).await?;
+    let mut items = Vec::with_capacity(rows.len());
+    for s in &rows {
+        let mut v = server_facts(s);
+        v["resources"] = json!(coolify_db::servers::resource_count(&state.db, s.id).await?);
+        items.push(v);
+    }
+    let (two_step, password) = confirmation_steps(&state, ctx.user_id).await?;
+    Ok(ok(json!({
+        "servers": items,
+        "can_create": ctx.is_team_admin(),
+        "confirm": {"text": two_step, "password": password},
+    }))
+    .into_response())
+}
+
+/// `Livewire\Server\New\ByIp::mount`: SSH keys to pick from and a generated name.
+async fn server_form_data(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+) -> ApiResult {
+    let keys = coolify_db::servers::ssh_keys_for_form(&state.db, ctx.team_id).await?;
+    Ok(ok(json!({
+        "keys": keys.iter().map(|(id, name)| json!({"id": id, "name": name})).collect::<Vec<_>>(),
+        "name": crate::routes::private_keys::random_name(),
+    }))
+    .into_response())
+}
+
+const BY_IP_MESSAGES: crate::validation::Messages = &[
+    (
+        "private_key_id.integer",
+        "The Private Key field must be an integer.",
+    ),
+    ("ip.required", "The IP Address/Domain is required."),
+    ("ip.string", "The IP Address/Domain must be a string."),
+    ("user.required", "The User field is required."),
+    ("user.string", "The User field must be a string."),
+    (
+        "user.regex",
+        "The User may only contain letters, numbers, dots, hyphens, and underscores.",
+    ),
+    ("port.required", "The Port field is required."),
+    ("port.integer", "The Port field must be an integer."),
+    (
+        "port.between",
+        "The Port field must be between 1 and 65535.",
+    ),
+    ("server_role.required", "The Server Role field is required."),
+    ("server_role.in", "The selected Server Role is invalid."),
+    (
+        "name.regex",
+        "The name may only contain letters (including Unicode), numbers, spaces, and these characters: - _ . / @ & ( ) # , : +",
+    ),
+    ("name.min", "The name must be at least :min characters."),
+    (
+        "name.max",
+        "The name may not be greater than :max characters.",
+    ),
+    (
+        "description.regex",
+        "The description may only contain letters (including Unicode), numbers, spaces, and common punctuation: - _ . , ! ? ( ) ' \" + = * / @ &",
+    ),
+    (
+        "description.max",
+        "The description may not be greater than :max characters.",
+    ),
+];
+
+static SSH_USER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^[a-zA-Z0-9._-]+\n?\z").unwrap_or_else(|_| unreachable!())
+});
+
+/// `Livewire\Server\New\ByIp::submit`.
+async fn create_server_form(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    peer: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> ApiResult {
+    use crate::routes::servers::{
+        as_php_string, normalize_ip, sentinel_url, user_accessor, valid_server_ip,
+    };
+    use crate::validation::{Field, Rule, patterns, validate};
+    use axum::http::StatusCode;
+    let input: Value =
+        serde_json::from_slice(&body).map_err(|_| ApiError::InvalidRequest("Invalid JSON."))?;
+    let Value::Object(map) = input else {
+        return Err(ApiError::InvalidRequest("Invalid JSON."));
+    };
+    let map = map
+        .into_iter()
+        .map(|(k, v)| match v {
+            Value::String(s) if s.trim().is_empty() => (k, Value::Null),
+            v => (k, v),
+        })
+        .collect();
+    let input = crate::input::Input(map);
+    let fields = vec![
+        Field {
+            name: "private_key_id",
+            rules: vec![Rule::Nullable, Rule::Integer],
+        },
+        patterns::name(true),
+        patterns::description(),
+        Field {
+            name: "ip",
+            rules: vec![Rule::Required, Rule::String, Rule::Custom(valid_server_ip)],
+        },
+        Field {
+            name: "user",
+            rules: vec![Rule::Required, Rule::String, Rule::Regex(&SSH_USER)],
+        },
+        Field {
+            name: "port",
+            rules: vec![Rule::Required, Rule::Integer, Rule::Between(1, 65535)],
+        },
+        Field {
+            name: "server_role",
+            rules: vec![Rule::Required, Rule::In(&["deployment", "build", "both"])],
+        },
+    ];
+    let allowed: Vec<&str> = input.keys().map(String::as_str).collect();
+    validate(&input, &fields, BY_IP_MESSAGES, &allowed)?;
+    let key_id = input.get("private_key_id").and_then(Value::as_i64);
+    if let Some(id) = key_id
+        && !coolify_db::private_keys::exists_in_team(&state.db, ctx.team_id, id).await?
+    {
+        let mut errors = serde_json::Map::new();
+        errors.insert(
+            "private_key_id".into(),
+            json!(["The selected Private Key is invalid."]),
+        );
+        return Err(ApiError::Validation(errors));
+    }
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Unauthorized);
+    }
+    let ip = normalize_ip(&input.get("ip").map(as_php_string).unwrap_or_default());
+    if coolify_db::servers::ip_in_use(&state.db, &ip, None).await? {
+        return Err(ApiError::Message(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "A server with this IP/Domain already exists.",
+        ));
+    }
+    let Some(key_id) = key_id else {
+        return Err(ApiError::Message(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "You must select a private key",
+        ));
+    };
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Message(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "APP_KEY is not configured; servers cannot be created.",
+    ))?;
+    let uuid = coolify_domain::new_public_id();
+    let name = coolify_domain::naming::strip_tags(input.str("name"));
+    let role: &'static str = match input.str("server_role") {
+        Some("deployment") => "deployment",
+        Some("build") => "build",
+        _ => "both",
+    };
+    let peer = peer
+        .map(|c| (c.0).0)
+        .unwrap_or_else(|| std::net::SocketAddr::from(([127, 0, 0, 1], 0)));
+    let token =
+        enc.encrypt_string(&enc.encrypt_serialized(&json!({"server_uuid": uuid}).to_string()));
+    let new = coolify_db::servers::NewServer {
+        sentinel_custom_url: sentinel_url(&state, &ip, peer, &headers).await?,
+        sentinel_token_encrypted: token,
+        shared_vars: [
+            ("COOLIFY_SERVER_UUID", enc.encrypt_string(&uuid)),
+            ("COOLIFY_SERVER_NAME", enc.encrypt_string(&name)),
+        ],
+        uuid,
+        name,
+        description: coolify_domain::naming::strip_tags(input.str("description")),
+        ip,
+        port: input
+            .get("port")
+            .map(|v| as_php_string(v).trim().parse::<i64>().unwrap_or(22))
+            .unwrap_or(22),
+        user: user_accessor(
+            input
+                .get("user")
+                .map(as_php_string)
+                .unwrap_or_default()
+                .trim(),
+        ),
+        private_key_id: key_id,
+        team_id: ctx.team_id,
+        // ByIp sets status before type.
+        proxy: json!({"redirect_enabled": true, "status": "exited", "type": "TRAEFIK"}).to_string(),
+        docker_uuid: coolify_domain::new_public_id(),
+        server_role: role,
+        always_write_role: false,
+    };
+    coolify_db::servers::create(&state.db, &new, state.now()).await?;
+    Ok(crate::response::created(json!({"uuid": new.uuid})).into_response())
+}
+
+/// `modal-confirmation` steps: the type-the-name step unless
+/// `disable_two_step_confirmation`; the password step unless that, or the user
+/// has no password or signs in through SSO (`shouldSkipPasswordConfirmation`;
+/// coolify-rs keeps no "recently confirmed" session flag).
+async fn confirmation_steps(state: &AppState, user_id: i64) -> Result<(bool, bool), ApiError> {
+    let disabled = coolify_db::users::two_step_confirmation_disabled(&state.db).await?;
+    if disabled {
+        return Ok((false, false));
+    }
+    let has_password = coolify_db::users::get(&state.db, user_id)
+        .await?
+        .and_then(|u| u.password)
+        .is_some_and(|p| !p.is_empty());
+    let sso = coolify_db::users::has_sso_identity(&state.db, user_id).await?;
+    Ok((true, has_password && !sso))
+}
+
+/// `verifyPasswordConfirmation`.
+async fn password_confirmed(
+    state: &AppState,
+    user_id: i64,
+    password: Option<&str>,
+) -> Result<bool, ApiError> {
+    let (_, required) = confirmation_steps(state, user_id).await?;
+    if !required {
+        return Ok(true);
+    }
+    let hash = coolify_db::users::get(&state.db, user_id)
+        .await?
+        .and_then(|u| u.password);
+    Ok(match (password, hash) {
+        (Some(p), Some(h)) => coolify_compat::password::verify(p, &h),
+        _ => false,
+    })
+}
+
+/// `Livewire\Server\Delete::delete($password, $selectedActions)`.
+async fn delete_server_form(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+    body: axum::body::Bytes,
+) -> ApiResult {
+    use axum::http::StatusCode;
+    let input: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let server = coolify_db::servers::find(&state.db, ctx.team_id, &uuid)
+        .await?
+        .ok_or(ApiError::Message(
+            StatusCode::NOT_FOUND,
+            "Server not found.",
+        ))?;
+    if !password_confirmed(
+        &state,
+        ctx.user_id,
+        input.get("password").and_then(Value::as_str),
+    )
+    .await?
+    {
+        return Err(ApiError::Message(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "The provided password is incorrect.",
+        ));
+    }
+    let actions: Vec<&str> = input
+        .get("actions")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Unauthorized);
+    }
+    if server.id == 0 {
+        return Err(ApiError::Message(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "The Coolify host server cannot be deleted.",
+        ));
+    }
+    let transferred = server_facts(&server)["transferred"]
+        .as_bool()
+        .unwrap_or(false);
+    let resources = coolify_db::servers::resource_count(&state.db, server.id).await?;
+    let force = actions.contains(&"force_delete_resources");
+    if resources > 0 && !force && !transferred {
+        return Err(ApiError::Message(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Server has defined resources. Please delete them first or select \"Delete all resources\".",
+        ));
+    }
+    let from_provider = actions.iter().any(|a| a.starts_with("delete_from_"));
+    // Archiving a transferred server, deleting resources, cloud servers,
+    // queued deployments' logs and GitHub runners are not ported.
+    if transferred
+        || resources > 0
+        || from_provider
+        || coolify_db::servers::has_unported_delete_side_effects(&state.db, server.id).await?
+    {
+        return Err(ApiError::NotPorted);
+    }
+    coolify_db::servers::delete(&state.db, server.id, state.now()).await?;
+    Ok(ok(json!({"message": "Server deleted."})).into_response())
+}
+
+/// `timezone_identifiers_list()` sorted (server timezone pickers).
+async fn timezones() -> ApiResult {
+    let mut zones: Vec<&str> = coolify_compat::timezones::PHP_TIMEZONES.to_vec();
+    zones.sort_unstable();
+    Ok(ok(json!(zones)).into_response())
 }

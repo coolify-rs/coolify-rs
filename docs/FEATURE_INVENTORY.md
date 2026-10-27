@@ -14,19 +14,19 @@ Upstream references are relative to the upstream repository root.
 | `services` | 57 | 0 | not started |
 | `applications` | 52 | 0 | not started |
 | `databases` | 47 | 0 | not started |
-| `servers` | 44 | 0 | not started (next slice, see roadmap) |
+| `servers` | 44 | 5 | list, show, create, update, delete verified (183/183 differential); no SSH: `instant_validate`, proxy changes, `?force` with resources and cloud-provider deletes answer 501; resources, domains and the rest not started |
 | `projects` | 18 | 10 | verified for project/environment CRUD; canvas links and project-level shared variables not started |
 | `teams` / `team` | 12 | 8 | verified for reads and `PATCH /team`; team invitations not started |
 | `notifications` | 12 | 0 | not started |
 | `cloud-tokens`, `hetzner`, `digitalocean`, `vultr`, `hostinger`, `cloud-init-scripts` | 30 | 0 | not started |
 | `github-apps`, `gitlab-apps` | 10 | 0 | not started |
 | `s3-storages` | 6 | 0 | not started |
-| `security` (private keys, integration tokens) | 6 | 5 | private keys verified (CRUD, 131/131 differential); integration tokens not started |
+| `security` (private keys, integration tokens) | 6 | 5 | private keys verified (CRUD, differential); integration tokens not started |
 | `destinations`, `tags`, `resources`, `settings`, `audit-events` | 12 | 0 | not started |
 | `deploy`, `deployments` | 6 | 0 | not started |
 | `health`, `version`, `disable` | 5 | 5 | verified |
 | `mcp`, `feedback`, `sentinel` | 4 | 0 | not started |
-| **Total** | **321** | **28** | |
+| **Total** | **321** | **33** | |
 
 ## 2. Cross-cutting foundations
 
@@ -58,7 +58,7 @@ Upstream references are relative to the upstream repository root.
 |---|---|---|
 | Web UI beyond the ported areas; registration/root setup window, password reset, 2FA enrollment, passkeys, OAuth | Livewire (272 components), Fortify, Socialite | started (ADR 0007, 0008): login, dashboard, projects, environments, keys, team, members, appearance |
 | Teams, invitations, roles | `app/Livewire/Team`, `TeamPolicy` | API reads verified; UI settings and member roles verified; invitations not started |
-| Servers: validation, SSH, proxy, Sentinel, Cloudflare tunnel, transfers | `ServersController`, `SshMultiplexingHelper`, `app/Actions/Server` | next slice |
+| Servers: validation, SSH, proxy, Sentinel, Cloudflare tunnel, transfers | `ServersController`, `SshMultiplexingHelper`, `app/Actions/Server` | records verified (API + UI: list, new server by IP, General, Danger Zone); everything that connects to a server not started (milestone 4) |
 | Private keys | `SecurityController`, `PrivateKey` | verified (API + UI) |
 | Git sources (GitHub/GitLab/Gitea/Bitbucket apps, webhooks) | `app/Http/Controllers/Webhook/*` | |
 | Applications and build packs (nixpacks, railpack, dockerfile, compose, static, image) | `ApplicationDeploymentJob` (6,479 lines) | critical, large |

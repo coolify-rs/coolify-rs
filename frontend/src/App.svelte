@@ -13,6 +13,11 @@
   import Team from './pages/Team.svelte';
   import Members from './pages/Members.svelte';
   import Appearance from './pages/Appearance.svelte';
+  import Servers from './pages/Servers.svelte';
+  import ServerNew from './pages/ServerNew.svelte';
+  import Server from './pages/Server.svelte';
+  import ServerDanger from './pages/ServerDanger.svelte';
+  import ServerSection from './pages/ServerSection.svelte';
   import Unported from './pages/Unported.svelte';
   import { router } from './lib/router.svelte';
   import { session } from './lib/session.svelte';
@@ -37,6 +42,8 @@
   $effect.pre(() => {
     void router.path;
     page.switchers = [];
+    page.navContext = null;
+    page.server = null;
   });
 
   // Pages that show a named record set their own title once it loads.
@@ -48,6 +55,9 @@
     team: 'Teams',
     members: 'Team Members',
     appearance: 'Appearance',
+    servers: 'Servers',
+    'server-new': 'New Server',
+    'server-new-type': 'New Server',
   };
   $effect(() => {
     const name = router.current.name;
@@ -92,6 +102,16 @@
       <Members />
     {:else if router.current.name === 'appearance'}
       <Appearance />
+    {:else if router.current.name === 'servers'}
+      <Servers />
+    {:else if router.current.name === 'server-new' || router.current.name === 'server-new-type'}
+      {#key router.path}<ServerNew type={params.type} />{/key}
+    {:else if router.current.name === 'server'}
+      {#key params.uuid}<Server uuid={params.uuid} />{/key}
+    {:else if router.current.name === 'server-section' && params.section === 'danger'}
+      {#key params.uuid}<ServerDanger uuid={params.uuid} />{/key}
+    {:else if router.current.name === 'server-section'}
+      {#key router.path}<ServerSection uuid={params.uuid} section={params.section} />{/key}
     {:else}
       <Unported />
     {/if}

@@ -161,11 +161,11 @@ rust.packages = ["coolify-compat"]
 # ---- planned (not yet ported; listed so classification knows their scope) ----
 
 [[component]]
-id = "api.servers"
-title = "Servers REST API"
+id = "api.servers.subroutes"
+title = "Server sub-routes (resources, domains, proxy, Sentinel, registries, transfers, validation)"
 status = "planned"
-upstream.paths = ["app/Http/Controllers/Api/Server*.php", "app/Models/Server.php", "app/Models/ServerSetting.php", "app/Policies/ServerPolicy.php", "app/Rules/ValidServerIp.php"]
-upstream.tables = ["servers", "server_settings", "standalone_dockers", "swarm_dockers"]
+upstream.paths = ["app/Http/Controllers/Api/Server*.php", "app/Policies/ServerPolicy.php"]
+upstream.tables = ["swarm_dockers"]
 
 [[component]]
 id = "api.private-keys"
@@ -218,6 +218,49 @@ divergences = [
 ]
 
 [[component]]
+id = "api.servers"
+title = "Servers API: list, show, create, update, delete (records only)"
+status = "verified"
+upstream.paths = [
+  "app/Http/Controllers/Api/ServersController.php",
+  "app/Models/Server.php",
+  "app/Models/ServerSetting.php",
+  "app/Models/StandaloneDocker.php",
+  "app/Models/SharedEnvironmentVariable.php",
+  "app/Rules/ValidServerIp.php",
+  "app/Rules/ValidHostname.php",
+  "app/Http/Controllers/Api/Concerns/RequiresDeployAbility.php",
+  "app/Actions/Server/DeleteServer.php",
+  "vendor/poliander/cron/src/Cron/CronExpression.php",
+]
+upstream.symbols = [
+  "bootstrap/helpers/api.php::removeServerProxySecrets()",
+  "bootstrap/helpers/shared.php::normalizeIpAddress()",
+  "bootstrap/helpers/shared.php::validate_cron_expression()",
+  "bootstrap/helpers/shared.php::validate_timezone()",
+  "bootstrap/helpers/shared.php::shouldSkipPasswordConfirmation()",
+  "app/Models/Team.php::createServerWithinLimit()",
+  "app/Models/ServerSetting.php::generateSentinelToken()",
+  "app/Models/ServerSetting.php::generateSentinelUrl()",
+]
+upstream.tables = ["servers", "server_settings", "standalone_dockers", "shared_environment_variables", "notification_throttles"]
+rust.paths = [
+  "crates/coolify-api/src/routes/servers.rs",
+  "crates/coolify-db/src/servers.rs",
+  "crates/coolify-api/src/laravel_url.rs",
+  "crates/coolify-compat/src/cron.rs",
+  "crates/coolify-compat/src/timezones.rs",
+]
+rust.tests = ["crates/coolify-api/tests/servers.rs"]
+rust.packages = ["coolify-api", "coolify-db", "coolify-compat"]
+divergences = [
+  "instant_validate, proxy type changes, force deletes with resources, provider deletes and ?resources answer 501 (no SSH)",
+  "Sentinel URL fallback trusts X-Forwarded-* only from trusted proxies",
+  "generated server names use different words than nubs/random-name-generator",
+  "the force delete runs in the request, not in a queued DeleteServer job",
+]
+
+[[component]]
 id = "ui.styles"
 title = "Vendored upstream stylesheet, fonts and icon set"
 status = "verified"
@@ -255,6 +298,14 @@ upstream.paths = [
   "resources/views/livewire/team/index.blade.php",
   "resources/views/livewire/team/member/index.blade.php",
   "resources/views/livewire/team/member.blade.php",
+  "resources/views/livewire/server/index.blade.php",
+  "resources/views/livewire/server/create.blade.php",
+  "resources/views/livewire/server/new/by-ip.blade.php",
+  "resources/views/livewire/server/show.blade.php",
+  "resources/views/livewire/server/delete.blade.php",
+  "resources/views/livewire/server/navbar.blade.php",
+  "resources/views/components/server/sidebar.blade.php",
+  "resources/views/components/server/status-summary.blade.php",
   "resources/views/components/theme-controls.blade.php",
   "resources/views/components/forms/**",
   "resources/views/components/modal-input.blade.php",
@@ -280,6 +331,10 @@ upstream.paths = [
   "app/Livewire/Team/Index.php",
   "app/Livewire/Team/Member.php",
   "app/Actions/User/RevokeUserTeamTokens.php",
+  "app/Livewire/Server/Index.php",
+  "app/Livewire/Server/New/ByIp.php",
+  "app/Livewire/Server/Show.php",
+  "app/Livewire/Server/Delete.php",
 ]
 upstream.symbols = [
   "app/Models/PrivateKey.php::generateNewKeyPair()",
