@@ -11,10 +11,11 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::IntoResponse;
-use coolify_db::databases::{self as dbs, DatabaseRow, NewPostgresql};
+use coolify_db::databases::{self as dbs, DatabaseRow, Kind, NewDatabase};
 use coolify_db::records::{Record, SERVER_SETTING};
 use coolify_db::servers::{self, ColumnValue, ServerRow};
 use coolify_domain::naming::strip_tags;
+use coolify_jobs::databases::connection as conn;
 use rand::Rng as _;
 use serde_json::{Map, Value, json};
 
@@ -98,41 +99,75 @@ fn nested_server(state: &AppState, ctx: &AuthCtx, s: &ServerRow) -> Result<Value
     Ok(Value::Object(r))
 }
 
-/// `postgres://user:pass@host:port/db` with `rawurlencode`d credentials.
-fn rawurlencode(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
+/// The decrypted credentials of a database.
+pub(crate) async fn credentials(
+    state: &AppState,
+    d: &DatabaseRow,
+) -> Result<conn::Credentials, ApiError> {
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    conn::credentials(&state.db, enc, d).await.map_err(|e| {
+        tracing::error!(error = %e, "cannot decrypt a database attribute (APP_KEY mismatch?)");
+        ApiError::Internal
+    })
 }
 
-fn connection_urls(d: &DatabaseRow, password: &str, server: Option<&ServerRow>) -> (String, Value) {
-    let user = rawurlencode(d.str("postgres_user").unwrap_or_default());
-    let pass = rawurlencode(password);
-    let db = d.str("postgres_db").unwrap_or_default();
-    let internal = format!("postgres://{user}:{pass}@{}:5432/{db}", d.uuid);
-    let public_port = d.int("public_port").filter(|_| d.bool("is_public"));
-    let external = match (
-        public_port,
-        server
-            .and_then(|s| s.record.get("ip"))
-            .and_then(Value::as_str),
-    ) {
-        (Some(port), Some(ip)) if !ip.is_empty() => {
-            let host = if ip.contains(':') {
-                format!("[{ip}]")
-            } else {
-                ip.to_owned()
-            };
-            Value::String(format!("postgres://{user}:{pass}@{host}:{port}/{db}"))
-        }
-        _ => Value::Null,
+/// `isConfigurationChanged`'s hash, with the database's variables.
+pub(crate) async fn config_hash(state: &AppState, d: &DatabaseRow) -> Result<String, ApiError> {
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    let variables = coolify_jobs::databases::env::load_stored(&state.db, enc, d)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "cannot read the variables of a database");
+            ApiError::Internal
+        })?;
+    Ok(coolify_jobs::databases::config_hash(
+        d,
+        &coolify_jobs::databases::env::config_hash_values(&variables),
+    ))
+}
+
+type Generated = (
+    Vec<(&'static str, String)>,
+    Vec<coolify_db::environment_variables::NewVariable>,
+);
+
+/// What `create_standalone_*` generates: the encrypted passwords and, for Redis, the
+/// `REDIS_PASSWORD` and `REDIS_USERNAME` variables.
+pub(crate) fn generated_defaults(
+    state: &AppState,
+    kind: Kind,
+    redis_password: Option<String>,
+) -> Result<Generated, ApiError> {
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    let secrets = kind
+        .generated_secrets()
+        .iter()
+        .map(|c| (*c, enc.encrypt_string(&random_password())))
+        .collect();
+    let variables = if kind == Kind::Redis {
+        let variable = |key: &str, value: &str| coolify_db::environment_variables::NewVariable {
+            key: key.into(),
+            value_encrypted: Some(enc.encrypt_serialized(value)),
+            is_shared: false,
+            version: state.version.clone(),
+        };
+        vec![
+            variable(
+                "REDIS_PASSWORD",
+                &redis_password.unwrap_or_else(random_password),
+            ),
+            variable("REDIS_USERNAME", "default"),
+        ]
+    } else {
+        Vec::new()
     };
-    (internal, external)
+    Ok((secrets, variables))
+}
+
+fn server_ip(server: Option<&ServerRow>) -> Option<&str> {
+    server
+        .and_then(|s| s.record.get("ip"))
+        .and_then(Value::as_str)
 }
 
 /// `isFunctional()` of the destination's server.
@@ -150,7 +185,7 @@ fn server_functional(s: &ServerRow) -> bool {
         && !(ip.is_empty() || ["1.2.3.4", "0.0.0.0", "::"].contains(&ip))
 }
 
-/// `removeSensitiveData($database)` for a PostgreSQL database.
+/// `removeSensitiveData($database)`.
 pub(crate) async fn present(
     state: &AppState,
     ctx: &AuthCtx,
@@ -177,18 +212,28 @@ pub(crate) async fn present(
         Value::Bool(server.as_ref().is_some_and(server_functional)),
     );
     if ctx.can_read_sensitive {
-        let password = d
-            .str("postgres_password")
-            .map(|c| decrypt(state, c))
-            .transpose()?
-            .unwrap_or_default();
-        let (internal, external) = connection_urls(d, &password, server.as_ref());
-        r.insert("postgres_password".into(), Value::String(password));
-        r.insert(
-            "init_scripts".into(),
-            d.raw.get("init_scripts").cloned().unwrap_or(Value::Null),
-        );
-        r.insert("internal_db_url".into(), Value::String(internal));
+        // `makeVisible([...])`: the hidden password columns, `init_scripts` and the URLs.
+        let c = credentials(state, d).await?;
+        for column in d.kind.encrypted_columns() {
+            r.insert((*column).into(), Value::String(c.secret(column)));
+        }
+        if d.kind == Kind::Postgresql {
+            r.insert(
+                "init_scripts".into(),
+                d.raw.get("init_scripts").cloned().unwrap_or(Value::Null),
+            );
+        }
+        // A locked password variable is never shown again, also not inside the URLs.
+        let (internal, external) = if c.locked {
+            (Value::Null, Value::Null)
+        } else {
+            (
+                Value::String(conn::internal_url(d, &c)),
+                conn::external_url(d, &c, server_ip(server.as_ref()))
+                    .map_or(Value::Null, Value::String),
+            )
+        };
+        r.insert("internal_db_url".into(), internal);
         r.insert("external_db_url".into(), external);
     }
     if let Some(dest) = &d.destination {
@@ -295,7 +340,8 @@ const ALLOWED_ANY: &[&str] = &[
     "sqlite_databases",
     "tags",
 ];
-const ALLOWED_POSTGRESQL: &[&str] = &[
+/// The fields every `create_database` type allows.
+const ALLOWED_COMMON: &[&str] = &[
     "name",
     "description",
     "image",
@@ -315,14 +361,85 @@ const ALLOWED_POSTGRESQL: &[&str] = &[
     "limits_cpus",
     "limits_cpuset",
     "limits_cpu_shares",
-    "postgres_user",
-    "postgres_password",
-    "postgres_db",
-    "postgres_initdb_args",
-    "postgres_host_auth_method",
-    "postgres_conf",
-    "tags",
 ];
+
+/// The type's own fields of `create_database` (`$allowedFields` after the common ones,
+/// before `tags`), with their rules.
+fn kind_fields(kind: Kind) -> Vec<Field> {
+    let id = |name| Field {
+        name,
+        rules: vec![
+            Rule::Nullable,
+            Rule::String,
+            Rule::Min(1),
+            Rule::Max(63),
+            Rule::Regex(&DB_IDENTIFIER),
+        ],
+    };
+    let pw = |name| Field {
+        name,
+        rules: vec![
+            Rule::Nullable,
+            Rule::String,
+            Rule::Min(1),
+            Rule::Max(128),
+            Rule::Regex(&DB_PASSWORD),
+        ],
+    };
+    let string = |name| Field {
+        name,
+        rules: vec![Rule::String],
+    };
+    match kind {
+        Kind::Postgresql => vec![
+            id("postgres_user"),
+            pw("postgres_password"),
+            id("postgres_db"),
+            string("postgres_initdb_args"),
+            string("postgres_host_auth_method"),
+            string("postgres_conf"),
+        ],
+        Kind::Redis => vec![pw("redis_password"), string("redis_conf")],
+        Kind::Dragonfly => vec![pw("dragonfly_password")],
+        Kind::Keydb => vec![pw("keydb_password"), string("keydb_conf")],
+        Kind::Clickhouse => vec![id("clickhouse_admin_user"), pw("clickhouse_admin_password")],
+        Kind::Mongodb => vec![
+            string("mongo_conf"),
+            id("mongo_initdb_root_username"),
+            pw("mongo_initdb_root_password"),
+            id("mongo_initdb_database"),
+        ],
+        Kind::Mysql => vec![
+            pw("mysql_root_password"),
+            pw("mysql_password"),
+            id("mysql_user"),
+            id("mysql_database"),
+            string("mysql_conf"),
+        ],
+        Kind::Mariadb => vec![
+            string("mariadb_conf"),
+            pw("mariadb_root_password"),
+            id("mariadb_user"),
+            pw("mariadb_password"),
+            id("mariadb_database"),
+        ],
+        Kind::Sqlite => vec![],
+    }
+}
+
+/// The base64 configuration field of a type (`isBase64Encoded` + UTF-8 check).
+fn conf_field(kind: Kind) -> Option<&'static str> {
+    match kind {
+        Kind::Postgresql => Some("postgres_conf"),
+        Kind::Redis => Some("redis_conf"),
+        Kind::Keydb => Some("keydb_conf"),
+        Kind::Mongodb => Some("mongo_conf"),
+        Kind::Mysql => Some("mysql_conf"),
+        Kind::Mariadb => Some("mariadb_conf"),
+        Kind::Dragonfly | Kind::Clickhouse | Kind::Sqlite => None,
+    }
+}
+
 /// Integer columns among the fillable ones.
 const INT_COLUMNS: &[&str] = &[
     "public_port",
@@ -386,13 +503,33 @@ fn decode_conf(v: &Value) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-/// `POST /databases/postgresql` (`create_database`).
-pub async fn create_postgresql(
-    State(state): State<AppState>,
-    Extension(ctx): Extension<AuthCtx>,
+macro_rules! create_handlers {
+    ($($name:ident => $kind:expr),* $(,)?) => {$(
+        /// `POST /databases/{type}` (`create_database`).
+        pub async fn $name(
+            State(state): State<AppState>,
+            Extension(ctx): Extension<AuthCtx>,
+            headers: HeaderMap,
+            uri: Uri,
+            body: Bytes,
+        ) -> ApiResult {
+            create_database(state, ctx, headers, uri, body, $kind).await
+        }
+    )*};
+}
+
+create_handlers! {
+    create_postgresql => Kind::Postgresql,
+    create_redis => Kind::Redis,
+}
+
+async fn create_database(
+    state: AppState,
+    ctx: AuthCtx,
     headers: HeaderMap,
     uri: Uri,
     body: Bytes,
+    kind: Kind,
 ) -> ApiResult {
     use coolify_domain::Ability;
     // `authorize('create', StandalonePostgresql::class)`: admin of the current team.
@@ -645,77 +782,36 @@ pub async fn create_postgresql(
             "The public port should be between 1024 and 65535.",
         ));
     }
-    let id_rules = || {
-        vec![
-            Rule::Nullable,
-            Rule::String,
-            Rule::Min(1),
-            Rule::Max(63),
-            Rule::Regex(&DB_IDENTIFIER),
-        ]
-    };
-    let pw_rules = || {
-        vec![
-            Rule::Nullable,
-            Rule::String,
-            Rule::Min(1),
-            Rule::Max(128),
-            Rule::Regex(&DB_PASSWORD),
-        ]
-    };
-    let allowed_pg: Vec<&str> = ALLOWED_POSTGRESQL.to_vec();
-    validate(
-        &input,
-        &[
-            Field {
-                name: "postgres_user",
-                rules: id_rules(),
-            },
-            Field {
-                name: "postgres_password",
-                rules: pw_rules(),
-            },
-            Field {
-                name: "postgres_db",
-                rules: id_rules(),
-            },
-            Field {
-                name: "postgres_initdb_args",
-                rules: vec![Rule::String],
-            },
-            Field {
-                name: "postgres_host_auth_method",
-                rules: vec![Rule::String],
-            },
-            Field {
-                name: "postgres_conf",
-                rules: vec![Rule::String],
-            },
-        ],
-        CUSTOM_API_MESSAGES,
-        &allowed_pg,
-    )?;
+    let own = kind_fields(kind);
+    let mut allowed: Vec<&str> = ALLOWED_COMMON.to_vec();
+    allowed.extend(own.iter().map(|f| f.name));
+    allowed.push("tags");
+    validate(&input, &own, CUSTOM_API_MESSAGES, &allowed)?;
     let mut conf: Option<String> = None;
-    if input.has("postgres_conf") {
-        conf = Some(
-            input
-                .get("postgres_conf")
-                .and_then(decode_conf)
-                .ok_or_else(|| {
-                    errors_with(
-                        "postgres_conf",
-                        "The postgres_conf should be base64 encoded.",
-                    )
-                })?,
-        );
+    if let Some(field) = conf_field(kind)
+        && input.has(field)
+    {
+        conf = Some(input.get(field).and_then(decode_conf).ok_or_else(|| {
+            ApiError::Validation(Map::from_iter([(
+                field.to_owned(),
+                Value::String(format!("The {field} should be base64 encoded.")),
+            )]))
+        })?);
     }
 
     // `$request->only($allowedFields)` minus the request-only keys, then `fill()`.
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let mut fields: Vec<(&'static str, ColumnValue)> = Vec::new();
     let mut name: Option<String> = None;
-    let mut password = random_password();
-    for key in ALLOWED_POSTGRESQL {
+    // `create_standalone_*` sets the generated passwords before `fill()`.
+    let mut secrets: Vec<(&'static str, String)> = Vec::new();
+    let mut redis_password: Option<String> = None;
+    let allowed_static: Vec<&'static str> = ALLOWED_COMMON
+        .iter()
+        .copied()
+        .chain(own.iter().map(|f| f.name))
+        .collect();
+    for key in &allowed_static {
         if matches!(
             *key,
             "project_uuid"
@@ -736,8 +832,18 @@ pub async fn create_postgresql(
                 "description",
                 ColumnValue::Text(Some(strip_tags(v.as_str()))),
             )),
-            "postgres_password" => password = v.as_str().unwrap_or_default().to_owned(),
-            "postgres_conf" => fields.push(("postgres_conf", ColumnValue::Text(conf.clone()))),
+            // `isset($otherData['redis_password'])`: the variable, not a column.
+            "redis_password" => {
+                redis_password = v.as_str().map(str::to_owned);
+            }
+            k if kind.encrypted_columns().contains(&k) => {
+                secrets.push((k, String::new()));
+                fields.push((
+                    k,
+                    ColumnValue::Text(v.as_str().map(|p| enc.encrypt_string(p))),
+                ));
+            }
+            k if Some(k) == conf_field(kind) => fields.push((k, ColumnValue::Text(conf.clone()))),
             "is_public" => fields.push(("is_public", ColumnValue::Bool(is_public))),
             k if INT_COLUMNS.contains(&k) => match &v {
                 Value::Null => fields.push((k, ColumnValue::Text(None))),
@@ -762,29 +868,42 @@ pub async fn create_postgresql(
     if input.has("is_public") && !fields.iter().any(|(c, _)| *c == "is_public") {
         fields.push(("is_public", ColumnValue::Bool(is_public)));
     }
-    let new = NewPostgresql {
+    let given: Vec<&str> = secrets.iter().map(|(c, _)| *c).collect();
+    let (mut generated, variables) = generated_defaults(&state, kind, redis_password)?;
+    generated.retain(|(c, _)| !given.contains(c));
+    let secrets = generated;
+    let new = NewDatabase {
         environment_id: env.id,
         destination_id: destination,
-        image: "postgres:16-alpine".into(),
-        password_encrypted: enc.encrypt_string(&password),
+        image: (kind == Kind::Postgresql).then(|| "postgres:16-alpine".to_owned()),
+        secrets,
         fields,
         name,
+        variables,
     };
-    let (_, uuid) = dbs::create_postgresql(&state.db, new, state.now()).await?;
+    let (_, uuid) = dbs::create(&state.db, kind, new, state.now()).await?;
     let d = dbs::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(ApiError::Internal)?;
     if instant {
         start_or_queue(&state, &ctx, d.clone(), false)?;
     }
-    tracing::info!(target: "audit", event = "api.database.created", team_id = ctx.team_id, database_uuid = %uuid, instant_deploy = instant, "database created");
+    tracing::info!(target: "audit", event = "api.database.created", team_id = ctx.team_id, database_uuid = %uuid, database_type = kind.name_prefix(), instant_deploy = instant, "database created");
     let mut payload = Map::new();
     payload.insert("uuid".into(), Value::String(uuid));
-    if ctx.can_read_sensitive {
-        let (internal, external) = connection_urls(&d, &password, Some(&server));
-        payload.insert("internal_db_url".into(), Value::String(internal));
-        if is_public && public_port.is_some() {
-            payload.insert("external_db_url".into(), external);
+    // `createdDatabasePayload` (Dragonfly and SQLite answer with the UUID only).
+    if ctx.can_read_sensitive && !matches!(kind, Kind::Dragonfly | Kind::Sqlite) {
+        let c = credentials(&state, &d).await?;
+        payload.insert(
+            "internal_db_url".into(),
+            Value::String(conn::internal_url(&d, &c)),
+        );
+        if d.bool("is_public") && d.int("public_port").is_some_and(|p| p != 0) {
+            let external = conn::external_url(&d, &c, server_ip(Some(&server)));
+            payload.insert(
+                "external_db_url".into(),
+                external.map_or(Value::Null, Value::String),
+            );
         }
     }
     Ok(created(Value::Object(serialize_record(payload))).into_response())

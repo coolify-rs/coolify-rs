@@ -9,7 +9,7 @@ use axum::Extension;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use coolify_db::databases::{self as dbs, NewPostgresql};
+use coolify_db::databases::{self as dbs, Kind, NewDatabase};
 use coolify_db::servers::ColumnValue;
 use coolify_domain::naming::strip_tags;
 use regex::Regex;
@@ -108,9 +108,12 @@ pub async fn create(
             .unwrap_or_default()
             .to_owned()
     };
-    if s("type") != "postgresql" {
+    let Some(kind) = Kind::ALL
+        .into_iter()
+        .find(|k| k.name_prefix() == s("type") && k.ported())
+    else {
         return Err(ApiError::NotPorted);
-    }
+    };
     let project = coolify_db::projects::find(&state.db, ctx.team_id, &s("project_uuid"))
         .await?
         .ok_or(ApiError::Message(
@@ -131,7 +134,8 @@ pub async fn create(
                 "Destination not found.",
             ))?;
     let image = s("database_image");
-    if image.is_empty() {
+    // PostgreSQL requires database_image to be explicitly set.
+    if kind == Kind::Postgresql && image.is_empty() {
         let mut m = Map::new();
         m.insert(
             "database_image".into(),
@@ -139,16 +143,17 @@ pub async fn create(
         );
         return Err(ApiError::Validation(m));
     }
-    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-    let new = NewPostgresql {
+    let (secrets, variables) = crate::routes::databases::generated_defaults(&state, kind, None)?;
+    let new = NewDatabase {
         environment_id: env.id,
         destination_id,
-        image,
-        password_encrypted: enc.encrypt_string(&crate::routes::databases::random_password()),
+        image: (kind == Kind::Postgresql).then_some(image),
+        secrets,
         fields: Vec::new(),
         name: None,
+        variables,
     };
-    let (_, uuid) = dbs::create_postgresql(&state.db, new, state.now()).await?;
+    let (_, uuid) = dbs::create(&state.db, kind, new, state.now()).await?;
     tracing::info!(target: "audit", event = "database.created", team_id = ctx.team_id, database_uuid = %uuid, "database created");
     Ok(created(json!({"uuid": uuid})).into_response())
 }
@@ -170,7 +175,7 @@ pub async fn state(
         && d.str("config_hash").is_none()
         && ctx.is_team_admin()
     {
-        let hash = coolify_jobs::databases::config_hash(&d);
+        let hash = crate::routes::databases::config_hash(&state, &d).await?;
         dbs::update_if_changed(
             &state.db,
             d.kind,
@@ -180,13 +185,22 @@ pub async fn state(
         )
         .await?;
     }
+    let saved = d.str("config_hash");
+    let configuration_changed = saved.is_some()
+        && saved
+            != Some(
+                crate::routes::databases::config_hash(&state, &d)
+                    .await?
+                    .as_str(),
+            )
+        && !d.str("status").unwrap_or_default().starts_with("exited");
     let activity = dbs::latest_start_activity(&state.db, &uuid).await?.map(|(id, props, description)| {
         let entries: Value = serde_json::from_str(&description).unwrap_or(Value::Array(vec![]));
         json!({"id": id, "status": props.get("status").cloned().unwrap_or(Value::Null), "entries": entries})
     });
     Ok(ok(json!({
         "activity": activity,
-        "configuration_changed": coolify_jobs::databases::configuration_changed(&d),
+        "configuration_changed": configuration_changed,
         "can_update": ctx.is_team_admin(),
     }))
     .into_response())
@@ -338,7 +352,7 @@ pub async fn update(
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
-    if !d.kind.ported() {
+    if d.kind != Kind::Postgresql {
         return Err(ApiError::NotPorted);
     }
     let mut map = match serde_json::from_slice::<Value>(&body) {
@@ -500,7 +514,7 @@ pub async fn update(
     if d.str("config_hash").is_none()
         && let Some(fresh) = dbs::find_in_team(&state.db, ctx.team_id, &uuid).await?
     {
-        let hash = coolify_jobs::databases::config_hash(&fresh);
+        let hash = crate::routes::databases::config_hash(&state, &fresh).await?;
         dbs::update_if_changed(
             &state.db,
             d.kind,

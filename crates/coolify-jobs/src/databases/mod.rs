@@ -9,7 +9,6 @@
 use std::time::Duration;
 
 use chrono::{NaiveDateTime, SecondsFormat, Utc};
-use coolify_compat::yaml::{self, PhpValue};
 use coolify_db::databases::{self as dbs, DatabaseRow, Kind};
 use coolify_db::servers::{self, ColumnValue};
 use coolify_remote::{RunOptions, Stream, shell::quote};
@@ -18,382 +17,51 @@ use serde_json::{Value, json};
 use crate::Jobs;
 use crate::server::ServerInfo;
 
-pub const IN_PROGRESS: &str =
-    "Another start, restart or import of this database is already in progress.";
-const NOT_FUNCTIONAL: &str = "Server is not functional";
-/// `database_configuration_dir()` with upstream's default base path.
-const CONFIGURATION_DIR: &str = "/data/coolify/databases";
-/// `ResourceStatusRefresher::HEALTH_WAIT_*`.
-const HEALTH_WAIT_ATTEMPTS: u32 = 10;
-const HEALTH_WAIT_INTERVAL: Duration = Duration::from_secs(3);
+mod common;
+pub mod connection;
+pub mod env;
+mod postgresql;
+mod redis;
 
-fn now() -> NaiveDateTime {
-    Jobs::now()
-}
+pub use common::slug;
+use common::{CONFIGURATION_DIR, docker_stop_command, hrtime, now};
 
-/// `hrtime(true)` stands in as a monotonic nanosecond counter for log ordering.
-fn hrtime() -> i64 {
-    Utc::now().timestamp_nanos_opt().unwrap_or_default()
-}
-
-/// `Str::slug($title)` for the label values (ASCII transliteration is not ported:
-/// non-ASCII letters are kept, lowercased).
-pub fn slug(title: &str) -> String {
-    let mut s = title.replace('_', "-");
-    s = s.replace('@', "-at-");
-    let lowered = s.to_lowercase();
-    let kept: String = lowered
-        .chars()
-        .filter(|c| *c == '-' || c.is_alphanumeric() || c.is_whitespace())
-        .collect();
-    let mut out = String::new();
-    let mut sep = false;
-    for c in kept.chars() {
-        if c == '-' || c.is_whitespace() {
-            sep = true;
-        } else {
-            if sep && !out.is_empty() {
-                out.push('-');
-            }
-            sep = false;
-            out.push(c);
-        }
-    }
-    out
-}
-
-/// `dockerStopCommand($timeout, $containers, $server)`.
-fn docker_stop_command(timeout: u32, container: &str, docker_version: Option<&str>) -> String {
-    let normalized = crate::checks::parse_docker_engine_version(docker_version);
-    let new_flag = normalized.as_deref().is_some_and(|v| {
-        let mut p = v.split('.').map(|x| x.parse::<u64>().unwrap_or(0));
-        (
-            p.next().unwrap_or(0),
-            p.next().unwrap_or(0),
-            p.next().unwrap_or(0),
-        ) >= (28, 0, 0)
-    });
-    let flag = if new_flag {
-        format!("--timeout={timeout}")
-    } else {
-        format!("--time={timeout}")
-    };
-    format!("docker stop {flag} {container}")
-}
-
-/// `serverDockerConfigPrefix`.
-fn server_docker_config_prefix(server: &ServerInfo) -> &'static str {
-    if server.is_non_root() {
-        r#"DOCKER_CONTEXT=default DOCKER_CONFIG="$(find "$HOME/.docker/config.json" -maxdepth 0 -exec dirname {} \; 2>/dev/null)" "#
-    } else {
-        ""
-    }
-}
-
-/// `escapeDollarSign`.
-fn escape_dollar(v: &str) -> String {
-    v.replace('$', "$$")
-}
-
-/// `base64_encode`.
-fn b64(s: &str) -> String {
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD.encode(s.as_bytes())
-}
-
-/// `generate_readme_file($name, now())`: `sanitize_string` keeps the plain text.
-fn readme(name: &str, at: NaiveDateTime) -> String {
-    format!(
-        "Resource name: {name}\nLatest Deployment Date: {}",
-        at.format("%Y-%m-%d %H:%M:%S")
-    )
-}
-
-/// Everything `StartPostgresql::handle` needs, resolved.
+/// Everything a `Start*` action reads, resolved: the database, its decrypted
+/// `encrypted` columns and runtime variables, the server and the destination.
 #[derive(Debug)]
-pub struct PostgresStart<'a> {
+pub struct StartContext<'a> {
     pub db: &'a DatabaseRow,
-    pub password: String,
+    /// Decrypted values of the kind's `encrypted` columns.
+    pub secrets: std::collections::HashMap<&'static str, String>,
+    /// `runtime_environment_variables`, resolved.
+    pub variables: Vec<env::Var>,
     pub server: &'a ServerInfo,
     pub network: String,
     pub volumes: Vec<(String, String, Option<String>)>,
     pub now: NaiveDateTime,
 }
 
-/// `StartPostgresql::handle`: the commands, including the Compose file.
-pub fn postgres_start_commands(p: &PostgresStart<'_>) -> (Vec<String>, String) {
-    let d = p.db;
-    let name = d.uuid.as_str();
-    let dir = format!("{CONFIGURATION_DIR}/{name}");
-    let s = |k: &str| d.str(k).unwrap_or_default().to_owned();
-    let mut commands: Vec<String> = vec![
-        "echo 'Starting database.'".into(),
-        "echo 'Creating directories.'".into(),
-        format!("mkdir -p {dir}"),
-        format!("mkdir -p {dir}/docker-entrypoint-initdb.d/"),
-        "echo 'Directories created successfully.'".into(),
-        // enable_ssl is false (SSL is not ported; the caller refuses it).
-        format!("rm -rf {dir}/ssl"),
-    ];
-
-    // generate_environment_variables (no runtime variables: the caller refuses them).
-    let user = s("postgres_user");
-    let db_name = s("postgres_db");
-    let mut env: Vec<String> = vec![
-        format!("POSTGRES_USER={user}"),
-        format!("PGUSER={user}"),
-        format!("POSTGRES_PASSWORD={}", p.password),
-        format!("PGPASSWORD={}", p.password),
-        format!("POSTGRES_DB={db_name}"),
-        format!("COOLIFY_RESOURCE_UUID={}", escape_dollar(name)),
-        format!("COOLIFY_CONTAINER_NAME={}", escape_dollar(name)),
-    ];
-    if d.raw
-        .get("include_coolify_default_variables")
-        .and_then(Value::as_bool)
-        != Some(false)
-    {
-        let defaults = [
-            ("COOLIFY_APP_NAME", d.str("name").map(str::to_owned)),
-            (
-                "COOLIFY_PROJECT_NAME",
-                d.project
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-            ),
-            (
-                "COOLIFY_ENVIRONMENT_NAME",
-                d.environment
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-            ),
-            (
-                "COOLIFY_SERVER_IP",
-                Some(p.server.ip.clone()).filter(|_| true),
-            ),
-        ];
-        for (k, v) in defaults {
-            if let Some(v) = v {
-                env.push(format!("{k}={}", escape_dollar(&v)));
-            }
-        }
+impl StartContext<'_> {
+    pub fn secret(&self, column: &str) -> String {
+        self.secrets.get(column).cloned().unwrap_or_default()
     }
-
-    // generate_init_scripts
-    commands.push(format!(
-        "find {dir}/docker-entrypoint-initdb.d -mindepth 1 -maxdepth 1 -exec rm -rf {{}} + 2>/dev/null || true"
-    ));
-    let mut init_scripts: Vec<String> = Vec::new();
-    if let Some(Value::Array(scripts)) = d.raw.get("init_scripts") {
-        for script in scripts {
-            let filename = script
-                .get("filename")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let filename = filename.rsplit('/').next().unwrap_or_default();
-            let content = script
-                .get("content")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let target = format!("{dir}/docker-entrypoint-initdb.d/{filename}");
-            commands.push(format!(
-                "echo '{}' | base64 -d | tee {} > /dev/null",
-                b64(content),
-                quote(&target)
-            ));
-            init_scripts.push(target);
-        }
-    }
-
-    // add_custom_conf
-    let conf_path = format!("{dir}/custom-postgres.conf");
-    let conf = d
-        .str("postgres_conf")
-        .filter(|c| !c.trim().is_empty())
-        .map(|c| {
-            if c.contains("listen_addresses") {
-                c.to_owned()
-            } else {
-                format!("{c}\nlisten_addresses = '*'")
-            }
-        });
-    match &conf {
-        None => commands.push(format!("rm -f {conf_path}")),
-        Some(c) => {
-            commands.push(format!(
-                "echo '{}' | base64 -d | tee {conf_path} > /dev/null",
-                b64(c)
-            ));
-            commands.push(format!("chmod 644 {conf_path}"));
-        }
-    }
-
-    let int = |k: &str, default: i64| d.int(k).unwrap_or(default);
-    let health = PhpValue::map([
-        (
-            "test",
-            PhpValue::strings(["CMD", "psql", "-U", &user, "-d", &db_name, "-c", "SELECT 1"]),
-        ),
-        (
-            "interval",
-            PhpValue::from(format!("{}s", int("health_check_interval", 15))),
-        ),
-        (
-            "timeout",
-            PhpValue::from(format!("{}s", int("health_check_timeout", 5))),
-        ),
-        ("retries", PhpValue::Int(int("health_check_retries", 5))),
-        (
-            "start_period",
-            PhpValue::from(format!("{}s", int("health_check_start_period", 5))),
-        ),
-    ]);
-    let project_name = d
-        .project
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let env_name = d
-        .environment
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let db_display = s("name");
-    let labels = PhpValue::strings([
-        "coolify.managed=true".to_owned(),
-        "coolify.type=database".to_owned(),
-        format!("coolify.databaseUuid={name}"),
-        format!("coolify.resourceName={}", slug(&db_display)),
-        format!("coolify.serviceName={}", slug(&db_display)),
-        format!("coolify.projectName={}", slug(project_name)),
-        format!("coolify.environmentName={}", slug(env_name)),
-        format!("coolify.database.subType={}", Kind::Postgresql.type_name()),
-    ]);
-    let cpus: f64 = s("limits_cpus").trim().parse().unwrap_or(0.0);
-    let mut service = PhpValue::map([
-        ("image", PhpValue::from(s("image"))),
-        ("container_name", PhpValue::from(name)),
-        ("environment", PhpValue::strings(env)),
-        ("restart", PhpValue::from("unless-stopped")),
-        ("networks", PhpValue::strings([p.network.clone()])),
-        ("labels", labels),
-        ("healthcheck", health),
-        ("mem_limit", PhpValue::from(s("limits_memory"))),
-        ("memswap_limit", PhpValue::from(s("limits_memory_swap"))),
-        (
-            "mem_swappiness",
-            PhpValue::Int(int("limits_memory_swappiness", 60)),
-        ),
-        (
-            "mem_reservation",
-            PhpValue::from(s("limits_memory_reservation")),
-        ),
-        ("cpus", PhpValue::Float(cpus)),
-        ("cpu_shares", PhpValue::Int(int("limits_cpu_shares", 1024))),
-    ]);
-    if let Some(cpuset) = d.str("limits_cpuset").filter(|c| !c.trim().is_empty()) {
-        service.set("cpuset", PhpValue::from(cpuset));
-    }
-    if let Some(ports) = d.str("ports_mappings") {
-        service.set(
-            "ports",
-            PhpValue::strings(ports.split(',').map(str::to_owned)),
-        );
-    }
-    let mut volumes = PhpValue::list([]);
-    let mut volume_names = PhpValue::list([]);
-    for (vname, mount, host) in &p.volumes {
-        match host.as_deref().filter(|h| !h.is_empty()) {
-            Some(h) => volumes.push(PhpValue::from(format!("{h}:{mount}"))),
-            None => {
-                volumes.push(PhpValue::from(format!("{vname}:{mount}")));
-                volume_names.set(
-                    vname,
-                    PhpValue::map([
-                        ("name", PhpValue::from(vname.as_str())),
-                        ("external", PhpValue::Bool(false)),
-                    ]),
-                );
-            }
-        }
-    }
-    for script in &init_scripts {
-        let base = script.rsplit('/').next().unwrap_or_default();
-        volumes.push(PhpValue::map([
-            ("type", PhpValue::from("bind")),
-            ("source", PhpValue::from(script.as_str())),
-            (
-                "target",
-                PhpValue::from(format!("/docker-entrypoint-initdb.d/{base}")),
-            ),
-            ("read_only", PhpValue::Bool(true)),
-        ]));
-    }
-    let mut command = vec!["postgres".to_owned()];
-    if conf.is_some() {
-        volumes.push(PhpValue::map([
-            ("type", PhpValue::from("bind")),
-            ("source", PhpValue::from(conf_path.clone())),
-            ("target", PhpValue::from("/etc/postgresql/postgresql.conf")),
-            ("read_only", PhpValue::Bool(true)),
-        ]));
-        command.extend([
-            "-c".to_owned(),
-            "config_file=/etc/postgresql/postgresql.conf".to_owned(),
-        ]);
-    }
-    service.set("volumes", volumes);
-    if command.len() > 1 {
-        service.set("command", PhpValue::strings(command));
-    }
-    if d.raw.get("health_check_enabled").and_then(Value::as_bool) == Some(false) {
-        service.remove("healthcheck");
-    }
-    let mut compose = PhpValue::map([
-        ("services", PhpValue::map([(name, service)])),
-        (
-            "networks",
-            PhpValue::map([(
-                p.network.clone(),
-                PhpValue::map([
-                    ("external", PhpValue::Bool(true)),
-                    ("name", PhpValue::from(p.network.clone())),
-                    ("attachable", PhpValue::Bool(true)),
-                ]),
-            )]),
-        ),
-    ]);
-    if !matches!(&volume_names, PhpValue::Array(v) if v.is_empty()) {
-        compose.set("volumes", volume_names);
-    }
-    let compose_yaml = yaml::dump(&compose, 10);
-    commands.push(format!(
-        "echo '{}' | base64 -d | tee {dir}/docker-compose.yml > /dev/null",
-        b64(&compose_yaml)
-    ));
-    commands.push(format!(
-        "echo '{}' | tee {dir}/README.md > /dev/null",
-        readme(&db_display, p.now)
-    ));
-    commands.push(format!(
-        "echo {}",
-        quote(&format!("Pulling {} image.", s("image")))
-    ));
-    commands.push(format!(
-        "{}docker compose -f {dir}/docker-compose.yml pull",
-        server_docker_config_prefix(p.server)
-    ));
-    commands.push(format!(
-        "{} 2>/dev/null || true",
-        docker_stop_command(10, name, p.server.docker_version())
-    ));
-    commands.push(format!("docker rm -f {name} 2>/dev/null || true"));
-    commands.push(format!("docker compose -f {dir}/docker-compose.yml up -d"));
-    commands.push("echo 'Database started.'".into());
-    (commands, compose_yaml)
 }
+
+/// The start commands and the Docker Compose file of a database.
+pub fn start_commands(ctx: &StartContext<'_>) -> Result<(Vec<String>, String), String> {
+    match ctx.db.kind {
+        Kind::Postgresql => Ok(postgresql::start_commands(ctx)),
+        Kind::Redis => Ok(redis::start_commands(ctx)),
+        _ => Err("Database start failed.".into()),
+    }
+}
+
+pub const IN_PROGRESS: &str =
+    "Another start, restart or import of this database is already in progress.";
+const NOT_FUNCTIONAL: &str = "Server is not functional";
+/// `ResourceStatusRefresher::HEALTH_WAIT_*`.
+const HEALTH_WAIT_ATTEMPTS: u32 = 10;
+const HEALTH_WAIT_INTERVAL: Duration = Duration::from_secs(3);
 
 /// `ContainerStatusAggregator::containerStatus`.
 fn container_status(c: &Value) -> String {
@@ -682,19 +350,26 @@ impl Jobs {
         }
     }
 
-    async fn run_start(
+    /// Everything the start commands read, loaded and decrypted.
+    pub async fn start_context<'a>(
         &self,
-        d: &DatabaseRow,
-        server: &ServerInfo,
-        activity: i64,
-    ) -> Result<(), String> {
+        d: &'a DatabaseRow,
+        server: &'a ServerInfo,
+    ) -> Result<StartContext<'a>, String> {
         let Some(enc) = self.0.encrypter.as_ref() else {
             return Err("Database start failed.".into());
         };
-        let password = d
-            .str("postgres_password")
-            .and_then(|c| enc.decrypt_string(c).ok())
-            .ok_or("Database start failed.")?;
+        let mut secrets = std::collections::HashMap::new();
+        for column in d.kind.encrypted_columns() {
+            if let Some(cipher) = d.str(column) {
+                secrets.insert(
+                    *column,
+                    enc.decrypt_string(cipher)
+                        .map_err(|_| "Database start failed.")?,
+                );
+            }
+        }
+        let variables = env::load(&self.0.db, enc, d, Some(server.id)).await?;
         let network = d
             .destination
             .as_ref()
@@ -705,15 +380,53 @@ impl Jobs {
         let volumes = dbs::persistent_volumes(&self.0.db, d.kind, d.id)
             .await
             .map_err(|e| e.to_string())?;
-        let start = PostgresStart {
+        Ok(StartContext {
             db: d,
-            password: password.clone(),
+            secrets,
+            variables,
             server,
             network,
             volumes,
             now: now(),
+        })
+    }
+
+    async fn run_start(
+        &self,
+        d: &DatabaseRow,
+        server: &ServerInfo,
+        activity: i64,
+    ) -> Result<(), String> {
+        let Some(enc) = self.0.encrypter.as_ref() else {
+            return Err("Database start failed.".into());
         };
-        let (commands, _) = postgres_start_commands(&start);
+        let ctx = self.start_context(d, server).await?;
+        let (commands, _) = start_commands(&ctx)?;
+        // StartRedis writes the model's `redis_username` to each REDIS_USERNAME variable.
+        if d.kind == Kind::Redis {
+            for (id, username) in redis::username_updates(&ctx) {
+                let value = enc.encrypt_serialized(&username);
+                let _ = coolify_db::environment_variables::update_value(
+                    &self.0.db,
+                    id,
+                    Some(&value),
+                    now(),
+                )
+                .await;
+            }
+        }
+        let mut locked: Vec<String> = ctx
+            .secrets
+            .values()
+            .filter(|v| !v.is_empty())
+            .cloned()
+            .collect();
+        locked.extend(
+            ctx.variables
+                .iter()
+                .filter_map(|v| v.resolved.clone())
+                .filter(|v| v.len() >= 4),
+        );
         let target = server.target(self).await?;
 
         let _ = dbs::update_activity(
@@ -726,7 +439,7 @@ impl Jobs {
         .await;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(Stream, String)>();
         let db = self.0.db.clone();
-        let secrets = [password];
+        let secrets = locked;
         let writer = tokio::spawn(async move {
             let mut entries: Vec<Value> = Vec::new();
             while let Some((stream, chunk)) = rx.recv().await {
@@ -797,7 +510,9 @@ impl Jobs {
             )
             .await;
         }
-        let hash = config_hash(&fresh);
+        let Ok(hash) = self.database_config_hash(&fresh).await else {
+            return;
+        };
         let _ = dbs::update_if_changed(
             &self.0.db,
             d.kind,
@@ -806,6 +521,17 @@ impl Jobs {
             now,
         )
         .await;
+    }
+
+    /// `config_hash` with the database's variables.
+    pub async fn database_config_hash(&self, d: &DatabaseRow) -> Result<String, String> {
+        let enc = self
+            .0
+            .encrypter
+            .as_ref()
+            .ok_or("No application encryption key has been specified.")?;
+        let variables = env::load_stored(&self.0.db, enc, d).await?;
+        Ok(config_hash(d, &env::config_hash_values(&variables)))
     }
 
     /// `ResourceStatusRefresher::refreshDatabase`.
@@ -982,9 +708,9 @@ impl Jobs {
     }
 }
 
-/// `StandalonePostgresql::isConfigurationChanged`'s hash (no environment variables:
-/// `json_encode` of the empty collection is `[]`).
-pub fn config_hash(d: &DatabaseRow) -> String {
+/// `isConfigurationChanged`'s hash; `variables` is `env::config_hash_values` of the
+/// database's variables.
+pub fn config_hash(d: &DatabaseRow, variables: &str) -> String {
     use md5::Digest as _;
     let s = |k: &str| d.str(k).unwrap_or_default().to_owned();
     let i = |k: &str, default: i64| d.int(k).unwrap_or(default);
@@ -1001,13 +727,21 @@ pub fn config_hash(d: &DatabaseRow) -> String {
         i("health_check_retries", 5),
         i("health_check_start_period", 5)
     );
-    let input = format!(
-        "{}{}{}{}{health}[]",
-        s("image"),
-        s("ports_mappings"),
-        s("postgres_initdb_args"),
-        s("postgres_host_auth_method")
-    );
+    let fields: &[&str] = match d.kind {
+        Kind::Postgresql => &["postgres_initdb_args", "postgres_host_auth_method"],
+        Kind::Redis => &["redis_conf"],
+        Kind::Mongodb => &["mongo_conf"],
+        Kind::Mysql => &["mysql_conf"],
+        Kind::Mariadb => &["mariadb_conf"],
+        Kind::Keydb => &["keydb_conf"],
+        Kind::Dragonfly | Kind::Clickhouse | Kind::Sqlite => &[],
+    };
+    let mut input = format!("{}{}", s("image"), s("ports_mappings"));
+    for f in fields {
+        input.push_str(&s(f));
+    }
+    input.push_str(&health);
+    input.push_str(variables);
     hex(&md5::Md5::digest(input.as_bytes()))
 }
 
@@ -1016,9 +750,9 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// `ConfigurationChecker`: the hash differs, one was saved before, and the database is not exited.
-pub fn configuration_changed(d: &DatabaseRow) -> bool {
+pub fn configuration_changed(d: &DatabaseRow, variables: &str) -> bool {
     let saved = d.str("config_hash");
-    saved.is_some_and(|h| h != config_hash(d))
+    saved.is_some_and(|h| h != config_hash(d, variables))
         && !d.str("status").unwrap_or_default().starts_with("exited")
 }
 

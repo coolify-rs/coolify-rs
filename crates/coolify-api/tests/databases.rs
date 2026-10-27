@@ -99,11 +99,14 @@ async fn fixture() -> Fixture {
 }
 
 async fn status(h: &Harness, uuid: &str) -> String {
-    sqlx::query_scalar("SELECT status FROM standalone_postgresqls WHERE uuid = $1")
-        .bind(uuid)
-        .fetch_one(h.tdb.db.pool())
-        .await
-        .unwrap()
+    sqlx::query_scalar(
+        "SELECT status FROM standalone_postgresqls WHERE uuid = $1 \
+         UNION ALL SELECT status FROM standalone_redis WHERE uuid = $1",
+    )
+    .bind(uuid)
+    .fetch_one(h.tdb.db.pool())
+    .await
+    .unwrap()
 }
 
 async fn wait_status(h: &Harness, uuid: &str, want: &str) {
@@ -360,10 +363,102 @@ async fn unported_parts_answer_501() {
         501
     );
     assert_eq!(
-        h.call("POST", "/api/v1/databases/redis", W, Some(base))
+        h.call("POST", "/api/v1/databases/mongodb", W, Some(base))
             .await
             .status,
         501
     );
+    f.h.finish().await;
+}
+
+#[tokio::test]
+async fn redis_create_and_start() {
+    let f = fixture().await;
+    let h = &f.h;
+    let body = json!({"server_uuid": f.server, "project_uuid": f.project, "environment_name": "production", "redis_password": "s3cret-pass"});
+    let r = h
+        .call("POST", "/api/v1/databases/redis", ROOT, Some(body))
+        .await;
+    assert_eq!(r.status, 201, "{}", r.body);
+    let created = r.json();
+    let uuid = created["uuid"].as_str().unwrap().to_owned();
+    assert_eq!(
+        created["internal_db_url"],
+        format!("redis://default:s3cret-pass@{uuid}:6379/0")
+    );
+
+    // create_standalone_redis keeps the password and username in variables.
+    let keys: Vec<String> = sqlx::query_scalar(
+        "SELECT key FROM environment_variables WHERE resourceable_type = 'App\\Models\\StandaloneRedis' ORDER BY id",
+    )
+    .fetch_all(h.tdb.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(keys, ["REDIS_PASSWORD", "REDIS_USERNAME"]);
+    let show = h
+        .get(&format!("/api/v1/databases/{uuid}"), "acme_owner_root")
+        .await
+        .json();
+    assert_eq!(show["database_type"], "standalone-redis");
+    assert!(show.get("redis_password").is_none() && show.get("legacy_password_quoting").is_none());
+    assert_eq!(
+        show["internal_db_url"],
+        format!("redis://default:s3cret-pass@{uuid}:6379/0")
+    );
+
+    // A field of another type is refused.
+    let r = h
+        .call(
+            "POST",
+            "/api/v1/databases/redis",
+            W,
+            Some(json!({"server_uuid": f.server, "project_uuid": f.project, "environment_name": "production", "postgres_user": "x"})),
+        )
+        .await;
+    r.assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"postgres_user":["This field is not allowed."]}}"#,
+    );
+
+    let r = h
+        .call(
+            "POST",
+            &format!("/api/v1/databases/{uuid}/start"),
+            ROOT,
+            None,
+        )
+        .await;
+    r.assert(200, r#"{"message":"Database starting request queued."}"#);
+    wait_status(h, &uuid, "running:healthy").await;
+    let all = scripts(&f.dir);
+    let start = all
+        .iter()
+        .find(|s| s.contains("docker compose -f"))
+        .expect("start script");
+    use base64::Engine as _;
+    let compose = start
+        .lines()
+        .find(|l| l.contains("docker-compose.yml > /dev/null"))
+        .and_then(|l| l.split('\'').nth(1))
+        .map(|b| {
+            String::from_utf8(base64::engine::general_purpose::STANDARD.decode(b).unwrap()).unwrap()
+        })
+        .expect("compose file");
+    assert!(
+        compose.contains(r#"command: "redis-server --requirepass 's3cret-pass' --appendonly yes""#),
+        "{compose}"
+    );
+    assert!(
+        compose.contains("- REDIS_PASSWORD=s3cret-pass"),
+        "{compose}"
+    );
+    assert!(compose.contains("- REDIS_USERNAME=default"), "{compose}");
+    let hash: Option<String> =
+        sqlx::query_scalar("SELECT config_hash FROM standalone_redis WHERE uuid = $1")
+            .bind(&uuid)
+            .fetch_one(h.tdb.db.pool())
+            .await
+            .unwrap();
+    assert!(hash.is_some());
     f.h.finish().await;
 }

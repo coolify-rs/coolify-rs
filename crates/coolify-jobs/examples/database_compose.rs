@@ -1,5 +1,5 @@
 //! Prints the Docker Compose file coolify-rs would write for a database:
-//! `DATABASE_URL=... APP_KEY=... cargo run -p coolify-jobs --example database_compose -- <team id> <uuid>`.
+//! `DATABASE_URL=... APP_KEY=... cargo run -p coolify-jobs --example database_compose -- <team id> <uuid> [--commands|--hash]`.
 //! Used to compare with the file upstream writes on a server.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -9,7 +9,7 @@ use std::time::Duration;
 use coolify_compat::Encrypter;
 use coolify_db::databases as dbs;
 use coolify_db::{Db, DbConfig, servers};
-use coolify_jobs::databases::{PostgresStart, postgres_start_commands};
+use coolify_jobs::databases::start_commands;
 use coolify_jobs::server::ServerInfo;
 
 #[tokio::main]
@@ -36,23 +36,18 @@ async fn main() {
             .unwrap()
             .unwrap(),
     );
-    let password = enc
-        .decrypt_string(d.str("postgres_password").unwrap())
-        .unwrap();
-    let network = d.destination.as_ref().unwrap()["network"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let volumes = dbs::persistent_volumes(&db, d.kind, d.id).await.unwrap();
-    let start = PostgresStart {
-        db: &d,
-        password,
-        server: &server,
-        network,
-        volumes,
-        now: chrono::Utc::now().naive_utc(),
-    };
-    let (commands, compose) = postgres_start_commands(&start);
+    let jobs = coolify_jobs::Jobs::new(
+        db.clone(),
+        coolify_remote::Remote::new(coolify_remote::RemoteConfig::new(std::env::temp_dir()))
+            .unwrap(),
+        Some(enc),
+    );
+    if args.get(3).map(String::as_str) == Some("--hash") {
+        println!("{}", jobs.database_config_hash(&d).await.unwrap());
+        return;
+    }
+    let ctx = jobs.start_context(&d, &server).await.unwrap();
+    let (commands, compose) = start_commands(&ctx).unwrap();
     if args.get(3).map(String::as_str) == Some("--commands") {
         for c in commands {
             println!("{c}");

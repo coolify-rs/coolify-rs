@@ -84,7 +84,12 @@ impl Kind {
     }
 
     pub fn ported(self) -> bool {
-        matches!(self, Kind::Postgresql)
+        matches!(self, Kind::Postgresql | Kind::Redis)
+    }
+
+    /// The ported kinds, in upstream's order.
+    pub fn ported_kinds() -> impl Iterator<Item = Kind> {
+        Kind::ALL.into_iter().filter(|k| k.ported())
     }
 }
 
@@ -311,23 +316,90 @@ pub async fn has_swarm_destinations(db: &Db, server_id: i64) -> DbResult<bool> {
     )
 }
 
-/// Fillable values of a new PostgreSQL database, as `fill()` stores them.
+/// Fillable values of a new database, as `create_standalone_*` and `fill()` store them.
 #[derive(Debug, Default)]
-pub struct NewPostgresql {
+pub struct NewDatabase {
     pub environment_id: i64,
     pub destination_id: i64,
-    pub image: String,
-    /// Encrypted with `APP_KEY` (`encrypted` cast).
-    pub password_encrypted: String,
+    /// The image when the caller chooses it (PostgreSQL in the UI); otherwise the column default.
+    pub image: Option<String>,
+    /// Generated or given passwords, already encrypted with `APP_KEY` (`encrypted` casts).
+    pub secrets: Vec<(&'static str, String)>,
     /// Other fillable columns from the request, in request order.
     pub fields: Vec<(&'static str, ColumnValue)>,
     pub name: Option<String>,
+    /// Variables the create helper adds (Redis: `REDIS_PASSWORD`, `REDIS_USERNAME`).
+    pub variables: Vec<crate::environment_variables::NewVariable>,
 }
 
-/// `create_standalone_postgresql` plus the model's `created` hook (data volume).
-pub async fn create_postgresql(
+impl Kind {
+    /// `create_standalone_*`: the default name is `{prefix}-database-{uuid}`.
+    pub fn name_prefix(self) -> &'static str {
+        match self {
+            Kind::Postgresql => "postgresql",
+            Kind::Redis => "redis",
+            Kind::Mongodb => "mongodb",
+            Kind::Mysql => "mysql",
+            Kind::Mariadb => "mariadb",
+            Kind::Keydb => "keydb",
+            Kind::Dragonfly => "dragonfly",
+            Kind::Clickhouse => "clickhouse",
+            Kind::Sqlite => "sqlite",
+        }
+    }
+
+    /// The model's `created` hook: `(volume name, mount path)` in creation order.
+    pub fn default_volumes(self, uuid: &str, image: &str) -> Vec<(String, &'static str)> {
+        match self {
+            Kind::Postgresql => {
+                // PostgreSQL 18+ keeps its data one level up.
+                let mount = if image_major(image) >= 18 {
+                    "/var/lib/postgresql"
+                } else {
+                    "/var/lib/postgresql/data"
+                };
+                vec![(format!("postgres-data-{uuid}"), mount)]
+            }
+            Kind::Redis => vec![(format!("redis-data-{uuid}"), "/data")],
+            Kind::Mongodb => vec![
+                (format!("mongodb-configdb-{uuid}"), "/data/configdb"),
+                (format!("mongodb-db-{uuid}"), "/data/db"),
+            ],
+            Kind::Mysql => vec![(format!("mysql-data-{uuid}"), "/var/lib/mysql")],
+            Kind::Mariadb => vec![(format!("mariadb-data-{uuid}"), "/var/lib/mysql")],
+            Kind::Keydb => vec![(format!("keydb-data-{uuid}"), "/data")],
+            Kind::Dragonfly => vec![(format!("dragonfly-data-{uuid}"), "/data")],
+            Kind::Clickhouse => vec![(format!("clickhouse-data-{uuid}"), "/var/lib/clickhouse")],
+            Kind::Sqlite => vec![(format!("sqlite-data-{uuid}"), "/data")],
+        }
+    }
+
+    /// Encrypted password columns `create_standalone_*` fills with `Str::password(64, symbols: false)`.
+    pub fn generated_secrets(self) -> &'static [&'static str] {
+        match self {
+            Kind::Postgresql => &["postgres_password"],
+            Kind::Mongodb => &["mongo_initdb_root_password"],
+            Kind::Mysql => &["mysql_root_password", "mysql_password"],
+            Kind::Mariadb => &["mariadb_root_password", "mariadb_password"],
+            Kind::Keydb => &["keydb_password"],
+            Kind::Dragonfly => &["dragonfly_password"],
+            Kind::Clickhouse => &["clickhouse_admin_password"],
+            Kind::Redis | Kind::Sqlite => &[],
+        }
+    }
+
+    /// Columns with the `encrypted` cast.
+    pub fn encrypted_columns(self) -> &'static [&'static str] {
+        self.generated_secrets()
+    }
+}
+
+/// `create_standalone_*` plus the model's `created` hook (data volumes) and, for
+/// Redis, its variables, in one transaction.
+pub async fn create(
     db: &Db,
-    n: NewPostgresql,
+    kind: Kind,
+    n: NewDatabase,
     now: NaiveDateTime,
 ) -> DbResult<(i64, String)> {
     db.ensure_writable()?;
@@ -335,53 +407,49 @@ pub async fn create_postgresql(
     let name = n
         .name
         .clone()
-        .unwrap_or_else(|| format!("postgresql-database-{uuid}"));
-    let image = n
-        .fields
-        .iter()
-        .find_map(|(c, v)| match (c, v) {
-            (&"image", ColumnValue::Text(Some(i))) => Some(i.clone()),
-            _ => None,
-        })
-        .unwrap_or_else(|| n.image.clone());
+        .unwrap_or_else(|| format!("{}-database-{uuid}", kind.name_prefix()));
     let mut cols: Vec<(&'static str, ColumnValue)> = vec![
         ("uuid", ColumnValue::Text(Some(uuid.clone()))),
         ("name", ColumnValue::Text(Some(name))),
-        ("image", ColumnValue::Text(Some(image.clone()))),
-        (
-            "postgres_password",
-            ColumnValue::Text(Some(n.password_encrypted.clone())),
-        ),
     ];
+    if let Some(image) = &n.image {
+        cols.push(("image", ColumnValue::Text(Some(image.clone()))));
+    }
+    for (c, v) in &n.secrets {
+        cols.push((c, ColumnValue::Text(Some(v.clone()))));
+    }
     for (c, v) in &n.fields {
-        if matches!(*c, "image" | "name") {
-            continue;
+        if *c == "name" || cols.iter().any(|(k, _)| k == c) {
+            cols.retain(|(k, _)| k != c);
         }
         cols.push((c, v.clone()));
     }
     let names: Vec<String> = cols.iter().map(|(c, _)| format!("\"{c}\"")).collect();
-    let mut placeholders: Vec<String> = Vec::new();
-    for (i, (c, v)) in cols.iter().enumerate() {
-        let cast = match v {
-            ColumnValue::Int(_) => "::integer",
-            _ if *c == "init_scripts" => "::json",
-            _ => "",
-        };
-        placeholders.push(format!("${}{cast}", i + 5));
-    }
+    let placeholders: Vec<String> = cols
+        .iter()
+        .enumerate()
+        .map(|(i, (c, v))| {
+            let cast = match v {
+                ColumnValue::Int(_) => "::integer",
+                _ if *c == "init_scripts" => "::json",
+                _ => "",
+            };
+            format!("${}{cast}", i + 5)
+        })
+        .collect();
     let sql = format!(
-        "INSERT INTO standalone_postgresqls ({}, environment_id, destination_id, destination_type, created_at, updated_at) \
-         VALUES ({}, $1, $2, $3, $4, $4) RETURNING id",
+        "INSERT INTO {} ({}, environment_id, destination_id, destination_type, created_at, updated_at) \
+         VALUES ({}, $1, $2, $3, $4, $4) RETURNING id, image",
+        kind.table(),
         names.join(", "),
         placeholders.join(", ")
     );
     let mut tx = db.pool().begin().await?;
-    let q = sqlx::query_scalar::<_, i64>(&sql)
+    let mut q = sqlx::query_as::<_, (i64, String)>(&sql)
         .bind(n.environment_id)
         .bind(n.destination_id)
         .bind(STANDALONE_DOCKER_MORPH)
         .bind(now);
-    let mut q = q;
     for (_, v) in &cols {
         q = match v {
             ColumnValue::Text(t) => q.bind(t.clone()),
@@ -390,32 +458,30 @@ pub async fn create_postgresql(
             ColumnValue::Time(t) => q.bind(*t),
         };
     }
-    let id = q.fetch_one(&mut *tx).await?;
-    // StandalonePostgresql::created: PostgreSQL 18+ keeps its data one level up.
-    let major = coolify_domain_major(&image);
-    let mount = if major >= 18 {
-        "/var/lib/postgresql"
-    } else {
-        "/var/lib/postgresql/data"
-    };
-    sqlx::query(
-        "INSERT INTO local_persistent_volumes (name, mount_path, host_path, resource_id, resource_type, uuid, created_at, updated_at) \
-         VALUES ($1, $2, NULL, $3, $4, $5, $6, $6)",
-    )
-    .bind(format!("postgres-data-{uuid}"))
-    .bind(mount)
-    .bind(id)
-    .bind(Kind::Postgresql.morph())
-    .bind(new_public_id())
-    .bind(now)
-    .execute(&mut *tx)
-    .await?;
+    let (id, image) = q.fetch_one(&mut *tx).await?;
+    for (name, mount) in kind.default_volumes(&uuid, &image) {
+        sqlx::query(
+            "INSERT INTO local_persistent_volumes (name, mount_path, host_path, resource_id, resource_type, uuid, created_at, updated_at) \
+             VALUES ($1, $2, NULL, $3, $4, $5, $6, $6)",
+        )
+        .bind(name)
+        .bind(mount)
+        .bind(id)
+        .bind(kind.morph())
+        .bind(new_public_id())
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
+    for v in &n.variables {
+        crate::environment_variables::insert(&mut tx, kind.morph(), id, v, now).await?;
+    }
     tx.commit().await?;
     Ok((id, uuid))
 }
 
 /// `preg_match('/:(?:pg)?(\d+)/i', $image)`.
-fn coolify_domain_major(image: &str) -> i64 {
+fn image_major(image: &str) -> i64 {
     let lower = image.to_ascii_lowercase();
     let mut rest = lower.as_str();
     while let Some(i) = rest.find(':') {
@@ -520,7 +586,7 @@ pub async fn persistent_volumes(
 }
 
 /// What the start command needs that coolify-rs cannot write yet: file
-/// storages, environment variables, SSL certificates, scheduled backups.
+/// storages, SSL certificates, scheduled backups.
 pub async fn unported_parts(db: &Db, kind: Kind, id: i64) -> DbResult<Vec<&'static str>> {
     let mut parts = Vec::new();
     for (table, col_type, col_id, label) in [
@@ -529,12 +595,6 @@ pub async fn unported_parts(db: &Db, kind: Kind, id: i64) -> DbResult<Vec<&'stat
             "resource_type",
             "resource_id",
             "file storages",
-        ),
-        (
-            "environment_variables",
-            "resourceable_type",
-            "resourceable_id",
-            "environment variables",
         ),
         (
             "ssl_certificates",
@@ -674,9 +734,18 @@ pub async fn activity_by_id(db: &Db, id: i64) -> DbResult<Option<(serde_json::Va
 
 /// Servers with at least one ported database on a standalone Docker destination.
 pub async fn servers_with_databases(db: &Db) -> DbResult<Vec<i64>> {
+    let parts: Vec<String> = Kind::ported_kinds()
+        .map(|k| {
+            format!(
+                "SELECT sd.server_id FROM {} d JOIN standalone_dockers sd ON sd.id = d.destination_id \
+                 WHERE d.destination_type = '{STANDALONE_DOCKER_MORPH}' AND d.deleted_at IS NULL",
+                k.table()
+            )
+        })
+        .collect();
     Ok(sqlx::query_scalar(&format!(
-        "SELECT DISTINCT sd.server_id FROM standalone_postgresqls d JOIN standalone_dockers sd ON sd.id = d.destination_id \
-         WHERE d.destination_type = '{STANDALONE_DOCKER_MORPH}' AND d.deleted_at IS NULL"
+        "SELECT DISTINCT server_id FROM ({}) s",
+        parts.join(" UNION ")
     ))
     .fetch_all(db.pool())
     .await?)
@@ -684,15 +753,24 @@ pub async fn servers_with_databases(db: &Db) -> DbResult<Vec<i64>> {
 
 /// Presents raw attributes with the model spec (timestamps, hidden columns).
 pub fn present(kind: Kind, raw: Record) -> Record {
-    match kind {
-        Kind::Postgresql => STANDALONE_POSTGRESQL.present(raw),
-        _ => raw,
-    }
+    use crate::database_specs as specs;
+    let spec = match kind {
+        Kind::Postgresql => &STANDALONE_POSTGRESQL,
+        Kind::Redis => &specs::STANDALONE_REDIS,
+        Kind::Mongodb => &specs::STANDALONE_MONGODB,
+        Kind::Mysql => &specs::STANDALONE_MYSQL,
+        Kind::Mariadb => &specs::STANDALONE_MARIADB,
+        Kind::Keydb => &specs::STANDALONE_KEYDB,
+        Kind::Dragonfly => &specs::STANDALONE_DRAGONFLY,
+        Kind::Clickhouse => &specs::STANDALONE_CLICKHOUSE,
+        Kind::Sqlite => return raw,
+    };
+    spec.present(raw)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::coolify_domain_major as major;
+    use super::image_major as major;
 
     #[test]
     fn postgres_major_version() {

@@ -267,6 +267,12 @@ pub const ROUTES: &[RouteSpec] = &[
         abilities: W,
     },
     RouteSpec {
+        method: "POST",
+        uri: "api/v1/databases/redis",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
         method: "DELETE",
         uri: "api/v1/databases/{uuid}",
         group: Group::Main,
@@ -419,6 +425,11 @@ pub fn router(state: AppState) -> Router {
             "POST",
             "api/v1/databases/postgresql",
             on_post(databases::create_postgresql),
+        ),
+        (
+            "POST",
+            "api/v1/databases/redis",
+            on_post(databases::create_redis),
         ),
         ("GET", "api/v1/databases/{uuid}", on_get(databases::show)),
         (
