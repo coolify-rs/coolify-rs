@@ -76,7 +76,7 @@ Verified = contract tests **and** 0 mismatches in the differential run against t
 
 ```bash
 docker compose up -d --wait && ./scripts/testing-host-up.sh
-COOLIFY_RS_TEST_SSH=127.0.0.1:2223 COOLIFY_RS_TEST_SSH_KEY=compat/testing-host/secrets/id_ed25519 ./scripts/test.sh  # 177 tests
+COOLIFY_RS_TEST_SSH=127.0.0.1:2223 COOLIFY_RS_TEST_SSH_KEY=compat/testing-host/secrets/id_ed25519 ./scripts/test.sh  # 181 tests
 (cd frontend && npm ci && npm run check && npm run build)  # UI type-check + build
 ./scripts/reference-up.sh && ./scripts/reference-seed.sh   # upstream sha-b5823c7 reference
 # coolify-rs on :18080 against the reference DB with APP_KEY (reference) and COOLIFY_RS_TRUSTED_PROXIES=127.0.0.1, then:

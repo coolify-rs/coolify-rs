@@ -10,7 +10,7 @@
   import ViewToggle from '../components/ViewToggle.svelte';
   import ResourceLogo from '../components/ResourceLogo.svelte';
   import ResourceStatus, { statusLabel, statusState } from '../components/ResourceStatus.svelte';
-  import { uiApi, dbUi, ApiError, type ProjectPageData, type DatabaseRecord } from '../lib/api';
+  import { uiApi, dbUi, ApiError, type ProjectPageData, type DatabaseRecord, type ApplicationRecord } from '../lib/api';
   import { link } from '../lib/router.svelte';
   import { listView } from '../lib/listview.svelte';
   import { setProjectCrumbs } from '../lib/crumbs';
@@ -23,7 +23,7 @@
 
   // The environment's resources: null while loading, 'unavailable' when the
   // read model is not there (the page then says resources cannot be shown).
-  let resources = $state<{ databases: DatabaseRecord[]; unported: number } | 'unavailable' | null>(null);
+  let resources = $state<{ applications?: ApplicationRecord[]; databases: DatabaseRecord[]; unported: number } | 'unavailable' | null>(null);
 
   $effect(() => {
     uiApi
@@ -58,6 +58,7 @@
     type: string;
     typeLabel: string;
     databaseType: string;
+    application: { buildPack: string | null; sourceType: string | null; fqdn: string | null; basicAuth: boolean } | null;
     description: string | null;
     status: string;
     restartLimitReached: boolean;
@@ -79,6 +80,7 @@
       type: 'database',
       typeLabel: 'Database',
       databaseType: db.database_type,
+      application: null,
       description: db.description ?? null,
       status: db.status ?? '',
       restartLimitReached: limitReached,
@@ -90,7 +92,36 @@
     };
   }
 
-  const items = $derived(resources && resources !== 'unavailable' ? resources.databases.map(toItem) : []);
+  function applicationItem(app: ApplicationRecord): Item {
+    const limitReached = String(app.status ?? '').startsWith('exited') && app.container_present === true && app.restart_limit_reached === true;
+    const restartCount = Number(app.restart_count ?? 0);
+    const maxRestartCount = Number(app.max_restart_count ?? 0);
+    return {
+      uuid: app.uuid,
+      name: app.name,
+      type: 'application',
+      typeLabel: 'Application',
+      databaseType: '',
+      application: {
+        buildPack: app.build_pack ?? null,
+        sourceType: app.source_type ?? null,
+        fqdn: app.fqdn ?? null,
+        basicAuth: app.is_http_basic_auth_enabled === true,
+      },
+      description: app.description ?? null,
+      status: app.status ?? '',
+      restartLimitReached: limitReached,
+      restartCount: limitReached ? Math.max(restartCount, maxRestartCount) : restartCount,
+      maxRestartCount,
+      hrefLink: `/project/${uuid}/environment/${env}/application/${app.uuid}`,
+      server: app.destination?.server?.name || 'Unknown',
+      tags: [],
+    };
+  }
+
+  const items = $derived(
+    resources && resources !== 'unavailable' ? [...(resources.applications ?? []).map(applicationItem), ...resources.databases.map(toItem)] : [],
+  );
   const unported = $derived(resources && resources !== 'unavailable' ? resources.unported : 0);
   // Upstream's `$environment->isEmpty()`: the resource list when there is one, else the project's count.
   const isEmpty = $derived(
@@ -416,7 +447,7 @@
                     <div
                       class="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-fg-dim"
                     >
-                      <ResourceLogo databaseType={item.databaseType} />
+                      <ResourceLogo databaseType={item.databaseType} application={item.application} />
                     </div>
                     <div class="min-w-0 flex-1">
                       <div class="flex min-w-0 items-center gap-1.5">
@@ -471,7 +502,7 @@
                   <div
                     class="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.035] dark:text-fg-dim"
                   >
-                    <ResourceLogo databaseType={item.databaseType} />
+                    <ResourceLogo databaseType={item.databaseType} application={item.application} />
                   </div>
                   <div class="min-w-0">
                     <div class="flex min-w-0 items-center gap-1.5">

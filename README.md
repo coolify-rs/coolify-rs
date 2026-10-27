@@ -3,8 +3,8 @@
 A Rust implementation of [Coolify](https://github.com/coollabsio/coolify)'s API and data model, plus a migration
 engine that tracks upstream Coolify and ports its changes. *Working name; not affiliated with coolLabs.*
 
-**Status: early.** 52 of 321 upstream API operations are implemented and verified against the official
-`coollabsio/coolify` image built from upstream `main` @ b5823c7 (`sha-b5823c7`). A web UI that reproduces upstream's interface covers what is ported (dashboard, projects, environments, private keys, team). Servers can be added and validated over SSH, and standalone databases (PostgreSQL, Redis, KeyDB, Dragonfly, MongoDB, MySQL, MariaDB, ClickHouse) can be created, started, stopped, restarted and deleted on them; there is no deployment engine (applications), service templates or proxy management yet. See
+**Status: early.** 68 of 321 upstream API operations are implemented and verified against the official
+`coollabsio/coolify` image built from upstream `main` @ b5823c7 (`sha-b5823c7`). A web UI that reproduces upstream's interface covers what is ported (dashboard, projects, environments, private keys, team). Servers can be added and validated over SSH, and standalone databases (PostgreSQL, Redis, KeyDB, Dragonfly, MongoDB, MySQL, MariaDB, ClickHouse) can be created, started, stopped, restarted and deleted on them. Applications from Docker images deploy through the ported deployment engine (queue, helper container, Traefik/Caddy labels, rolling update, logs); git build packs, service templates and proxy management are not ported yet. See
 [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md) and [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 
 ## What works

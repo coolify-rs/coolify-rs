@@ -293,6 +293,30 @@ export const serversUi = {
 };
 
 /** A standalone database as `GET /databases/{uuid}` presents it (PostgreSQL only so far). */
+/** An application as `GET /applications/{uuid}` serializes it. */
+export interface ApplicationRecord {
+  uuid: string;
+  name: string;
+  description?: string | null;
+  fqdn: string | null;
+  status: string | null;
+  build_pack: string | null;
+  source_type: string | null;
+  docker_registry_image_name: string | null;
+  docker_registry_image_tag: string | null;
+  ports_exposes: string | null;
+  ports_mappings: string | null;
+  is_http_basic_auth_enabled?: boolean;
+  container_present?: boolean | null;
+  restart_limit_reached?: boolean;
+  restart_count?: number;
+  max_restart_count?: number;
+  destination?: { uuid: string; name: string; network: string; server?: { uuid: string; name: string | null } };
+  environment?: { uuid: string; name: string | null; project: { uuid: string; name: string | null } };
+  settings?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 export interface DatabaseRecord {
   uuid: string;
   name: string;
@@ -379,7 +403,7 @@ export interface DestinationServer {
 export const dbUi = {
   /** Resources of an environment. `unported` counts applications, services and database kinds coolify-rs cannot show yet. */
   resources: (project: string, env: string) =>
-    request<{ databases: DatabaseRecord[]; unported: number }>(
+    request<{ applications?: ApplicationRecord[]; databases: DatabaseRecord[]; unported: number }>(
       'GET',
       `/ui/projects/${encodeURIComponent(project)}/environments/${encodeURIComponent(env)}/resources`,
     ),

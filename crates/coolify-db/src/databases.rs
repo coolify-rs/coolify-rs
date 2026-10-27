@@ -295,11 +295,10 @@ pub async fn team_destination(
     .await?)
 }
 
-/// Applications and services of an environment (not ported yet).
+/// Services of an environment (not ported yet).
 pub async fn count_other_resources(db: &Db, environment_id: i64) -> DbResult<i64> {
     Ok(sqlx::query_scalar(
-        "SELECT (SELECT count(*) FROM applications WHERE environment_id = $1 AND deleted_at IS NULL) \
-         + (SELECT count(*) FROM services WHERE environment_id = $1 AND deleted_at IS NULL)",
+        "SELECT count(*) FROM services WHERE environment_id = $1 AND deleted_at IS NULL",
     )
     .bind(environment_id)
     .fetch_one(db.pool())

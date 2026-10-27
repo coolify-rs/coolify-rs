@@ -12,7 +12,7 @@ Upstream references are relative to the upstream repository root.
 | Resource group | Upstream ops | Ported | Status |
 |---|---|---|---|
 | `services` | 57 | 0 | not started |
-| `applications` | 52 | 0 | not started |
+| `applications` | 52 | 10 | Docker image applications: list, show, create (`dockerimage`), start, restart, stop (POST + GET → 405), delete verified (`applications_diff.py`, 57/57 on a real VM including a live deployment); other build packs, PATCH, envs, storages, previews, tags answer 501 |
 | `databases` | 47 | 17 | list, show, create (PostgreSQL, MySQL, MariaDB, MongoDB, Redis, ClickHouse, Dragonfly, KeyDB), start, stop, restart (POST + GET → 405), delete verified (`databases_diff.py --kind <engine>` on a real VM, byte-identical Compose files); SQLite, PATCH, backups, envs, storages, tags, imports, logs, move/clone answer 501 |
 | `servers` | 44 | 7 | list, show, create, update, delete, validate (`POST` + `GET` → 405) verified (194/194 differential; validation job 8/8 in `validate_diff.py`); `install=true`, `instant_validate`, proxy changes, `?force` with resources and cloud-provider deletes answer 501; resources, domains and the rest not started |
 | `projects` | 18 | 10 | verified for project/environment CRUD; canvas links and project-level shared variables not started |
@@ -23,7 +23,7 @@ Upstream references are relative to the upstream repository root.
 | `s3-storages` | 6 | 0 | not started |
 | `security` (private keys, integration tokens) | 6 | 5 | private keys verified (CRUD, differential); integration tokens not started |
 | `destinations`, `tags`, `resources`, `settings`, `audit-events` | 12 | 0 | not started |
-| `deploy`, `deployments` | 6 | 0 | not started |
+| `deploy`, `deployments` | 6 | 6 | `POST /deploy` by uuid (tags and pull requests 501), `GET /deploy` → 405, deployments list/show/by application, cancel |
 | `health`, `version`, `disable` | 5 | 5 | verified |
 | `mcp`, `feedback`, `sentinel` | 4 | 0 | not started |
 | **Total** | **321** | **33** | |
@@ -63,7 +63,7 @@ Upstream references are relative to the upstream repository root.
 | Log redaction (`SensitiveDataRedactor::redactText`) and the `validation_logs` purifier | `app/Services/Security`, `config/purify.php` | verified: upstream's unit cases + reference container output | `coolify-compat` tests |
 | Private keys | `SecurityController`, `PrivateKey` | verified (API + UI) |
 | Git sources (GitHub/GitLab/Gitea/Bitbucket apps, webhooks) | `app/Http/Controllers/Webhook/*` | |
-| Applications and build packs (nixpacks, railpack, dockerfile, compose, static, image) | `ApplicationDeploymentJob` (6,479 lines) | critical, large |
+| Applications and build packs (nixpacks, railpack, dockerfile, compose, static, image) | `ApplicationDeploymentJob` (6,479 lines) | Docker image build pack verified (same commands, logs, Compose file, labels, env file, rolling update, health check); git build packs not started |
 | Deployment queue, logs, cancellation, previews | `application_deployment_queues`, `bootstrap/helpers/applications.php` | |
 | Standalone databases (9 engines), public proxy | `app/Actions/Database/*` | 8 engines verified (Start* actions with environment variables, StopDatabase, RestartDatabase, DeleteResourceJob, status refresh and the database part of GetContainersStatus; UI: environment resource list, new-resource picker, database page with each engine's General form); SQLite, public TCP proxy, SSL, init scripts upload, the env var page and backups not started |
 | Symfony YAML dump (`Yaml::dump($compose, 10)`) | symfony/yaml 7 | verified against the reference image (48 golden cases) | `symfony_yaml.rs` |

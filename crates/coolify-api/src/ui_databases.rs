@@ -46,12 +46,28 @@ pub async fn resources(
     let mut unported = dbs::count_other_resources(&state.db, e.id).await?;
     for d in dbs::list_for_environment(&state.db, e.id).await? {
         if d.kind.ported() {
-            databases.push(present(&state, &ctx, &d, false, None).await?);
+            let mut v = present(&state, &ctx, &d, false, None).await?;
+            // The page reads the type for the logo (`$resource->type()`), also for KeyDB.
+            if let Value::Object(m) = &mut v {
+                m.entry("database_type")
+                    .or_insert_with(|| Value::String(d.kind.type_name().into()));
+            }
+            databases.push(v);
         } else {
             unported += 1;
         }
     }
-    Ok(ok(json!({"databases": databases, "unported": unported})).into_response())
+    // `$this->applications->sortBy('name')`.
+    let mut applications = Vec::new();
+    let mut rows = coolify_db::applications::list_for_environment(&state.db, e.id).await?;
+    rows.sort_by(|a, b| a.str("name").cmp(&b.str("name")));
+    for a in &rows {
+        applications.push(crate::routes::applications::present(&state, &ctx, a, false).await?);
+    }
+    Ok(
+        ok(json!({"applications": applications, "databases": databases, "unported": unported}))
+            .into_response(),
+    )
 }
 
 /// `Project\New\Select`: servers that can host resources, with their destinations.

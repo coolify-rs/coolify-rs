@@ -59,6 +59,10 @@ Environment Variables page, `PATCH /databases/{uuid}`, backups.
 
 ## Milestone 5: deployment engine
 
+Done (session 8): queue admission and the job for the `dockerimage` build pack, status checks, stop and delete,
+verified against upstream on the VM (`compat/diff/applications_diff.py`). Next: git build packs, then private sources.
+
+
 Explicit state machine over `application_deployment_queues` (status strings and log JSON unchanged), queue admission
 (`concurrent_builds`, per-application exclusivity), helper-container build for `dockerimage` then `dockerfile`, health
 checks, rolling update, cancellation, recovery after restart. Each build pack is tested independently.
