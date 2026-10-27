@@ -5,3 +5,4 @@
 *.local.toml
 /compat/diff/last-report.json
 /compat/testing-host/secrets/
+__pycache__/

@@ -7,6 +7,7 @@
 pub mod applications;
 pub mod checks;
 pub mod databases;
+pub mod github;
 pub mod server;
 mod validate;
 

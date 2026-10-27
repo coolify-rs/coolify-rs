@@ -71,6 +71,43 @@ pub(crate) async fn insert(
     Ok(())
 }
 
+/// `EnvironmentVariable::create([... 'is_buildtime' => true, 'is_runtime' => false ...])` on an
+/// application (the `created` hook of a Nixpacks application) and the preview copy the
+/// variable's own `created` hook adds (`is_preview = true`, same flags, value re-encrypted).
+/// `version` is what both `created` hooks then write.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_for_application(
+    db: &Db,
+    application_id: i64,
+    key: &str,
+    value_encrypted: &str,
+    preview_value_encrypted: &str,
+    version: &str,
+    now: NaiveDateTime,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    let mut tx = db.pool().begin().await?;
+    for (value, is_preview) in [(value_encrypted, false), (preview_value_encrypted, true)] {
+        sqlx::query(
+            "INSERT INTO environment_variables (key, value, is_multiline, is_literal, is_buildtime, is_runtime, is_preview, \
+             is_required, is_shown_once, comment, resourceable_type, resourceable_id, is_shared, uuid, version, created_at, updated_at) \
+             VALUES ($1, $2, false, false, true, false, $3, false, false, NULL, $4, $5, false, $6, $7, $8, $8)",
+        )
+        .bind(key)
+        .bind(value)
+        .bind(is_preview)
+        .bind(crate::applications::MORPH)
+        .bind(application_id)
+        .bind(new_public_id())
+        .bind(version)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 fn flag(r: &Record, k: &str) -> bool {
     r.get(k).and_then(Value::as_bool).unwrap_or(false)
 }

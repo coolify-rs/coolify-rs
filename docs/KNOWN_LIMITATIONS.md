@@ -41,11 +41,20 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   (Domains, Environment Variables, Storage, Advanced, Healthcheck, Runtime Logs, Terminal, …) are not ported (the UI
   says so or opens the "not available" page). Log export does not apply upstream's secret redaction beyond what the
   deployment already wrote redacted.
+- Creating git applications (`POST /applications/public`, `/private-deploy-key`, `/private-github-app`): the row is
+  written as upstream writes it, but for `build_pack = dockercompose` without `instant_deploy` upstream's queued
+  `LoadComposeFile` job (clone the repository, read and parse the compose file, store `docker_compose_raw`,
+  `docker_compose`, variables and volumes) is not ported, so the compose columns stay empty until a deployment.
+  `docker_compose_domains`, `watch_paths`, `custom_nginx_configuration`, `use_build_server`,
+  `connect_to_docker_network`, HTTP basic auth, custom labels, Docker run options, pre/post-deployment commands,
+  manual webhook secrets, GPU and container-name settings and tags answer 501 when sent with a value. The GitHub App
+  repository check does not apply upstream's `SafeExternalUrl` private-network policy to the GitHub API URL, and the
+  GitHub App path is not yet verified against a real GitHub App (only up to the lookup of the App).
 - Server status in the UI and in `/ui/*` omits the Sentinel and Traefik-update checks.
 - `sentinel_custom_url` for a new server falls back to the request's scheme and host; `X-Forwarded-*` count only
   from trusted proxies (upstream trusts every proxy).
 - The new-server page offers only "IP address or domain" (no cloud provisioning).
-- Deployments: only the Docker image build pack. Git build packs (Dockerfile, static, Railpack, Nixpacks, Compose), previews, additional servers, build servers, registry pushes, basic auth, pre/post-deployment commands and custom Docker options are not ported (501). The deployment row's `configuration_snapshot` is not written (the hash is), `current_process_id` stays empty, and commands that upstream feeds on stdin carry their input inside the script. Jobs run in the coolify-rs process: a restart drops a running deployment.
+- Deployments: only the Docker image build pack. Git build packs (Dockerfile, static, Railpack, Nixpacks, Compose), previews, additional servers, build servers, registry pushes, basic auth, pre/post-deployment commands and custom Docker options are not ported (501). `current_process_id` stays empty, and commands that upstream feeds on stdin carry their input inside the script. Jobs run in the coolify-rs process: a restart drops a running deployment.
 - No proxy management, backups, scheduler, notifications or webhooks yet. SSH runs without
   connection multiplexing (one connection per command).
 - coolify-rs cannot bootstrap a new installation: it requires a database created by upstream Coolify at the baseline

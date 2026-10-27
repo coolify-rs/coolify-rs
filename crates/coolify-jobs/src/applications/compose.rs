@@ -102,6 +102,8 @@ pub fn escape_env_file_value(value: Option<&str>, allow_interpolation: bool) -> 
 #[derive(Debug)]
 pub struct EnvContext<'a> {
     pub commit: &'a str,
+    /// `$this->branch`: only set by a git import.
+    pub branch: Option<&'a str>,
     pub container_name: &'a str,
     pub project_name: Option<&'a str>,
     pub environment_name: Option<&'a str>,
@@ -166,7 +168,7 @@ pub fn runtime_env(
     }
     // `$this->branch` is only set by a git import.
     if !defined("COOLIFY_BRANCH") {
-        coolify.push(("COOLIFY_BRANCH", None));
+        coolify.push(("COOLIFY_BRANCH", ctx.branch.map(str::to_owned)));
     }
     if !defined("COOLIFY_RESOURCE_UUID") {
         coolify.push(("COOLIFY_RESOURCE_UUID", Some(a.uuid.clone())));

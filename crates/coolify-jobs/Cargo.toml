@@ -16,13 +16,16 @@ coolify-domain.workspace = true
 coolify-remote.workspace = true
 md-5.workspace = true
 regex.workspace = true
+reqwest.workspace = true
+rsa.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
+sha2 = { workspace = true, features = ["oid"] }
 tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+rand.workspace = true
 coolify-db = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
 

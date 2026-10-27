@@ -207,7 +207,10 @@ pub fn validate(
         // implicit rule (`required`); other failures do not stop it.
         for rule in &f.rules {
             if let Rule::Required = rule {
-                if v.is_null() {
+                // validateRequired: null, or an empty array (`count() < 1`).
+                let empty_array = v.as_array().is_some_and(Vec::is_empty)
+                    || v.as_object().is_some_and(Map::is_empty);
+                if v.is_null() || empty_array {
                     push(f.name, message(f.name, "required", messages, None));
                     break;
                 }

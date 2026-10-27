@@ -269,6 +269,24 @@ pub const ROUTES: &[RouteSpec] = &[
     },
     RouteSpec {
         method: "POST",
+        uri: "api/v1/applications/public",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/applications/private-github-app",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/applications/private-deploy-key",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
         uri: "api/v1/applications/dockerimage",
         group: Group::Main,
         abilities: W,
@@ -554,6 +572,21 @@ pub fn router(state: AppState) -> Router {
         ),
         ("GET", "api/v1/security/keys", on_get(private_keys::list)),
         ("GET", "api/v1/applications", on_get(applications::list)),
+        (
+            "POST",
+            "api/v1/applications/public",
+            on_post(applications::create_public),
+        ),
+        (
+            "POST",
+            "api/v1/applications/private-github-app",
+            on_post(applications::create_private_github_app),
+        ),
+        (
+            "POST",
+            "api/v1/applications/private-deploy-key",
+            on_post(applications::create_private_deploy_key),
+        ),
         (
             "POST",
             "api/v1/applications/dockerimage",

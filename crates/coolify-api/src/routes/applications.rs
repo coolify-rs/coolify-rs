@@ -1,22 +1,25 @@
 //! `ApplicationsController` and `DeployController` for Docker image applications:
-//! list, show, create (`dockerimage`), start, restart, stop, delete, and the
-//! deployment endpoints. Other build packs, PATCH, envs, storages, previews and
-//! the rest answer 501. compat/notes/applications-api.md describes upstream.
+//! list, show, create (`dockerimage`, and `public` for the git build packs), start,
+//! restart, stop, delete, and the deployment endpoints. The other create types,
+//! PATCH, envs, storages, previews and the rest answer 501.
+//! compat/notes/applications-api.md and deployment-job-git.md describe upstream.
 
 use axum::Extension;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, Uri};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
+use coolify_compat::Encrypter;
 use coolify_db::applications::{self as apps, ApplicationRow, Deployment, NewApplication};
 use coolify_db::records::{APPLICATION, APPLICATION_DEPLOYMENT_QUEUE, APPLICATION_SETTING, Record};
 use coolify_db::servers::{self, ColumnValue};
 use coolify_domain::naming::strip_tags;
-use coolify_jobs::applications::domains;
+use coolify_jobs::applications::domains::{self, UrlParts};
 use coolify_jobs::applications::queue::{QueueOptions, Queued};
 use serde_json::{Map, Value, json};
 
 use crate::auth::AuthCtx;
+use crate::git_urls;
 use crate::input::{Input, lenient_json, query_param, validated_json};
 use crate::response::{ApiError, ApiResult, PhpJson, created, ok};
 use crate::routes::databases::{
@@ -290,7 +293,8 @@ const ALLOWED: &[&str] = &[
     "custom_container_name_prefix",
 ];
 
-/// The fields coolify-rs applies on create; any other allowed field answers 501.
+/// The fields coolify-rs applies on create, for every type; any other allowed field
+/// answers 501.
 const SUPPORTED: &[&str] = &[
     "project_uuid",
     "environment_name",
@@ -300,8 +304,6 @@ const SUPPORTED: &[&str] = &[
     "name",
     "description",
     "domains",
-    "docker_registry_image_name",
-    "docker_registry_image_tag",
     "ports_exposes",
     "ports_mappings",
     "instant_deploy",
@@ -339,6 +341,56 @@ const SUPPORTED: &[&str] = &[
     "include_coolify_default_variables",
     "redact_all_env_values_in_logs",
     "tags",
+    // Removed from the request (`removeUnnecessaryFieldsFromRequest`) except in their own
+    // branch, where they pick the GitHub App or deploy key.
+    "github_app_uuid",
+    "private_key_uuid",
+];
+
+/// The fields only `dockerimage` applies.
+const SUPPORTED_DOCKERIMAGE: &[&str] = &["docker_registry_image_name", "docker_registry_image_tag"];
+
+/// The fields only the git types (`public`) apply.
+const SUPPORTED_GIT: &[&str] = &[
+    "git_repository",
+    "git_branch",
+    "git_commit_sha",
+    "build_pack",
+    "install_command",
+    "build_command",
+    "start_command",
+    "base_directory",
+    "publish_directory",
+    "static_image",
+    "dockerfile_location",
+    "dockerfile_target_build",
+    "docker_compose_location",
+    "docker_compose_custom_start_command",
+    "docker_compose_custom_build_command",
+    "is_static",
+    "is_spa",
+    "is_preview_deployments_enabled",
+    "use_build_secrets",
+    "is_preserve_repository_enabled",
+    "is_git_submodules_enabled",
+    "is_git_lfs_enabled",
+    "is_git_shallow_clone_enabled",
+    "disable_build_cache",
+    "inject_build_args_to_dockerfile",
+    "include_source_commit_in_build",
+    "is_raw_compose_deployment_enabled",
+];
+
+/// `GithubApp::class` (the morph type of a git source).
+const GITHUB_APP_MORPH: &str = r"App\Models\GithubApp";
+
+/// `BuildPackTypes` (the git build packs; `dockerimage` is not one of them).
+const BUILD_PACKS: &[&str] = &[
+    "nixpacks",
+    "static",
+    "dockerfile",
+    "dockercompose",
+    "railpack",
 ];
 
 static DOCKER_IMAGE_NAME: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
@@ -359,6 +411,33 @@ static HEALTH_PATH: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new
 });
 static HEALTH_COMMAND: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"^[a-zA-Z0-9 \-_./:=@,+]+$").unwrap_or_else(|_| unreachable!())
+});
+
+static GIT_COMMIT_SHA: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^[a-zA-Z0-9][a-zA-Z0-9._\-/]*$").unwrap_or_else(|_| unreachable!())
+});
+/// `ValidationPatterns::SHELL_SAFE_COMMAND_PATTERN`.
+static SHELL_SAFE_COMMAND: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(
+        r#"^(?:[ \t]+|&&|\|\||"[^"$`\\\n\r]*"|'[^'\n\r]*'|[a-zA-Z0-9._\-/=:@,+\[\]{}#%^~*?!]+)+$"#,
+    )
+    .unwrap_or_else(|_| unreachable!())
+});
+/// `ValidationPatterns::DIRECTORY_PATH_PATTERN`.
+static DIRECTORY_PATH: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^/([a-zA-Z0-9._\-/~@+]*)?$").unwrap_or_else(|_| unreachable!())
+});
+/// `ValidationPatterns::FILE_PATH_PATTERN`.
+static FILE_PATH: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^/[a-zA-Z0-9._\-/~@+]+$").unwrap_or_else(|_| unreachable!())
+});
+/// `ValidationPatterns::DOCKER_TARGET_PATTERN`.
+static DOCKER_TARGET: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$").unwrap_or_else(|_| unreachable!())
+});
+/// `ValidationPatterns::CONTAINER_NAME_PATTERN`.
+static CONTAINER_NAME: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z").unwrap_or_else(|_| unreachable!())
 });
 
 /// The `DockerImageFormat` rule.
@@ -443,19 +522,263 @@ fn health_host_rule(v: &Value) -> Option<String> {
     (!ok).then(|| "The health check host must be a hostname or an IP address.".to_owned())
 }
 
-/// `POST /applications/dockerimage` (`create_application($request, 'dockerimage')`).
-pub async fn create_dockerimage(
-    State(state): State<AppState>,
-    Extension(ctx): Extension<AuthCtx>,
-    headers: HeaderMap,
-    uri: Uri,
-    body: Bytes,
-) -> ApiResult {
+fn field(name: &'static str, rules: Vec<Rule>) -> Field {
+    Field { name, rules }
+}
+
+/// `ValidationPatterns::shellSafeCommandRules($max)`.
+fn shell_safe(max: usize) -> Vec<Rule> {
+    vec![
+        Rule::Nullable,
+        Rule::String,
+        Rule::Max(max),
+        Rule::Regex(&SHELL_SAFE_COMMAND),
+    ]
+}
+
+/// `ValidationPatterns::directoryPathRules()` / `filePathRules()` / `dockerTargetRules()`.
+fn path_rules(max: usize, re: &'static regex::Regex) -> Vec<Rule> {
+    vec![
+        Rule::Nullable,
+        Rule::String,
+        Rule::Max(max),
+        Rule::Regex(re),
+    ]
+}
+
+/// `ValidationPatterns::containerNameRules()`.
+fn container_name_rules() -> Vec<Rule> {
+    vec![Rule::String, Rule::Max(255), Rule::Regex(&CONTAINER_NAME)]
+}
+
+/// `sharedDataApplications()` for the rules coolify-rs ports, in upstream order. A type's
+/// overrides keep the shared position (`array_merge`); new keys are appended.
+fn shared_rules(overrides: Vec<Field>) -> Vec<Field> {
+    let boolean = |name| field(name, vec![Rule::Boolean]);
+    let mut fields = vec![
+        field("git_repository", vec![Rule::String]),
+        field(
+            "git_branch",
+            vec![Rule::String, Rule::CustomOwned(git_urls::valid_git_branch)],
+        ),
+        field("build_pack", vec![Rule::In(BUILD_PACKS)]),
+    ];
+    for name in [
+        "is_static",
+        "is_spa",
+        "is_auto_deploy_enabled",
+        "is_force_https_enabled",
+        "is_preview_deployments_enabled",
+        "use_build_secrets",
+        "is_git_submodules_enabled",
+        "is_git_lfs_enabled",
+        "is_git_shallow_clone_enabled",
+        "disable_build_cache",
+        "inject_build_args_to_dockerfile",
+        "include_source_commit_in_build",
+        "is_env_sorting_enabled",
+        "redact_all_env_values_in_logs",
+        "include_coolify_default_variables",
+        "is_pr_deployments_public_enabled",
+        "is_gzip_enabled",
+        "is_stripprefix_enabled",
+        "is_permanent_redirect_enabled",
+        "is_container_label_readonly_enabled",
+        "is_raw_compose_deployment_enabled",
+        "is_log_drain_enabled",
+        "is_gpu_enabled",
+        "is_consistent_container_name_enabled",
+    ] {
+        fields.push(boolean(name));
+    }
+    fields.extend([
+        field("preview_url_template", vec![Rule::String]),
+        field("max_restart_count", vec![Rule::Integer, Rule::MinNum(0)]),
+        field(
+            "stop_grace_period",
+            vec![
+                Rule::Nullable,
+                Rule::Integer,
+                Rule::MinNum(1),
+                Rule::MaxNum(3600),
+            ],
+        ),
+        field(
+            "rolling_update_drain_seconds",
+            vec![Rule::Integer, Rule::MinNum(0), Rule::MaxNum(300)],
+        ),
+        field(
+            "docker_images_to_keep",
+            vec![Rule::Integer, Rule::MinNum(0), Rule::MaxNum(100)],
+        ),
+        field("static_image", vec![Rule::In(&["nginx:alpine"])]),
+        field(
+            "domains",
+            vec![
+                Rule::Nullable,
+                Rule::String,
+                Rule::Max(2048),
+                Rule::CustomOwned(domain_rule),
+            ],
+        ),
+        field("noindex_domains", vec![Rule::Array, Rule::Nullable]),
+        field("redirect", vec![Rule::In(&["www", "non-www", "both"])]),
+        field(
+            "git_commit_sha",
+            vec![Rule::String, Rule::Regex(&GIT_COMMIT_SHA)],
+        ),
+        field(
+            "docker_registry_image_name",
+            path_rules(255, &DOCKER_IMAGE_NAME),
+        ),
+        field(
+            "docker_registry_image_tag",
+            path_rules(128, &DOCKER_IMAGE_TAG),
+        ),
+        field("install_command", shell_safe(1000)),
+        field("build_command", shell_safe(1000)),
+        field("start_command", shell_safe(1000)),
+        field(
+            "ports_exposes",
+            vec![Rule::String, Rule::Regex(&PORTS_EXPOSES)],
+        ),
+        field(
+            "ports_mappings",
+            vec![Rule::String, Rule::Regex(&PORTS_MAPPINGS), Rule::Nullable],
+        ),
+        field("custom_network_aliases", vec![Rule::String, Rule::Nullable]),
+        field("base_directory", path_rules(255, &DIRECTORY_PATH)),
+        field("publish_directory", path_rules(255, &DIRECTORY_PATH)),
+        boolean("health_check_enabled"),
+        field(
+            "health_check_type",
+            vec![Rule::String, Rule::In(&["http", "cmd"])],
+        ),
+        field(
+            "health_check_command",
+            vec![
+                Rule::Nullable,
+                Rule::String,
+                Rule::Max(1000),
+                Rule::Regex(&HEALTH_COMMAND),
+            ],
+        ),
+        field(
+            "health_check_path",
+            vec![Rule::String, Rule::Regex(&HEALTH_PATH)],
+        ),
+        field(
+            "health_check_port",
+            vec![
+                Rule::Integer,
+                Rule::Nullable,
+                Rule::MinNum(1),
+                Rule::MaxNum(65535),
+            ],
+        ),
+        field(
+            "health_check_host",
+            vec![Rule::String, Rule::CustomOwned(health_host_rule)],
+        ),
+        field(
+            "health_check_method",
+            vec![Rule::String, Rule::In(&["GET", "HEAD", "POST", "OPTIONS"])],
+        ),
+        field("health_check_return_code", vec![Rule::Numeric]),
+        field(
+            "health_check_scheme",
+            vec![Rule::String, Rule::In(&["http", "https"])],
+        ),
+        field(
+            "health_check_response_text",
+            vec![Rule::String, Rule::Nullable],
+        ),
+        field("health_check_interval", vec![Rule::Numeric]),
+        field("health_check_timeout", vec![Rule::Numeric]),
+        field("health_check_retries", vec![Rule::Numeric]),
+        field("health_check_start_period", vec![Rule::Numeric]),
+        field("limits_memory", vec![Rule::String]),
+        field("limits_memory_swap", vec![Rule::String]),
+        field("limits_memory_swappiness", vec![Rule::Numeric]),
+        field("limits_memory_reservation", vec![Rule::String]),
+        field("limits_cpus", vec![Rule::String]),
+        field("limits_cpuset", vec![Rule::String, Rule::Nullable]),
+        field("limits_cpu_shares", vec![Rule::Numeric]),
+        field("custom_labels", vec![Rule::String, Rule::Nullable]),
+        field("custom_docker_run_options", shell_safe(2000)),
+        field(
+            "post_deployment_command",
+            vec![Rule::String, Rule::Nullable],
+        ),
+        field("post_deployment_command_container", container_name_rules()),
+        field("pre_deployment_command", vec![Rule::String, Rule::Nullable]),
+        field("pre_deployment_command_container", container_name_rules()),
+        field("dockerfile_location", path_rules(255, &FILE_PATH)),
+        field("dockerfile_target_build", path_rules(128, &DOCKER_TARGET)),
+        field("docker_compose_location", path_rules(255, &FILE_PATH)),
+        field("docker_compose", vec![Rule::String, Rule::Nullable]),
+        field("docker_compose_domains", vec![Rule::Array, Rule::Nullable]),
+        field("docker_compose_custom_start_command", shell_safe(1000)),
+        field("docker_compose_custom_build_command", shell_safe(1000)),
+        boolean("is_container_label_escape_enabled"),
+        boolean("is_preserve_repository_enabled"),
+        field(
+            "http_basic_auth_hash_algorithm",
+            vec![Rule::In(&["bcrypt", "argon2id"])],
+        ),
+        field(
+            "http_basic_auth_bcrypt_cost",
+            vec![Rule::Integer, Rule::MinNum(4), Rule::MaxNum(14)],
+        ),
+        field(
+            "http_basic_auth_argon2id_memory_cost",
+            vec![Rule::Integer, Rule::MinNum(8192), Rule::MaxNum(262144)],
+        ),
+        field(
+            "http_basic_auth_argon2id_time_cost",
+            vec![Rule::Integer, Rule::MinNum(1), Rule::MaxNum(12)],
+        ),
+    ]);
+    for o in overrides {
+        match fields.iter_mut().find(|f| f.name == o.name) {
+            Some(slot) => *slot = o,
+            None => fields.push(o),
+        }
+    }
+    fields
+}
+
+/// A thrown exception rendered by Laravel's handler (`APP_DEBUG=false`).
+const SERVER_ERROR: ApiError = ApiError::Abort(StatusCode::INTERNAL_SERVER_ERROR, "Server Error");
+
+/// What the shared prologue of `create_application()` resolved.
+struct CreateContext {
+    input: Input,
+    instant: bool,
+    /// `$fqdn`: the request `domains`, normalized when it is a string.
+    fqdn: Option<String>,
+    autogenerate: bool,
+    server: servers::ServerRow,
+    server_settings: Map<String, Value>,
+    environment_id: i64,
+    destination_id: i64,
+}
+
+/// `create_application($request, $type)` up to the type branch (applications-api.md 2.1
+/// steps 1-23). `supported` lists the fields coolify-rs applies for this type.
+async fn create_prologue(
+    state: &AppState,
+    ctx: &AuthCtx,
+    request: (&HeaderMap, &Uri, &Bytes),
+    kind: &str,
+    supported: &[&[&str]],
+) -> Result<CreateContext, ApiError> {
     use coolify_domain::Ability;
+    let (headers, uri, body) = request;
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
-    let raw_input = lenient_json(&headers, &uri, &body);
+    let raw_input = lenient_json(headers, uri, body);
     let instant = raw_input.get("instant_deploy").is_some_and(php_truthy);
     if instant && !(ctx.abilities.can(Ability::Deploy) || ctx.abilities.can(Ability::Root)) {
         return Err(ApiError::Abort(
@@ -463,60 +786,28 @@ pub async fn create_dockerimage(
             "Missing required permissions: deploy",
         ));
     }
-    let input = validated_json(&headers, &uri, &body)?;
-    let mut allowed: Vec<&str> = ALLOWED.to_vec();
-    allowed.sort_unstable();
+    let input = validated_json(headers, uri, body)?;
     let present_keys: Vec<&str> = input.keys().map(String::as_str).collect();
     // Base validation, with the extra-field messages appended.
     let base = [
-        Field {
-            name: "name",
-            rules: vec![Rule::String, Rule::Max(255)],
-        },
-        Field {
-            name: "description",
-            rules: vec![Rule::String, Rule::Nullable],
-        },
-        Field {
-            name: "project_uuid",
-            rules: vec![Rule::String, Rule::Required],
-        },
-        Field {
-            name: "environment_name",
-            rules: vec![Rule::String, Rule::Nullable],
-        },
-        Field {
-            name: "environment_uuid",
-            rules: vec![Rule::String, Rule::Nullable],
-        },
-        Field {
-            name: "server_uuid",
-            rules: vec![Rule::String, Rule::Required],
-        },
-        Field {
-            name: "destination_uuid",
-            rules: vec![Rule::String],
-        },
-        Field {
-            name: "is_http_basic_auth_enabled",
-            rules: vec![Rule::Boolean],
-        },
-        Field {
-            name: "http_basic_auth_username",
-            rules: vec![Rule::String, Rule::Nullable],
-        },
-        Field {
-            name: "http_basic_auth_password",
-            rules: vec![Rule::String, Rule::Nullable, Rule::Max(72)],
-        },
-        Field {
-            name: "autogenerate_domain",
-            rules: vec![Rule::Boolean],
-        },
-        Field {
-            name: "tags",
-            rules: vec![Rule::Array, Rule::Nullable],
-        },
+        field("name", vec![Rule::String, Rule::Max(255)]),
+        field("description", vec![Rule::String, Rule::Nullable]),
+        field("project_uuid", vec![Rule::String, Rule::Required]),
+        field("environment_name", vec![Rule::String, Rule::Nullable]),
+        field("environment_uuid", vec![Rule::String, Rule::Nullable]),
+        field("server_uuid", vec![Rule::String, Rule::Required]),
+        field("destination_uuid", vec![Rule::String]),
+        field("is_http_basic_auth_enabled", vec![Rule::Boolean]),
+        field(
+            "http_basic_auth_username",
+            vec![Rule::String, Rule::Nullable],
+        ),
+        field(
+            "http_basic_auth_password",
+            vec![Rule::String, Rule::Nullable, Rule::Max(72)],
+        ),
+        field("autogenerate_domain", vec![Rule::Boolean]),
+        field("tags", vec![Rule::Array, Rule::Nullable]),
     ];
     if let Err(ApiError::Validation(mut errors)) =
         validate(&input, &base, CUSTOM_API_MESSAGES, &present_keys)
@@ -530,10 +821,10 @@ pub async fn create_dockerimage(
         return Err(ApiError::Validation(extra));
     }
     // Fields coolify-rs does not apply yet.
-    if input
-        .keys()
-        .any(|k| !SUPPORTED.contains(&k.as_str()) && input.get(k).is_some_and(|v| !v.is_null()))
-    {
+    if input.keys().any(|k| {
+        !supported.iter().any(|s| s.contains(&k.as_str()))
+            && input.get(k).is_some_and(|v| !v.is_null())
+    }) {
         return Err(ApiError::NotPorted);
     }
     if input
@@ -562,8 +853,27 @@ pub async fn create_dockerimage(
     if let Some(d) = input.str("domains") {
         fqdn = domains::normalize_domains(Some(d));
     }
-    let autogenerate =
-        !input.has("autogenerate_domain") || input_bool(&input, "autogenerate_domain");
+    // A Docker Compose application uses per-service domains; a top-level domain is never routed.
+    let autogenerate = (!input.has("autogenerate_domain")
+        || input_bool(&input, "autogenerate_domain"))
+        && input.str("build_pack") != Some("dockercompose");
+    let requested_build_pack = if matches!(kind, "public" | "private-gh-app" | "private-deploy-key")
+    {
+        input.str("build_pack")
+    } else {
+        Some(kind)
+    };
+    if input.has("is_raw_compose_deployment_enabled")
+        && input_bool(&input, "is_raw_compose_deployment_enabled")
+        && requested_build_pack != Some("dockercompose")
+    {
+        let mut m = Map::new();
+        m.insert(
+            "is_raw_compose_deployment_enabled".into(),
+            json!("Raw compose deployment can only be enabled for Docker Compose applications."),
+        );
+        return Err(ApiError::Validation(m));
+    }
     let project = coolify_db::projects::find(
         &state.db,
         ctx.team_id,
@@ -624,10 +934,10 @@ pub async fn create_dockerimage(
             "Server has multiple destinations and you do not set destination_uuid.",
         ));
     }
-    let mut destination = destinations[0].0;
+    let mut destination_id = destinations[0].0;
     if destinations.len() > 1 {
         let wanted = input.str("destination_uuid").unwrap_or_default();
-        destination = destinations
+        destination_id = destinations
             .iter()
             .find(|(_, u)| u == wanted)
             .map(|(id, _)| *id)
@@ -640,189 +950,26 @@ pub async fn create_dockerimage(
                 ApiError::Validation(m)
             })?;
     }
-    // Docker image validation: sharedDataApplications() order with the type's overrides.
-    let docker_fields = vec![
-        Field {
-            name: "is_auto_deploy_enabled",
-            rules: vec![Rule::Boolean],
-        },
-        Field {
-            name: "is_force_https_enabled",
-            rules: vec![Rule::Boolean],
-        },
-        Field {
-            name: "redact_all_env_values_in_logs",
-            rules: vec![Rule::Boolean],
-        },
-        Field {
-            name: "include_coolify_default_variables",
-            rules: vec![Rule::Boolean],
-        },
-        Field {
-            name: "is_gzip_enabled",
-            rules: vec![Rule::Boolean],
-        },
-        Field {
-            name: "is_stripprefix_enabled",
-            rules: vec![Rule::Boolean],
-        },
-        Field {
-            name: "stop_grace_period",
-            rules: vec![
-                Rule::Nullable,
-                Rule::Integer,
-                Rule::MinNum(1),
-                Rule::MaxNum(3600),
-            ],
-        },
-        Field {
-            name: "rolling_update_drain_seconds",
-            rules: vec![Rule::Integer, Rule::MinNum(0), Rule::MaxNum(300)],
-        },
-        Field {
-            name: "domains",
-            rules: vec![
-                Rule::Nullable,
-                Rule::String,
-                Rule::Max(2048),
-                Rule::CustomOwned(domain_rule),
-            ],
-        },
-        Field {
-            name: "redirect",
-            rules: vec![Rule::In(&["www", "non-www", "both"])],
-        },
-        Field {
-            name: "docker_registry_image_name",
-            rules: vec![
-                Rule::Required,
-                Rule::String,
-                Rule::Max(255),
-                Rule::CustomOwned(docker_image_format),
-            ],
-        },
-        Field {
-            name: "docker_registry_image_tag",
-            rules: vec![
-                Rule::Nullable,
-                Rule::String,
-                Rule::Max(128),
-                Rule::Regex(&DOCKER_IMAGE_TAG),
-            ],
-        },
-        Field {
-            name: "ports_exposes",
-            rules: vec![Rule::String, Rule::Regex(&PORTS_EXPOSES), Rule::Nullable],
-        },
-        Field {
-            name: "ports_mappings",
-            rules: vec![Rule::String, Rule::Regex(&PORTS_MAPPINGS), Rule::Nullable],
-        },
-        Field {
-            name: "health_check_enabled",
-            rules: vec![Rule::Boolean],
-        },
-        Field {
-            name: "health_check_type",
-            rules: vec![Rule::String, Rule::In(&["http", "cmd"])],
-        },
-        Field {
-            name: "health_check_command",
-            rules: vec![
-                Rule::Nullable,
-                Rule::String,
-                Rule::Max(1000),
-                Rule::Regex(&HEALTH_COMMAND),
-            ],
-        },
-        Field {
-            name: "health_check_path",
-            rules: vec![Rule::String, Rule::Regex(&HEALTH_PATH)],
-        },
-        Field {
-            name: "health_check_port",
-            rules: vec![
-                Rule::Integer,
-                Rule::Nullable,
-                Rule::MinNum(1),
-                Rule::MaxNum(65535),
-            ],
-        },
-        Field {
-            name: "health_check_host",
-            rules: vec![Rule::String, Rule::CustomOwned(health_host_rule)],
-        },
-        Field {
-            name: "health_check_method",
-            rules: vec![Rule::String, Rule::In(&["GET", "HEAD", "POST", "OPTIONS"])],
-        },
-        Field {
-            name: "health_check_return_code",
-            rules: vec![Rule::Numeric],
-        },
-        Field {
-            name: "health_check_scheme",
-            rules: vec![Rule::String, Rule::In(&["http", "https"])],
-        },
-        Field {
-            name: "health_check_response_text",
-            rules: vec![Rule::String, Rule::Nullable],
-        },
-        Field {
-            name: "health_check_interval",
-            rules: vec![Rule::Numeric],
-        },
-        Field {
-            name: "health_check_timeout",
-            rules: vec![Rule::Numeric],
-        },
-        Field {
-            name: "health_check_retries",
-            rules: vec![Rule::Numeric],
-        },
-        Field {
-            name: "health_check_start_period",
-            rules: vec![Rule::Numeric],
-        },
-        Field {
-            name: "limits_memory",
-            rules: vec![Rule::String],
-        },
-        Field {
-            name: "limits_memory_swap",
-            rules: vec![Rule::String],
-        },
-        Field {
-            name: "limits_memory_swappiness",
-            rules: vec![Rule::Numeric],
-        },
-        Field {
-            name: "limits_memory_reservation",
-            rules: vec![Rule::String],
-        },
-        Field {
-            name: "limits_cpus",
-            rules: vec![Rule::String],
-        },
-        Field {
-            name: "limits_cpuset",
-            rules: vec![Rule::String, Rule::Nullable],
-        },
-        Field {
-            name: "limits_cpu_shares",
-            rules: vec![Rule::Numeric],
-        },
-        Field {
-            name: "is_container_label_escape_enabled",
-            rules: vec![Rule::Boolean],
-        },
-    ];
-    validate(&input, &docker_fields, CUSTOM_API_MESSAGES, &present_keys)?;
-    let name = match input.get("name") {
-        Some(v) => strip_tags(v.as_str()),
-        None => format!("docker-image-{}", coolify_domain::new_public_id()),
-    };
-    // validateDataApplications(): ports_mappings, then domains (when the proxy runs).
+    Ok(CreateContext {
+        input,
+        instant,
+        fqdn,
+        autogenerate,
+        server,
+        server_settings,
+        environment_id: env.id,
+        destination_id,
+    })
+}
+
+/// `validateDataApplications($request, $server)`: `ports_mappings`, then the domains (when
+/// the proxy runs). `Some` is the early answer.
+async fn validate_data_applications(
+    state: &AppState,
+    ctx: &AuthCtx,
+    cx: &CreateContext,
+) -> Result<Option<Response>, ApiError> {
+    let input = &cx.input;
     if let Some(p) = input.str("ports_mappings") {
         let mut seen: Vec<&str> = Vec::new();
         for m in p.split(',') {
@@ -838,28 +985,31 @@ pub async fn create_dockerimage(
             seen.push(first);
         }
     }
-    let proxy_type = server
+    let proxy_type = cx
+        .server
         .record
         .get("proxy")
         .and_then(|p| p.get("type"))
         .and_then(Value::as_str)
         .unwrap_or("NONE");
-    let proxy_should_run =
-        proxy_type != "NONE" && !crate::routes::servers::effective_role_is_build(&server_settings);
+    let proxy_should_run = proxy_type != "NONE"
+        && !crate::routes::servers::effective_role_is_build(&cx.server_settings);
     if input.has("domains") && proxy_should_run {
         let errors = domains::validate_domains(input.str("domains").unwrap_or_default());
         if !errors.is_empty() {
-            return Ok(PhpJson(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                json!({"message": "Validation failed.", "errors": errors}),
-            )
-            .into_response());
+            return Ok(Some(
+                PhpJson(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    json!({"message": "Validation failed.", "errors": errors}),
+                )
+                .into_response(),
+            ));
         }
         if let Some(conflicts) =
-            domain_conflicts(&state, ctx.team_id, fqdn.as_deref(), None).await?
-            && !input_bool(&input, "force_domain_override")
+            domain_conflicts(state, ctx.team_id, cx.fqdn.as_deref(), None).await?
+            && !input_bool(input, "force_domain_override")
         {
-            return Ok(PhpJson(
+            return Ok(Some(PhpJson(
                 StatusCode::CONFLICT,
                 json!({
                     "message": "Domain conflicts detected. Use force_domain_override=true to proceed.",
@@ -867,16 +1017,14 @@ pub async fn create_dockerimage(
                     "warning": "Using the same domain for multiple resources can cause routing conflicts and unpredictable behavior.",
                 }),
             )
-            .into_response());
+            .into_response()));
         }
     }
-    let (image_name, image_tag) = parse_image(
-        input.str("docker_registry_image_name").unwrap_or_default(),
-        input.str("docker_registry_image_tag"),
-    );
+    Ok(None)
+}
 
-    // fill(): the fillable request values, then the explicit ones.
-    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+/// `$application->fill($request->only($allowedFields))` for the columns every type shares.
+fn fill_columns(input: &Input, name: String) -> Vec<(&'static str, ColumnValue)> {
     let mut columns: Vec<(&'static str, ColumnValue)> =
         vec![("name", ColumnValue::Text(Some(name)))];
     if input.has("description") {
@@ -885,18 +1033,14 @@ pub async fn create_dockerimage(
             ColumnValue::Text(Some(strip_tags(input.str("description")))),
         ));
     }
-    columns.push((
-        "docker_registry_image_name",
-        ColumnValue::Text(Some(image_name)),
-    ));
-    columns.push((
-        "docker_registry_image_tag",
-        ColumnValue::Text(Some(image_tag)),
-    ));
     for key in [
         "ports_exposes",
         "ports_mappings",
         "redirect",
+        "static_image",
+        "dockerfile_target_build",
+        "docker_compose_custom_start_command",
+        "docker_compose_custom_build_command",
         "health_check_type",
         "health_check_command",
         "health_check_path",
@@ -942,16 +1086,19 @@ pub async fn create_dockerimage(
     if input.has("health_check_enabled") {
         columns.push((
             "health_check_enabled",
-            ColumnValue::Bool(input_bool(&input, "health_check_enabled")),
+            ColumnValue::Bool(input_bool(input, "health_check_enabled")),
         ));
     }
-    columns.push(("build_pack", ColumnValue::Text(Some("dockerimage".into()))));
-    columns.push((
-        "git_repository",
-        ColumnValue::Text(Some("coollabsio/coolify".into())),
-    ));
-    columns.push(("git_branch", ColumnValue::Text(Some("main".into()))));
-    // `creating`: random manual webhook secrets.
+    columns
+}
+
+/// The `creating` hook (random manual webhook secrets) and the `saving` hook's domain
+/// normalization (ports move to `domain_port_overrides`).
+fn creating_columns(
+    enc: &Encrypter,
+    fqdn: Option<&str>,
+    columns: &mut Vec<(&'static str, ColumnValue)>,
+) {
     for k in [
         "manual_webhook_secret_github",
         "manual_webhook_secret_gitlab",
@@ -963,9 +1110,7 @@ pub async fn create_dockerimage(
             ColumnValue::Text(Some(enc.encrypt_string(&random_str(40)))),
         ));
     }
-    // `saving`: ports in domains move to `domain_port_overrides`.
-    let (stored_fqdn, overrides) =
-        domains::normalize_port_overrides(fqdn.as_deref(), &Default::default());
+    let (stored_fqdn, overrides) = domains::normalize_port_overrides(fqdn, &Default::default());
     columns.push(("fqdn", ColumnValue::Text(stored_fqdn.clone())));
     if let Some(o) = &overrides {
         columns.push((
@@ -973,18 +1118,36 @@ pub async fn create_dockerimage(
             ColumnValue::Text(Some(domains::overrides_json(stored_fqdn.as_deref(), o))),
         ));
     }
-    // applicationSettingsFromRequest() and the explicit settings writes.
+}
+
+/// `applicationSettingsFromRequest()` + `applyApplicationSettings()`, then the explicit
+/// settings writes of the type branch: each `explicit` key only when sent (`isset`),
+/// `is_container_label_escape_enabled` always, `is_preserve_repository_enabled` always
+/// when `preserve` (the git branches).
+fn request_settings(
+    input: &Input,
+    explicit: &[&'static str],
+    preserve: bool,
+) -> Vec<(&'static str, ColumnValue)> {
     let mut settings: Vec<(&'static str, ColumnValue)> = Vec::new();
-    for key in [
-        "is_auto_deploy_enabled",
-        "is_force_https_enabled",
+    for &key in [
+        "is_git_submodules_enabled",
+        "is_git_lfs_enabled",
+        "is_git_shallow_clone_enabled",
+        "disable_build_cache",
+        "inject_build_args_to_dockerfile",
+        "include_source_commit_in_build",
+        "redact_all_env_values_in_logs",
+        "include_coolify_default_variables",
         "is_gzip_enabled",
         "is_stripprefix_enabled",
-        "include_coolify_default_variables",
-        "redact_all_env_values_in_logs",
-    ] {
+        "is_raw_compose_deployment_enabled",
+    ]
+    .iter()
+    .chain(explicit)
+    {
         if input.get(key).is_some_and(|v| !v.is_null()) {
-            settings.push((key, ColumnValue::Bool(input_bool(&input, key))));
+            settings.push((key, ColumnValue::Bool(input_bool(input, key))));
         }
     }
     for key in ["stop_grace_period", "rolling_update_drain_seconds"] {
@@ -999,35 +1162,86 @@ pub async fn create_dockerimage(
         "is_container_label_escape_enabled",
         ColumnValue::Bool(
             !input.has("is_container_label_escape_enabled")
-                || input_bool(&input, "is_container_label_escape_enabled"),
+                || input_bool(input, "is_container_label_escape_enabled"),
         ),
     ));
+    if preserve {
+        settings.push((
+            "is_preserve_repository_enabled",
+            ColumnValue::Bool(input_bool(input, "is_preserve_repository_enabled")),
+        ));
+    }
+    settings
+}
+
+/// PHP `trim()` (the model's `saving` hook trims git and command columns).
+fn php_trim(s: &str) -> String {
+    s.trim_matches([' ', '\t', '\n', '\r', '\0', '\x0B'])
+        .to_owned()
+}
+
+/// `$application->save()` and the rest of the type branch: the `created` hook, the
+/// generated domain, read-only labels, `isConfigurationChanged(true)`, instant deploy, 201.
+async fn finish_create(
+    state: &AppState,
+    ctx: &AuthCtx,
+    cx: &CreateContext,
+    columns: Vec<(&'static str, ColumnValue)>,
+    settings: Vec<(&'static str, ColumnValue)>,
+    application_type: &'static str,
+) -> ApiResult {
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    let build_pack = columns
+        .iter()
+        .rev()
+        .find(|(k, _)| *k == "build_pack")
+        .and_then(|(_, v)| match v {
+            ColumnValue::Text(t) => t.clone(),
+            _ => None,
+        })
+        .unwrap_or_default();
     let uuid = coolify_domain::new_public_id();
     let now = state.now();
     let id = apps::create(
         &state.db,
         NewApplication {
             uuid: uuid.clone(),
-            environment_id: env.id,
-            destination_id: destination,
+            environment_id: cx.environment_id,
+            destination_id: cx.destination_id,
             columns,
             settings,
         },
         now,
     )
     .await?;
+    // `created`: Nixpacks applications get NIXPACKS_NODE_VERSION=22 (and its preview copy).
+    if build_pack == "nixpacks" {
+        coolify_db::environment_variables::create_for_application(
+            &state.db,
+            id,
+            "NIXPACKS_NODE_VERSION",
+            &enc.encrypt_serialized("22"),
+            &enc.encrypt_serialized("22"),
+            &state.version,
+            now,
+        )
+        .await?;
+    }
     // generateUrl() when no domain is given.
     let mut app = apps::find_by_id(&state.db, id)
         .await?
         .ok_or(ApiError::Internal)?;
-    if autogenerate && stored_fqdn.is_none() {
-        let ip = server
+    let blank_fqdn = cx.fqdn.as_deref().is_none_or(|f| f.trim().is_empty());
+    if cx.autogenerate && blank_fqdn {
+        let ip = cx
+            .server
             .record
             .get("ip")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
-        let wildcard = server_settings
+        let wildcard = cx
+            .server_settings
             .get("wildcard_domain")
             .and_then(Value::as_str)
             .map(str::to_owned);
@@ -1050,7 +1264,7 @@ pub async fn create_dockerimage(
     // Read-only labels: generated and stored as plain text.
     if app.setting_bool("is_container_label_readonly_enabled") {
         let labels = coolify_jobs::applications::labels::application(
-            &coolify_jobs::applications::labels::LabelInput::new(&app, &server),
+            &coolify_jobs::applications::labels::LabelInput::new(&app, &cx.server),
         );
         apps::update_if_changed(
             &state.db,
@@ -1077,7 +1291,7 @@ pub async fn create_dockerimage(
         now,
     )
     .await?;
-    if instant {
+    if cx.instant {
         let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
         let _ = jobs
             .queue_application_deployment(
@@ -1095,7 +1309,9 @@ pub async fn create_dockerimage(
                 ApiError::Internal
             })?;
     }
-    tracing::info!(target: "audit", event = "api.application.created", team_id = ctx.team_id, application_uuid = %uuid, application_type = "dockerimage", instant_deploy = instant, "application created");
+    // Without instant deploy, upstream dispatches `LoadComposeFile` for dockercompose
+    // (clone, read and parse the compose file); not ported (docs/KNOWN_LIMITATIONS.md).
+    tracing::info!(target: "audit", event = "api.application.created", team_id = ctx.team_id, application_uuid = %uuid, application_type, build_pack = %build_pack, instant_deploy = cx.instant, "application created");
     let fresh = apps::find_by_id(&state.db, id)
         .await?
         .ok_or(ApiError::Internal)?;
@@ -1108,6 +1324,447 @@ pub async fn create_dockerimage(
             .map_or(Value::Null, |f| Value::String(f.to_owned())),
     );
     Ok(created(Value::Object(serialize_record(payload))).into_response())
+}
+
+/// `POST /applications/dockerimage` (`create_application($request, 'dockerimage')`).
+pub async fn create_dockerimage(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> ApiResult {
+    let cx = create_prologue(
+        &state,
+        &ctx,
+        (&headers, &uri, &body),
+        "dockerimage",
+        &[SUPPORTED, SUPPORTED_DOCKERIMAGE],
+    )
+    .await?;
+    let input = &cx.input;
+    let present_keys: Vec<&str> = input.keys().map(String::as_str).collect();
+    let rules = shared_rules(vec![
+        field(
+            "docker_registry_image_name",
+            vec![
+                Rule::Required,
+                Rule::String,
+                Rule::Max(255),
+                Rule::CustomOwned(docker_image_format),
+            ],
+        ),
+        field(
+            "docker_registry_image_tag",
+            path_rules(128, &DOCKER_IMAGE_TAG),
+        ),
+        field(
+            "ports_exposes",
+            vec![Rule::String, Rule::Regex(&PORTS_EXPOSES), Rule::Nullable],
+        ),
+    ]);
+    validate(input, &rules, CUSTOM_API_MESSAGES, &present_keys)?;
+    let name = match input.get("name") {
+        Some(v) => strip_tags(v.as_str()),
+        None => format!("docker-image-{}", coolify_domain::new_public_id()),
+    };
+    if let Some(early) = validate_data_applications(&state, &ctx, &cx).await? {
+        return Ok(early);
+    }
+    let (image_name, image_tag) = parse_image(
+        input.str("docker_registry_image_name").unwrap_or_default(),
+        input.str("docker_registry_image_tag"),
+    );
+    // fill(): the fillable request values, then the explicit ones.
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    let mut columns = fill_columns(input, name);
+    columns.push((
+        "docker_registry_image_name",
+        ColumnValue::Text(Some(image_name)),
+    ));
+    columns.push((
+        "docker_registry_image_tag",
+        ColumnValue::Text(Some(image_tag)),
+    ));
+    columns.push(("build_pack", ColumnValue::Text(Some("dockerimage".into()))));
+    columns.push((
+        "git_repository",
+        ColumnValue::Text(Some("coollabsio/coolify".into())),
+    ));
+    columns.push(("git_branch", ColumnValue::Text(Some("main".into()))));
+    creating_columns(enc, cx.fqdn.as_deref(), &mut columns);
+    let settings = request_settings(
+        input,
+        &["is_auto_deploy_enabled", "is_force_https_enabled"],
+        false,
+    );
+    finish_create(&state, &ctx, &cx, columns, settings, "dockerimage").await
+}
+
+/// `POST /applications/public` (`create_application($request, 'public')`): an application
+/// built from a public git repository (applications-api.md 2.1, deployment-job-git.md 1.2).
+pub async fn create_public(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> ApiResult {
+    create_git(&state, &ctx, (&headers, &uri, &body), GitKind::Public).await
+}
+
+/// `POST /applications/private-github-app` (`create_application($request, 'private-gh-app')`).
+pub async fn create_private_github_app(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> ApiResult {
+    create_git(&state, &ctx, (&headers, &uri, &body), GitKind::GithubApp).await
+}
+
+/// `POST /applications/private-deploy-key` (`create_application($request, 'private-deploy-key')`).
+pub async fn create_private_deploy_key(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> ApiResult {
+    create_git(&state, &ctx, (&headers, &uri, &body), GitKind::DeployKey).await
+}
+
+/// The three git branches of `create_application()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GitKind {
+    Public,
+    GithubApp,
+    DeployKey,
+}
+
+impl GitKind {
+    /// `$type`.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::GithubApp => "private-gh-app",
+            Self::DeployKey => "private-deploy-key",
+        }
+    }
+}
+
+/// `gitRepositorySlug()`: `owner/repo` of a GitHub URL, SSH URL or slug.
+fn git_repository_slug(repository: &str) -> String {
+    if repository.is_empty() {
+        return String::new();
+    }
+    let slug = match git_urls::ssh_git_url_to_https(repository) {
+        Some(https) => UrlParts::parse(&https)
+            .and_then(|p| p.path)
+            .unwrap_or_default(),
+        None if repository.starts_with("http") || repository.contains("github.com") => repository
+            .replace("https://", "")
+            .replace("http://", "")
+            .replace("github.com/", ""),
+        None => repository.to_owned(),
+    };
+    let slug = slug.trim_matches('/');
+    slug.strip_suffix(".git").unwrap_or(slug).to_owned()
+}
+
+/// The git branches of `create_application()` (AC:1542-2395): validation, the type's
+/// source (public GitHub, a GitHub App, or a deploy key), `fill()` with the git setters.
+async fn create_git(
+    state: &AppState,
+    ctx: &AuthCtx,
+    request: (&HeaderMap, &Uri, &Bytes),
+    kind: GitKind,
+) -> ApiResult {
+    let mut cx = create_prologue(
+        state,
+        ctx,
+        request,
+        kind.name(),
+        &[SUPPORTED, SUPPORTED_GIT],
+    )
+    .await?;
+    let compose = cx.input.str("build_pack") == Some("dockercompose");
+    // Public: ports_exposes is not required for dockercompose, the request value becomes '80'
+    // before validation. The private types set it after validation.
+    let ports_rule = if compose && kind == GitKind::Public {
+        cx.input.0.insert("ports_exposes".into(), json!("80"));
+        vec![Rule::String]
+    } else {
+        vec![Rule::String, Rule::Regex(&PORTS_EXPOSES), Rule::Nullable]
+    };
+    let repository_rule = if kind == GitKind::GithubApp {
+        vec![Rule::String, Rule::Required]
+    } else {
+        vec![
+            Rule::String,
+            Rule::Required,
+            Rule::CustomOwned(git_urls::valid_git_repository_url),
+        ]
+    };
+    // The rule objects throw a TypeError on a non-empty array.
+    if (kind != GitKind::GithubApp && git_urls::rule_throws(cx.input.get("git_repository")))
+        || git_urls::rule_throws(cx.input.get("git_branch"))
+    {
+        return Err(SERVER_ERROR);
+    }
+    // Plain `Validator::make`: Laravel's default `required` message.
+    let mut overrides = vec![
+        field("git_repository", repository_rule),
+        field(
+            "git_branch",
+            vec![
+                Rule::String,
+                Rule::Required,
+                Rule::CustomOwned(git_urls::valid_git_branch),
+            ],
+        ),
+        field("build_pack", vec![Rule::Required, Rule::In(BUILD_PACKS)]),
+        field("ports_exposes", ports_rule),
+    ];
+    match kind {
+        GitKind::Public => {}
+        GitKind::GithubApp => {
+            overrides.push(field("github_app_uuid", vec![Rule::String, Rule::Required]))
+        }
+        GitKind::DeployKey => overrides.push(field(
+            "private_key_uuid",
+            vec![Rule::String, Rule::Required],
+        )),
+    }
+    if kind != GitKind::Public {
+        overrides.push(field("watch_paths", vec![Rule::String, Rule::Nullable]));
+    }
+    overrides.push(field(
+        "docker_compose_domains",
+        vec![Rule::Array, Rule::Nullable],
+    ));
+    let rules = shared_rules(overrides);
+    let present_keys: Vec<&str> = cx.input.keys().map(String::as_str).collect();
+    validate(&cx.input, &rules, &[], &present_keys)?;
+    if compose && cx.input.has("domains") {
+        let mut m = Map::new();
+        m.insert(
+            "domains".into(),
+            json!("The domains field cannot be used for dockercompose applications. Use docker_compose_domains instead to set domains for individual services."),
+        );
+        return Err(ApiError::Validation(m));
+    }
+    let repository = cx
+        .input
+        .str("git_repository")
+        .unwrap_or_default()
+        .to_owned();
+    let branch = cx.input.str("git_branch").unwrap_or_default().to_owned();
+    let name = match cx.input.get("name") {
+        Some(v) => strip_tags(v.as_str()),
+        None => git_urls::generate_application_name(&repository, &branch),
+    };
+    if compose {
+        cx.input.0.insert("ports_exposes".into(), json!("80"));
+    }
+    if let Some(early) = validate_data_applications(state, ctx, &cx).await? {
+        return Ok(early);
+    }
+    // The type's source.
+    let mut source_columns: Vec<(&'static str, ColumnValue)> = Vec::new();
+    let mut git_repository = repository.clone();
+    match kind {
+        GitKind::Public => {
+            // SSH URLs become https://, github.com gets the public GitHub source.
+            if let Some(https) = git_urls::ssh_git_url_to_https(&git_repository) {
+                git_repository = https;
+            }
+            let parts = UrlParts::parse(&git_repository);
+            // Spatie `Url::fromString()` throws on any other scheme (`git://`).
+            if parts.as_ref().is_some_and(|p| {
+                !["http", "https", "mailto", "tel"].contains(&p.scheme.to_lowercase().as_str())
+            }) {
+                return Err(SERVER_ERROR);
+            }
+            if let Some(p) = parts.filter(|p| p.host == "github.com") {
+                let path = p.path_or_root();
+                let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+                git_repository = php_trim(&format!(
+                    "{}/{}",
+                    segments.first().copied().unwrap_or_default(),
+                    segments.get(1).copied().unwrap_or_default()
+                ));
+                source_columns.push((
+                    "source_type",
+                    ColumnValue::Text(Some(GITHUB_APP_MORPH.into())),
+                ));
+                source_columns.push(("source_id", ColumnValue::Int(0)));
+            }
+        }
+        GitKind::GithubApp => {
+            let github_app = apps::github_app_for_team(
+                &state.db,
+                ctx.team_id,
+                cx.input.str("github_app_uuid").unwrap_or_default(),
+            )
+            .await?
+            .ok_or(ApiError::Message(
+                StatusCode::NOT_FOUND,
+                "Github App not found.",
+            ))?;
+            // generateGithubInstallationToken() throws on failure.
+            let token = coolify_jobs::github::installation_token(
+                &state.db,
+                state.encrypter.as_ref(),
+                Some(&github_app),
+            )
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "github app installation token failed");
+                SERVER_ERROR
+            })?;
+            git_repository = git_repository_slug(&repository);
+            let (status, found) =
+                coolify_jobs::github::repository_access(&github_app, &token, &git_repository)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!(error = %e, "github repository check failed");
+                        SERVER_ERROR
+                    })?;
+            if status == 404 || status == 403 {
+                return Err(ApiError::Message(
+                    StatusCode::NOT_FOUND,
+                    "Repository not found or not accessible by the GitHub App.",
+                ));
+            }
+            if !(200..300).contains(&status) {
+                let message = found
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Unknown error");
+                return Ok(PhpJson(
+                    StatusCode::BAD_REQUEST,
+                    json!({"message": format!("Failed to verify repository access: {message}")}),
+                )
+                .into_response());
+            }
+            source_columns.push((
+                "source_type",
+                ColumnValue::Text(Some(GITHUB_APP_MORPH.into())),
+            ));
+            source_columns.push((
+                "source_id",
+                ColumnValue::Int(
+                    github_app
+                        .get("id")
+                        .and_then(Value::as_i64)
+                        .unwrap_or_default(),
+                ),
+            ));
+            source_columns.push((
+                "repository_project_id",
+                found
+                    .get("id")
+                    .and_then(Value::as_i64)
+                    .map_or(ColumnValue::Text(None), ColumnValue::Int),
+            ));
+        }
+        GitKind::DeployKey => {
+            let key = coolify_db::private_keys::find(
+                &state.db,
+                ctx.team_id,
+                cx.input.str("private_key_uuid").unwrap_or_default(),
+            )
+            .await?
+            .ok_or(ApiError::Message(
+                StatusCode::NOT_FOUND,
+                "Private Key not found.",
+            ))?;
+            source_columns.push(("private_key_id", ColumnValue::Int(key.id)));
+        }
+    }
+    let input = &cx.input;
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    let build_pack = input.str("build_pack").unwrap_or_default().to_owned();
+    // fill(): `build_pack` precedes the location setters in `$allowedFields`.
+    let mut columns = fill_columns(input, name);
+    columns.push(("build_pack", ColumnValue::Text(Some(build_pack.clone()))));
+    columns.push(("git_branch", ColumnValue::Text(Some(php_trim(&branch)))));
+    if let Some(sha) = input.str("git_commit_sha") {
+        columns.push(("git_commit_sha", ColumnValue::Text(Some(php_trim(sha)))));
+    }
+    // `saving` stores `str($value)->trim()`, so a null command becomes ''.
+    for key in ["install_command", "build_command", "start_command"] {
+        if input.has(key) {
+            let v = php_trim(input.str(key).unwrap_or_default());
+            columns.push((key, ColumnValue::Text(Some(v))));
+        }
+    }
+    // `baseDirectory` setter: '/'.ltrim($value, '/').
+    if input.has("base_directory") {
+        let v = input.str("base_directory").unwrap_or_default();
+        let v = php_trim(&format!("/{}", v.trim_start_matches('/')));
+        columns.push(("base_directory", ColumnValue::Text(Some(v))));
+    }
+    // `publishDirectory` setter: '/'.ltrim or null; the `saving` hook then sets the trimmed
+    // Stringable, which is truthy even when empty, so null ends up as '/'.
+    if input.has("publish_directory") {
+        let v = input
+            .get("publish_directory")
+            .filter(|v| php_truthy(v))
+            .and_then(Value::as_str)
+            .map(|v| format!("/{}", php_trim(v).trim_start_matches('/')))
+            .unwrap_or_else(|| "/".into());
+        columns.push(("publish_directory", ColumnValue::Text(Some(v))));
+    }
+    // `dockerfileLocation` / `dockerComposeLocation` setters.
+    let location = |v: &str| {
+        if v == "/" {
+            "/".to_owned()
+        } else {
+            format!(
+                "/{}",
+                v.strip_suffix('/').unwrap_or(v).trim_start_matches('/')
+            )
+        }
+    };
+    if input.has("dockerfile_location") {
+        let v = match input.str("dockerfile_location") {
+            Some(v) => Some(location(v)),
+            None => (build_pack == "dockerfile").then(|| "/Dockerfile".to_owned()),
+        };
+        columns.push(("dockerfile_location", ColumnValue::Text(v)));
+    }
+    if input.has("docker_compose_location") {
+        let v = input
+            .str("docker_compose_location")
+            .map_or_else(|| "/docker-compose.yaml".to_owned(), location);
+        columns.push(("docker_compose_location", ColumnValue::Text(Some(v))));
+    }
+    columns.push((
+        "git_repository",
+        ColumnValue::Text(Some(php_trim(&git_repository))),
+    ));
+    columns.extend(source_columns);
+    // The `is_static` setter saves `ports_exposes = 80` on the application when truthy.
+    if input.get("is_static").is_some_and(php_truthy) {
+        columns.push(("ports_exposes", ColumnValue::Text(Some("80".into()))));
+    }
+    creating_columns(enc, cx.fqdn.as_deref(), &mut columns);
+    let settings = request_settings(
+        input,
+        &[
+            "is_static",
+            "is_spa",
+            "is_auto_deploy_enabled",
+            "is_force_https_enabled",
+            "is_preview_deployments_enabled",
+            "use_build_secrets",
+        ],
+        true,
+    );
+    finish_create(state, ctx, &cx, columns, settings, kind.name()).await
 }
 
 /// The extra-field messages of `create_application` (`fqdn` has its own).
@@ -1181,7 +1838,12 @@ async fn domain_conflicts(
 
 /// What a start, restart, stop or delete of this application needs that coolify-rs lacks.
 async fn deployable(state: &AppState, a: &ApplicationRow) -> Result<(), ApiError> {
-    let unsupported = a.str("build_pack") != Some("dockerimage")
+    // The deploy job builds Docker images and the dockerfile, static, nixpacks and railpack
+    // git build packs; dockercompose and an inline Dockerfile are not ported.
+    let unsupported = !matches!(
+        a.str("build_pack"),
+        Some("dockerimage" | "dockerfile" | "static" | "nixpacks" | "railpack")
+    ) || a.str("dockerfile").is_some_and(|d| !d.is_empty())
         || a.destination.is_none()
         || a.bool("is_http_basic_auth_enabled")
         || a.str("custom_docker_run_options")
@@ -1669,6 +2331,25 @@ pub async fn deploy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repository_slugs() {
+        for (input, slug) in [
+            (
+                "https://github.com/coollabsio/coolify-examples",
+                "coollabsio/coolify-examples",
+            ),
+            ("https://github.com/o/r.git", "o/r"),
+            ("git@github.com:o/r.git", "o/r"),
+            ("ssh://git@github.com:22/o/r.git", "o/r"),
+            ("o/r", "o/r"),
+            ("/o/r/", "o/r"),
+            ("https://gitlab.com/o/r", "gitlab.com/o/r"),
+            ("", ""),
+        ] {
+            assert_eq!(git_repository_slug(input), slug, "{input}");
+        }
+    }
 
     #[test]
     fn image_parsing() {

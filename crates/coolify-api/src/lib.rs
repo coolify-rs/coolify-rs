@@ -6,6 +6,7 @@
 
 pub mod auth;
 pub mod fallback;
+pub mod git_urls;
 pub mod input;
 pub mod ip;
 pub mod laravel_url;

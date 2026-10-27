@@ -465,6 +465,20 @@ pub async fn fqdns_of_team(db: &Db, team_id: TeamId) -> DbResult<Vec<(String, St
     .await?)
 }
 
+/// `GithubApp::where('uuid', $uuid)->where(team_id = $teamId OR is_system_wide)->first()`
+/// (raw attributes).
+pub async fn github_app_for_team(db: &Db, team_id: TeamId, uuid: &str) -> DbResult<Option<Record>> {
+    let row: Option<String> = sqlx::query_scalar(
+        "SELECT row_to_json(g)::text FROM github_apps g WHERE g.uuid = $1 AND (g.team_id = $2 OR g.is_system_wide) LIMIT 1",
+    )
+    .bind(uuid)
+    .bind(team_id)
+    .fetch_optional(db.pool())
+    .await?;
+    row.map(|t| parse_row(&t).map_err(|e| DbError::Schema(format!("decoding github app: {e}"))))
+        .transpose()
+}
+
 // ---------------------------------------------------------------------------
 // Deployment queue
 
@@ -673,6 +687,45 @@ pub async fn queued_on_server(db: &Db, server_id: i64) -> DbResult<Vec<Deploymen
     rows.iter().map(|t| deployment(t)).collect()
 }
 
+/// The newest `finished` deployment of an application for a pull request
+/// (`get_last_successful_deployment()` with pull request 0).
+pub async fn last_finished_deployment(
+    db: &Db,
+    application_id: i64,
+    pull_request_id: i64,
+) -> DbResult<Option<Deployment>> {
+    let t: Option<String> = sqlx::query_scalar(
+        "SELECT row_to_json(q)::text FROM application_deployment_queues q WHERE application_id = $1 \
+         AND status = 'finished' AND pull_request_id = $2 ORDER BY created_at DESC, id DESC LIMIT 1",
+    )
+    .bind(application_id.to_string())
+    .bind(pull_request_id as i32)
+    .fetch_optional(db.pool())
+    .await?;
+    t.as_deref().map(deployment).transpose()
+}
+
+/// The newest other `finished` deployment of the pull request that stored a configuration
+/// snapshot (`markDeploymentConfigurationApplied()`'s `$previousDeployment`).
+pub async fn last_finished_deployment_with_snapshot(
+    db: &Db,
+    application_id: i64,
+    pull_request_id: i64,
+    except_id: i64,
+) -> DbResult<Option<Deployment>> {
+    let t: Option<String> = sqlx::query_scalar(
+        "SELECT row_to_json(q)::text FROM application_deployment_queues q WHERE application_id = $1 \
+         AND status = 'finished' AND pull_request_id = $2 AND id != $3 AND configuration_snapshot IS NOT NULL \
+         ORDER BY created_at DESC, id DESC LIMIT 1",
+    )
+    .bind(application_id.to_string())
+    .bind(pull_request_id as i32)
+    .bind(except_id)
+    .fetch_optional(db.pool())
+    .await?;
+    t.as_deref().map(deployment).transpose()
+}
+
 /// `$queue->update($values)` (always writes, bumps `updated_at`).
 pub async fn update_deployment(
     db: &Db,
@@ -813,7 +866,10 @@ pub async fn volume_rows(db: &Db, id: i64) -> DbResult<Vec<(i64, String, String,
 }
 
 /// `(id, fs_path, mount_path, is_directory)` of the file mounts, by id.
-pub async fn file_volume_rows(db: &Db, id: i64) -> DbResult<Vec<(i64, String, String, bool)>> {
+pub async fn file_volume_rows(
+    db: &Db,
+    id: i64,
+) -> DbResult<Vec<(i64, String, Option<String>, bool)>> {
     Ok(sqlx::query_as(
         "SELECT id, fs_path, mount_path, COALESCE(is_directory, false) FROM local_file_volumes WHERE resource_type = $1 AND resource_id = $2 ORDER BY id",
     )

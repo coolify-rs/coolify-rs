@@ -1,7 +1,11 @@
-//! `ApplicationDeploymentJob` for the Docker image build pack on a standalone
-//! Docker destination: the same commands in the same order, the same log
-//! entries in `application_deployment_queues.logs`, the same rows.
-//! compat/notes/deployment-job-dockerimage.md describes upstream's job.
+//! `ApplicationDeploymentJob` on a standalone Docker destination: the same
+//! commands in the same order, the same log entries in
+//! `application_deployment_queues.logs`, the same rows.
+//! compat/notes/deployment-job-dockerimage.md and deployment-job-git.md describe
+//! upstream's job; the git build packs are in `build.rs`.
+
+mod build;
+mod git;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -123,6 +127,39 @@ impl Fail {
 
 type Step = Result<(), Fail>;
 
+/// The build state of a git deployment (`$this->build_pack`, `$this->source`, image names, …).
+#[derive(Default)]
+struct BuildState {
+    restart_only: bool,
+    rollback: bool,
+    force_rebuild: bool,
+    disable_build_cache: bool,
+    /// `$this->addHosts`.
+    add_hosts: String,
+    /// `$this->buildTarget`.
+    build_target: Option<String>,
+    source: Option<git::Source>,
+    kind: git::DeploymentType,
+    repository: String,
+    port: String,
+    branch: String,
+    full_repo_url: String,
+    github_token: Option<String>,
+    coolify_variables: String,
+    production_image: String,
+    build_image: String,
+    dockerfile_location: String,
+    compose_location: String,
+    buildkit: bool,
+    buildx: bool,
+    variables: Option<Vec<Var>>,
+    env_args: build::Ordered,
+    build_args: Vec<String>,
+    /// `$this->useBuildtimeEnvironmentLauncher`.
+    launcher: bool,
+    nixpacks_plan: Option<Value>,
+}
+
 /// The state of one deployment.
 struct Run {
     jobs: Jobs,
@@ -142,6 +179,7 @@ struct Run {
     saved: HashMap<String, String>,
     generated_compose: Option<String>,
     healthy: bool,
+    b: BuildState,
 }
 
 impl Run {
@@ -496,6 +534,21 @@ impl Jobs {
             .str("created_at")
             .and_then(|t| NaiveDateTime::parse_from_str(t, "%Y-%m-%dT%H:%M:%S%.f").ok())
             .unwrap_or_else(now);
+        let restart_only = q.bool("restart_only")
+            && !matches!(
+                app.str("build_pack"),
+                Some("dockerimage" | "dockerfile" | "dockercompose")
+            );
+        let disable_build_cache = app.setting_bool("disable_build_cache");
+        let b = BuildState {
+            restart_only,
+            rollback: q.bool("rollback"),
+            force_rebuild: q.bool("force_rebuild") || disable_build_cache,
+            disable_build_cache,
+            dockerfile_location: "/Dockerfile".into(),
+            compose_location: "/docker-compose.yaml".into(),
+            ..Default::default()
+        };
         let mut run = Run {
             jobs: self.clone(),
             queue_id,
@@ -514,6 +567,7 @@ impl Jobs {
             saved: HashMap::new(),
             generated_compose: None,
             healthy: false,
+            b,
         };
 
         // handle()
@@ -559,17 +613,96 @@ fn hostname() -> Option<String> {
 impl Run {
     async fn deploy(&mut self) -> Step {
         let net = quote(self.app.network());
-        self.instant(
-            &[&format!(
-                "docker network inspect {net} -f '{{{{json .Containers}}}}' "
-            )],
-            true,
-        )
-        .await?;
+        let containers = self
+            .instant(
+                &[&format!(
+                    "docker network inspect {net} -f '{{{{json .Containers}}}}' "
+                )],
+                true,
+            )
+            .await?;
+        if let Some(out) = containers {
+            self.b.add_hosts = self.add_host_flags(&out).await;
+        }
+        if let Some(target) = self
+            .app
+            .str("dockerfile_target_build")
+            .filter(|t| !t.is_empty())
+            .map(str::to_owned)
+        {
+            static TARGET: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+                regex::Regex::new(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+                    .unwrap_or_else(|_| unreachable!())
+            });
+            if !TARGET.is_match(&target) {
+                return Err(Fail::new(
+                    "Invalid dockerfile_target_build: contains forbidden characters.",
+                ));
+            }
+            self.b.build_target = Some(format!(" --target {target} "));
+        }
+        // customRepository()
+        self.load_source().await?;
         self.detect_buildkit().await;
-        self.deploy_docker_image().await?;
-        self.post_deployment().await;
-        Ok(())
+        self.decide_what_to_do().await
+    }
+
+    /// `addHostFlags(collect($allContainers[0]))`.
+    async fn add_host_flags(&self, output: &str) -> String {
+        let Some(first) = output
+            .split('\n')
+            .filter(|l| !l.is_empty())
+            .map(serde_json::from_str::<Value>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()
+            .and_then(|v| v.into_iter().next())
+        else {
+            return String::new();
+        };
+        let Value::Object(map) = first else {
+            return String::new();
+        };
+        let mut containers: Vec<Value> = map.into_iter().map(|(_, v)| v).collect();
+        let field = |c: &Value, k: &str| {
+            c.get(k)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        containers.sort_by(|a, b| {
+            (field(a, "Name"), field(a, "EndpointID"))
+                .cmp(&(field(b, "Name"), field(b, "EndpointID")))
+        });
+        let names: Vec<String> = containers
+            .iter()
+            .map(|c| field(c, "Name"))
+            .filter(|n| !n.is_empty())
+            .collect();
+        let helpers = coolify_db::git_sources::existing_deployment_uuids(&self.jobs.0.db, &names)
+            .await
+            .unwrap_or_default();
+        static GENERATED: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+            regex::Regex::new(r"(-\d{8}T\d{6}|-\d{12})$").unwrap_or_else(|_| unreachable!())
+        });
+        let mut ips: Vec<(String, String)> = Vec::new();
+        for c in &containers {
+            let name = field(c, "Name");
+            if name == "coolify-proxy" || GENERATED.is_match(&name) || helpers.contains(&name) {
+                continue;
+            }
+            let ip = field(c, "IPv4Address");
+            if !name.is_empty() && !ip.is_empty() {
+                let ip = ip.split('/').next().unwrap_or_default().to_owned();
+                match ips.iter_mut().find(|(n, _)| *n == name) {
+                    Some(slot) => slot.1 = ip,
+                    None => ips.push((name, ip)),
+                }
+            }
+        }
+        ips.iter()
+            .map(|(name, ip)| format!("--add-host {name}:{ip}"))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// `detectBuildKitCapabilities()`.
@@ -622,6 +755,8 @@ impl Run {
             .flatten()
             .unwrap_or_default();
         if buildx == "available" {
+            self.b.buildkit = true;
+            self.b.buildx = true;
             self.info(&format!(
                 "Docker {version} with BuildKit and Buildx detected on {name}."
             ))
@@ -637,6 +772,7 @@ impl Run {
                 .flatten()
                 .unwrap_or_default();
             if progress == "supported" {
+                self.b.buildkit = true;
                 self.info(&format!(
                     "Docker {version} with BuildKit support detected on {name}."
                 ))
@@ -819,6 +955,10 @@ impl Run {
                 .unwrap_or_default(),
             &version,
         ));
+        // Custom HEALTHCHECK of the repository's Dockerfile.
+        if self.app.str("build_pack") == Some("dockerfile") {
+            self.read_dockerfile_healthcheck().await?;
+        }
         let volumes = apps::persistent_volumes(&db, self.app.id)
             .await
             .map_err(|e| Fail::new(e.to_string()))?;
@@ -887,6 +1027,7 @@ impl Run {
             &variables,
             &compose::EnvContext {
                 commit: &self.commit,
+                branch: Some(self.b.branch.as_str()).filter(|b| !b.is_empty()),
                 container_name: &self.container,
                 project_name: project.as_deref(),
                 environment_name: environment.as_deref(),
@@ -1016,26 +1157,41 @@ impl Run {
                 .ignore_errors(),
             ])
             .await?;
-            self.info("Pulling latest images from the registry.").await;
             let u = self.app.uuid.clone();
             let w = self.workdir.clone();
             let dep = self.dep.clone();
-            self.exec(vec![
-                Cmd::new(in_docker(
-                    &dep,
-                    &format!("docker compose --project-name {u} --project-directory {w} pull"),
-                ))
-                .hidden(),
-                // `{$this->coolify_variables}` is empty here: the command starts with a space.
-                Cmd::new(in_docker(
-                    &dep,
-                    &format!(
-                        " docker compose --project-name {u} --project-directory {w} up --build -d"
-                    ),
-                ))
-                .hidden(),
-            ])
-            .await?;
+            let vars = self.b.coolify_variables.clone();
+            if self.app.str("build_pack") == Some("dockerimage") {
+                self.info("Pulling latest images from the registry.").await;
+                self.exec(vec![
+                    Cmd::new(in_docker(
+                        &dep,
+                        &format!("docker compose --project-name {u} --project-directory {w} pull"),
+                    ))
+                    .hidden(),
+                    // `{$this->coolify_variables}` is empty here: the command starts with a space.
+                    Cmd::new(in_docker(
+                        &dep,
+                        &format!(
+                            "{vars} docker compose --project-name {u} --project-directory {w} up --build -d"
+                        ),
+                    ))
+                    .hidden(),
+                ])
+                .await?;
+            } else {
+                let loc = self.b.compose_location.clone();
+                self.exec(vec![
+                    Cmd::new(in_docker(
+                        &dep,
+                        &format!(
+                            "{vars} docker compose --project-name {u} --project-directory {w} -f {w}{loc} up --build -d"
+                        ),
+                    ))
+                    .hidden(),
+                ])
+                .await?;
+            }
             self.info("New container started.").await;
             Ok(())
         };
@@ -1272,9 +1428,16 @@ impl Run {
             }
             return Ok(());
         }
-        self.info(SEPARATOR).await;
-        self.info("WARNING: Dockerfile or Docker Image based deployment detected. The healthcheck needs a curl or wget command to check the health of the application. Please make sure that it is available in the image or turn off healthcheck on Coolify's UI.").await;
-        self.info(SEPARATOR).await;
+        if self.app.str("dockerfile").is_some_and(|d| !d.is_empty())
+            || matches!(
+                self.app.str("build_pack"),
+                Some("dockerfile" | "dockerimage")
+            )
+        {
+            self.info(SEPARATOR).await;
+            self.info("WARNING: Dockerfile or Docker Image based deployment detected. The healthcheck needs a curl or wget command to check the health of the application. Please make sure that it is available in the image or turn off healthcheck on Coolify's UI.").await;
+            self.info(SEPARATOR).await;
+        }
         self.info("New container is not healthy, rolling back to the old container.")
             .await;
         self.fail_deployment().await;
@@ -1301,7 +1464,15 @@ impl Run {
 
     /// `post_deployment()`.
     async fn post_deployment(&mut self) {
-        // completeDeployment() → transitionToStatus(FINISHED)
+        self.complete_deployment().await;
+        // GetContainersStatus::dispatch($server)
+        let jobs = self.jobs.clone();
+        let server_id = self.server.id;
+        tokio::spawn(async move { jobs.check_server_applications(server_id).await });
+    }
+
+    /// `completeDeployment()` → `transitionToStatus(FINISHED)`.
+    async fn complete_deployment(&mut self) {
         let prev = apps::transition_status(&self.jobs.0.db, self.queue_id, "finished", now())
             .await
             .ok()
@@ -1315,10 +1486,6 @@ impl Run {
                 .queue_next_deployment(self.app.id, self.server.id)
                 .await;
         }
-        // GetContainersStatus::dispatch($server)
-        let jobs = self.jobs.clone();
-        let server_id = self.server.id;
-        tokio::spawn(async move { jobs.check_server_applications(server_id).await });
     }
 
     /// `handleSuccessfulDeployment()`.
@@ -1337,26 +1504,14 @@ impl Run {
             n,
         )
         .await;
-        // markDeploymentConfigurationApplied()
-        if let (Ok(Some(fresh)), Some(enc)) = (
-            apps::find_by_id(&db, self.app.id).await,
-            self.jobs.0.encrypter.as_ref(),
-        ) && let Ok(hash) = snapshot::config_hash(&db, enc, &fresh).await
+        // markDeploymentConfigurationApplied($this->application_deployment_queue)
+        if let Some(enc) = self.jobs.0.encrypter.as_ref()
+            && let Err(e) = snapshot::mark_applied(&db, enc, self.app.id, self.queue_id, 0).await
         {
-            let _ = apps::update_deployment(
-                &db,
-                self.queue_id,
-                &[("configuration_hash", ColumnValue::Text(Some(hash.clone())))],
-                n,
-            )
-            .await;
-            let _ = apps::update_if_changed(
-                &db,
-                self.app.id,
-                &[("config_hash", ColumnValue::Text(Some(hash)))],
-                n,
-            )
-            .await;
+            tracing::warn!(
+                "Failed to mark configuration as applied for deployment {}: {e}",
+                self.dep
+            );
         }
     }
 

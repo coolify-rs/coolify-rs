@@ -1,5 +1,8 @@
 //! Prints what coolify-rs computes for an application, to compare with upstream:
 //! `DATABASE_URL=... APP_KEY=... cargo run -p coolify-jobs --example application -- <team id> <uuid> [--hash|--labels]`.
+//! Configuration snapshots: `--snapshot` (`deploymentConfigurationSnapshot()`), `--input`
+//! (what it reads, decrypted), `--pending-diff` (`pendingDeploymentConfigurationDiff()->toArray()`)
+//! and `--mark-applied <queue id> <pull request id>` (`markDeploymentConfigurationApplied()`).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -28,6 +31,34 @@ async fn main() {
         .expect("application");
     match args.get(3).map(String::as_str) {
         Some("--hash") => println!("{}", snapshot::config_hash(&db, &enc, &a).await.unwrap()),
+        Some("--snapshot") => println!(
+            "{}",
+            coolify_compat::php_json::encode(&snapshot::snapshot(&db, &enc, &a).await.unwrap())
+        ),
+        Some("--input") => println!(
+            "{}",
+            serde_json::to_string(&snapshot::load_input(&db, &enc, &a).await.unwrap()).unwrap()
+        ),
+        Some("--pending-diff") => println!(
+            "{}",
+            coolify_compat::php_json::encode(
+                &snapshot::pending_diff(&db, &enc, &a)
+                    .await
+                    .unwrap()
+                    .to_array()
+            )
+        ),
+        Some("--mark-applied") => {
+            snapshot::mark_applied(
+                &db,
+                &enc,
+                a.id,
+                args[4].parse().unwrap(),
+                args[5].parse().unwrap(),
+            )
+            .await
+            .unwrap();
+        }
         _ => {
             let server = servers::find_by_id(&db, a.server_id().unwrap())
                 .await
