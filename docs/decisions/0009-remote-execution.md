@@ -46,8 +46,10 @@ review comes first. The threat model is in SECURITY_MODEL.md section 8; this ADR
    The Cloudflare tunnel `ProxyCommand=cloudflared access ssh --hostname %h` is kept as upstream has it.
 5. **Host keys: trust on first use, pinned per server.** `StrictHostKeyChecking=accept-new` with
    `UserKnownHostsFile=<data>/ssh/known_hosts/<server uuid>` and `GlobalKnownHostsFile=/dev/null`. A changed key
-   fails with OpenSSH's `Host key verification failed.` The pin is dropped when the server's IP or port changes and
-   when the server is deleted. `COOLIFY_RS_SSH_HOST_KEYS=ignore` restores upstream's behaviour.
+   fails with `Host key verification failed: the server's SSH host key changed ...`, which names the new fingerprint
+   and the way forward instead of OpenSSH's banner (that banner names the pin file, a control-plane path), and is not
+   retried. The pin is dropped when the server's IP or port changes and when the server is deleted; at startup, pins of
+   servers that no longer exist (deleted by upstream on a shared database) are removed. `COOLIFY_RS_SSH_HOST_KEYS=ignore` restores upstream's behaviour.
 6. **Keys never persist.** The encrypted `private_keys.private_key` is decrypted right before a run into a
    zeroizing buffer, written to a random-named file created with mode 0600 inside `<data>/ssh/keys` (mode 0700),
    and removed when the run ends. Leftovers from a crash are removed at startup. Key material has no `Debug`.

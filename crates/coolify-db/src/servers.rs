@@ -70,6 +70,15 @@ pub async fn list_by_name(db: &Db, team_id: TeamId) -> DbResult<Vec<ServerRow>> 
     rows.iter().map(|(s, st)| row(s, st.as_deref())).collect()
 }
 
+/// UUIDs of every server that is not soft-deleted (all teams).
+pub async fn live_uuids(db: &Db) -> DbResult<Vec<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT uuid FROM servers WHERE deleted_at IS NULL")
+            .fetch_all(db.pool())
+            .await?,
+    )
+}
+
 /// `Server::whereTeamId($teamId)->whereUuid($uuid)->first()`.
 pub async fn find(db: &Db, team_id: TeamId, uuid: &str) -> DbResult<Option<ServerRow>> {
     let r: Option<(String, Option<String>)> = sqlx::query_as(&format!(

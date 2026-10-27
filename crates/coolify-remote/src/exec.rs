@@ -230,6 +230,19 @@ impl Remote {
         }
     }
 
+    /// Drops the pins of servers that no longer exist, for example servers
+    /// deleted by upstream Coolify on a shared database. Returns how many.
+    pub fn retain_host_keys(&self, live_server_uuids: &std::collections::HashSet<String>) -> usize {
+        let Ok(entries) = std::fs::read_dir(self.ssh_dir().join("known_hosts")) else {
+            return 0;
+        };
+        entries
+            .flatten()
+            .filter(|e| !live_server_uuids.contains(e.file_name().to_string_lossy().as_ref()))
+            .filter(|e| std::fs::remove_file(e.path()).is_ok())
+            .count()
+    }
+
     /// `instant_remote_process($commands, $server, throwError: true, ...)`.
     pub async fn run(
         &self,
@@ -253,7 +266,10 @@ impl Remote {
             {
                 Ok(stdout) => return Ok(command_output(&stdout)),
                 Err(e) => {
-                    let retry = is_retryable_failure(e.code, &e.message) && attempt + 1 < attempts;
+                    // A changed host key does not fix itself between attempts.
+                    let retry = is_retryable_failure(e.code, &e.message)
+                        && !e.message.starts_with(HOST_KEY_CHANGED)
+                        && attempt + 1 < attempts;
                     last = e;
                     if !retry {
                         break;
@@ -460,7 +476,9 @@ impl Remote {
                     let stderr =
                         sanitize_utf8(&err).replace(&key_path, &format!("ssh_key@{}", t.key.uuid));
                     let msg = php_trim(&stderr);
-                    let msg = if msg.is_empty() {
+                    let msg = if let Some(changed) = host_key_changed(msg) {
+                        changed
+                    } else if msg.is_empty() {
                         format!(
                             "SSH command failed with exit code: {}",
                             code.map(|c| c.to_string()).unwrap_or_default()
@@ -485,6 +503,37 @@ impl Remote {
     }
 }
 
+pub(crate) const HOST_KEY_CHANGED: &str =
+    "Host key verification failed: the server's SSH host key changed";
+
+/// OpenSSH's "REMOTE HOST IDENTIFICATION HAS CHANGED" banner names the pin
+/// file (a path on the control plane) and gives no way forward in Coolify.
+/// Upstream never pins keys, so this message is coolify-rs's own.
+fn host_key_changed(stderr: &str) -> Option<String> {
+    if !stderr.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") {
+        return None;
+    }
+    let fingerprint = stderr
+        .lines()
+        .skip_while(|l| !l.starts_with("The fingerprint for the "))
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let offered = fingerprint
+        .strip_prefix("The fingerprint for the ")
+        .and_then(|rest| {
+            let (kind, after) = rest.split_once(" key sent by the remote host is")?;
+            Some(format!(
+                " It now offers this {kind} key: {}",
+                after.trim().trim_end_matches('.')
+            ))
+        })
+        .unwrap_or_default();
+    Some(format!(
+        "{HOST_KEY_CHANGED} since coolify-rs first connected to it.{offered}. If you reinstalled the server or replaced its SSH host keys, re-enter its IP address or port to accept the new key. Otherwise someone may be intercepting the connection."
+    ))
+}
+
 /// Symfony Process reports a signal as `128 + signal`.
 fn exit_code(status: std::process::ExitStatus) -> Option<i32> {
     use std::os::unix::process::ExitStatusExt;
@@ -503,5 +552,23 @@ async fn read_capped(mut r: impl AsyncRead + Unpin, cap: usize) -> Vec<u8> {
                 out.extend_from_slice(&buf[..n.min(room)]);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::host_key_changed;
+
+    #[test]
+    fn rewrites_the_changed_host_key_banner() {
+        // OpenSSH 10.3 output for a pinned key that changed.
+        let stderr = "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\nIT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\nSomeone could be eavesdropping on you right now (man-in-the-middle attack)!\nIt is also possible that a host key has just been changed.\nThe fingerprint for the ED25519 key sent by the remote host is\nSHA256:P/QnH16tWXGbHRqp4+IUWllIA/aw5lP/GZvdfsdVilk.\nPlease contact your system administrator.\nAdd correct host key in /data/coolify-rs/ssh/known_hosts/abc to get rid of this message.\nOffending ED25519 key in /data/coolify-rs/ssh/known_hosts/abc:1\nHost key for h.example has changed and you have requested strict checking.\nHost key verification failed.";
+        let msg = host_key_changed(stderr).unwrap_or_default();
+        assert_eq!(
+            msg,
+            "Host key verification failed: the server's SSH host key changed since coolify-rs first connected to it. It now offers this ED25519 key: SHA256:P/QnH16tWXGbHRqp4+IUWllIA/aw5lP/GZvdfsdVilk. If you reinstalled the server or replaced its SSH host keys, re-enter its IP address or port to accept the new key. Otherwise someone may be intercepting the connection."
+        );
+        assert!(!msg.contains("/data/"));
+        assert_eq!(host_key_changed("Permission denied (publickey)."), None);
     }
 }

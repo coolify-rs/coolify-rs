@@ -121,7 +121,7 @@ only), a compromised or hostile managed server, a network attacker between the c
 | Operator SSH config or environment changing behaviour | `-F /dev/null`; environment cleared except `PATH` and a private `HOME`; `IdentityAgent=none` |
 | Secrets leaking to `ssh`/`ProxyCommand` children | Cleared environment (no `APP_KEY`, `DB_PASSWORD`, `DATABASE_URL`) |
 | Key theft from disk | Decrypted only for a run, written 0600 in a 0700 directory under a random name, removed afterwards (and swept at startup); zeroized in memory; never in `Debug` or logs |
-| MITM / server impersonation | TOFU host-key pin per server; mismatch fails closed; pin reset only on IP/port change, server deletion, or by the operator |
+| MITM / server impersonation | TOFU host-key pin per server; mismatch fails closed with the offered fingerprint (no control-plane paths in the message, no retries); pin reset only on IP/port change, server deletion (pins of servers deleted elsewhere are pruned at startup), or by the operator |
 | Hostile server attacking the control plane | Agent and X11 forwarding off, all forwardings cleared, no local commands; stdout/stderr size caps; output decoded lossily and parsed strictly; deadlines on every run |
 | Stored XSS through `validation_logs` | SSH error text is HTML-escaped before it is stored (as upstream); the UI renders `validation_logs` through an allowlist sanitizer (text, `br`, `div`/`span` with class, `a` with http(s) href) |
 | Using validation to probe or brute-force hosts | Needs team admin + `write` token; connection check makes one attempt; one validation per server at a time; global SSH concurrency limit. Reaching private addresses stays possible by design (servers on a LAN), as upstream |

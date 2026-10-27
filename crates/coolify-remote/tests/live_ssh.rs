@@ -92,10 +92,13 @@ async fn pins_the_host_key_on_first_use() {
         .err()
         .unwrap_or_else(|| unreachable!());
     assert!(
-        err.message.contains("Host key verification failed"),
+        err.message
+            .starts_with("Host key verification failed: the server's SSH host key changed"),
         "{}",
         err.message
     );
+    // The pin file is a path on the control plane; it must not reach users.
+    assert!(!err.message.contains("known_hosts"), "{}", err.message);
     assert_eq!(err.code, Some(255));
 
     r.forget_host_key("live");

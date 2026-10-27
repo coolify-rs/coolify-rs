@@ -320,6 +320,24 @@ async fn output_is_capped_and_sanitized() {
 }
 
 #[test]
+fn prunes_pins_of_servers_that_are_gone() {
+    let dir = tempfile::tempdir().unwrap_or_else(|_| unreachable!());
+    let data = dir
+        .path()
+        .canonicalize()
+        .unwrap_or_else(|_| unreachable!())
+        .join("d");
+    let remote = Remote::new(RemoteConfig::new(&data)).unwrap_or_else(|e| panic!("{e}"));
+    let pins = data.join("ssh/known_hosts");
+    for uuid in ["kept", "gone1", "gone2"] {
+        std::fs::write(pins.join(uuid), "x").unwrap_or_else(|_| unreachable!());
+    }
+    let live = ["kept".to_owned()].into_iter().collect();
+    assert_eq!(remote.retain_host_keys(&live), 2);
+    assert!(pins.join("kept").exists() && !pins.join("gone1").exists());
+}
+
+#[test]
 fn rejects_unsafe_data_dirs_and_sweeps_old_keys() {
     assert!(Remote::new(RemoteConfig::new("/tmp/with space")).is_err());
     assert!(Remote::new(RemoteConfig::new("/tmp/%h")).is_err());

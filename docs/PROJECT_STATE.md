@@ -41,6 +41,11 @@ Verified = contract tests **and** 0 mismatches in the differential run against t
   real sudo, missing jq, missing Docker, old Docker, unreadable version, unsupported OS, refused login) the rows
   written match the reference's (`compat/diff/validate_diff.py`, 8/8). `validation_logs` go through ports of
   upstream's redactor and purifier.
+- End to end on a real machine (OrbStack Ubuntu 26.04 VM, Docker 29.1.3, Compose 2.40.3 from Ubuntu packages):
+  coolify-rs added and validated the VM through its API and through the UI dialog; upstream validating the same row
+  wrote identical columns for root, a sudo user, missing jq, a stopped Docker daemon and a refused login (5/5). A
+  regenerated VM host key was refused by coolify-rs (upstream connected anyway); re-entering the address accepted the
+  new key.
 
 ## Implemented, verified by tests and a manual browser walkthrough
 
@@ -65,7 +70,7 @@ Verified = contract tests **and** 0 mismatches in the differential run against t
 
 ```bash
 docker compose up -d --wait && ./scripts/testing-host-up.sh
-COOLIFY_RS_TEST_SSH=127.0.0.1:2223 COOLIFY_RS_TEST_SSH_KEY=compat/testing-host/secrets/id_ed25519 ./scripts/test.sh  # 171 tests
+COOLIFY_RS_TEST_SSH=127.0.0.1:2223 COOLIFY_RS_TEST_SSH_KEY=compat/testing-host/secrets/id_ed25519 ./scripts/test.sh  # 163 tests
 (cd frontend && npm ci && npm run check && npm run build)  # UI type-check + build
 ./scripts/reference-up.sh && ./scripts/reference-seed.sh   # upstream sha-b5823c7 reference
 # coolify-rs on :18080 against the reference DB with APP_KEY (reference) and COOLIFY_RS_TRUSTED_PROXIES=127.0.0.1, then:
@@ -75,7 +80,7 @@ python3 compat/diff/validate_diff.py                       # coolify-rs started 
 cargo test -p coolify-port --test route_parser_reference   # parser == artisan route:list (321 routes)
 ```
 
-Results on 2026-10-27: 171/171 tests passed (live SSH tests included); 194/194 differential cases and 8/8
+Results on 2026-10-27: 163/163 tests passed (live SSH tests included); 194/194 differential cases and 8/8
 validation scenarios matched on `main`; interop PASS; UI type-check clean; container image builds (with OpenSSH).
 
 ## Migration ledger

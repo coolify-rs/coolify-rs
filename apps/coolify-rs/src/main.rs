@@ -292,6 +292,17 @@ async fn main() -> Result<()> {
             let remote = match Remote::new(cfg.remote.clone()) {
                 Ok(r) => {
                     tracing::info!(data_dir = %cfg.remote.data_dir.display(), host_keys = ?cfg.remote.host_keys, "remote execution enabled");
+                    match coolify_db::servers::live_uuids(&db).await {
+                        Ok(live) => {
+                            let dropped = r.retain_host_keys(&live.into_iter().collect());
+                            if dropped > 0 {
+                                tracing::info!(dropped, "removed host key pins of deleted servers");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "could not list servers to prune host key pins")
+                        }
+                    }
                     Some(r)
                 }
                 Err(e) => {
