@@ -30,6 +30,9 @@ CASES = {
     "static": dict(build_pack="static", base_directory="/static", ports_exposes="80"),
     "nixpacks": dict(build_pack="nixpacks", base_directory="/javascript/runtimes/nodejs", ports_exposes="3000"),
     "railpack": dict(build_pack="railpack", base_directory="/javascript/runtimes/nodejs", ports_exposes="3000"),
+    "compose": dict(build_pack="dockercompose", base_directory="/internal/compose", docker_compose_location="/docker-compose.yaml"),
+    "compose-simple": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests",
+                           docker_compose_location="/docker-compose-simple.yaml"),
     # A deploy key against a git-over-SSH mirror of the repository (--deploy-key, --ssh-repo).
     "deploykey": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
 }
@@ -39,7 +42,10 @@ def norm(text, pairs):
     for old, new in pairs:
         if old:
             text = text.replace(old, new)
-    text = re.sub(r"-\d{8}T\d{6}", "-TS", text)
+    text = re.sub(r"-\d{8}[Tt]\d{6}", "-TS", text)
+    text = re.sub(r'time="[^"]*"', 'time="T"', text)
+    # The Compose build fingerprint hashes per-application inputs.
+    text = re.sub(r"coolify\.build-fingerprint=[0-9a-f]{64}", "coolify.build-fingerprint=FP", text)
     return text
 
 
@@ -101,6 +107,12 @@ def main():
             if len(apps) < 2:
                 continue
             ur, us = apps["ref"]["uuid"], apps["rs"]["uuid"]
+            if spec["build_pack"] == "dockercompose":
+                # Creating queues upstream's LoadComposeFile job; deploy after it stored the file.
+                for _ in range(60):
+                    if all(sql(f"SELECT docker_compose_raw IS NOT NULL FROM applications WHERE uuid='{u}'") == "t" for u in (ur, us)):
+                        break
+                    time.sleep(2)
             for n in (1, 2):
                 for side, u in (("ref", ur), ("rs", us)):
                     c, r = deploy(side, u)
@@ -122,7 +134,17 @@ def main():
                 def entries(q, u):
                     pairs = [(u, "U"), (q["deployment_uuid"], "DEP"), (commit, "SHA"), (f"{case}-ref", "NAME"), (f"{case}-rs", "NAME")]
                     out = json.loads(q["logs"] or "[]")
-                    visible = [(e["type"], norm(e["output"], pairs)) for e in out if not e["hidden"]]
+                    visible, compose_lines = [], []
+                    for e in out:
+                        if e["hidden"]:
+                            continue
+                        text = norm(e["output"], pairs)
+                        # `docker compose up` output: the line order varies between runs.
+                        if e.get("command") is None and (text.startswith("Container ") or text.startswith("time=")) :
+                            compose_lines.extend(line.strip() for line in text.splitlines())
+                        else:
+                            visible.append((e["type"], text))
+                    visible.append(("compose-up", "\n".join(sorted(compose_lines))))
                     commands, seen = [], set()
                     for e in out:
                         cmd = e.get("command")
@@ -130,7 +152,17 @@ def main():
                             seen.add((e["batch"], cmd))
                             # The helper container id and hashed build args differ by run.
                             commands.append(re.sub(r"COOLIFY_BUILD_SECRETS_HASH=[0-9a-f]{64}", "COOLIFY_BUILD_SECRETS_HASH=H", norm(cmd, pairs)))
-                    return visible, commands
+                    # Old containers stop in `docker ps` order, which is arbitrary for containers started together.
+                    ordered, run = [], []
+                    for c in commands:
+                        if c.startswith("docker stop --timeout") and "'DEP'" not in c or c.startswith("bash -c 'if command -v timeout"):
+                            run.append(c)
+                            continue
+                        ordered.extend(sorted(run))
+                        run = []
+                        ordered.append(c)
+                    ordered.extend(sorted(run))
+                    return visible, ordered
                 (vr, cr), (vs, cs) = entries(qr, ur), entries(qs, us)
                 record(f"{label}: visible log entries identical", vr == vs,
                        "\n".join(difflib.unified_diff([f"{t} {o}" for t, o in vr], [f"{t} {o}" for t, o in vs], lineterm="")))
@@ -142,10 +174,29 @@ def main():
                    "\n".join(difflib.unified_diff(fr.splitlines(), fs.splitlines(), lineterm="")))
             envs = []
             for u in (ur, us):
-                name = vm(f"docker ps --filter label=coolify.applicationUuid={u} --format '{{{{.Names}}}}'").strip()
-                env = json.loads(vm(f"docker inspect --format '{{{{json .Config.Env}}}}' {name}") or "[]")
-                envs.append(sorted(norm(x, [(u, "U"), (f"{case}-ref", "NAME"), (f"{case}-rs", "NAME")]) for x in env))
-            record(f"[{case}] container environment identical", envs[0] == envs[1], set(envs[0]) ^ set(envs[1]))
+                names = sorted(vm(f"docker ps -a --filter label=coolify.applicationUuid={u} --format '{{{{.Names}}}}'").split())
+                per = []
+                for name in names:
+                    env = json.loads(vm(f"docker inspect --format '{{{{json .Config.Env}}}}' {name}") or "[]")
+                    state = vm(f"docker inspect --format '{{{{.State.Status}}}}' {name}").strip()
+                    def secret(x):
+                        # Generated SERVICE_PASSWORD_* / SERVICE_USER_* / … values differ per application.
+                        k, _, v = x.partition("=")
+                        if re.match(r"^(SERVICE_(PASSWORD|USER|BASE64|REALBASE64|HEX)|[A-Z0-9_]*PASSWORD)", k):
+                            return f"{k}=<{len(v)} chars>"
+                        return x
+                    per.append((norm(name, [(u, "U")]), state, sorted(secret(norm(x, [(u, "U"), (f"{case}-ref", "NAME"), (f"{case}-rs", "NAME")])) for x in env)))
+                envs.append(per)
+            record(f"[{case}] containers, states and environment identical", envs[0] == envs[1] and envs[0] != [],
+                   "\n".join(difflib.unified_diff([repr(x) for x in envs[0]], [repr(x) for x in envs[1]], lineterm="")))
+            if spec["build_pack"] == "dockercompose":
+                for col in ("docker_compose", "docker_compose_domains", "fqdn"):
+                    vr = json.loads(sql(f"SELECT to_json({col})::text FROM applications WHERE uuid='{ur}'") or "null")
+                    vs = json.loads(sql(f"SELECT to_json({col})::text FROM applications WHERE uuid='{us}'") or "null")
+                    vr = norm(json.dumps(vr), [(ur, "U"), (f"{case}-ref", "NAME")])
+                    vs = norm(json.dumps(vs), [(us, "U"), (f"{case}-rs", "NAME")])
+                    record(f"[{case}] applications.{col} alike", vr == vs, f"{vr[:800]}\n  vs {vs[:800]}")
+                continue
             codes = []
             for u in (ur, us):
                 fqdn = json.loads(sql(f"SELECT to_json(fqdn)::text FROM applications WHERE uuid='{u}'") or "null") or ""

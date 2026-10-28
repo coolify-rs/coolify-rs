@@ -121,3 +121,83 @@ pub async fn load_compose_file(jobs: &Jobs, app_id: i64, is_init: bool) -> Resul
 pub async fn old_raw_parser(jobs: &Jobs, app_id: i64) -> Result<String, String> {
     raw::old_raw_parser(jobs, app_id, Jobs::now()).await
 }
+
+/// `json_decode($application->docker_compose_domains ?: '[]', true)`.
+pub fn php_json_array(json: Option<&str>) -> Vec<(Key, PhpValue)> {
+    php::json_array(json)
+}
+
+/// `composeDomainEntryString($entry)`.
+pub fn domain_entry_string(entry: &PhpValue) -> Option<String> {
+    domains::compose_domain_entry_string(entry)
+}
+
+/// `normalizeComposeServiceName($name)`.
+pub fn normalize_service_name(name: &str) -> String {
+    domains::normalize_compose_service_name(name)
+}
+
+/// The service names of a compose file (`data_get(parseDockerComposeYaml($compose), 'services')`).
+pub fn service_names(compose: &str) -> Vec<String> {
+    if compose.trim().is_empty() {
+        return Vec::new();
+    }
+    match validate::parse_docker_compose_yaml(compose) {
+        Ok(v) => match php::get(&v, "services") {
+            Some(PhpValue::Array(items)) => items.iter().map(|(k, _)| k.as_string()).collect(),
+            _ => Vec::new(),
+        },
+        Err(_) => Vec::new(),
+    }
+}
+
+/// `dockerComposeEnvironmentVariableShouldBeUnset($compose, $key, null)` (the value is null).
+pub fn environment_variable_should_be_unset(compose: Option<&str>, key: &str) -> bool {
+    let Some(compose) = compose.filter(|c| !c.trim().is_empty()) else {
+        return false;
+    };
+    // extractHardcodedEnvironmentVariables(): a passthrough assignment of the key in any service.
+    if let Ok(v) = validate::parse_docker_compose_yaml(compose)
+        && let Some(PhpValue::Array(services)) = php::get(&v, "services")
+    {
+        for (_, service) in services {
+            let environment = php::get(service, "environment");
+            if environment.is_some_and(php::filled)
+                && env::extract_docker_compose_passthrough_keys(environment)
+                    .iter()
+                    .any(|k| k == key)
+            {
+                return true;
+            }
+        }
+    }
+    env::extract_docker_compose_environment_variable_references(compose)
+        .iter()
+        .any(|k| k == key)
+}
+
+/// `registry_image_compose_services()`: services whose image comes from a registry.
+pub fn registry_image_services(yaml: &str) -> Vec<String> {
+    let Ok(v) = coolify_compat::yaml_parse::parse(yaml, 50) else {
+        return Vec::new();
+    };
+    let Some(PhpValue::Array(services)) = php::get(&v, "services") else {
+        return Vec::new();
+    };
+    let filled = |s: &PhpValue, k: &str| php::get(s, k).is_some_and(php::filled);
+    let built: Vec<PhpValue> = services
+        .iter()
+        .filter(|(_, s)| filled(s, "build"))
+        .filter_map(|(_, s)| php::get(s, "image").cloned())
+        .filter(php::filled)
+        .collect();
+    services
+        .iter()
+        .filter(|(_, s)| {
+            filled(s, "image")
+                && !filled(s, "build")
+                && php::get(s, "image").is_none_or(|i| !built.contains(i))
+        })
+        .map(|(k, _)| k.as_string())
+        .collect()
+}

@@ -5,6 +5,7 @@
 //! upstream's job; the git build packs are in `build.rs`.
 
 mod build;
+mod compose_pack;
 mod git;
 
 use std::collections::HashMap;
@@ -55,6 +56,8 @@ struct Cmd {
     append: bool,
     kind: Option<&'static str>,
     skip_command_log: bool,
+    /// `command_hidden`: the command goes to a hidden `[CMD]:` line, the output stays visible.
+    command_hidden: bool,
     /// Content upstream sends on the command's stdin.
     input: Option<String>,
 }
@@ -86,6 +89,10 @@ impl Cmd {
     }
     fn skip_command_log(mut self) -> Self {
         self.skip_command_log = true;
+        self
+    }
+    fn command_hidden(mut self) -> Self {
+        self.command_hidden = true;
         self
     }
     fn input(mut self, input: String) -> Self {
@@ -158,6 +165,10 @@ struct BuildState {
     /// `$this->useBuildtimeEnvironmentLauncher`.
     launcher: bool,
     nixpacks_plan: Option<Value>,
+    /// Set by the Docker Compose build pack before `save_runtime_environment()`.
+    compose_env: Option<compose::ComposeEnv>,
+    compose_fingerprint: Option<String>,
+    compose_build_env: Option<Vec<String>>,
 }
 
 /// The state of one deployment.
@@ -180,6 +191,58 @@ struct Run {
     generated_compose: Option<String>,
     healthy: bool,
     b: BuildState,
+    /// `$hiddenEnvValuesHintAdded`, shared with the output writers.
+    hint_added: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// `ApplicationDeploymentQueue::HIDDEN_ENV_VALUES_HINT`.
+const HIDDEN_ENV_VALUES_HINT: &str = "Some environment variable values are hidden in this log. To show values that are not locked, go to Environment Variables > Environment values in logs and select \"Hide locked values only\".";
+
+/// `SensitiveDataRedactor::containsKnownSecret($text, $unlocked)`.
+fn contains_known_secret(text: &str, known: &[String], locked: &[String]) -> bool {
+    known
+        .iter()
+        .filter(|s| !locked.contains(s))
+        .any(|s| !s.trim().is_empty() && s.len() >= 8 && text.contains(s.as_str()))
+}
+
+/// `EnvironmentVariable::logRedactionValues()` from a resolved value.
+fn log_redaction_values(v: &Var) -> Vec<String> {
+    let Some(resolved) = v.resolved.clone().filter(|r| !r.is_empty()) else {
+        return Vec::new();
+    };
+    let literal = v.is_literal || v.is_multiline;
+    let json = (resolved.starts_with('{') || resolved.starts_with('['))
+        && serde_json::from_str::<Value>(&resolved).is_ok();
+    let legacy = if json {
+        resolved.clone()
+    } else if literal {
+        format!("'{resolved}'")
+    } else {
+        crate::databases::env::escape_env_variables(&resolved)
+    };
+    let mut values = vec![legacy.clone(), resolved];
+    if literal {
+        let unquoted = if legacy.len() >= 2 && legacy.starts_with('\'') && legacy.ends_with('\'') {
+            legacy[1..legacy.len() - 1].to_owned()
+        } else {
+            legacy.clone()
+        };
+        values.push(unquoted.clone());
+        values.push(format!("'{}'", unquoted.replace('\'', "'\\''")));
+        values.push(unquoted.replace('\'', "'\\''"));
+        values.push(unquoted.replace("\r\n", "\\n").replace(['\r', '\n'], "\\n"));
+        if v.is_multiline {
+            values.extend(unquoted.split(['\r', '\n']).map(str::to_owned));
+        }
+    }
+    let mut out: Vec<String> = Vec::new();
+    for x in values {
+        if !x.is_empty() && !out.contains(&x) {
+            out.push(x);
+        }
+    }
+    out
 }
 
 impl Run {
@@ -191,6 +254,8 @@ impl Run {
 
     /// `addLogEntry($message, $type, $hidden)` (batch 1, no command).
     async fn log(&self, message: &str, kind: &'static str, hidden: bool) {
+        let hint = !self.hint_added.load(std::sync::atomic::Ordering::SeqCst)
+            && contains_known_secret(&format!("{} ", message.trim()), &self.known, &self.locked);
         let mut output = self.redact(message.trim());
         if output.starts_with('╔') {
             output = format!("\n{output}");
@@ -205,6 +270,60 @@ impl Run {
             batch: 1,
         };
         let _ = apps::append_log(&self.jobs.0.db, self.queue_id, &[entry], now()).await;
+        if hint {
+            self.add_hidden_values_hint().await;
+        }
+    }
+
+    /// The hint entry after the first line that hides an unlocked environment value.
+    async fn add_hidden_values_hint(&self) {
+        if self
+            .hint_added
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        let entry = LogEntry {
+            command: None,
+            output: HIDDEN_ENV_VALUES_HINT.into(),
+            kind: "stdout",
+            timestamp: timestamp(),
+            hidden: false,
+            batch: 1,
+        };
+        let _ = apps::append_log(&self.jobs.0.db, self.queue_id, &[entry], now()).await;
+    }
+
+    /// `EnvironmentVariable::logRedactionSecretsFor($application)`: values hidden in the log.
+    async fn init_redaction(&mut self) {
+        let Some(enc) = self.jobs.0.encrypter.clone() else {
+            return;
+        };
+        let owner = Owner {
+            morph: apps::MORPH,
+            id: self.app.id,
+            team_id: self.app.team_id,
+            project_id: self.app.project.get("id").and_then(Value::as_i64),
+            environment_id: self.app.environment.get("id").and_then(Value::as_i64),
+        };
+        let Ok(variables) =
+            env::load_for(&self.jobs.0.db, &enc, &owner, Some(self.server.id)).await
+        else {
+            return;
+        };
+        let redact_all = self
+            .app
+            .settings
+            .get("redact_all_env_values_in_logs")
+            .and_then(Value::as_bool)
+            != Some(false);
+        for v in variables.iter().filter(|v| !v.is_preview) {
+            if v.is_shown_once {
+                self.locked.extend(log_redaction_values(v));
+            } else if redact_all {
+                self.known.extend(log_redaction_values(v));
+            }
+        }
     }
 
     async fn info(&self, message: &str) {
@@ -262,10 +381,21 @@ impl Run {
                 }
                 None => cmd.command.clone(),
             };
+            if cmd.command_hidden && !cmd.skip_command_log {
+                self.log(
+                    &format!("[CMD]: {}", self.redact(&cmd.command)),
+                    "stdout",
+                    true,
+                )
+                .await;
+            }
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(Stream, String)>();
             let db = self.jobs.0.db.clone();
             let queue_id = self.queue_id;
-            let command_for_log = (!cmd.skip_command_log).then(|| self.redact(&cmd.command));
+            let command_for_log =
+                (!cmd.skip_command_log && !cmd.command_hidden).then(|| self.redact(&cmd.command));
+            let raw_command = cmd.command.clone();
+            let hint_added = self.hint_added.clone();
             let known = self.known.clone();
             let locked = self.locked.clone();
             let (hidden, kind) = (cmd.hidden, cmd.kind);
@@ -280,14 +410,21 @@ impl Run {
                     }
                     let k: Vec<&str> = known.iter().map(String::as_str).collect();
                     let l: Vec<&str> = locked.iter().map(String::as_str).collect();
+                    let hint = !hint_added.load(std::sync::atomic::Ordering::SeqCst)
+                        && contains_known_secret(
+                            &format!("{} {raw_command}", chunk.trim()),
+                            &known,
+                            &locked,
+                        );
                     let mut text = chunk.trim().to_owned();
                     if skip {
                         text = redact_base64_payloads(&text);
                     }
-                    let mut output = coolify_compat::redact::redact_text(&text, &k, &l);
-                    if output.is_empty() {
+                    // `takeCompleteOutput()`: a non-empty chunk is logged even when it trims to nothing.
+                    if chunk.is_empty() {
                         continue;
                     }
+                    let mut output = coolify_compat::redact::redact_text(&text, &k, &l);
                     if output.starts_with('╔') {
                         output = format!("\n{output}");
                     }
@@ -304,6 +441,17 @@ impl Run {
                         batch,
                     };
                     let _ = apps::append_log(&db, queue_id, &[entry], now()).await;
+                    if hint && !hint_added.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                        let hint_entry = LogEntry {
+                            command: None,
+                            output: HIDDEN_ENV_VALUES_HINT.into(),
+                            kind: "stdout",
+                            timestamp: timestamp(),
+                            hidden: false,
+                            batch,
+                        };
+                        let _ = apps::append_log(&db, queue_id, &[hint_entry], now()).await;
+                    }
                 }
                 (chunks, stdout)
             });
@@ -568,7 +716,9 @@ impl Jobs {
             generated_compose: None,
             healthy: false,
             b,
+            hint_added: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
+        run.init_redaction().await;
 
         // handle()
         if q.status == "cancelled-by-user" {
@@ -1012,22 +1162,6 @@ impl Run {
         let variables: Vec<Var> = env::load_for(&self.jobs.0.db, enc, &owner, Some(self.server.id))
             .await
             .map_err(Fail::new)?;
-        // Log redaction: all values when `redact_all_env_values_in_logs`, locked values always.
-        let redact_all = self
-            .app
-            .settings
-            .get("redact_all_env_values_in_logs")
-            .and_then(Value::as_bool)
-            != Some(false);
-        for v in &variables {
-            if let Some(value) = v.resolved.clone().filter(|x| !x.is_empty()) {
-                if v.is_shown_once {
-                    self.locked.push(value);
-                } else if redact_all {
-                    self.known.push(value);
-                }
-            }
-        }
         let project = self
             .app
             .project
@@ -1047,6 +1181,7 @@ impl Run {
             &compose::EnvContext {
                 commit: &self.commit,
                 branch: Some(self.b.branch.as_str()).filter(|b| !b.is_empty()),
+                compose: self.b.compose_env.take(),
                 container_name: &self.container,
                 project_name: project.as_deref(),
                 environment_name: environment.as_deref(),
@@ -1568,18 +1703,10 @@ impl Run {
             .await;
     }
 
-    /// The `finally` block of `handle()`.
-    async fn finally(&mut self) {
-        let db = self.jobs.0.db.clone();
+    /// `write_deployment_configurations()`: the generated compose file and README in the
+    /// configuration directory on the server.
+    async fn write_deployment_configurations(&mut self) {
         let finished = now();
-        let _ = apps::update_deployment(
-            &db,
-            self.queue_id,
-            &[("finished_at", ColumnValue::Time(finished))],
-            finished,
-        )
-        .await;
-        // write_deployment_configurations()
         if let Some(yaml) = self.generated_compose.clone() {
             let name = sanitize_string(self.app.str("name").unwrap_or_default());
             let readme = format!(
@@ -1604,6 +1731,20 @@ impl Run {
                 .await;
             }
         }
+    }
+
+    /// The `finally` block of `handle()`.
+    async fn finally(&mut self) {
+        let db = self.jobs.0.db.clone();
+        let finished = now();
+        let _ = apps::update_deployment(
+            &db,
+            self.queue_id,
+            &[("finished_at", ColumnValue::Time(finished))],
+            finished,
+        )
+        .await;
+        self.write_deployment_configurations().await;
         let dep = self.dep.clone();
         self.info(&format!("Gracefully shutting down build container: {dep}"))
             .await;

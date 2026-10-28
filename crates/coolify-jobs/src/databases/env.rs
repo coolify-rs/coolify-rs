@@ -38,6 +38,8 @@ pub struct Var {
     pub is_buildtime: bool,
     pub is_preview: bool,
     pub uses_legacy_escaping: bool,
+    /// `preserve_compose_null`.
+    pub preserve_compose_null: bool,
     /// The stored ciphertext (upstream's configuration hash sorts by it).
     pub cipher: Option<String>,
 }
@@ -230,6 +232,7 @@ pub async fn load_stored_for(db: &Db, enc: &Encrypter, o: &Owner<'_>) -> Result<
             is_buildtime: flag("is_buildtime"),
             is_preview: r.is_preview,
             uses_legacy_escaping: r.uses_legacy_escaping,
+            preserve_compose_null: flag("preserve_compose_null"),
             cipher: r.value_encrypted,
             key: r.key,
         });
@@ -361,6 +364,7 @@ mod tests {
             is_buildtime: true,
             is_preview: false,
             uses_legacy_escaping: legacy,
+            preserve_compose_null: false,
             cipher: None,
         }
     }

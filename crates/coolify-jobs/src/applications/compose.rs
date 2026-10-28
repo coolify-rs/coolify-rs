@@ -104,10 +104,20 @@ pub struct EnvContext<'a> {
     pub commit: &'a str,
     /// `$this->branch`: only set by a git import.
     pub branch: Option<&'a str>,
+    /// Docker Compose build pack: the `SERVICE_URL_*` / `SERVICE_FQDN_*` / `SERVICE_NAME_*` lines,
+    /// and the variables left out of the file (generated `SERVICE_*` keys, unset blanks).
+    pub compose: Option<ComposeEnv>,
     pub container_name: &'a str,
     pub project_name: Option<&'a str>,
     pub environment_name: Option<&'a str>,
     pub server_ip: Option<&'a str>,
+}
+
+/// What a Docker Compose deployment adds to the runtime env file.
+#[derive(Debug, Default)]
+pub struct ComposeEnv {
+    pub service_lines: Vec<String>,
+    pub excluded_ids: Vec<i64>,
 }
 
 /// `hostsFromFqdn`.
@@ -166,18 +176,22 @@ pub fn runtime_env(
         };
         coolify.push((key, Some(hosts_from_fqdn(fqdn))));
     }
-    // `$this->branch` is only set by a git import.
-    if !defined("COOLIFY_BRANCH") {
-        coolify.push(("COOLIFY_BRANCH", ctx.branch.map(str::to_owned)));
-    }
-    if !defined("COOLIFY_RESOURCE_UUID") {
-        coolify.push(("COOLIFY_RESOURCE_UUID", Some(a.uuid.clone())));
-    }
-    if !defined("COOLIFY_CONTAINER_NAME") {
-        coolify.push((
-            "COOLIFY_CONTAINER_NAME",
-            Some(ctx.container_name.to_owned()),
-        ));
+    let compose_v3 =
+        ctx.compose.is_some() && !matches!(a.str("compose_parsing_version"), Some("1" | "2"));
+    if !compose_v3 {
+        // `$this->branch` is only set by a git import.
+        if !defined("COOLIFY_BRANCH") {
+            coolify.push(("COOLIFY_BRANCH", ctx.branch.map(str::to_owned)));
+        }
+        if !defined("COOLIFY_RESOURCE_UUID") {
+            coolify.push(("COOLIFY_RESOURCE_UUID", Some(a.uuid.clone())));
+        }
+        if !defined("COOLIFY_CONTAINER_NAME") {
+            coolify.push((
+                "COOLIFY_CONTAINER_NAME",
+                Some(ctx.container_name.to_owned()),
+            ));
+        }
     }
     // coolifyDefaultEnvironmentVariables
     if a.settings
@@ -206,11 +220,18 @@ pub fn runtime_env(
         .iter()
         .map(|(k, v)| format!("{k}={}", escape_env_file_value(v.as_deref(), false)))
         .collect();
+    if let Some(c) = &ctx.compose {
+        envs.extend(c.service_lines.iter().cloned());
+    }
 
+    let excluded: &[i64] = ctx
+        .compose
+        .as_ref()
+        .map_or(&[], |c| c.excluded_ids.as_slice());
     let mut runtime: Vec<&Var> = production
         .iter()
         .copied()
-        .filter(|v| !excluded_runtime_key(&v.key))
+        .filter(|v| !excluded_runtime_key(&v.key) && !excluded.contains(&v.id))
         .collect();
     if a.setting_bool("is_env_sorting_enabled") {
         runtime.sort_by(|x, y| x.key.cmp(&y.key));
@@ -235,7 +256,8 @@ pub fn runtime_env(
 
     let ports = main_ports(a);
     let mut warning = None;
-    if a.setting_bool("is_container_label_readonly_enabled")
+    if ctx.compose.is_none()
+        && a.setting_bool("is_container_label_readonly_enabled")
         && let Some(port) = production
             .iter()
             .find(|v| v.key == "PORT")
@@ -248,7 +270,7 @@ pub fn runtime_env(
             ports.join(",")
         ));
     }
-    if !defined("PORT") && !ports.is_empty() {
+    if ctx.compose.is_none() && !defined("PORT") && !ports.is_empty() {
         envs.push(format!("PORT={}", ports[0]));
     }
     if !defined("HOST") {

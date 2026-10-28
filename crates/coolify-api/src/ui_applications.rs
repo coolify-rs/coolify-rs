@@ -461,7 +461,7 @@ async fn queue(
     }
     let built = matches!(
         a.str("build_pack"),
-        Some("dockerimage" | "dockerfile" | "static" | "nixpacks" | "railpack")
+        Some("dockerimage" | "dockerfile" | "static" | "nixpacks" | "railpack" | "dockercompose")
     );
     if !built
         || a.str("dockerfile").is_some_and(|d| !d.is_empty())

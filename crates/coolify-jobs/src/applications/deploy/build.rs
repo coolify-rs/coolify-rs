@@ -18,7 +18,7 @@ use super::{B64, Cmd, Fail, Run, SEPARATOR, Step, in_docker, now};
 use crate::applications::domains;
 use crate::databases::env::{self, Owner, Var};
 
-const BUILD_TIME_ENV_PATH: &str = concat!("/artifacts/build-time.", "env");
+pub(super) const BUILD_TIME_ENV_PATH: &str = concat!("/artifacts/build-time.", "env");
 const BUILD_TIME_SHELL_ENV_PATH: &str = concat!("/artifacts/build-time-shell.", "env");
 const BUILD_TIME_ENV_LAUNCHER_PATH: &str = "/artifacts/run-with-build-time-env";
 const BUILD_SCRIPT_PATH: &str = "/artifacts/build.sh";
@@ -47,7 +47,7 @@ fn reserved_docker_client_key(key: &str) -> bool {
 }
 
 /// `ValidationPatterns::isValidEnvironmentVariableKey()`.
-fn valid_env_key(key: &str) -> bool {
+pub(super) fn valid_env_key(key: &str) -> bool {
     static RE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"\A[A-Za-z_][A-Za-z0-9_.]*\z").unwrap_or_else(|_| unreachable!())
     });
@@ -218,11 +218,7 @@ impl Run {
                 "static" => self.deploy_static().await?,
                 "nixpacks" => self.deploy_nixpacks().await?,
                 "railpack" => self.deploy_railpack().await?,
-                "dockercompose" => {
-                    return Err(Fail::new(format!(
-                        "The {bp} build pack is not supported by coolify-rs yet."
-                    )));
-                }
+                "dockercompose" => self.deploy_docker_compose().await?,
                 _ => return Err(Fail::new(format!("Unsupported build pack: {bp}"))),
             }
         }
@@ -1098,7 +1094,7 @@ impl Run {
     }
 
     /// `clone_repository()` with `import_repository()`.
-    async fn clone_repository(&mut self) -> Step {
+    pub(super) async fn clone_repository(&mut self) -> Step {
         let basedir = format!("/artifacts/{}", self.dep);
         self.info(&format!("\n{SEPARATOR}")).await;
         self.info(&format!(
@@ -1174,13 +1170,13 @@ impl Run {
     }
 
     /// `cleanup_git()`.
-    async fn cleanup_git(&mut self) -> Step {
+    pub(super) async fn cleanup_git(&mut self) -> Step {
         let cmd = in_docker(&self.dep, &format!("rm -fr /artifacts/{}/.git", self.dep));
         self.exec(vec![Cmd::new(cmd)]).await
     }
 
     /// `generate_image_names()` for a git application.
-    fn generate_image_names(&mut self) {
+    pub(super) fn generate_image_names(&mut self) {
         let tag: String = self.commit.chars().take(128).collect();
         let name = self
             .app
@@ -1283,7 +1279,9 @@ impl Run {
     }
 
     /// `generate_buildtime_environment_variables()`.
-    async fn generate_buildtime_environment_variables(&mut self) -> Result<Vec<String>, Fail> {
+    pub(super) async fn generate_buildtime_environment_variables(
+        &mut self,
+    ) -> Result<Vec<String>, Fail> {
         let mut dict = Ordered::default();
         if self.build_pack() == "nixpacks"
             && let Some(Value::Object(plan_vars)) = self
@@ -1305,9 +1303,69 @@ impl Run {
         for (key, value) in self.coolify_env(true).await?.0 {
             dict.put(&key, Some(git::bash_env_value(value.as_deref())));
         }
+        let compose = self.build_pack() == "dockercompose";
+        if compose {
+            let text = if self.app.setting_bool("is_raw_compose_deployment_enabled") {
+                self.app.str("docker_compose_raw")
+            } else {
+                self.app.str("docker_compose")
+            }
+            .unwrap_or_default()
+            .to_owned();
+            for name in crate::compose_parser::service_names(&text) {
+                dict.put(
+                    &format!(
+                        "SERVICE_NAME_{}",
+                        name.replace(['-', '.'], "_").to_uppercase()
+                    ),
+                    Some(git::bash_env_value(Some(&name))),
+                );
+            }
+            for (service, entry) in
+                crate::compose_parser::php_json_array(self.app.str("docker_compose_domains"))
+            {
+                let Some(domain) =
+                    crate::compose_parser::domain_entry_string(&entry).filter(|d| !d.is_empty())
+                else {
+                    continue;
+                };
+                let first = domain.split(',').next().unwrap_or_default().to_owned();
+                let Some(parts) = domains::UrlParts::parse(&first) else {
+                    continue;
+                };
+                let key = crate::compose_parser::normalize_service_name(&service.as_string())
+                    .to_uppercase();
+                dict.put(
+                    &format!("SERVICE_URL_{key}"),
+                    Some(git::bash_env_value(Some(&domains::without_port(&first)))),
+                );
+                dict.put(
+                    &format!("SERVICE_FQDN_{key}"),
+                    Some(git::bash_env_value(Some(&parts.host))),
+                );
+            }
+        }
+        let compose_source = self
+            .app
+            .str("docker_compose_raw")
+            .or(self.app.str("docker_compose"))
+            .map(str::to_owned);
         let railpack = self.build_pack() == "railpack";
         for v in self.buildtime_variables(true).await? {
             if railpack && reserved_docker_client_key(&v.key) {
+                continue;
+            }
+            if compose
+                && (v.key.starts_with("SERVICE_FQDN_")
+                    || v.key.starts_with("SERVICE_URL_")
+                    || v.key.starts_with("SERVICE_NAME_")
+                    || (!v.preserve_compose_null
+                        && v.value.is_none()
+                        && crate::compose_parser::environment_variable_should_be_unset(
+                            compose_source.as_deref(),
+                            &v.key,
+                        )))
+            {
                 continue;
             }
             let literal = v.is_literal || v.is_multiline;
@@ -1356,7 +1414,18 @@ impl Run {
 
     /// `save_buildtime_environment_variables()`.
     async fn save_buildtime_environment_variables(&mut self) -> Step {
-        let lines = self.generate_buildtime_environment_variables().await?;
+        self.save_buildtime_environment_variables_with(None).await
+    }
+
+    /// `save_buildtime_environment_variables($environment_variables)`.
+    pub(super) async fn save_buildtime_environment_variables_with(
+        &mut self,
+        lines: Option<Vec<String>>,
+    ) -> Step {
+        let lines = match lines {
+            Some(l) => l,
+            None => self.generate_buildtime_environment_variables().await?,
+        };
         let (shell, dotted): (Vec<&String>, Vec<&String>) = lines
             .iter()
             .partition(|l| shell_env_key(l.split('=').next().unwrap_or_default()));
@@ -1447,7 +1516,7 @@ impl Run {
     }
 
     /// `generate_env_variables()`: `$this->env_args`.
-    async fn generate_env_variables(&mut self) -> Step {
+    pub(super) async fn generate_env_variables(&mut self) -> Step {
         let mut args = Ordered::default();
         if self.app.setting_bool("include_source_commit_in_build") {
             args.put("SOURCE_COMMIT", Some(self.commit.clone()));
@@ -1457,7 +1526,26 @@ impl Run {
                 args.put(&k, Some(v));
             }
         }
+        let compose = self.build_pack() == "dockercompose";
+        let compose_source = self
+            .app
+            .str("docker_compose_raw")
+            .or(self.app.str("docker_compose"))
+            .map(str::to_owned);
         for v in self.buildtime_variables(false).await? {
+            if compose
+                && (v.key.starts_with("SERVICE_FQDN_")
+                    || v.key.starts_with("SERVICE_URL_")
+                    || v.key.starts_with("SERVICE_NAME_")
+                    || (!v.preserve_compose_null
+                        && v.value.is_none()
+                        && crate::compose_parser::environment_variable_should_be_unset(
+                            compose_source.as_deref(),
+                            &v.key,
+                        )))
+            {
+                continue;
+            }
             if let Some(value) =
                 git::resolved_with_server(v.resolved.as_deref(), v.is_literal || v.is_multiline)
             {
@@ -1486,7 +1574,7 @@ impl Run {
     }
 
     /// `generate_build_env_variables()` without build secrets.
-    async fn generate_build_env_variables(&mut self) -> Step {
+    pub(super) async fn generate_build_env_variables(&mut self) -> Step {
         let variables: Vec<(String, String)> = if self.build_pack() == "nixpacks" {
             match self
                 .b
@@ -2313,7 +2401,7 @@ fn hosts_from_fqdn(fqdn: Option<&str>) -> String {
 }
 
 /// `validatePathField($value, $field)`.
-fn validate_path(value: &str, field: &str) -> Result<String, Fail> {
+pub(super) fn validate_path(value: &str, field: &str) -> Result<String, Fail> {
     static RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^/[a-zA-Z0-9._\-/~@+]+$").unwrap_or_else(|_| unreachable!()));
     if !RE.is_match(value) {

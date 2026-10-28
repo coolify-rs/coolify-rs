@@ -57,6 +57,10 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   manual webhook secrets, GPU and container-name settings and tags answer 501 when sent with a value. The GitHub App
   repository check does not apply upstream's `SafeExternalUrl` private-network policy to the GitHub API URL, and the
   GitHub App path is not yet verified against a real GitHub App (only up to the lookup of the App).
+- Docker Compose applications deploy (build, pull, `docker compose up`, build fingerprint reuse, raw mode). Not ported:
+  custom Compose start/build commands, "preserve repository", preview deployments, configuration files with content
+  (file storages Coolify writes), build secrets. The startup cleanup scopes interrupted deployments by host name, so
+  two coolify-rs instances on one host would mark each other's running deployments as failed.
 - At startup upstream (`app:init`) marks every in-progress and queued deployment as failed; coolify-rs marks only the
   in-progress deployments its own host was running (`horizon_job_worker`), so an upstream instance sharing the database
   keeps its deployments. Queued deployments are left queued.

@@ -188,7 +188,8 @@ pub async fn unported_parts(db: &Db, id: i64) -> DbResult<Vec<&'static str>> {
             "additional servers",
         ),
         (
-            "SELECT EXISTS (SELECT 1 FROM local_file_volumes WHERE resource_type = 'App\\Models\\Application' AND resource_id = $1)",
+            // Only files Coolify would write (`hasContentToWrite()`); directories and git files are only mounted.
+            "SELECT EXISTS (SELECT 1 FROM local_file_volumes WHERE resource_type = 'App\\Models\\Application' AND resource_id = $1 AND is_directory = false AND COALESCE(is_host_file, false) = false AND is_based_on_git = false AND content IS NOT NULL)",
             "file storages",
         ),
         (

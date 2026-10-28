@@ -29,7 +29,7 @@ import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOKENS = json.load(open(os.path.join(ROOT, "compat/reference/secrets/tokens.json")))
-BASES = {"ref": "http://127.0.0.1:18000", "rs": "http://127.0.0.1:18080"}
+BASES = {"ref": "http://127.0.0.1:18000", "rs": os.environ.get("COOLIFY_RS_BASE", "http://127.0.0.1:18080")}
 results = []
 
 
