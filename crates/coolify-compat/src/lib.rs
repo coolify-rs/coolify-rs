@@ -16,6 +16,7 @@ pub mod sshkey;
 pub mod timezones;
 pub mod totp;
 pub mod yaml;
+pub mod yaml_parse;
 
 pub use encrypter::{DecryptError, Encrypter, EncrypterKeyError};
 pub use sanctum::{ParsedToken, hash_token, parse_bearer_token};

@@ -1,0 +1,49 @@
+# comment
+services:
+  web:
+    image: "nginx:latest"
+    environment:
+      - A=1
+      - B=${B:-x}
+      - 'C=it''s'
+      - "D=\ttab \u00e9"
+    ports:
+      - "80:80"
+      - 443:443
+      - 8080
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost || exit 1"]
+      interval: 10s
+      retries: 3
+    command: >
+      sh -c "echo hi
+      && sleep 1"
+    entrypoint: |
+      #!/bin/sh
+      echo "x"
+
+    labels:
+      traefik.enable: true
+      com.example: "1.5"
+      other: 1.5
+      oct: 0o17
+      hex: 0x1F
+      neg: -12
+      big: 99999999999999999999
+      date: 2024-01-02
+      dt: 2024-01-02T03:04:05Z
+      dtf: 2024-01-02 03:04:05.5 +02:00
+      nul: ~
+      empty:
+      yes: no
+      under: 1_000
+      under2: 1_0.5
+      inf: .inf
+      dotted.key: v
+volumes:
+  data: {}
+  other:
+    driver: local
+networks:
+  default:
+    name: foo

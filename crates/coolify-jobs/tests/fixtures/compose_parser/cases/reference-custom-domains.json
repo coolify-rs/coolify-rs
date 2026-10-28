@@ -1,0 +1,11 @@
+{
+  "compose_file": "reference.yaml",
+  "app": {
+    "docker_compose_domains": "{\"web\": {\"domain\": \"https://web.example.com:3000,https://www.web.example.com\"}, \"api\": {\"domain\": \"https://www.api.example.com\", \"redirect\": \"non-www\"}, \"api_v2\": {\"domain\": \"https://api-v2.example.com/v2\"}, \"blog\": {\"domain\": \"\"}, \"worker\": {\"domain\": null}}"
+  },
+  "settings": {
+    "is_force_https_enabled": true,
+    "is_permanent_redirect_enabled": true
+  },
+  "name": "reference-custom-domains"
+}

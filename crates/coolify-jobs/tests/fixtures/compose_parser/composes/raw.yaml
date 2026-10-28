@@ -1,0 +1,26 @@
+version: "3.8"
+services:
+  web:
+    image: nginx:alpine
+    labels:
+      - traefik.enable=true
+      - coolify.managed
+    volumes:
+      - ./html:/usr/share/nginx/html:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/data:/data
+      - named:/named
+      - type: bind
+        source: ../shared
+        target: /shared
+      - type: bind
+        source: ${DATA_DIR:-/opt/data}
+        target: /opt
+  api:
+    image: example/api
+    labels:
+      com.example.team: api
+      coolify.type: custom
+  empty:
+volumes:
+  named:

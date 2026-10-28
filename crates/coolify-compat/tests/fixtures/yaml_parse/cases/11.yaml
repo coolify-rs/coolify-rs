@@ -1,0 +1,13 @@
+services:
+  web:
+    environment:
+    - A=1
+    - B=2
+    volumes:
+    - type: bind
+      source: ./x
+      target: /x
+      content: |
+        hello
+        world
+    - ./y:/y:ro

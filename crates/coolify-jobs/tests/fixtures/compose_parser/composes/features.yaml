@@ -1,0 +1,124 @@
+# Parser features not in the upstream reference compose.
+x-common: &common
+  restart: always
+  logging:
+    driver: json-file
+services:
+  front:
+    <<: *common
+    build: ./front
+    environment:
+      SERVICE_URL_FRONT_8080: /app
+      PORT: 8080
+      DEBUG: true
+      RATIO: 1.5
+      EMPTY_OVERRIDE: ''
+      WITH_DEFAULT: ${WITH_DEFAULT:-fallback}
+      TOKEN: '{{environment.TEAM_TOKEN}}'
+      REF_MAGIC: ${SERVICE_FQDN_BACK}
+      NET: ${CUSTOM_NETWORK_NAME}
+      MALFORMED: ${UNCLOSED
+      MALFORMED_DASH: $MAL-dash
+    env_file:
+      - ./front.env
+      - .env
+    labels:
+      - "traefik.http.middlewares.front-auth.basicauth.users=user:$$apr1$$x"
+      - coolify.traefik.middlewares=custom-a,custom-b
+      - 42
+    ports:
+      - "8080:8080/tcp"
+      - "9090:9090/udp"
+    volumes:
+      - ./data:/data
+      - ../outside:/outside
+      - ~/home-dir:/home-dir
+      - /abs/path/:/abs
+      - ./front/conf.yml:/etc/app/conf.yml:ro
+      - named-data:/named
+      - ext-vol:/ext
+      - ext-legacy:/legacy-ext
+      - type: bind
+        source: ./long
+        target: /long:ro
+        isDirectory: true
+      - type: bind
+        source: /must/exist
+        target: /exist
+        bind:
+          create_host_path: false
+      - type: volume
+        source: long-named
+        target: /long-named
+        volume:
+          nocopy: true
+      - type: tmpfs
+        target: /tmp/cache
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp:/host-tmp
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+    exclude_from_hc: true
+    networks:
+      - backend
+      - frontend
+  back:
+    image: ghcr.io/example/back:1.2.3
+    environment:
+      - SERVICE_FQDN_BACK_3000
+      - DATABASE_URL=postgres://${DB_USER:-app}:${SERVICE_PASSWORD_DB}@db:5432/app
+      - LOWER=${SERVICE_LOWERCASEUSER_BACK}
+      - REAL=${SERVICE_REALBASE64_64_BACK}
+      - SYMBOLS=${SERVICE_PASSWORDWITHSYMBOLS_BACK}
+      - 123=numeric-key
+      - PASS
+    labels:
+      com.example.port: 3000
+      com.example.enabled: true
+      com.example.ratio: 0.25
+      com.example.empty:
+    expose:
+      - "3000"
+    networks:
+      backend:
+        aliases:
+          - api
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_DB}
+      POSTGRES_USER: ${DB_USER:-app}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+    networks:
+      - backend
+  proxy:
+    image: caddy:2
+    network_mode: host
+    restart: on-failure
+volumes:
+  named-data:
+    driver: local
+    labels:
+      com.example: named
+  ext-vol:
+    external: true
+    name: ${EXT_VOLUME_NAME:-shared-data}
+  ext-legacy:
+    external: true
+  long-named:
+  db-data:
+networks:
+  backend:
+    name: ${CUSTOM_NETWORK_NAME:-backend-net}
+  frontend:
+    driver: bridge
+  public:
+    aliases:
+      - x

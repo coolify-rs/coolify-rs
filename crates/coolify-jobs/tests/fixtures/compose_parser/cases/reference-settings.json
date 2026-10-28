@@ -1,0 +1,14 @@
+{
+  "compose_file": "reference.yaml",
+  "server_settings": {
+    "is_logdrain_custom_enabled": true
+  },
+  "settings": {
+    "is_gzip_enabled": false,
+    "is_stripprefix_enabled": false,
+    "is_container_label_escape_enabled": false,
+    "is_log_drain_enabled": true,
+    "connect_to_docker_network": true
+  },
+  "name": "reference-settings"
+}

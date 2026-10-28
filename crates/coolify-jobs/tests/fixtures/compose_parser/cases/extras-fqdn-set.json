@@ -1,0 +1,15 @@
+{
+  "compose_file": "extras.yaml",
+  "app": {
+    "fqdn": "https://preset.example.com"
+  },
+  "settings": {
+    "is_force_https_enabled": true
+  },
+  "proxy_type": "TRAEFIK",
+  "server_settings": {
+    "generate_exact_labels": true,
+    "traefik_certificate_resolver": "myresolver"
+  },
+  "name": "extras-fqdn-set"
+}

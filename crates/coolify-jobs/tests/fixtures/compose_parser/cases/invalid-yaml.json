@@ -1,0 +1,4 @@
+{
+  "compose": "services:\n  web:\n    image: nginx\n   bad: indent\n",
+  "name": "invalid-yaml"
+}

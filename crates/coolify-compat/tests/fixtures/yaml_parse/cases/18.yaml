@@ -1,0 +1,13 @@
+a: |+
+  keep
+
+b: |-
+  strip
+
+c: |2
+    indented
+d: >
+  folded
+   more indented
+  back
+e: |

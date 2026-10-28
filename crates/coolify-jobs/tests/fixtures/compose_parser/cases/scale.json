@@ -1,0 +1,4 @@
+{
+  "compose": "services:\n  web:\n    image: nginx\n    deploy:\n      replicas: 3\n",
+  "name": "scale"
+}

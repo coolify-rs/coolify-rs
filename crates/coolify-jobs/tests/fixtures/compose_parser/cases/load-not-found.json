@@ -1,0 +1,13 @@
+{
+  "mode": "load",
+  "server_id": 57,
+  "uuid": "composeparserload0000001",
+  "app": {
+    "git_repository": "https://github.com/coollabsio/coolify-examples",
+    "git_branch": "main",
+    "base_directory": "/internal/compose",
+    "docker_compose_location": "/missing-compose.yaml",
+    "docker_compose_raw": null
+  },
+  "name": "load-not-found"
+}

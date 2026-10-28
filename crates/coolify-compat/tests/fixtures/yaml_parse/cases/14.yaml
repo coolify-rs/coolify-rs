@@ -1,0 +1,4 @@
+services:
+  web:
+    image: '@reserved'
+    other: @bad

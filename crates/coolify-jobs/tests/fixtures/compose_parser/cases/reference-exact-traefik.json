@@ -1,0 +1,15 @@
+{
+  "compose_file": "reference.yaml",
+  "proxy_type": "TRAEFIK",
+  "server_settings": {
+    "generate_exact_labels": true
+  },
+  "shared_variables": [
+    {
+      "key": "SHARED_KEY",
+      "value": "shared-value",
+      "type": "environment"
+    }
+  ],
+  "name": "reference-exact-traefik"
+}

@@ -1,0 +1,20 @@
+{
+  "compose_file": "extras.yaml",
+  "commit": "1111111111111111111111111111111111111111",
+  "existing_env": [
+    {
+      "key": "CONFIG_PATH",
+      "value": "/srv/custom-config",
+      "is_preview": false
+    },
+    {
+      "key": "DATA_PATH",
+      "value": "${OTHER}/x",
+      "is_preview": false
+    }
+  ],
+  "server_settings": {
+    "wildcard_domain": "https://apps.example.com/base"
+  },
+  "name": "extras"
+}

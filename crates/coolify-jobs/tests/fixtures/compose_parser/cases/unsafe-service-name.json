@@ -1,0 +1,4 @@
+{
+  "compose": "services:\n  'web;rm -rf /':\n    image: nginx\n",
+  "name": "unsafe-service-name"
+}

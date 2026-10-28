@@ -1,0 +1,12 @@
+x-common: &common
+  restart: always
+  environment:
+    A: 1
+services:
+  a:
+    <<: *common
+    image: a
+  b:
+    <<: [*common]
+    image: b
+    environment: {X: 1, Y: "two", Z: [1, 2]}

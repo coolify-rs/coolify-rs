@@ -1,0 +1,12 @@
+{
+  "compose_file": "features.yaml",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "shared_variables": [
+    {
+      "key": "TEAM_TOKEN",
+      "value": "tok-123",
+      "type": "environment"
+    }
+  ],
+  "name": "features"
+}

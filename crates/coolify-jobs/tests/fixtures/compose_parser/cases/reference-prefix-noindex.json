@@ -1,0 +1,13 @@
+{
+  "compose_file": "reference.yaml",
+  "settings": {
+    "custom_container_name_prefix": "pre",
+    "include_coolify_default_variables": false
+  },
+  "app": {
+    "noindex_domains": [
+      "http://web-composeparserdiff0000001.203.0.113.50.sslip.io"
+    ]
+  },
+  "name": "reference-prefix-noindex"
+}

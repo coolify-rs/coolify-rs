@@ -1,0 +1,12 @@
+{
+  "compose_file": "reference.yaml",
+  "commit": "abcdef0123456789abcdef0123456789abcdef01",
+  "shared_variables": [
+    {
+      "key": "SHARED_KEY",
+      "value": "shared-value",
+      "type": "environment"
+    }
+  ],
+  "name": "reference"
+}

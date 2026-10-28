@@ -1,0 +1,16 @@
+{
+  "mode": "load",
+  "server_id": 57,
+  "uuid": "composeparserload0000001",
+  "app": {
+    "git_repository": "coollabsio/coolify-examples",
+    "git_branch": "main",
+    "base_directory": "/internal/compose",
+    "docker_compose_location": "/docker-compose.yaml",
+    "docker_compose_raw": null,
+    "source_type": "App\\Models\\GithubApp",
+    "source_id": 0,
+    "docker_compose_domains": "{\"api_test\": {\"domain\": \"https://api.example.com\"}, \"gone\": {\"domain\": \"https://gone.example.com\"}}"
+  },
+  "name": "load-github-app"
+}

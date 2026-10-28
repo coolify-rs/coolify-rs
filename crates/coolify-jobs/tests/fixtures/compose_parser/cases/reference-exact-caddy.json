@@ -1,0 +1,9 @@
+{
+  "compose_file": "reference.yaml",
+  "proxy_type": "CADDY",
+  "server_settings": {
+    "generate_exact_labels": true,
+    "is_traffic_analytics_enabled": true
+  },
+  "name": "reference-exact-caddy"
+}

@@ -1,0 +1,7 @@
+services:
+  web:
+    image: nginx
+    environment:
+      - KEY=value # not a comment? 
+      - URL=http://x#frag
+      - "QUOTED=a # b"

@@ -1,0 +1,8 @@
+{
+  "compose_file": "reference.yaml",
+  "settings": {
+    "is_consistent_container_name_enabled": true,
+    "custom_internal_name": "myapp"
+  },
+  "name": "reference-consistent-names"
+}

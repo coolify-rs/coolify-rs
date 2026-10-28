@@ -1,0 +1,248 @@
+=== 01.yaml
+OK a:4:{s:1:"x";a:2:{s:5:"image";s:5:"nginx";s:5:"ports";a:2:{i:0;i:80;i:1;s:3:"443";}}s:1:"y";a:2:{s:5:"image";s:5:"caddy";s:5:"ports";a:2:{i:0;i:80;i:1;s:3:"443";}}s:4:"list";a:2:{i:0;s:1:"a";i:1;a:2:{s:1:"b";s:1:"c";s:1:"d";s:1:"e";}}i:8080;s:1:"z";}
+---DUMP---
+x:
+  image: nginx
+  ports:
+    - 80
+    - '443'
+'y':
+  image: caddy
+  ports:
+    - 80
+    - '443'
+list:
+  - a
+  -
+    b: c
+    d: e
+8080: z
+
+=== 02.yaml
+OK a:3:{s:8:"services";a:1:{s:3:"web";a:7:{s:5:"image";s:12:"nginx:latest";s:11:"environment";a:4:{i:0;s:3:"A=1";i:1;s:9:"B=${B:-x}";i:2;s:6:"C=it's";i:3;s:9:"D=	tab é";}s:5:"ports";a:3:{i:0;s:5:"80:80";i:1;s:7:"443:443";i:2;i:8080;}s:11:"healthcheck";a:3:{s:4:"test";a:2:{i:0;s:9:"CMD-SHELL";i:1;s:34:"curl -f http://localhost || exit 1";}s:8:"interval";s:3:"10s";s:7:"retries";i:3;}s:7:"command";s:27:"sh -c "echo hi && sleep 1"
+";s:10:"entrypoint";s:19:"#!/bin/sh
+echo "x"
+";s:6:"labels";a:17:{s:14:"traefik.enable";b:1;s:11:"com.example";s:3:"1.5";s:5:"other";d:1.5;s:3:"oct";i:15;s:3:"hex";i:31;s:3:"neg";i:-12;s:3:"big";s:20:"99999999999999999999";s:4:"date";i:1704153600;s:2:"dt";i:1704164645;s:3:"dtf";d:1704157445.5;s:3:"nul";N;s:5:"empty";N;s:3:"yes";s:2:"no";s:5:"under";i:1000;s:6:"under2";d:10.5;s:3:"inf";d:INF;s:10:"dotted.key";s:1:"v";}}}s:7:"volumes";a:2:{s:4:"data";a:0:{}s:5:"other";a:1:{s:6:"driver";s:5:"local";}}s:8:"networks";a:1:{s:7:"default";a:1:{s:4:"name";s:3:"foo";}}}
+---DUMP---
+services:
+  web:
+    image: 'nginx:latest'
+    environment:
+      - A=1
+      - 'B=${B:-x}'
+      - "C=it's"
+      - "D=\ttab é"
+    ports:
+      - '80:80'
+      - '443:443'
+      - 8080
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'curl -f http://localhost || exit 1'
+      interval: 10s
+      retries: 3
+    command: "sh -c \"echo hi && sleep 1\"\n"
+    entrypoint: "#!/bin/sh\necho \"x\"\n"
+    labels:
+      traefik.enable: true
+      com.example: '1.5'
+      other: 1.5
+      oct: 15
+      hex: 31
+      neg: -12
+      big: '99999999999999999999'
+      date: 1704153600
+      dt: 1704164645
+      dtf: 1704157445.5
+      nul: null
+      empty: null
+      'yes': 'no'
+      under: 1000
+      under2: 10.5
+      inf: .Inf
+      dotted.key: v
+volumes:
+  data: {}
+  other:
+    driver: local
+networks:
+  default:
+    name: foo
+
+=== 03.yaml
+OK a:1:{s:8:"services";a:1:{s:1:"a";a:3:{s:5:"image";s:7:"busybox";s:7:"command";a:3:{i:0;s:2:"sh";i:1;s:2:"-c";i:2;s:11:"echo "a: b"";}s:11:"environment";a:5:{s:3:"FOO";s:3:"bar";s:3:"BAR";s:3:"baz";s:3:"URL";s:28:"http://example.com:8080/path";s:5:"MULTI";s:22:"this is a folded plain";s:1:"Q";s:12:"single multi";}}}}
+---DUMP---
+services:
+  a:
+    image: busybox
+    command:
+      - sh
+      - '-c'
+      - 'echo "a: b"'
+    environment:
+      FOO: bar
+      BAR: baz
+      URL: 'http://example.com:8080/path'
+      MULTI: 'this is a folded plain'
+      Q: 'single multi'
+
+=== 04.yaml
+OK a:2:{s:8:"x-common";a:2:{s:7:"restart";s:6:"always";s:11:"environment";a:1:{s:1:"A";i:1;}}s:8:"services";a:2:{s:1:"a";a:3:{s:7:"restart";s:6:"always";s:11:"environment";a:1:{s:1:"A";i:1;}s:5:"image";s:1:"a";}s:1:"b";a:3:{s:7:"restart";s:6:"always";s:11:"environment";a:3:{s:1:"X";i:1;s:1:"Y";s:3:"two";s:1:"Z";a:2:{i:0;i:1;i:1;i:2;}}s:5:"image";s:1:"b";}}}
+---DUMP---
+x-common:
+  restart: always
+  environment:
+    A: 1
+services:
+  a:
+    restart: always
+    environment:
+      A: 1
+    image: a
+  b:
+    restart: always
+    environment:
+      X: 1
+      'Y': two
+      Z:
+        - 1
+        - 2
+    image: b
+
+=== 05.yaml
+ERR Symfony\Component\Yaml\Exception\ParseException: Duplicate key "a" detected at line 2 (near "a: 2").
+=== 06.yaml
+ERR Symfony\Component\Yaml\Exception\ParseException: A YAML file cannot contain tabs as indentation at line 2 (near "	web: x").
+=== 07.yaml
+ERR Symfony\Component\Yaml\Exception\ParseException: Indentation problem at line 4 (near " bad: indent").
+=== 08.yaml
+ERR Symfony\Component\Yaml\Exception\ParseException: Malformed inline YAML string at line 2.
+=== 09.yaml
+ERR Symfony\Component\Yaml\Exception\ParseException: Tags support is not enabled. Enable the "Yaml::PARSE_CUSTOM_TAGS" flag to use "!custom" at line 3 (near "image: !custom nginx").
+=== 10.yaml
+ERR Symfony\Component\Yaml\Exception\ParseException: Malformed inline YAML string at line 2.
+=== 11.yaml
+OK a:1:{s:8:"services";a:1:{s:3:"web";a:2:{s:11:"environment";a:2:{i:0;s:3:"A=1";i:1;s:3:"B=2";}s:7:"volumes";a:2:{i:0;a:4:{s:4:"type";s:4:"bind";s:6:"source";s:3:"./x";s:6:"target";s:2:"/x";s:7:"content";s:12:"hello
+world
+";}i:1;s:9:"./y:/y:ro";}}}}
+---DUMP---
+services:
+  web:
+    environment:
+      - A=1
+      - B=2
+    volumes:
+      -
+        type: bind
+        source: ./x
+        target: /x
+        content: "hello\nworld\n"
+      - './y:/y:ro'
+
+=== 12.yaml
+OK s:12:"plain scalar";
+---DUMP---
+
+=== 13.yaml
+OK a:1:{s:8:"services";a:1:{s:3:"web";a:2:{s:5:"image";s:5:"nginx";s:6:"labels";a:3:{i:0;s:41:"traefik.http.routers.x.rule=Host(`a.com`)";i:1;s:21:"key=value with spaces";i:2;s:9:"@reserved";}}}}
+---DUMP---
+services:
+  web:
+    image: nginx
+    labels:
+      - traefik.http.routers.x.rule=Host(`a.com`)
+      - 'key=value with spaces'
+      - '@reserved'
+
+=== 14.yaml
+ERR Symfony\Component\Yaml\Exception\ParseException: The reserved indicator "@" cannot start a plain scalar; you need to quote the scalar at line 4 (near "other: @bad").
+=== 15.yaml
+OK a:9:{s:1:"a";a:3:{s:1:"b";s:1:"c";s:1:"d";a:2:{i:0;s:1:"e";i:1;s:1:"f";}s:1:"g";a:1:{s:1:"h";s:1:"i";}}s:1:"b";a:2:{i:0;a:1:{s:1:"a";i:1;}i:1;a:1:{s:1:"c";s:1:"d";}}s:1:"c";a:3:{i:0;s:1:"x";i:1;s:1:"y";i:2;s:1:"z";}s:1:"d";s:3:"123";s:1:"e";d:1;s:1:"f";s:5:"Aé";s:1:"g";s:3:"a'b";s:1:"h";s:1:"-";s:1:"i";s:3:"- x";}
+---DUMP---
+a:
+  b: c
+  d:
+    - e
+    - f
+  g:
+    h: i
+b:
+  -
+    a: 1
+  -
+    c: d
+c:
+  - x
+  - 'y'
+  - z
+d: '123'
+e: 1.0
+f: "Aé\N"
+g: "a'b"
+h: '-'
+i: '- x'
+
+=== 16.yaml
+OK a:1:{s:3:"key";a:4:{i:0;s:1:"a";i:1;a:2:{i:0;s:6:"nested";i:1;s:4:"list";}i:2;a:2:{i:0;s:6:"inline";i:1;s:5:"first";}i:3;s:6:"spaced";}}
+---DUMP---
+key:
+  - a
+  -
+    - nested
+    - list
+  -
+    - inline
+    - first
+  - spaced
+
+=== 17.yaml
+ERR Symfony\Component\Yaml\Exception\ParseException: A colon cannot be used in an unquoted mapping value at line 3 (near "command: echo "a: b"").
+=== 18.yaml
+OK a:5:{s:1:"a";s:6:"keep
+
+";s:1:"b";s:5:"strip";s:1:"c";s:11:"  indented
+";s:1:"d";s:27:"folded
+ more indented
+back
+";s:1:"e";s:0:"";}
+---DUMP---
+a: "keep\n\n"
+b: strip
+c: "  indented\n"
+d: "folded\n more indented\nback\n"
+e: ''
+
+=== 19.yaml
+ERR Symfony\Component\Yaml\Exception\ParseException: Complex mappings are not supported at line 1 (near "? complex").
+=== 20.yaml
+OK a:1:{s:8:"services";a:1:{s:3:"web";a:2:{s:5:"image";s:5:"nginx";s:11:"environment";a:3:{i:0;s:9:"KEY=value";i:1;s:17:"URL=http://x#frag";i:2;s:12:"QUOTED=a # b";}}}}
+---DUMP---
+services:
+  web:
+    image: nginx
+    environment:
+      - KEY=value
+      - 'URL=http://x#frag'
+      - 'QUOTED=a # b'
+
+=== 21.yaml
+OK a:2:{s:7:"anchors";a:4:{i:0;i:1;i:1;i:1;i:2;a:1:{s:1:"x";i:1;}i:3;a:1:{s:1:"x";i:1;}}s:1:"m";a:2:{s:1:"k";s:1:"v";s:1:"l";s:1:"v";}}
+---DUMP---
+anchors:
+  - 1
+  - 1
+  -
+    x: 1
+  -
+    x: 1
+m:
+  k: v
+  l: v
+
+=== 22.yaml
+ERR Symfony\Component\Yaml\Exception\ParseException: Numeric keys are not supported. Quote your evaluable mapping keys instead at line 5 (near "1.5: float").
+=== 23.yaml
+ERR Symfony\Component\Yaml\Exception\ParseException: Non-string keys are not supported. Quote your evaluable mapping keys instead at line 2 (near "true: x").
+=== 24.yaml
+ERR Symfony\Component\Yaml\Exception\ParseException: Reference "missing" does not exist at line 1 (near "a: *missing").

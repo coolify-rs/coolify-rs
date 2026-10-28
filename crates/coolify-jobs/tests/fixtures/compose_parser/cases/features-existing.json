@@ -1,0 +1,41 @@
+{
+  "compose_file": "features.yaml",
+  "parses": 2,
+  "existing_env": [
+    {
+      "key": "WITH_DEFAULT",
+      "value": "user-set",
+      "is_preview": false
+    },
+    {
+      "key": "COOLIFY_BRANCH",
+      "value": "custom",
+      "is_preview": false
+    },
+    {
+      "key": "EMPTY_OVERRIDE",
+      "value": "from-db",
+      "is_preview": false
+    },
+    {
+      "key": "SERVICE_URL_FRONT",
+      "value": "https://old.example.com",
+      "is_preview": false
+    }
+  ],
+  "existing_files": [
+    {
+      "mount_path": "/etc/app/conf.yml",
+      "fs_path": "/data/coolify/applications/composeparserdiff0000001/conf.yml",
+      "content": "old: content\n",
+      "is_directory": false
+    }
+  ],
+  "existing_volumes": [
+    {
+      "name": "composeparserdiff0000001_ext-legacy",
+      "mount_path": "/legacy"
+    }
+  ],
+  "name": "features-existing"
+}

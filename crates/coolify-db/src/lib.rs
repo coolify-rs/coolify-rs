@@ -12,6 +12,7 @@
 
 pub mod applications;
 pub mod auth;
+pub mod compose;
 pub mod dashboard;
 pub mod database_specs;
 pub mod databases;

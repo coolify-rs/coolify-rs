@@ -1,0 +1,14 @@
+---
+services:
+  a:
+    image: busybox
+    command: ["sh", "-c", 'echo "a: b"']
+    environment:
+      FOO: bar # trailing comment
+      BAR: "baz" # c
+      URL: http://example.com:8080/path
+      MULTI: this is
+        a folded plain
+      Q: 'single
+        multi'
+...

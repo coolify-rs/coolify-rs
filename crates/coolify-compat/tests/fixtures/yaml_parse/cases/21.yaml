@@ -1,0 +1,8 @@
+anchors:
+  - &a 1
+  - *a
+  - &b {x: 1}
+  - *b
+m:
+  k: &c v
+  l: *c

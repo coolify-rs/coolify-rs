@@ -1,0 +1,44 @@
+﻿services:
+  app:
+    build:
+      context: .
+      args:
+        BUILD_URL: ${SERVICE_URL_APP_3000}
+        BUILD_SECRET: ${SERVICE_BASE64_APP}
+        PLAIN_ARG: value
+    image: registry.example.com/app:${TAG:-latest}
+    environment:
+      - SERVICE_FQDN_APP_3000
+      - HEX=${SERVICE_HEX_64_APP}
+      - REALB=${SERVICE_REALBASE64_APP}
+      - PASS64=${SERVICE_PASSWORD_64_APP}
+      - USERNAME=${SERVICE_USER_ADMIN}
+      - OPTIONAL=${OPTIONAL_VAR-}
+      - REQ_SHORT=${REQ_SHORT?missing}
+      - DOUBLE=$${NOT_A_VAR}
+    volumes:
+      - type: bind
+        source: ${DATA_PATH:-./data}
+        target: /data
+      - type: bind
+        source: ${CONFIG_PATH:-./config}
+        target: /config
+      - "${CACHE_DIR:-./cache}:/cache"
+      - ${LOGS_DIR}/app:/logs
+    ports:
+      - target: 3000
+        published: "3000"
+        protocol: tcp
+    labels:
+      traefik.http.routers.custom.middlewares: mw-one
+  worker:
+    image: app-worker
+    command: ["worker"]
+    environment:
+      APP_URL: ${SERVICE_URL_APP}
+      API_FQDN: ${SERVICE_FQDN_API_8080}
+    depends_on:
+      - app
+networks:
+  default:
+    name: ${DEFAULT_NET:-bad name}

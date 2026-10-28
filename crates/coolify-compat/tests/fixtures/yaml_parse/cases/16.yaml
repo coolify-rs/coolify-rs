@@ -1,0 +1,8 @@
+key:
+  - a
+  -
+    - nested
+    - list
+  - - inline
+    - first
+  -   spaced

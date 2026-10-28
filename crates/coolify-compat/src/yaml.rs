@@ -25,6 +25,30 @@ pub enum Key {
     Str(String),
 }
 
+impl Key {
+    /// The key PHP stores for a string key: a canonical decimal integer (`"8080"`, `"-1"`, not
+    /// `"08"`, `"+1"` or `"-0"`) becomes an integer key.
+    pub fn from_php_string(s: &str) -> Key {
+        let digits = s.strip_prefix('-').unwrap_or(s);
+        let canonical = !digits.is_empty()
+            && digits.bytes().all(|b| b.is_ascii_digit())
+            && (digits == "0" || !digits.starts_with('0'))
+            && s != "-0";
+        match s.parse::<i64>() {
+            Ok(i) if canonical => Key::Int(i),
+            _ => Key::Str(s.to_owned()),
+        }
+    }
+
+    /// The key as PHP prints it.
+    pub fn as_string(&self) -> String {
+        match self {
+            Key::Int(i) => i.to_string(),
+            Key::Str(s) => s.clone(),
+        }
+    }
+}
+
 impl From<&str> for PhpValue {
     fn from(s: &str) -> Self {
         PhpValue::Str(s.to_owned())
@@ -126,10 +150,15 @@ fn is_hash(items: &[(Key, PhpValue)]) -> bool {
 
 /// `Yaml::dump($value, $inline)` (indentation 4).
 pub fn dump(value: &PhpValue, inline: i32) -> String {
-    do_dump(value, inline, 0, 0)
+    do_dump(value, inline, 0, 0, 4)
 }
 
-fn do_dump(input: &PhpValue, inline: i32, indent: usize, nesting: usize) -> String {
+/// `Yaml::dump($value, $inline, $indentation)`.
+pub fn dump_with_indent(value: &PhpValue, inline: i32, indentation: usize) -> String {
+    do_dump(value, inline, 0, 0, indentation.max(1))
+}
+
+fn do_dump(input: &PhpValue, inline: i32, indent: usize, nesting: usize, step: usize) -> String {
     let prefix = " ".repeat(indent);
     let items = match input {
         PhpValue::Array(items) if inline > 0 && !items.is_empty() => items,
@@ -151,8 +180,9 @@ fn do_dump(input: &PhpValue, inline: i32, indent: usize, nesting: usize) -> Stri
         let child = do_dump(
             value,
             inline - 1,
-            if will_inline { 0 } else { indent + 4 },
+            if will_inline { 0 } else { indent + step },
             nesting + 1,
+            step,
         );
         out.push_str(&prefix);
         out.push_str(&head);

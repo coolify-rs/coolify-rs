@@ -1,0 +1,4 @@
+{
+  "compose": "services:\n  web:\n    image: nginx\n    environment:\n      - 'FOO=${my-var}'\n",
+  "name": "bad-env-key"
+}

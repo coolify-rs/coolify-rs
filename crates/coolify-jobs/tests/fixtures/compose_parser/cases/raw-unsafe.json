@@ -1,0 +1,5 @@
+{
+  "compose": "services:\n  web:\n    image: nginx\n    volumes:\n      - './x;rm -rf /:/x'\n",
+  "mode": "raw",
+  "name": "raw-unsafe"
+}

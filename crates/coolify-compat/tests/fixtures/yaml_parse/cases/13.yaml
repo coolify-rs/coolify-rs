@@ -1,0 +1,7 @@
+services:
+  web:
+    image: nginx
+    labels:
+      - "traefik.http.routers.x.rule=Host(`a.com`)"
+      - key=value with spaces
+      - '@reserved'

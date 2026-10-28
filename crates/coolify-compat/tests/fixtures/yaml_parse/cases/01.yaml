@@ -1,0 +1,11 @@
+x: &base
+  image: nginx
+  ports: [80, '443']
+y:
+  <<: *base
+  image: caddy
+list:
+  - a
+  - b: c
+    d: e
+"8080": z

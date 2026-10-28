@@ -1,0 +1,9 @@
+a: {b: c, d: [e, f], g: {h: i}}
+b: [a: 1, {c: d}]
+c: [ "x", 'y' , z ]
+d: !!str 123
+e: !!float 1
+f: "\x41\u00e9\N"
+g: 'a''b'
+h: -
+i: - x
