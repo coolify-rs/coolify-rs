@@ -2,12 +2,13 @@
   // Port of upstream livewire/project/application/configuration.blade.php (+
   // Project\Application\Configuration), deployment/index.blade.php and
   // deployment/show.blade.php: the heading, the application menu (shown by the
-  // main sidebar) and the section. General, Deployment Logs and Danger zone are
-  // ported; the other sections show the "not available in coolify-rs yet" page
-  // in the same frame.
+  // main sidebar) and the section. General, Git Source, Deployment Logs and
+  // Danger zone are ported; the other sections show the "not available in
+  // coolify-rs yet" page in the same frame.
   import Empty from '../components/Empty.svelte';
   import ApplicationHeading from '../components/ApplicationHeading.svelte';
   import ApplicationGeneral from '../components/ApplicationGeneral.svelte';
+  import ApplicationSource from '../components/ApplicationSource.svelte';
   import DatabaseDanger from '../components/DatabaseDanger.svelte';
   import DeploymentHistory from '../components/DeploymentHistory.svelte';
   import DeploymentLogs from '../components/DeploymentLogs.svelte';
@@ -81,7 +82,8 @@
     const bp = r.build_pack ?? '';
     page.navContext = applicationNavContext(base, active, {
       canAccessTerminal: session.isAdmin,
-      gitBased: r.source_type != null && r.source_type !== '' && bp !== 'dockerimage',
+      // Application::git_based()
+      gitBased: !r.dockerfile && bp !== 'dockerimage',
       dockerImage: bp === 'dockerimage',
       compose: bp === 'dockercompose',
     });
@@ -160,11 +162,13 @@
           <aside class="application-settings-navigation in-main-nav min-w-0"></aside>
           <div class="min-w-0">
             {#if active === 'general'}
-              {#if ['dockerimage'].includes(record.build_pack ?? '')}
+              {#if ['dockerimage', 'dockerfile', 'static', 'nixpacks', 'railpack'].includes(record.build_pack ?? '')}
                 <ApplicationGeneral {record} {appState} {base} onsaved={() => refresh().catch(() => {})} />
               {:else}
                 <Unported description="The settings of this build pack are not ported to coolify-rs yet." />
               {/if}
+            {:else if active === 'source' && !record.dockerfile && record.build_pack !== 'dockerimage'}
+              <ApplicationSource uuid={app} onsaved={() => refresh().catch(() => {})} />
             {:else if active === 'deployment'}
               <DeploymentHistory uuid={app} {base} {serverName} {timezone} />
             {:else if active === 'danger'}

@@ -37,8 +37,28 @@ pub fn routes(state: AppState) -> Router<AppState> {
             post(crate::ui_applications::create_docker_image),
         )
         .route(
+            "/ui/public-repository",
+            post(crate::ui_applications::public_git::create),
+        )
+        .route(
+            "/ui/public-repository/check",
+            post(crate::ui_applications::public_git::check),
+        )
+        .route(
+            "/ui/public-repository/scan",
+            post(crate::ui_applications::public_git::scan),
+        )
+        .route(
             "/ui/applications/{uuid}",
             axum::routing::patch(crate::ui_applications::update),
+        )
+        .route(
+            "/ui/applications/{uuid}/source",
+            get(crate::ui_applications::source::show).patch(crate::ui_applications::source::update),
+        )
+        .route(
+            "/ui/applications/{uuid}/source/change",
+            post(crate::ui_applications::source::change),
         )
         .route(
             "/ui/applications/{uuid}/state",

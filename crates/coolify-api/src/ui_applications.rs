@@ -21,6 +21,10 @@ use crate::response::{ApiError, ApiResult, PhpJson, created, ok};
 use crate::state::AppState;
 use crate::validation::{Field, Messages, Rule, patterns, validate};
 
+mod general;
+pub mod public_git;
+pub mod source;
+
 const NOT_FOUND: ApiError = ApiError::Message(StatusCode::NOT_FOUND, "Application not found.");
 
 static IMAGE_NAME: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
@@ -378,7 +382,51 @@ pub async fn state(
         .unwrap_or("UTC")
         .to_owned();
     let labels_text = stored_labels_text(&fresh);
+    // The build options of the General page: `Server::buildServers($teamId)->exists()` and the
+    // team's fallback policy, and what the image registry fields depend on.
+    let build: (bool, bool) = sqlx::query_as(
+        "SELECT EXISTS (SELECT 1 FROM servers s JOIN server_settings ss ON ss.server_id = s.id          WHERE s.team_id = $1 AND s.deleted_at IS NULL AND ss.is_reachable AND ss.is_usable AND NOT ss.is_swarm_worker          AND NOT ss.force_disabled AND (ss.server_role = 'build' OR (ss.server_role IS NULL AND ss.is_build_server))          AND NOT EXISTS (SELECT 1 FROM github_runner_configs g WHERE g.server_id = s.id AND g.is_enabled AND g.is_dedicated)),          COALESCE((SELECT is_build_server_fallback_enabled FROM teams WHERE id = $1), false)",
+    )
+    .bind(ctx.team_id)
+    .fetch_one(state.db.pool())
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "build server lookup failed");
+        ApiError::Internal
+    })?;
+    let server_setting = |k: &str| {
+        server
+            .as_ref()
+            .and_then(|s| s.settings.as_ref())
+            .and_then(|s| s.get(k))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    let is_swarm = server_setting("is_swarm_manager")
+        .as_bool()
+        .unwrap_or(false)
+        || server_setting("is_swarm_worker").as_bool().unwrap_or(false);
+    // effectiveServerRole()->canBuild()
+    let can_build = match server_setting("server_role").as_str() {
+        Some(role) => role != "deployment",
+        None => true,
+    };
+    // is_public_repository(): `source.is_public`.
+    let source_is_public = match (fresh.str("source_type"), fresh.int("source_id")) {
+        (Some(r"App\Models\GithubApp"), Some(id)) => {
+            coolify_db::git_sources::github_app(&state.db, id)
+                .await?
+                .and_then(|g| g.get("is_public").and_then(Value::as_bool))
+                .unwrap_or(false)
+        }
+        _ => false,
+    };
     Ok(ok(json!({
+        "source_is_public": source_is_public,
+        "has_build_servers": build.0,
+        "build_server_fallback": build.1,
+        "server_is_swarm": is_swarm,
+        "server_can_build": can_build,
         "can_update": ctx.is_team_admin(),
         "can_deploy": ctx.is_team_admin(),
         "running_deployment_url": running_url,
@@ -411,7 +459,12 @@ async fn queue(
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
-    if a.str("build_pack") != Some("dockerimage")
+    let built = matches!(
+        a.str("build_pack"),
+        Some("dockerimage" | "dockerfile" | "static" | "nixpacks" | "railpack")
+    );
+    if !built
+        || a.str("dockerfile").is_some_and(|d| !d.is_empty())
         || !apps::unported_parts(&state.db, a.id).await?.is_empty()
     {
         return Err(ApiError::NotPorted);
@@ -853,6 +906,55 @@ const GENERAL_MESSAGES: Messages = &[
         "attribute:custom_network_aliases",
         "Custom docker network aliases",
     ),
+    (
+        "install_command.regex",
+        "The install command contains invalid characters. Allowed: alphanumerics, && / || chaining, balanced quotes, globs (*, ?), !, and safe path/arg chars. Blocked: bare &, bare |, ;, $, backtick, (, ), <, >, \\, newlines.",
+    ),
+    (
+        "build_command.regex",
+        "The build command contains invalid characters. Allowed: alphanumerics, && / || chaining, balanced quotes, globs (*, ?), !, and safe path/arg chars. Blocked: bare &, bare |, ;, $, backtick, (, ), <, >, \\, newlines.",
+    ),
+    (
+        "start_command.regex",
+        "The start command contains invalid characters. Allowed: alphanumerics, && / || chaining, balanced quotes, globs (*, ?), !, and safe path/arg chars. Blocked: bare &, bare |, ;, $, backtick, (, ), <, >, \\, newlines.",
+    ),
+    ("build_pack.required", "The Build Pack field is required."),
+    (
+        "static_image.required",
+        "The Static Image field is required.",
+    ),
+    (
+        "base_directory.required",
+        "The Base Directory field is required.",
+    ),
+    (
+        "base_directory.regex",
+        "The base directory must be a valid path starting with / and containing only safe characters.",
+    ),
+    (
+        "publish_directory.regex",
+        "The publish directory must be a valid path starting with / and containing only safe characters.",
+    ),
+    (
+        "dockerfile_location.regex",
+        "The Dockerfile location must be a valid path starting with / and containing only alphanumeric characters, dots, hyphens, underscores, slashes, @, ~, and +.",
+    ),
+    (
+        "dockerfile_target_build.regex",
+        "The Dockerfile target build must contain only alphanumeric characters, dots, hyphens, and underscores.",
+    ),
+    ("attribute:install_command", "Install command"),
+    ("attribute:build_command", "Build command"),
+    ("attribute:start_command", "Start command"),
+    ("attribute:build_pack", "Build pack"),
+    ("attribute:static_image", "Static image"),
+    ("attribute:base_directory", "Base directory"),
+    ("attribute:publish_directory", "Publish directory"),
+    ("attribute:dockerfile_location", "Dockerfile location"),
+    (
+        "attribute:dockerfile_target_build",
+        "Dockerfile target build",
+    ),
 ];
 
 /// Laravel's summary of a validation failure (`handleError` shows it as an error toast).
@@ -870,8 +972,9 @@ fn summary(errors: &Map<String, Value>) -> String {
     }
 }
 
-/// `General::submit` for a Docker image application: name, description, image, networking
-/// and container options; labels follow the Coolify-managed rules.
+/// `General::submit` (and `updatedBuildPack()` / `generateNginxConfiguration()`, which save the
+/// whole form too): name, description, the build fields of the git build packs, image,
+/// networking and container options; labels follow the Coolify-managed rules.
 pub async fn update(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -899,43 +1002,64 @@ pub async fn update(
             );
         }
     }
+    // `required` fails on an empty string.
+    for k in ["build_pack", "static_image", "base_directory"] {
+        if m.get(k)
+            .and_then(Value::as_str)
+            .is_some_and(|v| v.trim().is_empty())
+        {
+            m.insert(k.into(), Value::Null);
+        }
+    }
     let input = Input(m.clone());
     let keys: Vec<&str> = m.keys().map(String::as_str).collect();
-    let result = validate(
-        &input,
-        &[
-            patterns::name(true),
-            patterns::description(),
-            Field {
-                name: "ports_exposes",
-                rules: vec![Rule::Nullable, Rule::String, Rule::Regex(&PORTS_EXPOSES)],
-            },
-            Field {
-                name: "ports_mappings",
-                rules: vec![Rule::Nullable, Rule::String, Rule::Regex(&PORT_MAPPINGS)],
-            },
-            Field {
-                name: "docker_registry_image_name",
-                rules: vec![
-                    Rule::Nullable,
-                    Rule::String,
-                    Rule::Max(255),
-                    Rule::Regex(&IMAGE_NAME),
-                ],
-            },
-            Field {
-                name: "docker_registry_image_tag",
-                rules: vec![
-                    Rule::Nullable,
-                    Rule::String,
-                    Rule::Max(128),
-                    Rule::Regex(&IMAGE_TAG),
-                ],
-            },
-        ],
-        GENERAL_MESSAGES,
-        &keys,
+    let mut fields = vec![
+        patterns::name(true),
+        patterns::description(),
+        Field {
+            name: "ports_exposes",
+            rules: vec![Rule::Nullable, Rule::String, Rule::Regex(&PORTS_EXPOSES)],
+        },
+        Field {
+            name: "ports_mappings",
+            rules: vec![Rule::Nullable, Rule::String, Rule::Regex(&PORT_MAPPINGS)],
+        },
+        Field {
+            name: "docker_registry_image_name",
+            rules: vec![
+                Rule::Nullable,
+                Rule::String,
+                Rule::Max(255),
+                Rule::Regex(&IMAGE_NAME),
+            ],
+        },
+        Field {
+            name: "docker_registry_image_tag",
+            rules: vec![
+                Rule::Nullable,
+                Rule::String,
+                Rule::Max(128),
+                Rule::Regex(&IMAGE_TAG),
+            ],
+        },
+    ];
+    fields.extend(general::rules());
+    fields.extend(
+        [
+            "custom_nginx_configuration",
+            "watch_paths",
+            "dockerfile",
+            "generate_nginx",
+            "custom_docker_run_options",
+            "pre_deployment_command",
+            "post_deployment_command",
+        ]
+        .map(|name| Field {
+            name,
+            rules: vec![Rule::Nullable],
+        }),
     );
+    let result = validate(&input, &fields, GENERAL_MESSAGES, &keys);
     if let Err(ApiError::Validation(errors)) = result {
         return Ok(PhpJson(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -954,6 +1078,15 @@ pub async fn update(
         {
             return Err(ApiError::NotPorted);
         }
+    }
+    // A Dockerfile stored on the application (no repository) is not ported.
+    if m.contains_key("dockerfile")
+        && m.get("dockerfile")
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            != a.str("dockerfile")
+    {
+        return Err(ApiError::NotPorted);
     }
     let text = |k: &str| match m.get(k) {
         Some(Value::String(s)) => Some(s.clone()).filter(|s| !s.is_empty()),
@@ -994,15 +1127,44 @@ pub async fn update(
             (!aliases.is_empty()).then(|| coolify_compat::php_json::encode(&json!(aliases)));
         values.push(("custom_network_aliases", ColumnValue::Text(stored)));
     }
-    let ports_changed = text("ports_exposes").as_deref() != a.str("ports_exposes");
+    let ports_changed = m.contains_key("ports_exposes")
+        && text("ports_exposes").as_deref() != a.str("ports_exposes");
+    let fx = general::apply(&a, &m, &mut values);
+    // syncData(toModel: true) assigns `settings->is_static`, whose mutator saves `ports_exposes = 80`
+    // on its own copy of the application: it stays unless this save changes the ports.
+    if a.setting_bool("is_static") && !ports_changed {
+        values.retain(|(k, _)| *k != "ports_exposes");
+        values.push(("ports_exposes", ColumnValue::Text(Some("80".into()))));
+    }
     let now = state.now();
+    apps::update_settings(&state.db, a.id, &fx.settings, now).await?;
     apps::update_if_changed(&state.db, a.id, &values, now).await?;
-    // resetDefaultLabels(): Coolify-managed labels follow the ports.
-    if ports_changed {
+    if fx.remove_service_variables {
+        sqlx::query(
+            "DELETE FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 AND (key LIKE 'SERVICE_FQDN_%' OR key LIKE 'SERVICE_URL_%')",
+        )
+        .bind(apps::MORPH)
+        .bind(a.id)
+        .execute(state.db.pool())
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "service variables cleanup failed");
+            ApiError::Internal
+        })?;
+    }
+    // resetDefaultLabels(): Coolify-managed labels follow the ports (and a new build pack).
+    if ports_changed || fx.reset_labels {
         regenerate_labels(&state, a.id, false).await?;
     }
+    let pack = m
+        .get("build_pack")
+        .and_then(Value::as_str)
+        .or(a.str("build_pack"))
+        .unwrap_or_default();
     // dockerimage: the image is required (checked after the save).
-    if text("docker_registry_image_name").is_none() && m.contains_key("docker_registry_image_name")
+    if pack == "dockerimage"
+        && text("docker_registry_image_name").is_none()
+        && m.contains_key("docker_registry_image_name")
     {
         return Ok(PhpJson(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1010,7 +1172,10 @@ pub async fn update(
         )
         .into_response());
     }
-    Ok(ok(json!({"message": "Application settings updated!"})).into_response())
+    Ok(
+        ok(json!({"message": "Application settings updated!", "toasts": fx.toasts}))
+            .into_response(),
+    )
 }
 
 /// `resetDefaultLabels($manualReset)`: regenerates Coolify-managed labels (always on a manual reset).
@@ -1039,7 +1204,8 @@ async fn regenerate_labels(state: &AppState, id: i64, manual: bool) -> Result<()
     Ok(())
 }
 
-/// `General::instantSave` for the label settings, and `resetDefaultLabels(true)`.
+/// `General::instantSave` for the label, site type (`setSiteType()`) and builder settings,
+/// and `resetDefaultLabels(true)`.
 pub async fn settings(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -1055,10 +1221,17 @@ pub async fn settings(
         regenerate_labels(&state, a.id, true).await?;
         return Ok(ok(json!({"message": null})).into_response());
     }
+    // The build server is not ported: the deployment would ignore the setting.
+    if m.get("is_build_server_enabled").and_then(Value::as_bool) == Some(true) {
+        return Err(ApiError::NotPorted);
+    }
     let mut values: Vec<(&'static str, ColumnValue)> = Vec::new();
     for k in [
         "is_container_label_readonly_enabled",
         "is_container_label_escape_enabled",
+        "is_static",
+        "is_spa",
+        "is_build_server_enabled",
     ] {
         if let Some(b) = m.get(k).and_then(Value::as_bool) {
             values.push((k, ColumnValue::Bool(b)));
@@ -1066,6 +1239,35 @@ pub async fn settings(
     }
     let now = state.now();
     apps::update_settings(&state.db, a.id, &values, now).await?;
+    // The `isStatic` mutator of ApplicationSetting: a static site listens on port 80.
+    if m.get("is_static").and_then(Value::as_bool) == Some(true) {
+        apps::update_if_changed(
+            &state.db,
+            a.id,
+            &[("ports_exposes", ColumnValue::Text(Some("80".into())))],
+            now,
+        )
+        .await?;
+    }
+    // instantSave(): a changed `is_spa` regenerates the Nginx configuration.
+    let mut toasts: Vec<&str> = Vec::new();
+    if let Some(spa) = m.get("is_spa").and_then(Value::as_bool)
+        && spa != a.setting_bool("is_spa")
+    {
+        use base64::Engine as _;
+        let conf = general::default_nginx_configuration(spa);
+        apps::update_if_changed(
+            &state.db,
+            a.id,
+            &[(
+                "custom_nginx_configuration",
+                ColumnValue::Text(Some(base64::engine::general_purpose::STANDARD.encode(conf))),
+            )],
+            now,
+        )
+        .await?;
+        toasts.push("Nginx configuration generated.");
+    }
     if let Some(labels) = m.get("custom_labels").and_then(Value::as_str) {
         use base64::Engine as _;
         let stored = base64::engine::general_purpose::STANDARD.encode(labels);
@@ -1078,7 +1280,7 @@ pub async fn settings(
         .await?;
     }
     regenerate_labels(&state, a.id, false).await?;
-    Ok(ok(json!({"message": "Settings saved."})).into_response())
+    Ok(ok(json!({"message": "Settings saved.", "toasts": toasts})).into_response())
 }
 
 /// `Shared\Danger::delete` for an application, with the page's confirmation steps.

@@ -1,6 +1,7 @@
 <script lang="ts">
   // Port of upstream components/toast.blade.php (bottom-right position).
   import Reicon from './Reicon.svelte';
+  import { sanitizeHtml } from '../lib/sanitize';
   import { toasts, type Toast } from '../lib/toast.svelte';
 
   const iconTone: Record<Toast['type'], string> = {
@@ -43,7 +44,7 @@
         <div class="min-w-0 flex-1 pt-0.5">
           <p class="text-sm font-semibold leading-5 text-neutral-950 dark:text-fg">{t.message}</p>
           {#if t.description}
-            <div class="mt-0.5 w-full whitespace-pre-wrap break-words text-xs leading-5 text-neutral-600 dark:text-fg-dim">{t.description}</div>
+            <div class="mt-0.5 w-full whitespace-pre-wrap break-words text-xs leading-5 text-neutral-600 dark:text-fg-dim">{@html sanitizeHtml(t.description)}</div>
           {/if}
         </div>
       </div>

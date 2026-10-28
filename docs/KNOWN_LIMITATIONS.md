@@ -35,12 +35,19 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   `PATCH /databases/{uuid}` are not ported (501, or disabled in the UI). After a start coolify-rs does not run Docker
   cleanup, and `Str::slug` in container labels does not transliterate non-ASCII names.
   Reachability changes do not send the Reachable/Unreachable notifications.
-- Applications: Docker image applications only, in the API and the UI (new-resource "Docker Image" form, General
-  page, Deployment Logs list and log viewer, Danger zone, heading actions). HTTP Basic Authentication, custom Docker
-  run options, pre/post-deployment commands, "Force start" of a queued deployment and the other application pages
-  (Domains, Environment Variables, Storage, Advanced, Healthcheck, Runtime Logs, Terminal, …) are not ported (the UI
-  says so or opens the "not available" page). Log export does not apply upstream's secret redaction beyond what the
-  deployment already wrote redacted.
+- Applications in the UI: Docker image applications and git applications from a public repository (new-resource
+  "Docker Image" and "Public Git Repository" forms with Smart Scan and env file import, General page for the Docker
+  image, Dockerfile, Static, Nixpacks and Railpack build packs, Git Source page, Deployment Logs list and log viewer,
+  Danger zone, heading actions). Not ported in the UI: the other new-resource types (private repositories through a
+  GitHub App or a deploy key), the Docker Compose sections of the General page (a Compose application shows the "not
+  available" page; it can be created but not deployed), HTTP Basic Authentication, custom Docker run options,
+  pre/post-deployment commands, building on a build server (selecting it says so), a Dockerfile stored on the
+  application (no repository), switching the Git source to a GitLab or Gitea App, "Force start" of a queued
+  deployment and the other application pages (Domains, Environment Variables, Storage, Advanced, Healthcheck,
+  Runtime Logs, Terminal, …). The General page's instant saves (site type, labels) store only the setting they
+  change, while upstream's `syncData()` also persists unsaved form edits when it regenerates the Nginx
+  configuration. Log export does not apply upstream's secret redaction beyond what the deployment already wrote
+  redacted.
 - Creating git applications (`POST /applications/public`, `/private-deploy-key`, `/private-github-app`): the row is
   written as upstream writes it, but for `build_pack = dockercompose` without `instant_deploy` upstream's queued
   `LoadComposeFile` job (clone the repository, read and parse the compose file, store `docker_compose_raw`,

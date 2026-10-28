@@ -24,6 +24,8 @@
     searchable = false,
     searchPlaceholder = 'Search…',
     searchEmptyText = 'No matching options',
+    allowCustom = false,
+    error,
     onchange,
   }: {
     id: string;
@@ -38,6 +40,9 @@
     searchable?: boolean;
     searchPlaceholder?: string;
     searchEmptyText?: string;
+    /** With `searchable`: the search text can be chosen as a custom value. */
+    allowCustom?: boolean;
+    error?: string;
     onchange?: (v: V) => void;
   } = $props();
 
@@ -57,7 +62,14 @@
   function focusSearch(node: HTMLInputElement) {
     queueMicrotask(() => node.focus());
   }
-  const current = $derived(options.find((o) => String(o.value) === String(value))?.label ?? placeholder);
+  const customOption = $derived.by((): Option | null => {
+    const q = query.trim();
+    if (!allowCustom || q === '' || options.some((o) => String(o.value) === q)) return null;
+    return { value: q as V, label: q };
+  });
+  const current = $derived(
+    options.find((o) => String(o.value) === String(value))?.label ?? (allowCustom && value ? String(value) : placeholder),
+  );
 
   function position() {
     if (!trigger || !panel) return;
@@ -149,6 +161,7 @@
                   e.preventDefault();
                   const matches = visible.filter((o) => !o.disabled);
                   if (matches.length === 1) choose(matches[0]);
+                  else if (customOption) choose(customOption);
                 } else if (e.key === 'Escape') {
                   e.stopPropagation();
                   open = false;
@@ -158,7 +171,7 @@
           </div>
         {/if}
         <div class={searchable ? 'searchable-listbox-options' : 'contents'}>
-        {#if visible.length === 0}
+        {#if visible.length === 0 && !customOption}
           <div class="px-3 py-2 text-[13px] text-neutral-500 dark:text-fg-dim">{options.length === 0 || !searchable ? emptyText : searchEmptyText}</div>
         {/if}
         {#each visible as o (String(o.value))}
@@ -188,8 +201,19 @@
             </button>
           </div>
         {/each}
+        {#if customOption}
+          <button type="button" class="listbox-option" role="option" aria-selected="false" onclick={() => customOption && choose(customOption)}>
+            <span class="truncate">Use <span class="font-mono">{customOption.label}</span></span>
+          </button>
+        {/if}
         </div>
       </div>
     {/if}
   </div>
+  {#if error}
+    <!-- svelte-ignore a11y_label_has_associated_control -->
+    <label class="label">
+      <span class="text-red-500 label-text-alt">{error}</span>
+    </label>
+  {/if}
 </div>

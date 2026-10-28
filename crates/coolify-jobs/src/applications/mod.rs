@@ -3,6 +3,7 @@
 
 pub mod compose;
 mod deploy;
+pub mod detect;
 pub mod domains;
 pub mod labels;
 mod lifecycle;

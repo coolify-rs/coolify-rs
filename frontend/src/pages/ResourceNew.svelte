@@ -5,6 +5,7 @@
   // listed as upstream lists it and says it is not available yet. Service
   // templates are not loaded, and the deploy canvas is left out (ADR 0008).
   import NewDockerImage from '../components/NewDockerImage.svelte';
+  import NewPublicRepository from '../components/NewPublicRepository.svelte';
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
   import Callout from '../components/Callout.svelte';
@@ -183,7 +184,7 @@
   // Database types coolify-rs can create (SQLite is not ported).
   const portedDatabases = ['postgresql', 'mysql', 'mariadb', 'redis', 'keydb', 'dragonfly', 'mongodb', 'clickhouse'];
   // Application types coolify-rs can create.
-  const portedApplications = ['docker-image'];
+  const portedApplications = ['docker-image', 'public'];
   // `Create::mount()`: `?type=…&destination=…` renders that type's form.
   const formType = $derived(router.query('type'));
   const formDestination = $derived(router.query('destination') ?? '');
@@ -372,6 +373,10 @@
 {:else if project && formType === 'docker-image' && formDestination}
   <div>
     <NewDockerImage project={uuid} {env} destination={formDestination} />
+  </div>
+{:else if project && formType === 'public' && formDestination}
+  <div>
+    <NewPublicRepository project={uuid} {env} destination={formDestination} />
   </div>
 {:else if project}
   <div>

@@ -438,6 +438,62 @@ export interface ApplicationState {
   custom_labels: string | null;
   server_ip: string | null;
   server_id: number | null;
+  /** `Server::buildServers($teamId)->exists()`. */
+  /** `is_public_repository()`. */
+  source_is_public?: boolean;
+  has_build_servers?: boolean;
+  /** The team's `is_build_server_fallback_enabled`. */
+  build_server_fallback?: boolean;
+  server_is_swarm?: boolean;
+  server_can_build?: boolean;
+}
+
+/** `applyDetectionResult()`'s input (`RepositoryDetector::detect()`). */
+export interface RepositoryDetection {
+  failed: boolean;
+  toast?: string;
+  suggested_build_pack: string | null;
+  dockerfiles: string[];
+  docker_compose_files: string[];
+  dockerfile_ports: Record<string, number | null>;
+  env_files: { file: string; variables: [string, string][] }[];
+}
+
+/** The `PublicGitRepository` state `loadBranch()` returns. */
+export interface RepositoryCheck {
+  repository_url?: string;
+  branch_found?: boolean;
+  git_branch?: string;
+  base_directory?: string;
+  git_repository?: string;
+  git_source?: 'github' | 'other';
+  rate_limit_remaining?: number;
+  rate_limit_reset?: string | number;
+  error?: string | null;
+  detection?: RepositoryDetection | null;
+}
+
+export interface SourceCard {
+  id: number;
+  type: string;
+  name: string;
+  subtitle: string;
+}
+
+/** `Project\Application\Source` state. */
+export interface ApplicationSource {
+  git_repository: string | null;
+  git_branch: string | null;
+  git_commit_sha: string | null;
+  private_key_id: number | null;
+  private_key_name: string | null;
+  private_keys: { id: number; name: string }[];
+  branch_location: string | null;
+  commits_url: string | null;
+  installation_path: string | null;
+  current_source: SourceCard | null;
+  sources: SourceCard[];
+  can_update: boolean;
 }
 
 export interface DeploymentListItem {
@@ -511,8 +567,21 @@ export const appUi = {
     image_tag: string;
     image_sha256: string;
   }) => request<{ uuid: string }>('POST', '/ui/applications', body),
-  update: (uuid: string, body: Record<string, unknown>) => request<{ message: string }>('PATCH', appPath(uuid), body),
-  settings: (uuid: string, body: Record<string, unknown>) => request<{ message: string | null }>('POST', `${appPath(uuid)}/settings`, body),
+  /** `PublicGitRepository::loadBranch()` with the component state; the answer is the new state. */
+  publicCheck: (body: Record<string, unknown>) => request<RepositoryCheck>('POST', '/ui/public-repository/check', body),
+  /** `detectRepository()` (the Smart Scan button). */
+  publicScan: (body: Record<string, unknown>) =>
+    request<{ detection: RepositoryDetection | null; error?: string }>('POST', '/ui/public-repository/scan', body),
+  /** `PublicGitRepository::submit()`. */
+  createPublic: (body: Record<string, unknown>) => request<{ uuid: string }>('POST', '/ui/public-repository', body),
+  source: (uuid: string) => request<ApplicationSource>('GET', `${appPath(uuid)}/source`),
+  updateSource: (uuid: string, body: { git_repository: string; git_branch: string; git_commit_sha: string }) =>
+    request<{ message: string }>('PATCH', `${appPath(uuid)}/source`, body),
+  changeSource: (uuid: string, body: { source_id?: number; source_type?: string; private_key_id?: number }) =>
+    request<{ message: string }>('POST', `${appPath(uuid)}/source/change`, body),
+  update: (uuid: string, body: Record<string, unknown>) => request<{ message: string; toasts?: string[] }>('PATCH', appPath(uuid), body),
+  settings: (uuid: string, body: Record<string, unknown>) =>
+    request<{ message: string | null; toasts?: string[] }>('POST', `${appPath(uuid)}/settings`, body),
   deploy: (uuid: string, force = false) => request<QueueAnswer>('POST', `${appPath(uuid)}/deploy`, { force }),
   restart: (uuid: string) => request<QueueAnswer>('POST', `${appPath(uuid)}/restart`, {}),
   stop: (uuid: string) => request<{ message: string }>('POST', `${appPath(uuid)}/stop`, {}),

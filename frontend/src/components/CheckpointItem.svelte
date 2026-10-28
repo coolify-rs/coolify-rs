@@ -3,7 +3,12 @@
   import Reicon from './Reicon.svelte';
 
   type Status = 'idle' | 'pending' | 'running' | 'success' | 'error';
-  let { title, description, status = 'idle' }: { title: string; description?: string; status?: Status } = $props();
+  let {
+    title,
+    description,
+    status = 'idle',
+    icon,
+  }: { title: string; description?: string; status?: Status; icon?: string } = $props();
 
   const classes: Record<Status, string> = {
     success: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
@@ -29,6 +34,8 @@
           d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
         ></path>
       </svg>
+    {:else if icon}
+      <Reicon name={icon} class="size-4" />
     {:else}
       <span class="size-1.5 rounded-full bg-current opacity-50"></span>
     {/if}

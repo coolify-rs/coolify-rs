@@ -7,6 +7,7 @@
   // (components/applications/links.blade.php) and the configuration-changed
   // warning (livewire/project/shared/configuration-checker.blade.php).
   import Reicon from './Reicon.svelte';
+  import Callout from './Callout.svelte';
   import StatusBadge from './StatusBadge.svelte';
   import ConfirmModal from './ConfirmModal.svelte';
   import DatabaseTopbar from './DatabaseTopbar.svelte';
@@ -287,6 +288,12 @@
 
 <nav class="w-full max-w-none">
   <div>
+    {#if record.build_pack === 'nixpacks'}
+      <Callout type="warning" title="Nixpacks is deprecated" class="mb-4">
+        Nixpacks is deprecated and is in maintenance mode upstream. We recommend Railpack, the successor of Nixpacks, for new and existing applications.
+        <a class="underline" href={base} use:link>Switch to Railpack in General settings.</a>
+      </Callout>
+    {/if}
     <div class="mb-3 flex w-full min-w-0 items-start gap-3 xl:hidden">
       <div class="min-w-0 flex-1">
         <div class="flex min-w-0 flex-col items-start gap-2">
