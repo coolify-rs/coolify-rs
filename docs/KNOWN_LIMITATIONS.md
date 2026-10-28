@@ -50,6 +50,9 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   manual webhook secrets, GPU and container-name settings and tags answer 501 when sent with a value. The GitHub App
   repository check does not apply upstream's `SafeExternalUrl` private-network policy to the GitHub API URL, and the
   GitHub App path is not yet verified against a real GitHub App (only up to the lookup of the App).
+- At startup upstream (`app:init`) marks every in-progress and queued deployment as failed; coolify-rs marks only the
+  in-progress deployments its own host was running (`horizon_job_worker`), so an upstream instance sharing the database
+  keeps its deployments. Queued deployments are left queued.
 - Server status in the UI and in `/ui/*` omits the Sentinel and Traefik-update checks.
 - `sentinel_custom_url` for a new server falls back to the request's scheme and host; `X-Forwarded-*` count only
   from trusted proxies (upstream trusts every proxy).

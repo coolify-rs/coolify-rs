@@ -105,3 +105,22 @@ pub async fn private_key_row(db: &Db, id: i64) -> DbResult<Option<(Option<i64>, 
             .await?;
     Ok(row)
 }
+
+/// `in_progress` deployments run by `worker` (`horizon_job_worker`) → `failed`.
+pub async fn fail_in_progress_for_worker(
+    db: &Db,
+    worker: &str,
+    now: NaiveDateTime,
+) -> DbResult<usize> {
+    if worker.is_empty() || db.ensure_writable().is_err() {
+        return Ok(0);
+    }
+    let done = sqlx::query(
+        "UPDATE application_deployment_queues SET status = 'failed', updated_at = $1 WHERE status = 'in_progress' AND horizon_job_worker = $2",
+    )
+    .bind(now)
+    .bind(worker)
+    .execute(db.pool())
+    .await?;
+    Ok(usize::try_from(done.rows_affected()).unwrap_or(0))
+}

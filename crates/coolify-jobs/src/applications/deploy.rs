@@ -602,6 +602,25 @@ impl Jobs {
     }
 }
 
+impl Jobs {
+    /// `app:init`: deployments interrupted by a restart are marked failed. Upstream fails every
+    /// in-progress and queued row; coolify-rs only fails the rows this host was running, so a
+    /// second instance on the same database keeps its own deployments.
+    pub async fn fail_interrupted_deployments(&self) -> usize {
+        let host = std::env::var("HOSTNAME")
+            .ok()
+            .or_else(hostname)
+            .unwrap_or_default();
+        let count = coolify_db::git_sources::fail_in_progress_for_worker(&self.0.db, &host, now())
+            .await
+            .unwrap_or(0);
+        if count > 0 {
+            tracing::info!(count, "marked stuck deployments as failed");
+        }
+        count
+    }
+}
+
 fn hostname() -> Option<String> {
     std::process::Command::new("hostname")
         .output()

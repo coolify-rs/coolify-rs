@@ -30,6 +30,8 @@ CASES = {
     "static": dict(build_pack="static", base_directory="/static", ports_exposes="80"),
     "nixpacks": dict(build_pack="nixpacks", base_directory="/javascript/runtimes/nodejs", ports_exposes="3000"),
     "railpack": dict(build_pack="railpack", base_directory="/javascript/runtimes/nodejs", ports_exposes="3000"),
+    # A deploy key against a git-over-SSH mirror of the repository (--deploy-key, --ssh-repo).
+    "deploykey": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
 }
 
 
@@ -45,7 +47,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--server", required=True)
     ap.add_argument("--vm", required=True)
-    ap.add_argument("--case", default=",".join(CASES))
+    ap.add_argument("--case", default=",".join(c for c in CASES if c != "deploykey"))
+    ap.add_argument("--deploy-key", help="private key file the --ssh-repo accepts")
+    ap.add_argument("--ssh-repo", help="e.g. git@192.168.139.220:examples.git")
     a = ap.parse_args()
 
     def vm(cmd):
@@ -73,12 +77,21 @@ def main():
     base = {"server_uuid": a.server, "project_uuid": project, "environment_name": "production",
             "git_repository": REPO, "git_branch": "main", "instant_deploy": False}
     created = []
+    key_uuid = None
     try:
+        if "deploykey" in a.case.split(","):
+            c, r = call("ref", "POST", "/api/v1/security/keys",
+                        {"name": "git-deploy-diff", "private_key": open(a.deploy_key).read()}, tok="acme_owner_root")
+            key_uuid = json.loads(r)["uuid"]
         for case in a.case.split(","):
             spec = CASES[case]
             apps = {}
             for side in ("ref", "rs"):
-                c, r = call("ref", "POST", "/api/v1/applications/public", dict(base, name=f"{case}-{side}", **spec), tok="acme_owner_root")
+                if case == "deploykey":
+                    body = dict(base, name=f"{case}-{side}", git_repository=a.ssh_repo, private_key_uuid=key_uuid, **spec)
+                    c, r = call("ref", "POST", "/api/v1/applications/private-deploy-key", body, tok="acme_owner_root")
+                else:
+                    c, r = call("ref", "POST", "/api/v1/applications/public", dict(base, name=f"{case}-{side}", **spec), tok="acme_owner_root")
                 body = json.loads(r)
                 if c != 201:
                     record(f"[{case}] create", False, r)
@@ -151,6 +164,9 @@ def main():
             call("ref", "DELETE", f"/api/v1/applications/{u}?delete_volumes=true", tok="acme_owner_root")
         time.sleep(5)
         call("ref", "DELETE", f"/api/v1/projects/{project}", tok="acme_owner_root")
+        if key_uuid:
+            time.sleep(10)
+            call("ref", "DELETE", f"/api/v1/security/keys/{key_uuid}", tok="acme_owner_root")
     passed = sum(results)
     print(f"\n{passed}/{len(results)} checks identical")
     sys.exit(0 if passed == len(results) else 1)
