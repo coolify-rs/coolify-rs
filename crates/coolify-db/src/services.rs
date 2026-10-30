@@ -529,7 +529,7 @@ fn sub_row(kind: SubKind, text: &str) -> DbResult<SubRow> {
 /// `$service->applications()->get()` / `databases()->get()` (table order).
 pub async fn subs(db: &Db, kind: SubKind, service_id: i64) -> DbResult<Vec<SubRow>> {
     let rows: Vec<(String,)> = sqlx::query_as(&format!(
-        "SELECT row_to_json(x)::text FROM {} x WHERE x.service_id = $1 AND x.deleted_at IS NULL",
+        "SELECT row_to_json(x)::text FROM {} x WHERE x.service_id = $1 AND x.deleted_at IS NULL ORDER BY x.id",
         kind.table()
     ))
     .bind(service_id)
@@ -609,6 +609,27 @@ pub async fn sub_update(
     now: NaiveDateTime,
 ) -> DbResult<bool> {
     update_row(db, kind.table(), id, values, now).await
+}
+
+/// `$sub->image = $image; $sub->save()`: a `Stringable` attribute is always dirty.
+pub async fn sub_write_image(
+    db: &Db,
+    kind: SubKind,
+    id: i64,
+    image: &str,
+    now: NaiveDateTime,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query(&format!(
+        "UPDATE {} SET image = $2, updated_at = $3 WHERE id = $1",
+        kind.table()
+    ))
+    .bind(id)
+    .bind(image)
+    .bind(now)
+    .execute(db.pool())
+    .await?;
+    Ok(())
 }
 
 /// Writes a JSON column of a sub-resource (`noindex_domains`, `domain_port_overrides`).
@@ -946,7 +967,7 @@ pub async fn env_keys_like(db: &Db, service_id: i64, prefix: &str) -> DbResult<V
 pub async fn env_rows(db: &Db, service_id: i64) -> DbResult<Vec<Record>> {
     rows_of(
         db,
-        "SELECT row_to_json(v)::text FROM environment_variables v WHERE v.resourceable_type = $1 AND v.resourceable_id = $2",
+        "SELECT row_to_json(v)::text FROM environment_variables v WHERE v.resourceable_type = $1 AND v.resourceable_id = $2 ORDER BY v.id",
         MORPH,
         service_id,
     )

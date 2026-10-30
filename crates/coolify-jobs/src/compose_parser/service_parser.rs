@@ -224,6 +224,8 @@ pub struct ServiceRun<'a> {
     env_cache: Option<Vec<EnvRow>>,
     pub warnings: Vec<String>,
     pub effects: ParseEffects,
+    /// `is_container_label_escape_enabled` of a model created in this request.
+    pub label_escape_override: Option<bool>,
     comments: BTreeMap<String, String>,
 }
 
@@ -484,6 +486,7 @@ impl<'a> ServiceRun<'a> {
             env_cache: None,
             warnings: Vec::new(),
             effects: ParseEffects::default(),
+            label_escape_override: None,
             comments: BTreeMap::new(),
         })
     }
@@ -748,15 +751,9 @@ impl<'a> ServiceRun<'a> {
     /// `$savedService->image = $image; $savedService->save();`: a `Stringable` is always dirty.
     async fn set_image(&self, sub: &mut SubRow, image: &str) -> Result<(), String> {
         let new = Value::String(image.to_owned());
-        svc::sub_update(
-            self.db,
-            sub.kind,
-            sub.id,
-            &[("image", ColumnValue::Text(Some(image.to_owned())))],
-            self.now,
-        )
-        .await
-        .map_err(db_err)?;
+        svc::sub_write_image(self.db, sub.kind, sub.id, image, self.now)
+            .await
+            .map_err(db_err)?;
         sub.raw.insert("image".into(), new);
         Ok(())
     }
@@ -1443,7 +1440,9 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
         .unwrap_or_default()
         .to_owned();
     let resource_name = run.service.name().to_owned();
-    let label_escape = run.service.bool("is_container_label_escape_enabled");
+    let label_escape = run
+        .label_escape_override
+        .unwrap_or_else(|| run.service.bool("is_container_label_escape_enabled"));
     let destination_network = destination_network(run).await?;
 
     let mut parsed_services: Arr = Vec::new();

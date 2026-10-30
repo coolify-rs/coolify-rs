@@ -26,7 +26,7 @@ use crate::auth::AuthCtx;
 use crate::input::{Input, lenient_json, query_param, validated_json};
 use crate::response::{ApiError, ApiResult, PhpJson, created, ok};
 use crate::routes::databases::{
-    errors_with, input_bool, nested_server, query_bool, server_functional,
+    errors_with, input_bool, nested_server, nested_server_with, query_bool, server_functional,
 };
 use crate::serialize::{php_truthy, serialize_record};
 use crate::state::AppState;
@@ -60,6 +60,7 @@ fn require_admin(ctx: &AuthCtx) -> Result<(), ApiError> {
 /// `$request->user()->tokenCan('deploy') || tokenCan('root')`.
 fn can_deploy(ctx: &AuthCtx) -> bool {
     ctx.abilities.can(coolify_domain::Ability::Deploy)
+        || ctx.abilities.can(coolify_domain::Ability::Root)
 }
 
 fn deploy_forbidden(ctx: &AuthCtx, reason: &str) -> Option<axum::response::Response> {
@@ -147,7 +148,7 @@ async fn present_service(
     state: &AppState,
     ctx: &AuthCtx,
     s: &ServiceRow,
-    with_destination: bool,
+    with_environment: bool,
 ) -> Result<Value, ApiError> {
     let server = server_of(state, s).await?;
     let mut r = SERVICE.present(s.raw.clone());
@@ -167,7 +168,11 @@ async fn present_service(
     let apps = svc::subs(&state.db, SubKind::Application, s.id).await?;
     let databases = svc::subs(&state.db, SubKind::Database, s.id).await?;
     if let Some(server) = &server {
-        r.insert("server".into(), nested_server(state, ctx, server)?);
+        // `exposeNestedServerSecrets()` only touches `destination.server`: this is another instance.
+        r.insert(
+            "server".into(),
+            nested_server_with(state, server, false, ctx.can_read_sensitive)?,
+        );
     }
     r.insert(
         "applications".into(),
@@ -182,8 +187,15 @@ async fn present_service(
                 .collect(),
         ),
     );
-    if with_destination
-        && ctx.can_read_sensitive
+    // `$service->team()` (the policy, or redacting the compose file) loads these relations.
+    if with_environment {
+        let mut project = s.project.clone();
+        project.insert("team".into(), Value::Object(s.team.clone()));
+        let mut env = s.environment.clone();
+        env.insert("project".into(), Value::Object(project));
+        r.insert("environment".into(), Value::Object(env));
+    }
+    if ctx.can_read_sensitive
         && let Some(mut dest) = svc::destination_record(&state.db, s).await?
     {
         if let Some(server) = &server {
@@ -199,7 +211,7 @@ pub async fn list(State(state): State<AppState>, Extension(ctx): Extension<AuthC
     let rows = svc::list_for_team(&state.db, ctx.team_id).await?;
     let mut out = Vec::with_capacity(rows.len());
     for s in &rows {
-        out.push(present_service(&state, &ctx, s, true).await?);
+        out.push(present_service(&state, &ctx, s, ctx.can_read_sensitive).await?);
     }
     Ok(ok(Value::Array(out)).into_response())
 }
@@ -868,7 +880,10 @@ pub async fn create(
             coolify_db::compose::env_insert(&state.db, svc::MORPH, id, &new, &state.version, now)
                 .await?;
         }
-        jobs_of(&state)?.parse_service(id).await.map_err(parse_error)?;
+        jobs_of(&state)?
+            .parse_new_service(id, flag("is_container_label_escape_enabled").unwrap_or(false))
+            .await
+            .map_err(parse_error)?;
         apply_prerequisites(&state, id, kind).await?;
         (id, uuid, kind.to_owned())
     } else if input.filled("docker_compose_raw") {
@@ -906,7 +921,10 @@ pub async fn create(
             now,
         )
         .await?;
-        jobs_of(&state)?.parse_service(id).await.map_err(parse_error)?;
+        jobs_of(&state)?
+            .parse_new_service(id, flag("is_container_label_escape_enabled").unwrap_or(false))
+            .await
+            .map_err(parse_error)?;
         (id, uuid, "docker_compose".to_owned())
     } else {
         return message(
@@ -1264,6 +1282,17 @@ const BUILDPACK_ALLOWED: &[&str] = &[
 
 /// `removeSensitiveData($env)`: the attributes, the appends and the visible values.
 async fn present_env(state: &AppState, ctx: &AuthCtx, s: &ServiceRow, r: &Record) -> Result<Value, ApiError> {
+    present_env_without(state, ctx, s, r, &[]).await
+}
+
+/// [`present_env`] of a model created in this request: attributes it was not given are absent.
+async fn present_env_without(
+    state: &AppState,
+    ctx: &AuthCtx,
+    s: &ServiceRow,
+    r: &Record,
+    absent: &[&str],
+) -> Result<Value, ApiError> {
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let value = env_value(enc, r);
     let key = r.get("key").and_then(Value::as_str).unwrap_or_default();
@@ -1317,10 +1346,15 @@ async fn present_env(state: &AppState, ctx: &AuthCtx, s: &ServiceRow, r: &Record
         out.insert("value".into(), value.map_or(Value::Null, Value::String));
         out.insert("real_value".into(), real.map_or(Value::Null, Value::String));
     }
+    for k in absent {
+        out.shift_remove(*k);
+    }
     Ok(Value::Object(serialize_record(out)))
 }
 
 /// `GET /services/{uuid}/envs`.
+
+
 pub async fn envs(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -1459,7 +1493,8 @@ pub async fn create_env(
     }
     let row = env_upsert(&state, &s, &key, &input, true).await?;
     tracing::info!(target: "audit", event = "api.service.env_created", team_id = ctx.team_id, service_uuid = %s.uuid, env_key = %key, "service variable created");
-    Ok(created(present_env(&state, &ctx, &s, &row).await?).into_response())
+    let absent = ["is_preview", "is_required", "order", "preserve_compose_null"];
+    Ok(created(present_env_without(&state, &ctx, &s, &row, &absent).await?).into_response())
 }
 
 /// `PATCH /services/{uuid}/envs` (`update_env_by_uuid`).
@@ -1512,8 +1547,19 @@ pub async fn bulk_envs(
         let one = Input(map);
         env_validate(&one)?;
         let key = env_key_of(&one);
+        let existed = svc::env_row_by_key(&state.db, s.id, &key).await?.is_some();
         let row = env_upsert(&state, &s, &key, &one, false).await?;
-        out.push(present_env(&state, &ctx, &s, &row).await?);
+        // `updateOrCreate(['key' => $key], $item)`: a new model has only the attributes of the item.
+        let mut absent: Vec<&str> = Vec::new();
+        if !existed {
+            absent.extend(["is_preview", "is_required", "order", "preserve_compose_null"]);
+            for k in ["comment", "is_literal", "is_multiline", "is_shown_once", "value"] {
+                if !one.has(k) {
+                    absent.push(k);
+                }
+            }
+        }
+        out.push(present_env_without(&state, &ctx, &s, &row, &absent).await?);
     }
     tracing::info!(target: "audit", event = "api.service.env_bulk_upserted", team_id = ctx.team_id, service_uuid = %s.uuid, "service variables upserted");
     Ok(created(Value::Array(out)).into_response())

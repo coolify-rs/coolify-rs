@@ -119,11 +119,37 @@ impl Jobs {
         Ok(parsed)
     }
 
+    /// `$service->parse(isNew: true)` on the model the request just created: it has no attributes
+    /// from column defaults, so labels are escaped only when the request asked for it.
+    pub async fn parse_new_service(
+        &self,
+        service_id: i64,
+        label_escape: bool,
+    ) -> Result<ParsedCompose, String> {
+        let (parsed, effects) = self
+            .parse_service_with(service_id, Some(label_escape))
+            .await?;
+        let jobs = self.clone();
+        tokio::spawn(async move {
+            jobs.run_parse_effects(service_id, effects).await;
+        });
+        Ok(parsed)
+    }
+
     async fn parse_service_inline(
         &self,
         service_id: i64,
     ) -> Result<(ParsedCompose, service_parser::ParseEffects), String> {
+        self.parse_service_with(service_id, None).await
+    }
+
+    async fn parse_service_with(
+        &self,
+        service_id: i64,
+        label_escape: Option<bool>,
+    ) -> Result<(ParsedCompose, service_parser::ParseEffects), String> {
         let mut run = ServiceRun::load(self, service_id, Jobs::now()).await?;
+        run.label_escape_override = label_escape;
         if run.service.parsing_version() < 3 {
             return Err(
                 "Compose parsing versions before 3 (parseDockerComposeFile) are not ported.".into(),
