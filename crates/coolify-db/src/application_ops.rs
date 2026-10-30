@@ -471,7 +471,12 @@ pub struct CloneApplication {
 }
 
 /// The name of a cloned volume (`clone_application()`).
-fn cloned_volume_name(name: &str, is_sqlite: bool, source_uuid: &str, new_uuid: &str) -> String {
+pub fn cloned_volume_name(
+    name: &str,
+    is_sqlite: bool,
+    source_uuid: &str,
+    new_uuid: &str,
+) -> String {
     if is_sqlite {
         format!("{new_uuid}-{name}")
     } else if name.starts_with(source_uuid) {

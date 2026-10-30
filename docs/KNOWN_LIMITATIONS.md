@@ -79,7 +79,9 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
     host) is logged and the new volume stays empty. A source the job cannot deploy answers 501 before anything is created.
   - Upstream reads the service names of a Compose preview from `parse(pull_request_id)`. The preview branch of the parser
     is not ported: names and named volumes come from `docker_compose_raw`; bind mounts get no `LocalFileVolume` rows and
-    no `ServerFilesFromServerJob` runs. Deleting a Compose preview removes the volumes from the stored rows.
+    no `ServerFilesFromServerJob` runs, and `applications.docker_compose` keeps its value where upstream leaves the rendered
+    preview file there. A clone of a Compose application with a named volume and a preview answers 500 like upstream, but
+    writes nothing where upstream leaves a half-made clone. Deleting a Compose preview removes the volumes from the stored rows.
   - Managed DNS records (`ManagedDnsRecordCleanup`) are not released when a preview's domains change or it is deleted, and
     log redaction does not resolve remote secrets.
 - Docker Compose applications deploy (build, pull, `docker compose up`, build fingerprint reuse, raw mode). Not ported:

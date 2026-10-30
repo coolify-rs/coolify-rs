@@ -354,6 +354,7 @@ pub async fn clone(
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let now = state.now();
     let new_uuid = coolify_domain::new_public_id();
+    check_preview_volume_names(&state, &source, &new_uuid).await?;
     let name = input.str("name").filter(|n| !n.is_empty()).map_or_else(
         || {
             format!(
@@ -500,6 +501,40 @@ pub async fn clone(
     }
     tracing::info!(target: "audit", event = "api.application.cloned", team_id = ctx.team_id, source_uuid = %source.uuid, application_uuid = %new_uuid, destination_uuid = %destination.uuid, clone_volumes, "application cloned");
     Ok(created(json!({"uuid": new_uuid, "message": "Application cloned."})).into_response())
+}
+
+/// Upstream's previews are copied first, and their parse stores `{new uuid}_{volume}-pr-{id}`. The
+/// copy of the source's row with that name then violates the unique index: a Compose application
+/// with a named volume and a preview cannot be cloned, the answer is a 500. Upstream has no
+/// transaction and leaves a half-made clone behind; here nothing is written.
+async fn check_preview_volume_names(
+    state: &AppState,
+    source: &ApplicationRow,
+    new_uuid: &str,
+) -> Result<(), ApiError> {
+    if source.str("build_pack") != Some("dockercompose") {
+        return Ok(());
+    }
+    let raw = source.str("docker_compose_raw").unwrap_or_default();
+    let copied: Vec<String> = apps::persistent_volumes(&state.db, source.id)
+        .await?
+        .into_iter()
+        .map(|(name, _, _)| ops::cloned_volume_name(&name, false, &source.uuid, new_uuid))
+        .collect();
+    for preview in ops::previews(&state.db, source.id).await? {
+        let id = preview
+            .get("pull_request_id")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        let collides = coolify_jobs::applications::ops::compose_preview_volumes(raw, new_uuid, id)
+            .iter()
+            .any(|(name, _)| copied.contains(name));
+        if collides {
+            tracing::error!(application = %source.uuid, "clone: a preview volume name comes out twice");
+            return Err(ApiError::Internal);
+        }
+    }
+    Ok(())
 }
 
 /// `LocalFileVolume::created`: the same check as a new storage, for the copies of the source's.
