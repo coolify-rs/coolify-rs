@@ -2177,7 +2177,31 @@ pub async fn create_storage(
             now,
         )
         .await?;
-        return Ok(created(Value::Object(persistent_array(&row))).into_response());
+        // A model created in this request has only the attributes it was given.
+        let mut out = persistent_array(&row);
+        for k in [
+            "host_path",
+            "container_id",
+            "is_preview_suffix_enabled",
+            "standalone_sqlite_id",
+            "ignores_compose_driver_options",
+        ] {
+            out.shift_remove(k);
+        }
+        let ordered: Record = [
+            "name",
+            "mount_path",
+            "resource_id",
+            "resource_type",
+            "uuid",
+            "updated_at",
+            "created_at",
+            "id",
+        ]
+        .into_iter()
+        .filter_map(|k| out.get(k).map(|v| (k.to_owned(), v.clone())))
+        .collect();
+        return Ok(created(Value::Object(ordered)).into_response());
     }
     let invalid: Vec<&str> = ["name", "host_path"]
         .into_iter()
@@ -2303,7 +2327,97 @@ pub async fn create_storage(
         });
     }
     tracing::info!(target: "audit", event = "api.service.storage_created", team_id = ctx.team_id, service_uuid = %s.uuid, storage_id = id, "service storage created");
-    Ok(created(Value::Object(file_array(&state, &ctx, &row))).into_response())
+    // The attributes of the new model, in the order it got them.
+    let full = file_array(&state, &ctx, &row);
+    let mut names: Vec<&str> = vec!["fs_path", "mount_path"];
+    if !new.is_directory {
+        names.push("content");
+    }
+    names.push("is_directory");
+    if new.is_host_file {
+        names.push("is_host_file");
+    }
+    names.extend([
+        "resource_id",
+        "resource_type",
+        "uuid",
+        "updated_at",
+        "created_at",
+        "id",
+        "is_binary",
+        "is_too_large",
+    ]);
+    let mut out: Record = names
+        .into_iter()
+        .filter_map(|k| full.get(k).map(|v| (k.to_owned(), v.clone())))
+        .collect();
+    // The `created` hook loads the owner, unless it is a host file.
+    if !new.is_host_file {
+        out.insert(
+            "resource".into(),
+            nested_part(&state, &ctx, &s, &sub).await?,
+        );
+    }
+    Ok(created(Value::Object(out)).into_response())
+}
+
+/// The owner a file storage model loaded, as it serializes inside the storage: not through
+/// `serializeApiResponse`, so upstream shows the proxy configuration of the nested server to any
+/// token here. coolify-rs keeps it for tokens that can read sensitive data only.
+async fn nested_part(
+    state: &AppState,
+    ctx: &AuthCtx,
+    s: &ServiceRow,
+    part: &SubRow,
+) -> Result<Value, ApiError> {
+    let fresh = svc::sub_by_uuid(&state.db, part.kind, s.id, &part.uuid)
+        .await?
+        .ok_or(ApiError::Internal)?;
+    let mut out = match fresh.kind {
+        SubKind::Application => application_array(&fresh),
+        SubKind::Database => SERVICE_DATABASE.present(fresh.raw.clone()),
+    };
+    let mut service = SERVICE.present(s.raw.clone());
+    service.shift_remove("docker_compose");
+    service.shift_remove("docker_compose_raw");
+    let server = server_of(state, s).await?;
+    service.insert(
+        "server_status".into(),
+        Value::Bool(server.as_ref().is_some_and(server_functional)),
+    );
+    service.insert(
+        "status".into(),
+        service_status(state, s)
+            .await?
+            .map_or(Value::Null, Value::String),
+    );
+    if let Some(server) = &server {
+        service.insert(
+            "server".into(),
+            nested_server_with(state, server, false, ctx.can_read_sensitive)?,
+        );
+    }
+    let apps = svc::subs(&state.db, SubKind::Application, s.id).await?;
+    let databases = svc::subs(&state.db, SubKind::Database, s.id).await?;
+    service.insert(
+        "applications".into(),
+        Value::Array(
+            apps.iter()
+                .map(|a| Value::Object(application_array(a)))
+                .collect(),
+        ),
+    );
+    service.insert(
+        "databases".into(),
+        Value::Array(
+            databases
+                .iter()
+                .map(|d| Value::Object(SERVICE_DATABASE.present(d.raw.clone())))
+                .collect(),
+        ),
+    );
+    out.insert("service".into(), Value::Object(service));
+    Ok(Value::Object(out))
 }
 
 /// The storage with this column value among the parts of a service.
@@ -2490,7 +2604,13 @@ pub async fn update_storage(
     let out = if persistent {
         persistent_array(&fresh)
     } else {
-        file_array(&state, &ctx, &fresh)
+        // `isReadOnlyVolume()` loads the owner through the `service` relation.
+        let mut out = file_array(&state, &ctx, &fresh);
+        out.insert(
+            "service".into(),
+            nested_part(&state, &ctx, &s, &part).await?,
+        );
+        out
     };
     Ok(ok(Value::Object(out)).into_response())
 }

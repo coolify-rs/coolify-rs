@@ -353,6 +353,9 @@ def errors(project):
 
 def subroutes(name, ur, urs):
     sa, sb = Scrub(ur), Scrub(urs)
+    # Each side gets its own domain below, so that they do not conflict.
+    sa.map[f"ref-{name}"] = f"x-{name}"
+    sb.map[f"rs-{name}"] = f"x-{name}"
     both = (sa, sb)
     P = "/api/v1/services"
     drop = ("uuid", "id", "created_at", "updated_at", "resource_id", "last_online_at", "service_id")
@@ -479,7 +482,7 @@ def subroutes(name, ur, urs):
         compare(f"{name}: persistent storage create", [a[0], sa.value(a[1], pd)], [b[0], sb.value(b[1], pd)])
         a = api("ref", "POST", f"{P}/{ur}/storages", {"type": "file", "resource_uuid": ra, "mount_path": "/etc/app.conf", "content": "v1"})
         b = api("rs", "POST", f"{P}/{urs}/storages", {"type": "file", "resource_uuid": rb, "mount_path": "/etc/app.conf", "content": "v1"})
-        fp = ("id", "uuid", "resource_id", "created_at", "updated_at")
+        fp = ("id", "uuid", "resource_id", "created_at", "updated_at", "last_online_at", "service_id", "last_saved_proxy_configuration", "sentinel_updated_at")
         compare(f"{name}: file storage create", [a[0], sa.value(a[1], fp)], [b[0], sb.value(b[1], fp)])
         time.sleep(4)
         compare(f"{name}: file written on the server", file_text(ur, "etc/app.conf"), file_text(urs, "etc/app.conf"))
@@ -659,6 +662,7 @@ def main():
     ap.add_argument("--all-templates", action="store_true")
     ap.add_argument("--no-live", action="store_true")
     ap.add_argument("--only", default=None)
+    ap.add_argument("--custom-only", action="store_true")
     a = ap.parse_args()
     env_uuid = None
     st, proj = api("ref", "POST", "/api/v1/projects", {"name": f"svc-diff-{int(time.time())}"})
@@ -668,7 +672,7 @@ def main():
         if not a.only:
             errors(project)
             same_api("list as a member", "GET", "/api/v1/services", tok="acme_member_read")
-        names = TEMPLATES
+        names = [] if a.custom_only else TEMPLATES
         if a.all_templates:
             names = sorted(json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../templates/service-templates-latest.json"))))
         if a.only:
@@ -726,8 +730,16 @@ def main():
         for side, u in created:
             remove(side, u)
         wait_gone([u for _, u in created], 300)
-        for table in ("service_applications", "service_databases"):
-            pass
+        # `$service->delete()` after failed URLs leaves a trashed row on both sides, as upstream does.
+        env_ids = sql(f"SELECT string_agg(e.id::text, ',') FROM environments e JOIN projects p ON p.id=e.project_id WHERE p.uuid='{project}'")
+        if env_ids:
+            for sid in sql(f"SELECT id FROM services WHERE deleted_at IS NOT NULL AND environment_id IN ({env_ids})").splitlines():
+                for table, morph in (("service_applications", "ServiceApplication"), ("service_databases", "ServiceDatabase")):
+                    for store in ("local_persistent_volumes", "local_file_volumes"):
+                        sql(f"DELETE FROM {store} WHERE resource_type='App\\Models\\{morph}' AND resource_id IN (SELECT id FROM {table} WHERE service_id={sid})")
+                    sql(f"DELETE FROM {table} WHERE service_id={sid}")
+                sql(f"DELETE FROM environment_variables WHERE resourceable_type='App\\Models\\Service' AND resourceable_id={sid}")
+                sql(f"DELETE FROM services WHERE id={sid}")
         api("ref", "DELETE", f"/api/v1/projects/{project}")
     print(f"{sum(results)}/{len(results)} checks passed")
     sys.exit(0 if all(results) else 1)
