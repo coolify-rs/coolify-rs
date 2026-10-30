@@ -18,7 +18,7 @@ const WEEKDAYS: [&str; 7] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 type Register = Vec<i64>;
 
 /// PHP `(int)` on a string: leading whitespace and sign, then digits.
-fn php_int(s: &str) -> i64 {
+pub(crate) fn php_int(s: &str) -> i64 {
     let t = s.trim_start();
     let (neg, rest) = match t.strip_prefix('-') {
         Some(r) => (true, r),
@@ -32,7 +32,7 @@ fn php_int(s: &str) -> i64 {
 }
 
 /// PHP `is_numeric` for strings.
-fn php_is_numeric(s: &str) -> bool {
+pub(crate) fn php_is_numeric(s: &str) -> bool {
     let t = s
         .trim_start_matches([' ', '\t', '\n', '\r', '\x0B', '\x0C'])
         .trim_end_matches([' ', '\t', '\n', '\r', '\x0B', '\x0C']);

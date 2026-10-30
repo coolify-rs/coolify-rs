@@ -5,6 +5,7 @@
 //! adopt an upstream database without rewriting it.
 
 pub mod cron;
+pub mod cron_expression;
 pub mod encrypter;
 pub mod password;
 pub mod php_json;

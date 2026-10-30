@@ -23,6 +23,7 @@ anyhow = "1"
 axum = "0.8"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
 clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4"
 hmac = "0.12"

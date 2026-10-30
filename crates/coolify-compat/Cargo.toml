@@ -12,6 +12,7 @@ zeroize.workspace = true
 argon2.workspace = true
 bcrypt.workspace = true
 chrono.workspace = true
+chrono-tz.workspace = true
 rsa.workspace = true
 sha1.workspace = true
 ssh-key.workspace = true
