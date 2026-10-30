@@ -93,6 +93,7 @@ class Sides:
         text = re.sub(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+Z", "<ts>", text)
         text = re.sub(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d", "<ts>", text)
         text = re.sub(r'"uuid":"[a-z0-9]{24}"', '"uuid":"U"', text)
+        text = re.sub(r'"sentinel_token":"[^"]*"', '"sentinel_token":"T"', text)
         text = re.sub(r'"id":\d+', '"id":0', text)
         text = re.sub(r'"server_id":\d+', '"server_id":0', text)
         return text
@@ -711,7 +712,7 @@ def jobs(vm_a, vm_b):
     def both_file(name, path):
         x, y = vm_file(vm_a, path), vm_file(vm_b, path)
         def n(t):
-            return re.sub(r"\.orb\.local", "", t).replace(vm_a, "VM").replace(vm_b, "VM")
+            return re.sub(r"\.orb\.local", "", t).replace(vm_a, "VM").replace(vm_b, "VM").replace("diff-job-a", "S").replace("diff-job-b", "S")
         record(f"file {name}", bool(x) and n(x) == n(y), f"ref {x[:800]}\n  rs  {y[:800]}")
 
     def ps(machine):
@@ -759,7 +760,8 @@ def jobs(vm_a, vm_b):
         record("sentinel env", senv(vm_a) == senv(vm_b), f"{senv(vm_a)}\n  {senv(vm_b)}")
         same("restart sentinel by setting", "PATCH", "/api/v1/servers/{s}/sentinel", {"sentinel_push_interval_seconds": 45})
         for side in ("ref", "rs"):
-            wait_for(f"{side} sentinel env", lambda: "PUSH_INTERVAL_SECONDS=45" in senv(machines[side]), timeout=240)
+            changed = wait_for(f"{side} sentinel env", lambda: "PUSH_INTERVAL_SECONDS=45" in senv(machines[side]), timeout=240)
+            record(f"{side} sentinel restarted with the new setting", bool(changed), str(senv(machines[side])))
         record("sentinel env after change", senv(vm_a) == senv(vm_b), f"{senv(vm_a)}\n  {senv(vm_b)}")
         # A push with the server's token on each side.
         tokens = {side: json.loads(call("ref", "GET", f"/api/v1/servers/{S.vars[side]['s']}/sentinel")[1])["sentinel_token"] for side in sids}
@@ -851,6 +853,69 @@ def jobs(vm_a, vm_b):
         same("PATCH drain off", "PATCH", "/api/v1/servers/{s}/log-drains", {"is_logdrain_axiom_enabled": False})
         time.sleep(10)
         record("log drain removed", ps(vm_a) == ps(vm_b), f"{ps(vm_a)}\n  {ps(vm_b)}")
+        # Scheduled jobs, run once on each side.
+        def rs_job(job, uuid):
+            env = dict(os.environ)
+            for k, c, n in (("APP_KEY", "coolify-rs-reference-coolify-1", "APP_KEY"),):
+                env[k] = subprocess.run(["docker", "exec", c, "printenv", n], capture_output=True, text=True).stdout.strip()
+            pw = subprocess.run(["docker", "exec", "coolify-rs-reference-postgres-1", "printenv", "POSTGRES_PASSWORD"], capture_output=True, text=True).stdout.strip()
+            env["DATABASE_URL"] = f"postgres://coolify:{pw}@127.0.0.1:15432/coolify"
+            env["COOLIFY_RS_DATA_DIR"] = os.path.expanduser("~/.cache/coolify-rs-dev/18084/data")
+            binary = os.path.expanduser("~/.cache/coolify-rs-dev/18084/coolify-rs")
+            r = subprocess.run([binary, "server-job", job, uuid], capture_output=True, text=True, env=env)
+            return r.returncode, r.stdout.strip().split("\n")[-1] if r.stdout.strip() else "", r.stderr[-400:]
+
+        def ref_job(php):
+            r = subprocess.run(["docker", "exec", "coolify-rs-reference-coolify-1", "php", "/var/www/html/artisan", "tinker", "--execute",
+                                f"$s=\\App\\Models\\Server::where('uuid','{a}')->first(); {php}"], capture_output=True, text=True)
+            return r.stdout.strip()[-400:]
+
+        # Patch check.
+        print("ref patch", ref_job("(new \\App\\Jobs\\ServerPatchCheckJob($s, true))->handle();")[:200])
+        print("rs patch", rs_job("patch-check", b)[0::2])
+        pc = {side: json.loads(sql(f"select patch_check_result from server_settings where server_id={sids[side]}") or "{}") for side in sids}
+        record("patch result keys", list(pc["ref"]) == list(pc["rs"]), f"{list(pc['ref'])}\n  {list(pc['rs'])}")
+        for k in ("total_updates", "security_updates", "reboot_required", "osId", "package_manager"):
+            record(f"patch {k}", pc["ref"].get(k) == pc["rs"].get(k), f"{pc['ref'].get(k)} {pc['rs'].get(k)}")
+        names = {side: sorted(u["package"] for u in pc[side].get("updates", [])) for side in sids}
+        record("patch packages", names["ref"] == names["rs"], f"{names['ref'][:10]}\n  {names['rs'][:10]}")
+        record("patch update keys", (pc["ref"].get("updates") or [{}])[0].keys() == (pc["rs"].get("updates") or [{}])[0].keys(), "")
+        err = {side: sql(f"select patch_check_error is null from server_settings where server_id={sids[side]}") for side in sids}
+        record("patch error", err["ref"] == err["rs"] == "t", str(err))
+        # Storage check: the command is the same; both print the usage.
+        rc, out, e = rs_job("storage-check", b)
+        real = vm(vm_b, "sh", "-c", "df / --output=pcent | tr -cd 0-9")
+        record("storage check", rc == 0 and out == real, f"{rc} {out} {real} {e}")
+        # Connection check after losing sshd: two failures mark the server unreachable, then it recovers.
+        for side, m in machines.items():
+            vm(m, "systemctl", "stop", "ssh", "ssh.socket")
+        for _ in range(2):
+            ref_job("(new \\App\\Jobs\\ServerConnectionCheckJob($s))->handle();")
+            rs_job("connection-check", b)
+        down = {side: sql(f"select ss.is_reachable::text||ss.is_usable::text||s.unreachable_count from server_settings ss join servers s on s.id=ss.server_id where s.id={sids[side]}") for side in sids}
+        record("connection check down", down["ref"] == down["rs"] == "falsefalse2", str(down))
+        for side, m in machines.items():
+            vm(m, "systemctl", "start", "ssh")
+        time.sleep(5)
+        ref_job("(new \\App\\Jobs\\ServerConnectionCheckJob($s))->handle();")
+        rs_job("connection-check", b)
+        up = {side: sql(f"select ss.is_reachable::text||ss.is_usable::text||s.unreachable_count from server_settings ss join servers s on s.id=ss.server_id where s.id={sids[side]}") for side in sids}
+        record("connection check up", up["ref"] == up["rs"] == "truetrue0", str(up))
+        # Traefik check with an older version stored as running.
+        for m in (vm_a, vm_b):
+            pass
+        ref_job("(new \\App\\Jobs\\CheckTraefikVersionForServerJob($s, get_traefik_versions()))->handle();")
+        rs_job("traefik-check", b)
+        tv = {side: sql(f"select coalesce(detected_traefik_version,'')||'|'||coalesce(traefik_outdated_info->>'type','')||'|'||coalesce(traefik_outdated_info->>'latest','') from servers where id={sids[side]}") for side in sids}
+        record("traefik check", tv["ref"] == tv["rs"], str(tv))
+        # Server check restarts a removed proxy.
+        for m in (vm_a, vm_b):
+            vm(m, "docker", "rm", "-f", "coolify-proxy")
+        ref_job("(new \\App\\Jobs\\ServerCheckJob($s))->handle();")
+        rs_job("server-check", b)
+        for side, m in machines.items():
+            wait_for(f"{side} proxy back", lambda: "coolify-proxy " in " ".join(ps(m)), timeout=180)
+        record("server check restarts the proxy", ps(vm_a) == ps(vm_b) and any(x.startswith("coolify-proxy ") for x in ps(vm_b)), f"{ps(vm_a)}\n  {ps(vm_b)}")
         # Proxy type change.
         same("PATCH proxy type caddy", "PATCH", "/api/v1/servers/{s}/proxy", {"proxy_type": "caddy"})
         for side in sids:

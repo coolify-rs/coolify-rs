@@ -41,6 +41,12 @@ enum Cmd {
     Serve,
     /// Inspect the database and print the schema guard result as JSON.
     CheckSchema,
+    /// Run one scheduled server job now and print what it returns (operators and differential tests).
+    ServerJob {
+        /// connection-check, storage-check, server-check, patch-check, traefik-check, ca-certificate.
+        job: String,
+        server_uuid: String,
+    },
 }
 
 #[derive(Debug)]
@@ -251,6 +257,15 @@ async fn main() -> Result<()> {
         .context("connecting to the Coolify database")?;
     let schema = db.schema();
     match cli.cmd.unwrap_or(Cmd::Serve) {
+        Cmd::ServerJob { job, server_uuid } => {
+            let remote = Remote::new(cfg.remote.clone()).context("remote execution")?;
+            let jobs = coolify_jobs::Jobs::new(db.clone(), remote, cfg.encrypter.clone());
+            let out = coolify_jobs::server_ops::run_named(&jobs, &job, &server_uuid)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
+            println!("{out}");
+            Ok(())
+        }
         Cmd::CheckSchema => {
             println!(
                 "{}",

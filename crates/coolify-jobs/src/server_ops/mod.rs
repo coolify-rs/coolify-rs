@@ -377,6 +377,31 @@ pub fn version_compare(a: &str, b: &str) -> std::cmp::Ordering {
     std::cmp::Ordering::Equal
 }
 
+/// Runs one scheduled job on a server now (`coolify-rs server-job`).
+pub async fn run_named(jobs: &Jobs, job: &str, server_uuid: &str) -> Result<String, String> {
+    let row = servers::find_any_team(&jobs.0.db, server_uuid)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("Server not found.")?;
+    let id = row.id;
+    match job {
+        "connection-check" => checks::server_connection_check(jobs, id).await?,
+        "storage-check" => {
+            return Ok(checks::server_storage_check(jobs, id)
+                .await?
+                .unwrap_or_default());
+        }
+        "server-check" => checks::server_check(jobs, id).await?,
+        "patch-check" => patches::server_patch_check(jobs, id, true).await?,
+        "traefik-check" => checks::check_traefik_version(jobs, id).await?,
+        "ca-certificate" => {
+            return certificate::regenerate_ca_certificate(&Srv::from_row(jobs, row)).await;
+        }
+        other => return Err(format!("Unknown job {other}.")),
+    }
+    Ok(String::new())
+}
+
 impl Jobs {
     /// Runs a server job in the background; failures are logged, as a failed queued job.
     pub(crate) fn spawn_server_job<F, Fut>(&self, name: &'static str, server_id: i64, f: F)

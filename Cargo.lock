@@ -550,6 +550,7 @@ dependencies = [
  "coolify-api",
  "coolify-compat",
  "coolify-db",
+ "coolify-jobs",
  "coolify-remote",
  "serde_json",
  "tokio",
