@@ -88,7 +88,7 @@ class Sides:
             text = text.replace(BASES[side].replace("http://", "").replace("/", r"\/"), "HOST")
             text = text.replace(BASES[side].replace("http://", ""), "HOST")
         for k, v in sorted(self.vars[side].items(), key=lambda kv: -len(str(kv[1]))):
-            if len(str(v)) >= 3:
+            if len(str(v)) >= 3 and not str(v).isdigit():
                 text = text.replace(str(v), "<" + k + ">")
         text = re.sub(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+Z", "<ts>", text)
         text = re.sub(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d", "<ts>", text)
@@ -257,7 +257,8 @@ def api():
         same("POST cleanup run read token", "POST", "/api/v1/servers/{s}/docker-cleanup/run", tok="acme_owner_read")
         same("POST cleanup run write only", "POST", "/api/v1/servers/{s}/docker-cleanup/run", tok="acme_owner_write")
         same("POST cleanup run", "POST", "/api/v1/servers/{s}/docker-cleanup/run", {"delete_unused_volumes": False})
-        time.sleep(5)
+        for side in ("ref", "rs"):
+            wait_for(f"{side} cleanup row", lambda: sql(f"select count(*) from docker_cleanup_executions where server_id={S.vars[side]['sid']} and finished_at is not null") == "1", timeout=120, step=2)
         same("GET executions", "GET", "/api/v1/servers/{s}/docker-cleanup/executions")
         # Log drains.
         same("PATCH drains invalid", "PATCH", "/api/v1/servers/{s}/log-drains",

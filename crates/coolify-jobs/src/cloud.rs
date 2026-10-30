@@ -347,7 +347,8 @@ impl Client {
         self.request(
             Method::POST,
             &format!("/servers/{id}/actions/enable_backup"),
-            None,
+            // `Http::post($url, [])` sends an empty JSON array.
+            Some(&json!([])),
         )
         .await
         .map(|_| ())

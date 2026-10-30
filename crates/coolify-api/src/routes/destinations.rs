@@ -380,7 +380,9 @@ async fn model_order(
                 out.insert(key.clone(), raw.get(key).cloned().unwrap_or(Value::Null));
             }
             // `exposeSensitiveFields` also shows these, which the application API keeps hidden.
-            "domain_dns_statuses" | "domain_port_overrides" if sensitive => {
+            "domain_dns_statuses" | "domain_port_overrides" | "legacy_password_quoting"
+                if sensitive =>
+            {
                 out.insert(key.clone(), raw.get(key).cloned().unwrap_or(Value::Null));
             }
             k => {
@@ -400,6 +402,24 @@ async fn model_order(
             out.insert((*key).into(), project.map_or(Value::Null, Value::from));
         } else if let Some(v) = from.shift_remove(*key) {
             out.insert((*key).into(), v);
+        }
+    }
+    // `exposeSensitiveFields` covers only the resource: the nested server keeps its hidden settings.
+    if let Some(settings) = out
+        .get_mut("destination")
+        .and_then(|d| d.get_mut("server"))
+        .and_then(|s| s.get_mut("settings"))
+        .and_then(Value::as_object_mut)
+    {
+        for k in [
+            "sentinel_token",
+            "sentinel_custom_url",
+            "logdrain_newrelic_license_key",
+            "logdrain_axiom_api_key",
+            "logdrain_custom_config",
+            "logdrain_custom_config_parser",
+        ] {
+            settings.shift_remove(k);
         }
     }
     out.insert("type".into(), json!(kind));
