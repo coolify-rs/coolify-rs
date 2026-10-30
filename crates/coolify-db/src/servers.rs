@@ -48,6 +48,27 @@ fn row(text: &str, settings: Option<&str>) -> DbResult<ServerRow> {
 const SETTINGS: &str =
     "(SELECT row_to_json(ss)::text FROM server_settings ss WHERE ss.server_id = s.id LIMIT 1)";
 
+/// `Server::with(['settings'])->get()` over all teams (`ServerManagerJob`).
+pub async fn all(db: &Db) -> DbResult<Vec<ServerRow>> {
+    let rows: Vec<(String, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT row_to_json(s)::text, {SETTINGS} FROM servers s WHERE s.deleted_at IS NULL"
+    ))
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter().map(|(s, st)| row(s, st.as_deref())).collect()
+}
+
+/// `Server::where('uuid', $uuid)->first()` without a team scope (`SentinelController`).
+pub async fn find_any_team(db: &Db, uuid: &str) -> DbResult<Option<ServerRow>> {
+    let r: Option<(String, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT row_to_json(s)::text, {SETTINGS} FROM servers s WHERE s.uuid = $1 AND s.deleted_at IS NULL LIMIT 1"
+    ))
+    .bind(uuid)
+    .fetch_optional(db.pool())
+    .await?;
+    r.as_ref().map(|(s, st)| row(s, st.as_deref())).transpose()
+}
+
 /// `Server::whereTeamId($teamId)->get()` (SoftDeletes scope, table order).
 pub async fn list(db: &Db, team_id: TeamId) -> DbResult<Vec<ServerRow>> {
     let rows: Vec<(String, Option<String>)> = sqlx::query_as(&format!(
@@ -264,7 +285,7 @@ const DESTINATION_MATCH: &str = "((destination_type = 'App\\Models\\StandaloneDo
      (SELECT id FROM swarm_dockers WHERE server_id = $1)))";
 
 /// Database tables `Server::databases()` reads.
-const DATABASE_TABLES: &[&str] = &[
+pub(crate) const DATABASE_TABLES: &[&str] = &[
     "standalone_postgresqls",
     "standalone_redis",
     "standalone_mongodbs",

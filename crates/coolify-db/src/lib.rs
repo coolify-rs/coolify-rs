@@ -12,10 +12,12 @@
 
 pub mod applications;
 pub mod auth;
+pub mod cloud;
 pub mod compose;
 pub mod dashboard;
 pub mod database_specs;
 pub mod databases;
+pub mod destinations;
 pub mod environment_variables;
 pub mod git_sources;
 pub mod instance;
@@ -23,6 +25,7 @@ pub mod private_keys;
 pub mod projects;
 pub mod records;
 pub mod schema;
+pub mod server_ops;
 pub mod servers;
 pub mod services;
 pub mod teams;

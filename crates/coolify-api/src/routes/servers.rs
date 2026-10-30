@@ -219,9 +219,21 @@ pub async fn show(
     // `view`: member of the server's team (the query is already team-scoped).
     if resources {
         // Listing resources needs the application/database/service models (not ported yet).
-        return Err(ApiError::NotPorted);
+        // Presenting resources needs the service model when the server has services.
+        if !coolify_db::server_ops::services_on_server(&state.db, s.id)
+            .await?
+            .is_empty()
+        {
+            return Err(ApiError::NotPorted);
+        }
     }
     let mut r = s.record.clone();
+    if resources {
+        r.insert(
+            "resources".into(),
+            Value::Array(crate::routes::destinations::defined_resources(&state, s.id).await?),
+        );
+    }
     r.insert("proxy".into(), proxy_attribute(r.get("proxy")));
     r.insert("is_coolify_host".into(), Value::Bool(s.id == 0));
     r.insert(
@@ -385,7 +397,7 @@ fn create_fields() -> Vec<Field> {
 }
 
 /// Laravel `$request->boolean()`.
-fn input_bool(input: &Input, key: &str) -> bool {
+pub(crate) fn input_bool(input: &Input, key: &str) -> bool {
     match input.get(key) {
         Some(Value::Bool(b)) => *b,
         Some(Value::Number(n)) => n.as_i64() == Some(1),
@@ -441,7 +453,7 @@ fn role_error(msg: &str) -> ApiError {
 }
 
 /// `ProxyTypes` cases, matched case-insensitively.
-fn proxy_type_valid(t: &str) -> bool {
+pub(crate) fn proxy_type_valid(t: &str) -> bool {
     matches!(
         t.to_ascii_lowercase().as_str(),
         "none" | "traefik" | "nginx" | "caddy"
@@ -565,8 +577,8 @@ pub async fn create(
             "A server with this IP/Domain is already in use.",
         ));
     }
-    if input_bool(&input, "instant_validate") {
-        // ValidateServer needs SSH (remote execution is not ported yet).
+    let instant_validate = input_bool(&input, "instant_validate");
+    if instant_validate && state.jobs.is_none() {
         return Err(ApiError::NotPorted);
     }
     let enc = state.encrypter.as_ref().ok_or(ApiError::Message(
@@ -606,7 +618,15 @@ pub async fn create(
         server_role: role,
         always_write_role: true,
     };
-    servers::create(&state.db, &new, state.now()).await?;
+    let id = servers::create(&state.db, &new, state.now()).await?;
+    if let (true, Some(jobs)) = (instant_validate, state.jobs.as_ref()) {
+        jobs.spawn_validation(
+            id,
+            ctx.team_id,
+            new.uuid.clone(),
+            coolify_jobs::Wording::Api,
+        );
+    }
     Ok(created(json!({"uuid": new.uuid})).into_response())
 }
 
@@ -740,7 +760,7 @@ fn port_mutator(v: &Value) -> i64 {
     }
 }
 
-fn int_value(v: &Value) -> i64 {
+pub(crate) fn int_value(v: &Value) -> i64 {
     match v {
         Value::Number(n) => n
             .as_i64()
@@ -962,11 +982,10 @@ pub async fn update(
             "Missing required permissions: deploy. Changing the proxy type starts the new proxy on the server, so it needs a token with the deploy permission.",
         )?;
     }
-    // Starting the new proxy and validating the server need SSH (not ported).
-    if proxy_changed || input_bool(&input, "instant_validate") {
+    // Without remote execution the proxy cannot be started and the server cannot be validated.
+    if (proxy_changed || input_bool(&input, "instant_validate")) && state.jobs.is_none() {
         return Err(ApiError::NotPorted);
     }
-
     let now = state.now();
     servers::update_columns(&state.db, s.id, &changes, now).await?;
     // A new address means a new host: drop the pinned host key.
@@ -1028,6 +1047,22 @@ pub async fn update(
             .map(as_php_string);
         servers::update_settings(&state.db, s.id, &[("wildcard_domain", C::Text(v))], now).await?;
     }
+    if let (true, Some(jobs)) = (proxy_changed, state.jobs.as_ref()) {
+        let requested = input
+            .get("proxy_type")
+            .map(as_php_string)
+            .unwrap_or_default();
+        coolify_jobs::server_ops::proxy::change_proxy(jobs, s.id, &requested)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "changing the proxy failed");
+                ApiError::Internal
+            })?;
+    }
+    if input_bool(&input, "instant_validate") {
+        let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+        jobs.spawn_validation(s.id, s.team_id, s.uuid.clone(), coolify_jobs::Wording::Api);
+    }
     Ok(created(json!({"uuid": s.uuid})).into_response())
 }
 
@@ -1041,7 +1076,7 @@ fn php_filter_bool(v: Option<&str>) -> Option<bool> {
     }
 }
 
-fn deploy_forbidden(ctx: &AuthCtx, reason: &'static str) -> Result<(), ApiError> {
+pub(crate) fn deploy_forbidden(ctx: &AuthCtx, reason: &'static str) -> Result<(), ApiError> {
     use coolify_domain::Ability;
     if ctx.abilities.can(Ability::Deploy) || ctx.abilities.can(Ability::Root) {
         return Ok(());
@@ -1112,13 +1147,13 @@ pub async fn delete(
             "Missing required permissions: deploy. Deleting the resources or the cloud server needs a token with the deploy permission.",
         )?;
     }
-    // Deleting resources, cloud servers, queued deployments' logs and GitHub
-    // runners needs code that is not ported yet.
-    if from_provider
-        || resources > 0
-        || servers::has_unported_delete_side_effects(&state.db, s.id).await?
-    {
+    // Deleting resources, queued deployments' logs and GitHub runners needs
+    // code that is not ported yet.
+    if resources > 0 || servers::has_unported_delete_side_effects(&state.db, s.id).await? {
         return Err(ApiError::NotPorted);
+    }
+    if let (true, Some(jobs)) = (from_provider, state.jobs.as_ref()) {
+        coolify_jobs::cloud::delete_from_provider(jobs, &s).await;
     }
     servers::delete(&state.db, s.id, state.now()).await?;
     if let Some(jobs) = &state.jobs {
@@ -1167,21 +1202,15 @@ pub async fn validate_server(
             &ctx,
             "Missing required permissions: deploy. Installing the server runs commands on it and starts the proxy, so it needs a token with the deploy permission.",
         )?;
-        // Installing prerequisites, Docker and the proxy is not ported.
-        return Err(ApiError::NotPorted);
     }
-    // Refreshing a cloud provider's state before validating is not ported.
-    let linked = [
-        "vultr_instance_id",
-        "digitalocean_droplet_id",
-        "hostinger_virtual_machine_id",
-    ]
-    .iter()
-    .any(|k| s.record.get(*k).is_some_and(php_truthy));
-    let Some(jobs) = state.jobs.as_ref().filter(|_| !linked) else {
+    let Some(jobs) = state.jobs.as_ref() else {
         return Err(ApiError::NotPorted);
     };
-    jobs.spawn_validation(s.id, s.team_id, s.uuid.clone(), coolify_jobs::Wording::Api);
+    if install {
+        jobs.spawn_validate_and_install(s.id);
+    } else {
+        jobs.spawn_validation(s.id, s.team_id, s.uuid.clone(), coolify_jobs::Wording::Api);
+    }
     tracing::info!(
         target: "audit",
         event = "api.server.validated",
@@ -1190,7 +1219,12 @@ pub async fn validate_server(
         install,
         "server validation started"
     );
-    Ok(created(json!({"message": "Validation started."})).into_response())
+    let message = if install {
+        "Validation and installation started."
+    } else {
+        "Validation started."
+    };
+    Ok(created(json!({"message": message})).into_response())
 }
 
 pub(crate) fn is_transferred(s: &ServerRow) -> bool {

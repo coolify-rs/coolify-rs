@@ -14,6 +14,11 @@ pub mod servers;
 pub mod services;
 pub mod teams;
 
+pub mod cloud_providers;
+pub mod cloud_tokens;
+pub mod destinations;
+pub mod server_proxy;
+pub mod server_settings;
 use axum::Router;
 use axum::middleware::{from_fn, from_fn_with_state};
 use axum::routing::{MethodRouter, on};
@@ -786,6 +791,420 @@ pub const ROUTES: &[RouteSpec] = &[
         group: Group::Main,
         abilities: D,
     },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/{uuid}/domains",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/{uuid}/resources",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/{uuid}/envs",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/{uuid}/envs",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/servers/{uuid}/envs/{env_id}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/servers/{uuid}/envs/{env_id}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/{uuid}/docker-cleanup",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/servers/{uuid}/docker-cleanup",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/{uuid}/docker-cleanup/run",
+        group: Group::Main,
+        abilities: WD,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/{uuid}/docker-cleanup/executions",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/{uuid}/log-drains",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/servers/{uuid}/log-drains",
+        group: Group::Main,
+        abilities: WD,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/{uuid}/sentinel",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/servers/{uuid}/sentinel",
+        group: Group::Main,
+        abilities: WD,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/{uuid}/cloudflare-tunnel",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/servers/{uuid}/cloudflare-tunnel",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/{uuid}/cloudflare-tunnel/enable",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/{uuid}/cloudflare-tunnel/disable",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/destinations",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/destinations/{uuid}",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/destinations/{uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/destinations/{uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/{server_uuid}/destinations",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/{server_uuid}/destinations",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/{uuid}/registries",
+        group: Group::Main,
+        abilities: &[&[Ability::ReadSensitive]],
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/{uuid}/registries",
+        group: Group::Main,
+        abilities: WD,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/{uuid}/registries/{registry}/check",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/servers/{uuid}/registries/{registry}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/{uuid}/proxy",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/servers/{uuid}/proxy",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PUT",
+        uri: "api/v1/servers/{uuid}/proxy/configuration",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/{uuid}/proxy/restart",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/{uuid}/transfer",
+        group: Group::Main,
+        abilities: &[&[Ability::Read, Ability::Write]],
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/resources",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/sentinel/push",
+        group: Group::Public,
+        abilities: NONE,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/cloud-tokens",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/cloud-tokens",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/cloud-tokens/{uuid}",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/cloud-tokens/{uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/cloud-tokens/{uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/cloud-tokens/{uuid}/validate",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/cloud-init-scripts",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/cloud-init-scripts",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/cloud-init-scripts/{uuid}",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/cloud-init-scripts/{uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/cloud-init-scripts/{uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/hetzner/locations",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/hetzner/server-types",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/hetzner/images",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/hetzner/ssh-keys",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/hetzner/firewalls",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/hetzner/networks",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/hetzner",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/vultr/regions",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/vultr/plans",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/vultr/os",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/vultr/ssh-keys",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/vultr",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/digitalocean/regions",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/digitalocean/sizes",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/digitalocean/images",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/digitalocean/ssh-keys",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/digitalocean",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/hostinger/data-centers",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/hostinger/catalog",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/hostinger/templates",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/hostinger/ssh-keys",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/hostinger/post-install-scripts",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/hostinger",
+        group: Group::Main,
+        abilities: W,
+    },
 ];
 
 /// Prefix of the browser-session bridge: `/ui/api/v1/...` mirrors the main
@@ -1328,6 +1747,378 @@ pub fn router(state: AppState) -> Router {
             "POST",
             "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}/execute",
             on_post(services::execute_scheduled_task),
+        ),
+        (
+            "GET",
+            "api/v1/servers/{uuid}/domains",
+            on_get(destinations::domains_by_server),
+        ),
+        (
+            "GET",
+            "api/v1/servers/{uuid}/resources",
+            on_get(destinations::resources_by_server),
+        ),
+        (
+            "GET",
+            "api/v1/servers/{uuid}/envs",
+            on_get(server_proxy::envs_list),
+        ),
+        (
+            "POST",
+            "api/v1/servers/{uuid}/envs",
+            on_post(server_proxy::envs_create),
+        ),
+        (
+            "PATCH",
+            "api/v1/servers/{uuid}/envs/{env_id}",
+            on(
+                axum::routing::MethodFilter::PATCH,
+                server_proxy::envs_update,
+            ),
+        ),
+        (
+            "DELETE",
+            "api/v1/servers/{uuid}/envs/{env_id}",
+            on(
+                axum::routing::MethodFilter::DELETE,
+                server_proxy::envs_delete,
+            ),
+        ),
+        (
+            "GET",
+            "api/v1/servers/{uuid}/docker-cleanup",
+            on_get(server_settings::cleanup_show),
+        ),
+        (
+            "PATCH",
+            "api/v1/servers/{uuid}/docker-cleanup",
+            on(
+                axum::routing::MethodFilter::PATCH,
+                server_settings::cleanup_update,
+            ),
+        ),
+        (
+            "POST",
+            "api/v1/servers/{uuid}/docker-cleanup/run",
+            on_post(server_settings::cleanup_run),
+        ),
+        (
+            "GET",
+            "api/v1/servers/{uuid}/docker-cleanup/executions",
+            on_get(server_settings::cleanup_executions),
+        ),
+        (
+            "GET",
+            "api/v1/servers/{uuid}/log-drains",
+            on_get(server_settings::drains_show),
+        ),
+        (
+            "PATCH",
+            "api/v1/servers/{uuid}/log-drains",
+            on(
+                axum::routing::MethodFilter::PATCH,
+                server_settings::drains_update,
+            ),
+        ),
+        (
+            "GET",
+            "api/v1/servers/{uuid}/sentinel",
+            on_get(server_settings::sentinel_show),
+        ),
+        (
+            "PATCH",
+            "api/v1/servers/{uuid}/sentinel",
+            on(
+                axum::routing::MethodFilter::PATCH,
+                server_settings::sentinel_update,
+            ),
+        ),
+        (
+            "GET",
+            "api/v1/servers/{uuid}/cloudflare-tunnel",
+            on_get(server_settings::tunnel_show),
+        ),
+        (
+            "PATCH",
+            "api/v1/servers/{uuid}/cloudflare-tunnel",
+            on(
+                axum::routing::MethodFilter::PATCH,
+                server_settings::tunnel_update,
+            ),
+        ),
+        (
+            "POST",
+            "api/v1/servers/{uuid}/cloudflare-tunnel/enable",
+            on_post(server_settings::tunnel_enable),
+        ),
+        (
+            "POST",
+            "api/v1/servers/{uuid}/cloudflare-tunnel/disable",
+            on_post(server_settings::tunnel_disable),
+        ),
+        ("GET", "api/v1/destinations", on_get(destinations::index)),
+        (
+            "GET",
+            "api/v1/destinations/{uuid}",
+            on_get(destinations::show),
+        ),
+        (
+            "PATCH",
+            "api/v1/destinations/{uuid}",
+            on(axum::routing::MethodFilter::PATCH, destinations::update),
+        ),
+        (
+            "DELETE",
+            "api/v1/destinations/{uuid}",
+            on(axum::routing::MethodFilter::DELETE, destinations::delete),
+        ),
+        (
+            "GET",
+            "api/v1/servers/{server_uuid}/destinations",
+            on_get(destinations::index_by_server),
+        ),
+        (
+            "POST",
+            "api/v1/servers/{server_uuid}/destinations",
+            on_post(destinations::create),
+        ),
+        (
+            "GET",
+            "api/v1/servers/{uuid}/registries",
+            on_get(server_proxy::registries_index),
+        ),
+        (
+            "POST",
+            "api/v1/servers/{uuid}/registries",
+            on_post(server_proxy::registries_login),
+        ),
+        (
+            "POST",
+            "api/v1/servers/{uuid}/registries/{registry}/check",
+            on_post(server_proxy::registries_check),
+        ),
+        (
+            "DELETE",
+            "api/v1/servers/{uuid}/registries/{registry}",
+            on(
+                axum::routing::MethodFilter::DELETE,
+                server_proxy::registries_logout,
+            ),
+        ),
+        (
+            "GET",
+            "api/v1/servers/{uuid}/proxy",
+            on_get(server_proxy::proxy_show),
+        ),
+        (
+            "PATCH",
+            "api/v1/servers/{uuid}/proxy",
+            on(
+                axum::routing::MethodFilter::PATCH,
+                server_proxy::proxy_update,
+            ),
+        ),
+        (
+            "PUT",
+            "api/v1/servers/{uuid}/proxy/configuration",
+            on(
+                axum::routing::MethodFilter::PUT,
+                server_proxy::proxy_save_configuration,
+            ),
+        ),
+        (
+            "POST",
+            "api/v1/servers/{uuid}/proxy/restart",
+            on_post(server_proxy::proxy_restart),
+        ),
+        (
+            "GET",
+            "api/v1/servers/{uuid}/transfer",
+            on_get(server_proxy::transfer_status),
+        ),
+        ("GET", "api/v1/resources", on_get(destinations::resources)),
+        (
+            "POST",
+            "api/v1/sentinel/push",
+            on_post(server_proxy::sentinel_push),
+        ),
+        (
+            "GET",
+            "api/v1/cloud-tokens",
+            on_get(cloud_tokens::tokens_index),
+        ),
+        (
+            "POST",
+            "api/v1/cloud-tokens",
+            on_post(cloud_tokens::tokens_store),
+        ),
+        (
+            "GET",
+            "api/v1/cloud-tokens/{uuid}",
+            on_get(cloud_tokens::tokens_show),
+        ),
+        (
+            "PATCH",
+            "api/v1/cloud-tokens/{uuid}",
+            on(
+                axum::routing::MethodFilter::PATCH,
+                cloud_tokens::tokens_update,
+            ),
+        ),
+        (
+            "DELETE",
+            "api/v1/cloud-tokens/{uuid}",
+            on(
+                axum::routing::MethodFilter::DELETE,
+                cloud_tokens::tokens_destroy,
+            ),
+        ),
+        (
+            "POST",
+            "api/v1/cloud-tokens/{uuid}/validate",
+            on_post(cloud_tokens::tokens_validate),
+        ),
+        (
+            "GET",
+            "api/v1/cloud-init-scripts",
+            on_get(cloud_tokens::scripts_index),
+        ),
+        (
+            "POST",
+            "api/v1/cloud-init-scripts",
+            on_post(cloud_tokens::scripts_store),
+        ),
+        (
+            "GET",
+            "api/v1/cloud-init-scripts/{uuid}",
+            on_get(cloud_tokens::scripts_show),
+        ),
+        (
+            "PATCH",
+            "api/v1/cloud-init-scripts/{uuid}",
+            on(
+                axum::routing::MethodFilter::PATCH,
+                cloud_tokens::scripts_update,
+            ),
+        ),
+        (
+            "DELETE",
+            "api/v1/cloud-init-scripts/{uuid}",
+            on(
+                axum::routing::MethodFilter::DELETE,
+                cloud_tokens::scripts_destroy,
+            ),
+        ),
+        (
+            "GET",
+            "api/v1/hetzner/locations",
+            on_get(cloud_providers::hetzner_locations),
+        ),
+        (
+            "GET",
+            "api/v1/hetzner/server-types",
+            on_get(cloud_providers::hetzner_server_types),
+        ),
+        (
+            "GET",
+            "api/v1/hetzner/images",
+            on_get(cloud_providers::hetzner_images),
+        ),
+        (
+            "GET",
+            "api/v1/hetzner/ssh-keys",
+            on_get(cloud_providers::hetzner_ssh_keys),
+        ),
+        (
+            "GET",
+            "api/v1/hetzner/firewalls",
+            on_get(cloud_providers::hetzner_firewalls),
+        ),
+        (
+            "GET",
+            "api/v1/hetzner/networks",
+            on_get(cloud_providers::hetzner_networks),
+        ),
+        (
+            "POST",
+            "api/v1/servers/hetzner",
+            on_post(cloud_providers::hetzner_create_server),
+        ),
+        (
+            "GET",
+            "api/v1/vultr/regions",
+            on_get(cloud_providers::vultr_regions),
+        ),
+        (
+            "GET",
+            "api/v1/vultr/plans",
+            on_get(cloud_providers::vultr_plans),
+        ),
+        ("GET", "api/v1/vultr/os", on_get(cloud_providers::vultr_os)),
+        (
+            "GET",
+            "api/v1/vultr/ssh-keys",
+            on_get(cloud_providers::vultr_ssh_keys),
+        ),
+        (
+            "POST",
+            "api/v1/servers/vultr",
+            on_post(cloud_providers::vultr_create_server),
+        ),
+        (
+            "GET",
+            "api/v1/digitalocean/regions",
+            on_get(cloud_providers::digitalocean_regions),
+        ),
+        (
+            "GET",
+            "api/v1/digitalocean/sizes",
+            on_get(cloud_providers::digitalocean_sizes),
+        ),
+        (
+            "GET",
+            "api/v1/digitalocean/images",
+            on_get(cloud_providers::digitalocean_images),
+        ),
+        (
+            "GET",
+            "api/v1/digitalocean/ssh-keys",
+            on_get(cloud_providers::digitalocean_ssh_keys),
+        ),
+        (
+            "POST",
+            "api/v1/servers/digitalocean",
+            on_post(cloud_providers::digitalocean_create_server),
+        ),
+        (
+            "GET",
+            "api/v1/hostinger/data-centers",
+            on_get(cloud_providers::hostinger_data_centers),
+        ),
+        (
+            "GET",
+            "api/v1/hostinger/catalog",
+            on_get(cloud_providers::hostinger_catalog),
+        ),
+        (
+            "GET",
+            "api/v1/hostinger/templates",
+            on_get(cloud_providers::hostinger_templates),
+        ),
+        (
+            "GET",
+            "api/v1/hostinger/ssh-keys",
+            on_get(cloud_providers::hostinger_ssh_keys),
+        ),
+        (
+            "GET",
+            "api/v1/hostinger/post-install-scripts",
+            on_get(cloud_providers::hostinger_post_install_scripts),
+        ),
+        (
+            "POST",
+            "api/v1/servers/hostinger",
+            on_post(cloud_providers::hostinger_create_server),
         ),
     ];
 
