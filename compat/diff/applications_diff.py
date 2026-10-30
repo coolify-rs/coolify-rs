@@ -174,7 +174,15 @@ def main():
         codes = []
         for u, domain in ((ur, dr), (us, ds)):
             host = domain.split("://", 1)[1]
-            codes.append(vm(f"curl -s -o /dev/null -w '%{{http_code}}' -H 'Host: {host}' http://127.0.0.1/"))
+            # Traefik needs a moment to pick up a container that just turned healthy. Also record the
+            # number of attempts, so a lasting difference between the sides stays visible.
+            for attempt in range(1, 31):
+                code = vm(f"curl -s -o /dev/null -w '%{{http_code}}' -H 'Host: {host}' http://127.0.0.1/")
+                if code == "200":
+                    break
+                time.sleep(2)
+            print(f"proxy answer {u}: {code} after {attempt} attempts")
+            codes.append(code)
         record("both answer through the proxy", codes == ["200", "200"], codes)
         for tok in ("acme_owner_read", "acme_owner_root"):
             a_ = call("ref", "GET", f"/api/v1/deployments/applications/{ur}", tok=tok)

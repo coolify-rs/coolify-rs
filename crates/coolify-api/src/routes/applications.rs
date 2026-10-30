@@ -1710,7 +1710,7 @@ async fn create_git(
     }
     // The public branch checks the domains before it reads the repository URL, the others after
     // they found the GitHub App or the key.
-    let duplicate_suffix = if kind == GitKind::Public { "" } else { " " };
+    let duplicate_suffix = if kind == GitKind::GithubApp { " " } else { "" };
     if kind == GitKind::Public
         && let Some(early) =
             fields::check_compose_domain_urls(state, ctx.team_id, &cx.input, duplicate_suffix, None)

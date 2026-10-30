@@ -230,12 +230,9 @@ fn location(v: &str) -> String {
     if v == "/" {
         "/".to_owned()
     } else {
+        // `Str::start` collapses repeated leading slashes.
         let v = v.strip_suffix('/').unwrap_or(v);
-        if v.starts_with('/') {
-            v.to_owned()
-        } else {
-            format!("/{v}")
-        }
+        format!("/{}", v.trim_start_matches('/'))
     }
 }
 

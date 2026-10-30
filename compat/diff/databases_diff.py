@@ -97,7 +97,8 @@ KINDS = {
 
 def call(side, method, path, body=None, tok="acme_owner_write"):
     data = json.dumps(body).encode() if body is not None else None
-    for _ in range(5):
+    # Other agents share the reference's per-user rate limit.
+    for _ in range(40):
         r = urllib.request.Request(BASES[side] + path, data=data, method=method)
         r.add_header("Authorization", "Bearer " + TOKENS[tok])
         r.add_header("Accept", "application/json")
