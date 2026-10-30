@@ -19,7 +19,9 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         "echo 'Starting database.'".into(),
         format!("mkdir -p {dir}"),
     ];
-    let (volume_list, volume_names) = volume_entries(&ctx.volumes);
+    commands.extend(ctx.ensure_commands.iter().cloned());
+    let (mut volume_list, volume_names) = volume_entries(&ctx.volumes);
+    volume_list.extend(ctx.file_mounts.iter().map(|m| PhpValue::from(m.as_str())));
 
     // generate_environment_variables
     let mut user = s("clickhouse_admin_user");
@@ -85,7 +87,9 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
     if let Some(p) = ports(d) {
         service.set("ports", p);
     }
+    ctx.apply_logging(&mut service);
     service.set("volumes", PhpValue::list(volume_list));
+    ctx.apply_docker_options(&mut service);
     if d.raw.get("health_check_enabled").and_then(Value::as_bool) == Some(false) {
         service.remove("healthcheck");
     }

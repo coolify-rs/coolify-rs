@@ -328,45 +328,26 @@ async fn create_show_list_and_lifecycle() {
 }
 
 #[tokio::test]
-async fn unported_parts_answer_501() {
+async fn sqlite_and_tags_are_created() {
     let f = fixture().await;
     let h = &f.h;
     let base = json!({"server_uuid": f.server, "project_uuid": f.project, "environment_name": "production"});
     let mut tagged = base.clone();
     tagged["tags"] = json!(["prod"]);
-    assert_eq!(
-        h.call("POST", "/api/v1/databases/postgresql", W, Some(tagged))
-            .await
-            .status,
-        501
-    );
-    let mut public = base.clone();
-    public["is_public"] = json!(true);
-    public["public_port"] = json!(5433);
-    let uuid = h
-        .call("POST", "/api/v1/databases/postgresql", W, Some(public))
-        .await
-        .json()["uuid"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    // A public database needs the TCP proxy, which is not ported.
-    assert_eq!(
-        h.call(
-            "POST",
-            &format!("/api/v1/databases/{uuid}/start"),
-            ROOT,
-            None
-        )
-        .await
-        .status,
-        501
-    );
+    let created = h
+        .call("POST", "/api/v1/databases/postgresql", W, Some(tagged))
+        .await;
+    assert_eq!(created.status, 201);
+    let uuid = created.json()["uuid"].as_str().unwrap().to_owned();
+    let tags = h
+        .call("GET", &format!("/api/v1/databases/{uuid}/tags"), ROOT, None)
+        .await;
+    assert_eq!(tags.json()[0]["name"], "prod");
     assert_eq!(
         h.call("POST", "/api/v1/databases/sqlite", W, Some(base))
             .await
             .status,
-        501
+        201
     );
     f.h.finish().await;
 }

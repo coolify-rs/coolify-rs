@@ -97,7 +97,7 @@ KINDS = {
 
 def call(side, method, path, body=None, tok="acme_owner_write"):
     data = json.dumps(body).encode() if body is not None else None
-    for _ in range(5):
+    for _ in range(40):
         r = urllib.request.Request(BASES[side] + path, data=data, method=method)
         r.add_header("Authorization", "Bearer " + TOKENS[tok])
         r.add_header("Accept", "application/json")
@@ -108,7 +108,7 @@ def call(side, method, path, body=None, tok="acme_owner_write"):
             return resp.status, resp.read()
         except urllib.error.HTTPError as e:
             if e.code == 429:
-                time.sleep(int(e.headers.get("Retry-After", "5")))
+                time.sleep(max(3, int(e.headers.get("Retry-After", "5"))))
                 continue
             return e.code, e.read()
     raise SystemExit("rate limited")

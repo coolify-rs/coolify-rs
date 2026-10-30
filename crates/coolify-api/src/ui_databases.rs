@@ -918,7 +918,7 @@ pub async fn delete(
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let flag = |k: &str| input.get(k).and_then(Value::as_bool).unwrap_or(true);
     dbs::soft_delete(&state.db, d.kind, d.id, state.now()).await?;
-    jobs.spawn_database_delete(
+    jobs.spawn_database_delete_ui(
         d.clone(),
         flag("delete_volumes"),
         flag("delete_configurations"),

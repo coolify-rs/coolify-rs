@@ -19,6 +19,15 @@ pub async fn api_settings(db: &Db) -> DbResult<ApiSettings> {
     )
 }
 
+/// `webhook_allowed_internal_hosts` (as text) and `webhook_allow_localhost`.
+pub async fn webhook_policy(db: &Db) -> DbResult<Option<(Option<String>, Option<bool>)>> {
+    Ok(sqlx::query_as(
+        "SELECT webhook_allowed_internal_hosts::text, webhook_allow_localhost FROM instance_settings WHERE id = 0",
+    )
+    .fetch_optional(db.pool())
+    .await?)
+}
+
 /// `OtherController@disable_api`.
 pub async fn disable_api(db: &Db, now: NaiveDateTime) -> DbResult<()> {
     db.ensure_writable()?;

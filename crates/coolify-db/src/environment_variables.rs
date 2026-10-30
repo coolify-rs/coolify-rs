@@ -119,7 +119,7 @@ pub async fn for_resource(
     resource_id: i64,
 ) -> DbResult<Vec<Variable>> {
     let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT row_to_json(v)::text FROM environment_variables v WHERE resourceable_type = $1 AND resourceable_id = $2",
+        "SELECT row_to_json(v)::text FROM environment_variables v WHERE resourceable_type = $1 AND resourceable_id = $2 ORDER BY id",
     )
     .bind(resource_type)
     .bind(resource_id)

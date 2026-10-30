@@ -6,8 +6,8 @@ use serde_json::Value;
 
 use super::StartContext;
 use super::common::{
-    CONFIGURATION_DIR, b64, database_labels, finish_commands, healthcheck, limits, networks,
-    php_filled, volume_entries,
+    CONFIGURATION_DIR, b64, ca_mount, database_labels, finish_commands, healthcheck, limits,
+    networks, php_filled, volume_entries,
 };
 use super::env::add_coolify_variables;
 
@@ -45,10 +45,11 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         "echo 'Creating directories.'".into(),
         format!("mkdir -p {dir}"),
         "echo 'Directories created successfully.'".into(),
-        // enable_ssl is false (SSL is not ported; the caller refuses it).
-        format!("rm -rf {dir}/ssl"),
     ];
-    let (volume_list, volume_names) = volume_entries(&ctx.volumes);
+    commands.extend(ctx.ssl_commands.iter().cloned());
+    commands.extend(ctx.ensure_commands.iter().cloned());
+    let (mut volume_list, volume_names) = volume_entries(&ctx.volumes);
+    volume_list.extend(ctx.file_mounts.iter().map(|m| PhpValue::from(m.as_str())));
 
     // generate_environment_variables
     let legacy_quoting = d.bool("legacy_password_quoting");
@@ -99,11 +100,14 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         quote(&password)
     };
     let conf_path = "/usr/local/etc/redis/redis.conf";
-    let command = match &conf {
+    let mut command = match &conf {
         Some(c) if c.contains("requirepass") => format!("redis-server {conf_path}"),
         Some(_) => format!("redis-server {conf_path} --requirepass {password_arg}"),
         None => format!("redis-server --requirepass {password_arg} --appendonly yes"),
     };
+    if d.bool("enable_ssl") {
+        command.push_str(" --tls-port 6380 --tls-cert-file /etc/redis/certs/server.crt --tls-key-file /etc/redis/certs/server.key --tls-ca-cert-file /etc/redis/certs/coolify-ca.crt --tls-auth-clients optional");
+    }
 
     let mut service = PhpValue::map([
         ("image", PhpValue::from(d.str("image").unwrap_or_default())),
@@ -131,7 +135,11 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
             PhpValue::strings(ports.split(',').map(str::to_owned)),
         );
     }
+    ctx.apply_logging(&mut service);
     let mut volumes = PhpValue::list(volume_list);
+    if d.bool("enable_ssl") {
+        volumes.push(ca_mount("/etc/redis/certs/coolify-ca.crt"));
+    }
     if conf.is_some() {
         volumes.push(PhpValue::map([
             ("type", PhpValue::from("bind")),
@@ -141,6 +149,7 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         ]));
     }
     service.set("volumes", volumes);
+    ctx.apply_docker_options(&mut service);
     if d.raw.get("health_check_enabled").and_then(Value::as_bool) == Some(false) {
         service.remove("healthcheck");
     }
@@ -152,10 +161,15 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         compose.set("volumes", volume_names);
     }
     let compose_yaml = yaml::dump(&compose, 10);
-    let extra: Vec<String> = conf
-        .iter()
-        .map(|_| format!("chown 999:999 {dir}/redis.conf"))
-        .collect();
+    let mut extra: Vec<String> = Vec::new();
+    if d.bool("enable_ssl") {
+        extra.push(format!(
+            "chown -R 999:999 {dir}/ssl/server.key {dir}/ssl/server.crt"
+        ));
+    }
+    if conf.is_some() {
+        extra.push(format!("chown 999:999 {dir}/redis.conf"));
+    }
     finish_commands(&mut commands, d, ctx.server, &compose_yaml, ctx.now, &extra);
     (commands, compose_yaml)
 }

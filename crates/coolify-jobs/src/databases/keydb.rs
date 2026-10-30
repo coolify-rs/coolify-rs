@@ -8,8 +8,8 @@ use serde_json::Value;
 
 use super::StartContext;
 use super::common::{
-    CONFIGURATION_DIR, b64, cpuset, database_labels, finish_commands, healthcheck, limits,
-    networks, php_filled, ports, volume_entries,
+    CONFIGURATION_DIR, b64, ca_mount, cpuset, database_labels, finish_commands, healthcheck,
+    limits, networks, php_filled, ports, volume_entries,
 };
 use super::env::{add_coolify_variables, has_key};
 
@@ -23,10 +23,11 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         "echo 'Creating directories.'".into(),
         format!("mkdir -p {dir}"),
         "echo 'Directories created successfully.'".into(),
-        // enable_ssl is false (SSL is not ported; the caller refuses it).
-        format!("rm -rf {dir}/ssl"),
     ];
-    let (volume_list, volume_names) = volume_entries(&ctx.volumes);
+    commands.extend(ctx.ssl_commands.iter().cloned());
+    commands.extend(ctx.ensure_commands.iter().cloned());
+    let (mut volume_list, volume_names) = volume_entries(&ctx.volumes);
+    volume_list.extend(ctx.file_mounts.iter().map(|m| PhpValue::from(m.as_str())));
 
     // generate_environment_variables
     let model_password = ctx.secret(if keydb {
@@ -81,12 +82,19 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         quote(&password)
     };
     let conf_path = "/etc/keydb/keydb.conf";
-    let command = match (&conf, keydb) {
+    let mut command = match (&conf, keydb) {
         (_, false) => format!("dragonfly --requirepass {password_arg}"),
         (Some(c), true) if c.contains("requirepass") => format!("keydb-server {conf_path}"),
         (Some(_), true) => format!("keydb-server {conf_path} --requirepass {password_arg}"),
         (None, true) => format!("keydb-server --requirepass {password_arg} --appendonly yes"),
     };
+    if d.bool("enable_ssl") {
+        if keydb {
+            command.push_str(" --tls-port 6380 --tls-cert-file /etc/keydb/certs/server.crt --tls-key-file /etc/keydb/certs/server.key --tls-ca-cert-file /etc/keydb/certs/coolify-ca.crt --tls-auth-clients optional");
+        } else {
+            command.push_str(" --tls --tls_cert_file /etc/dragonfly/certs/server.crt --tls_key_file /etc/dragonfly/certs/server.key --tls_ca_cert_file /etc/dragonfly/certs/coolify-ca.crt");
+        }
+    }
     let test: Vec<&str> = if keydb {
         vec!["CMD", "keydb-cli", "--pass", &password, "ping"]
     } else {
@@ -112,6 +120,7 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
     if let Some(p) = ports(d) {
         service.set("ports", p);
     }
+    ctx.apply_logging(&mut service);
     let mut volumes = PhpValue::list(volume_list);
     if conf.is_some() {
         volumes.push(PhpValue::map([
@@ -121,7 +130,15 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
             ("read_only", PhpValue::Bool(true)),
         ]));
     }
+    if d.bool("enable_ssl") {
+        volumes.push(ca_mount(if keydb {
+            "/etc/keydb/certs/coolify-ca.crt"
+        } else {
+            "/etc/dragonfly/certs/coolify-ca.crt"
+        }));
+    }
     service.set("volumes", volumes);
+    ctx.apply_docker_options(&mut service);
     if d.raw.get("health_check_enabled").and_then(Value::as_bool) == Some(false) {
         service.remove("healthcheck");
     }
@@ -133,10 +150,15 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         compose.set("volumes", volume_names);
     }
     let compose_yaml = yaml::dump(&compose, 10);
-    let extra: Vec<String> = conf
-        .iter()
-        .map(|_| format!("chown 999:999 {dir}/keydb.conf"))
-        .collect();
+    let mut extra: Vec<String> = Vec::new();
+    if d.bool("enable_ssl") {
+        extra.push(format!(
+            "chown -R 999:999 {dir}/ssl/server.key {dir}/ssl/server.crt"
+        ));
+    }
+    if conf.is_some() {
+        extra.push(format!("chown 999:999 {dir}/keydb.conf"));
+    }
     finish_commands(&mut commands, d, ctx.server, &compose_yaml, ctx.now, &extra);
     (commands, compose_yaml)
 }

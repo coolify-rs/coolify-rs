@@ -1,6 +1,6 @@
-//! `DatabasesController`: list, show, create (PostgreSQL), start, stop,
-//! restart and delete. Other database kinds, backups, environment variables,
-//! storages, tags, imports, logs and updates are not ported yet (501).
+//! `DatabasesController`: list, show, create, start, stop, restart and delete.
+//! The other routes are in `database_more`, `database_envs`, `database_storages`
+//! and `database_backups`.
 //!
 //! Responses follow `removeSensitiveData` + `serializeApiResponse`: the model
 //! attributes sorted, with the destination (its server and settings, loaded
@@ -27,7 +27,8 @@ use crate::serialize::{php_truthy, serialize_record};
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
 
-const NOT_FOUND: ApiError = ApiError::Message(StatusCode::NOT_FOUND, "Database not found.");
+pub(crate) const NOT_FOUND: ApiError =
+    ApiError::Message(StatusCode::NOT_FOUND, "Database not found.");
 
 /// `ServerSetting` attributes hidden by the model; the sensitive ones are made
 /// visible for `can_read_sensitive` (`exposeNestedServerSecrets`).
@@ -208,9 +209,6 @@ pub(crate) async fn present(
     with_environment: bool,
     backup_configs: Option<Value>,
 ) -> Result<Value, ApiError> {
-    if !d.kind.ported() {
-        return Err(ApiError::NotPorted);
-    }
     let server = match d.server_id() {
         Some(id) => servers::find_by_id(&state.db, id).await?,
         None => None,
@@ -229,7 +227,7 @@ pub(crate) async fn present(
         "server_status".into(),
         Value::Bool(server.as_ref().is_some_and(server_functional)),
     );
-    if ctx.can_read_sensitive {
+    if ctx.can_read_sensitive && d.kind != Kind::Sqlite {
         // `makeVisible([...])`: the hidden password columns, `init_scripts` and the URLs.
         let c = credentials(state, d).await?;
         for column in d.kind.encrypted_columns() {
@@ -282,15 +280,9 @@ pub async fn list(State(state): State<AppState>, Extension(ctx): Extension<AuthC
     let rows = dbs::list_for_team(&state.db, ctx.team_id).await?;
     let mut items = Vec::with_capacity(rows.len());
     for d in &rows {
-        // Backup configurations are not ported: only databases without them are listed faithfully.
-        if !dbs::unported_parts(&state.db, d.kind, d.id)
-            .await?
-            .iter()
-            .all(|p| *p != "scheduled backups")
-        {
-            return Err(ApiError::NotPorted);
-        }
-        items.push(present(&state, &ctx, d, false, Some(json!([]))).await?);
+        let configs =
+            crate::routes::database_backups::configs_with_latest_log(&state, &ctx, d).await?;
+        items.push(present(&state, &ctx, d, false, Some(configs)).await?);
     }
     Ok(ok(Value::Array(items)).into_response())
 }
@@ -383,7 +375,7 @@ const ALLOWED_COMMON: &[&str] = &[
 
 /// The type's own fields of `create_database` (`$allowedFields` after the common ones,
 /// before `tags`), with their rules.
-fn kind_fields(kind: Kind) -> Vec<Field> {
+pub(crate) fn kind_fields(kind: Kind) -> Vec<Field> {
     let id = |name| Field {
         name,
         rules: vec![
@@ -441,12 +433,28 @@ fn kind_fields(kind: Kind) -> Vec<Field> {
             pw("mariadb_password"),
             id("mariadb_database"),
         ],
-        Kind::Sqlite => vec![],
+        Kind::Sqlite => vec![Field {
+            name: "sqlite_databases",
+            rules: vec![Rule::String, Rule::Max(255), Rule::Regex(&SQLITE_DATABASES)],
+        }],
     }
 }
 
+/// `isPublicPortAlreadyUsed` with `$id`.
+pub(crate) async fn public_port_used_except(
+    db: &coolify_db::Db,
+    server_id: i64,
+    port: i64,
+    id: i64,
+) -> Result<bool, ApiError> {
+    Ok(dbs::list_for_server(db, server_id)
+        .await?
+        .iter()
+        .any(|d| d.bool("is_public") && d.int("public_port") == Some(port) && d.id != id))
+}
+
 /// The base64 configuration field of a type (`isBase64Encoded` + UTF-8 check).
-fn conf_field(kind: Kind) -> Option<&'static str> {
+pub(crate) fn conf_field(kind: Kind) -> Option<&'static str> {
     match kind {
         Kind::Postgresql => Some("postgres_conf"),
         Kind::Redis => Some("redis_conf"),
@@ -459,13 +467,18 @@ fn conf_field(kind: Kind) -> Option<&'static str> {
 }
 
 /// Integer columns among the fillable ones.
-const INT_COLUMNS: &[&str] = &[
+pub(crate) const INT_COLUMNS: &[&str] = &[
     "public_port",
     "public_port_timeout",
     "limits_memory_swappiness",
     "limits_cpu_shares",
 ];
 
+/// `StandaloneSqlite::DATABASES_PATTERN`.
+static SQLITE_DATABASES: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]*(,[A-Za-z0-9][A-Za-z0-9._-]*)*\n?\z")
+        .unwrap_or_else(|_| unreachable!())
+});
 static DB_IDENTIFIER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"^[A-Za-z_][A-Za-z0-9_]{0,62}\n?\z").unwrap_or_else(|_| unreachable!())
 });
@@ -545,6 +558,7 @@ create_handlers! {
     create_clickhouse => Kind::Clickhouse,
     create_dragonfly => Kind::Dragonfly,
     create_keydb => Kind::Keydb,
+    create_sqlite => Kind::Sqlite,
 }
 
 async fn create_database(
@@ -791,12 +805,42 @@ async fn create_database(
         CUSTOM_API_MESSAGES,
         &present_keys,
     )?;
-    // Tags need the tag models (not ported).
-    if input
-        .get("tags")
-        .is_some_and(|t| t.as_array().is_some_and(|a| !a.is_empty()))
-    {
-        return Err(ApiError::NotPorted);
+    // `tags.*` => `string|min:2`.
+    if let Some(Value::Array(list)) = input.get("tags") {
+        let mut errors = Map::new();
+        for (i, tag) in list.iter().enumerate() {
+            match tag.as_str() {
+                None => {
+                    errors.insert(
+                        format!("tags.{i}"),
+                        json!([format!("The tags.{i} field must be a string.")]),
+                    );
+                }
+                Some(s) if s.chars().count() < 2 => {
+                    errors.insert(
+                        format!("tags.{i}"),
+                        json!([format!("The tags.{i} field must be at least 2 characters.")]),
+                    );
+                }
+                _ => {}
+            }
+        }
+        if !errors.is_empty() {
+            return Err(ApiError::Validation(errors));
+        }
+    }
+    // validateTagsParameter
+    let tag_names: Vec<String> = match input.get("tags") {
+        Some(Value::Array(list)) => crate::routes::database_more::normalize_tag_names(list),
+        _ => Vec::new(),
+    };
+    if tag_names.iter().any(|n| n.chars().count() < 2) {
+        let mut m = Map::new();
+        m.insert(
+            "tags".into(),
+            json!(["Each tag name must be at least 2 characters after sanitization."]),
+        );
+        return Err(ApiError::Validation(m));
     }
     if let Some(port) = public_port.filter(|p| *p != 0)
         && !(1024..=65535).contains(&port)
@@ -807,7 +851,15 @@ async fn create_database(
         ));
     }
     let own = kind_fields(kind);
-    let mut allowed: Vec<&str> = ALLOWED_COMMON.to_vec();
+    // SQLite has no public port.
+    let common: Vec<&'static str> = ALLOWED_COMMON
+        .iter()
+        .copied()
+        .filter(|f| {
+            kind != Kind::Sqlite || !["public_port", "public_port_timeout", "is_public"].contains(f)
+        })
+        .collect();
+    let mut allowed: Vec<&str> = common.clone();
     allowed.extend(own.iter().map(|f| f.name));
     allowed.push("tags");
     validate(&input, &own, CUSTOM_API_MESSAGES, &allowed)?;
@@ -830,7 +882,7 @@ async fn create_database(
     // `create_standalone_*` sets the generated passwords before `fill()`.
     let mut secrets: Vec<(&'static str, String)> = Vec::new();
     let mut redis_password: Option<String> = None;
-    let allowed_static: Vec<&'static str> = ALLOWED_COMMON
+    let allowed_static: Vec<&'static str> = common
         .iter()
         .copied()
         .chain(own.iter().map(|f| f.name))
@@ -905,10 +957,21 @@ async fn create_database(
         name,
         variables,
     };
-    let (_, uuid) = dbs::create(&state.db, kind, new, state.now()).await?;
+    let (new_id, uuid) = dbs::create(&state.db, kind, new, state.now()).await?;
     let d = dbs::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(ApiError::Internal)?;
+    if !tag_names.is_empty() {
+        coolify_db::database_parts::attach_tags(
+            &state.db,
+            ctx.team_id,
+            kind.morph(),
+            new_id,
+            &tag_names,
+            state.now(),
+        )
+        .await?;
+    }
     if instant {
         start_or_queue(&state, &ctx, d.clone(), false)?;
     }
@@ -935,21 +998,25 @@ async fn create_database(
 
 /// What a start would need that coolify-rs cannot do yet.
 pub(crate) async fn startable(state: &AppState, d: &DatabaseRow) -> Result<(), ApiError> {
-    let unsupported = !d.kind.ported()
-        || d.bool("enable_ssl")
-        || (d.bool("is_public") && d.int("public_port").is_some())
-        || d.str("custom_docker_run_options")
-            .is_some_and(|o| !o.trim().is_empty())
-        || d.destination.is_none()
-        || !dbs::unported_parts(&state.db, d.kind, d.id)
-            .await?
-            .iter()
-            .all(|p| *p == "scheduled backups");
-    if unsupported {
+    let _ = state;
+    if d.destination.is_none() {
         Err(ApiError::NotPorted)
     } else {
         Ok(())
     }
+}
+
+/// `StartDatabase::prerequisiteError`.
+async fn prerequisite(state: &AppState, d: &DatabaseRow) -> Result<(), ApiError> {
+    if let Some(jobs) = state.jobs.as_ref()
+        && jobs.start_prerequisite_error(d).await.is_some()
+    {
+        return Err(ApiError::Message(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            coolify_jobs::databases::ssl::MISSING_CA,
+        ));
+    }
+    Ok(())
 }
 
 fn start_or_queue(
@@ -985,6 +1052,7 @@ pub async fn start(
             "Database is already running.",
         ));
     }
+    prerequisite(&state, &d).await?;
     startable(&state, &d).await?;
     start_or_queue(&state, &ctx, d.clone(), false)?;
     tracing::info!(target: "audit", event = "api.database.started", team_id = ctx.team_id, database_uuid = %d.uuid, "database start queued");
@@ -996,6 +1064,9 @@ pub async fn stop(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
     Path(uuid): Path<String>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
 ) -> ApiResult {
     let d = dbs::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
@@ -1010,11 +1081,9 @@ pub async fn stop(
             "Database is already stopped.",
         ));
     }
-    if !d.kind.ported() || d.bool("is_public") {
-        return Err(ApiError::NotPorted);
-    }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
-    jobs.spawn_database_stop(d.clone());
+    let input = lenient_json(&headers, &uri, &body);
+    jobs.spawn_database_stop(d.clone(), query_bool(&uri, &input, "docker_cleanup", true));
     tracing::info!(target: "audit", event = "api.database.stopped", team_id = ctx.team_id, database_uuid = %d.uuid, "database stop queued");
     Ok(ok(json!({"message": "Database stopping request queued."})).into_response())
 }
@@ -1031,6 +1100,7 @@ pub async fn restart(
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
+    prerequisite(&state, &d).await?;
     startable(&state, &d).await?;
     start_or_queue(&state, &ctx, d.clone(), true)?;
     tracing::info!(target: "audit", event = "api.database.restarted", team_id = ctx.team_id, database_uuid = %d.uuid, "database restart queued");
@@ -1063,24 +1133,33 @@ pub async fn delete(
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
-    if !d.kind.ported() || d.bool("is_public") {
-        return Err(ApiError::NotPorted);
-    }
-    let unported = dbs::unported_parts(&state.db, d.kind, d.id).await?;
-    if unported.iter().any(|p| {
-        matches!(
-            *p,
-            "file storages" | "SSL certificates" | "scheduled backups"
-        )
-    }) {
-        return Err(ApiError::NotPorted);
+    if d.kind == Kind::Sqlite {
+        let names =
+            coolify_db::database_parts::sqlite_connected_applications(&state.db, d.id).await?;
+        if !names.is_empty() {
+            let message = format!(
+                "This database volume is mounted by {}. Remove those mounts before deleting the database.",
+                names.join(", ")
+            );
+            return Ok(crate::response::PhpJson(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({"message": message}),
+            )
+            .into_response());
+        }
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let input = lenient_json(&headers, &uri, &body);
     let delete_volumes = query_bool(&uri, &input, "delete_volumes", true);
     let delete_configurations = query_bool(&uri, &input, "delete_configurations", true);
+    let docker_cleanup = query_bool(&uri, &input, "docker_cleanup", true);
     dbs::soft_delete(&state.db, d.kind, d.id, state.now()).await?;
-    jobs.spawn_database_delete(d.clone(), delete_volumes, delete_configurations);
+    jobs.spawn_database_delete(
+        d.clone(),
+        delete_volumes,
+        delete_configurations,
+        docker_cleanup,
+    );
     tracing::info!(target: "audit", event = "api.database.deleted", team_id = ctx.team_id, database_uuid = %d.uuid, "database deletion queued");
     Ok(ok(json!({"message": "Database deletion request queued."})).into_response())
 }

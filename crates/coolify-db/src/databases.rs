@@ -84,7 +84,7 @@ impl Kind {
     }
 
     pub fn ported(self) -> bool {
-        !matches!(self, Kind::Sqlite)
+        true
     }
 
     /// The ported kinds, in upstream's order.
@@ -754,6 +754,78 @@ pub async fn servers_with_databases(db: &Db) -> DbResult<Vec<i64>> {
     .await?)
 }
 
+/// The UUID of a row, also of a soft-deleted one.
+pub async fn uuid_by_id(db: &Db, kind: Kind, id: i64) -> DbResult<Option<String>> {
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT uuid FROM {} WHERE id = $1 AND deleted_at IS NULL",
+        kind.table()
+    ))
+    .bind(id)
+    .fetch_optional(db.pool())
+    .await?)
+}
+
+/// `ResourceStartActivity::active` for one operation, without the stale ones
+/// (`QUEUED_STALE_AFTER_SECONDS`, `IN_PROGRESS_STALE_AFTER_SECONDS`, the import limit).
+pub async fn active_activities(db: &Db, uuid: &str, operation: &str) -> DbResult<Vec<i64>> {
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM activity_log WHERE properties->>'type_uuid' = $1 AND properties->>'operation' = $2 \
+         AND properties->>'status' IN ('queued', 'in_progress') AND updated_at > (now() AT TIME ZONE 'UTC') - make_interval(secs => \
+         CASE WHEN $2 = 'database_import' THEN 7200 WHEN properties->>'status' = 'queued' THEN 600 ELSE 900 END)",
+    )
+    .bind(uuid)
+    .bind(operation)
+    .fetch_all(db.pool())
+    .await?)
+}
+
+/// A live start or import, or a latest activity that is still running.
+pub async fn live_operation(db: &Db, uuid: &str) -> DbResult<bool> {
+    for op in ["database-start", "database_import"] {
+        if !active_activities(db, uuid, op).await?.is_empty() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// `S3Storage::ownedByCurrentTeamAPI` with `is_usable`, by UUID or numeric id.
+pub async fn team_usable_s3(db: &Db, team_id: TeamId, wanted: &str) -> DbResult<Option<Record>> {
+    let id: i64 = if wanted.chars().all(|c| c.is_ascii_digit()) && !wanted.is_empty() {
+        wanted.parse().unwrap_or(-1)
+    } else {
+        -1
+    };
+    let text: Option<String> = sqlx::query_scalar(
+        "SELECT row_to_json(s)::text FROM s3_storages s WHERE team_id = $1 AND (uuid = $2 OR id = $3) AND is_usable ORDER BY name LIMIT 1",
+    )
+    .bind(team_id)
+    .bind(wanted)
+    .bind(id)
+    .fetch_optional(db.pool())
+    .await?;
+    text.map(|t| decode(&t, "s3_storages")).transpose()
+}
+
+/// The import activity of `showDatabaseImport`: `(properties, description, created_at, updated_at)`.
+pub async fn import_activity(
+    db: &Db,
+    id: i64,
+    team_id: TeamId,
+    uuid: &str,
+) -> DbResult<Option<(serde_json::Value, String, String, String)>> {
+    let r: Option<(String, String, String, String)> = sqlx::query_as(
+        "SELECT properties::text, description, to_char(created_at, 'YYYY-MM-DD\"T\"HH24:MI:SS'), to_char(updated_at, 'YYYY-MM-DD\"T\"HH24:MI:SS') FROM activity_log \
+         WHERE id = $1 AND properties->>'team_id' = $2 AND properties->>'type_uuid' = $3 AND properties->>'operation' = 'database_import'",
+    )
+    .bind(id)
+    .bind(team_id.to_string())
+    .bind(uuid)
+    .fetch_optional(db.pool())
+    .await?;
+    Ok(r.map(|(p, d, c, u)| (serde_json::from_str(&p).unwrap_or_default(), d, c, u)))
+}
+
 /// Presents raw attributes with the model spec (timestamps, hidden columns).
 pub fn present(kind: Kind, raw: Record) -> Record {
     use crate::database_specs as specs;
@@ -766,7 +838,7 @@ pub fn present(kind: Kind, raw: Record) -> Record {
         Kind::Keydb => &specs::STANDALONE_KEYDB,
         Kind::Dragonfly => &specs::STANDALONE_DRAGONFLY,
         Kind::Clickhouse => &specs::STANDALONE_CLICKHOUSE,
-        Kind::Sqlite => return raw,
+        Kind::Sqlite => &specs::STANDALONE_SQLITE,
     };
     spec.present(raw)
 }

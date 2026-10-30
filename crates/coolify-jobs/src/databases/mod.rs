@@ -17,15 +17,26 @@ use serde_json::{Value, json};
 use crate::Jobs;
 use crate::server::ServerInfo;
 
+pub mod backup;
+pub mod cleanup;
 mod clickhouse;
 mod common;
 pub mod connection;
+pub mod docker_options;
 pub mod env;
+pub mod import;
 mod keydb;
 mod mongodb;
 mod mysql;
+pub mod paths;
 mod postgresql;
+pub mod proxy;
 mod redis;
+pub mod s3;
+mod sqlite;
+pub mod ssl;
+pub mod storage;
+pub mod variables;
 
 pub(crate) use common::docker_stop_command;
 pub use common::slug;
@@ -44,11 +55,35 @@ pub struct StartContext<'a> {
     pub network: String,
     pub volumes: Vec<(String, String, Option<String>)>,
     pub now: NaiveDateTime,
+    /// The SSL commands of the start (`rm -rf ssl`, or the certificate setup).
+    pub ssl_commands: Vec<String>,
+    /// `EnsureContentFilesOnServer::echoCommands`.
+    pub ensure_commands: Vec<String>,
+    /// `"$fs_path:$mount_path"` of the file storages.
+    pub file_mounts: Vec<String>,
+    /// `generate_log_drain_configuration`, when the server and the database use a log drain.
+    pub logging: Option<coolify_compat::yaml::PhpValue>,
 }
 
 impl StartContext<'_> {
     pub fn secret(&self, column: &str) -> String {
         self.secrets.get(column).cloned().unwrap_or_default()
+    }
+
+    /// `$docker_compose['services'][$name]['logging']`.
+    pub fn apply_logging(&self, service: &mut coolify_compat::yaml::PhpValue) {
+        if let Some(l) = &self.logging {
+            service.set("logging", l.clone());
+        }
+    }
+
+    /// `generateCustomDockerRunOptionsForDatabases`.
+    pub fn apply_docker_options(&self, service: &mut coolify_compat::yaml::PhpValue) {
+        docker_options::apply_to_service(
+            service,
+            self.db.str("custom_docker_run_options"),
+            &self.network,
+        );
     }
 }
 
@@ -61,7 +96,7 @@ pub fn start_commands(ctx: &StartContext<'_>) -> Result<(Vec<String>, String), S
         Kind::Mongodb => Ok(mongodb::start_commands(ctx)),
         Kind::Mysql | Kind::Mariadb => Ok(mysql::start_commands(ctx)),
         Kind::Clickhouse => Ok(clickhouse::start_commands(ctx)),
-        _ => Err("Database start failed.".into()),
+        Kind::Sqlite => Ok(sqlite::start_commands(ctx)),
     }
 }
 
@@ -86,6 +121,14 @@ fn container_status(c: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     format!("{state}:{health}")
+}
+
+/// `removeAnsiColors`.
+fn remove_ansi(text: &str) -> String {
+    static ANSI: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"\x1b[\[][A-Za-z0-9];?[0-9]*m?").unwrap_or_else(|_| unreachable!())
+    });
+    ANSI.replace_all(text, "").into_owned()
 }
 
 /// `format_docker_command_output_to_json`: one JSON object per line.
@@ -122,6 +165,21 @@ impl Jobs {
         Ok(ServerInfo::from_row(&row))
     }
 
+    /// `StartDatabase::prerequisiteError`: the CA of a database with SSL.
+    pub async fn start_prerequisite_error(&self, d: &DatabaseRow) -> Option<String> {
+        if !d.bool("enable_ssl") {
+            return None;
+        }
+        match self.server_for(d).await {
+            Ok(server) => self
+                .ensure_ca_certificate(&server)
+                .await
+                .err()
+                .map(|_| ssl::MISSING_CA.to_owned()),
+            Err(_) => Some(ssl::MISSING_CA.to_owned()),
+        }
+    }
+
     /// `StartDatabase::reserveOperation` + `dispatchReserved(StartDatabase::class)`.
     /// The request answers right away; the start runs in the background.
     pub fn spawn_database_start(
@@ -155,7 +213,7 @@ impl Jobs {
             let uuid = d.uuid.clone();
             match jobs.server_for(&d).await {
                 Ok(server) if server.is_functional() => {
-                    jobs.stop_database(&d, &server).await;
+                    jobs.stop_database(&d, &server, false).await;
                     jobs.start_database(&d, user_id).await;
                 }
                 Ok(_) => jobs.record_failed_start(&d, NOT_FUNCTIONAL, user_id).await,
@@ -167,11 +225,13 @@ impl Jobs {
     }
 
     /// `StopDatabase::dispatch`.
-    pub fn spawn_database_stop(&self, d: DatabaseRow) {
+    pub fn spawn_database_stop(&self, d: DatabaseRow, docker_cleanup: bool) {
         let jobs = self.clone();
         tokio::spawn(async move {
             match jobs.server_for(&d).await {
-                Ok(server) if server.is_functional() => jobs.stop_database(&d, &server).await,
+                Ok(server) if server.is_functional() => {
+                    jobs.stop_database(&d, &server, docker_cleanup).await
+                }
                 Ok(_) => {
                     tracing::info!(database = %d.uuid, "stop skipped: server is not functional")
                 }
@@ -187,6 +247,7 @@ impl Jobs {
         d: DatabaseRow,
         delete_volumes: bool,
         delete_configurations: bool,
+        docker_cleanup: bool,
     ) {
         let jobs = self.clone();
         tokio::spawn(async move {
@@ -194,7 +255,7 @@ impl Jobs {
                 && server.is_functional()
                 && let Ok(t) = server.target(&jobs).await
             {
-                jobs.stop_database(&d, &server).await;
+                jobs.stop_database(&d, &server, docker_cleanup).await;
                 let remote = jobs.remote();
                 if delete_configurations {
                     remote
@@ -225,8 +286,168 @@ impl Jobs {
         });
     }
 
-    /// `StopDatabase::handle` (no Docker cleanup: `CleanupDocker` is not ported).
-    async fn stop_database(&self, d: &DatabaseRow, server: &ServerInfo) {
+    /// `spawn_database_delete` with upstream's defaults (the UI's delete form has no cleanup switch here).
+    pub fn spawn_database_delete_ui(
+        &self,
+        d: DatabaseRow,
+        delete_volumes: bool,
+        delete_configurations: bool,
+    ) {
+        self.spawn_database_delete(d, delete_volumes, delete_configurations, true);
+    }
+
+    /// `logs_by_uuid`: `None` when the database has no running container.
+    pub async fn database_logs(
+        &self,
+        d: &DatabaseRow,
+        lines: &str,
+        timestamps: bool,
+    ) -> Result<Option<String>, String> {
+        let server = self.server_for(d).await?;
+        if server.is_swarm() {
+            return Ok(None);
+        }
+        let t = server.target(self).await?;
+        let by_label = format!(
+            "docker ps -a --filter {} --format {}",
+            quote(&format!("label=coolify.databaseUuid={}", d.uuid)),
+            quote("{{json .}}")
+        );
+        let legacy = format!(
+            "docker ps -a --filter {} --filter {} --format {}",
+            quote("label=coolify.databaseId"),
+            quote(&format!("label=com.docker.compose.project={}", d.uuid)),
+            quote("{{json .}}")
+        );
+        let out = self
+            .remote()
+            .run(
+                &t,
+                &[by_label.as_str(), legacy.as_str()],
+                RunOptions::op("database.logs"),
+            )
+            .await
+            .map_err(|e| e.message)?
+            .unwrap_or_default();
+        let containers = json_lines(&out);
+        let Some(first) = containers.first() else {
+            return Ok(None);
+        };
+        let names = first
+            .get("Names")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let id = first.get("ID").and_then(Value::as_str).unwrap_or_default();
+        let inspect = format!("docker inspect --format '{{{{json .}}}}' {}", quote(names));
+        let state = self
+            .remote()
+            .run_quiet(&t, &[inspect.as_str()], RunOptions::op("database.logs"))
+            .await
+            .unwrap_or_default();
+        let running = json_lines(&state)
+            .first()
+            .and_then(|c| c.pointer("/State/Status"))
+            .and_then(Value::as_str)
+            == Some("running");
+        if !running {
+            return Ok(None);
+        }
+        let mut command = format!("docker logs -n {lines}");
+        if timestamps {
+            command.push_str(" --timestamps");
+        }
+        let command = format!("{command} {} 2>&1", quote(id));
+        let logs = self
+            .remote()
+            .run(&t, &[command.as_str()], RunOptions::op("database.logs"))
+            .await
+            .map_err(|e| e.message)?
+            .unwrap_or_default();
+        let plain = remove_ansi(&logs);
+        let enc = self
+            .0
+            .encrypter
+            .as_ref()
+            .ok_or("No application encryption key has been specified.")?;
+        let credentials = connection::credentials(&self.0.db, enc, d)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut locked: Vec<String> = d
+            .kind
+            .encrypted_columns()
+            .iter()
+            .map(|c| credentials.secret(c))
+            .filter(|s| !s.is_empty())
+            .collect();
+        let mut known: Vec<String> = Vec::new();
+        let redact_all = d
+            .raw
+            .get("redact_all_env_values_in_logs")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        for v in &credentials.variables {
+            let Some(value) = v.resolved.clone().filter(|x| !x.is_empty()) else {
+                continue;
+            };
+            if v.is_shown_once {
+                locked.push(value);
+            } else if redact_all {
+                known.push(value);
+            }
+        }
+        let locked_refs: Vec<&str> = locked.iter().map(String::as_str).collect();
+        let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
+        Ok(Some(coolify_compat::redact::redact_text(
+            &plain,
+            &known_refs,
+            &locked_refs,
+        )))
+    }
+
+    /// The Bus chain of `clone_by_uuid`: stop once, clone all volumes (`VolumeCloneJob`), start once.
+    pub fn spawn_volume_clones(
+        &self,
+        d: DatabaseRow,
+        _target_server_id: i64,
+        clones: Vec<(String, String)>,
+    ) {
+        let jobs = self.clone();
+        tokio::spawn(async move {
+            let Ok(server) = jobs.server_for(&d).await else {
+                return;
+            };
+            jobs.stop_database(&d, &server, true).await;
+            if let Ok(t) = server.target(&jobs).await {
+                for (source, target) in clones {
+                    let command = format!(
+                        "docker volume create {target_q} && docker run --rm -v {source_q}:/source -v {target_q}:/target alpine sh -c 'cd /source && cp -a . /target/'",
+                        source_q = quote(&source),
+                        target_q = quote(&target)
+                    );
+                    if let Err(e) = jobs
+                        .remote()
+                        .run(
+                            &t,
+                            &[command.as_str()],
+                            RunOptions::op("database.clone").timeout(Duration::from_secs(3600)),
+                        )
+                        .await
+                    {
+                        tracing::warn!(database = %d.uuid, error = %e.message, "volume clone failed");
+                    }
+                }
+            }
+            jobs.start_database(&d, None).await;
+        });
+    }
+
+    /// `StopDatabase::handle`.
+    pub(crate) async fn stop_database(
+        &self,
+        d: &DatabaseRow,
+        server: &ServerInfo,
+        docker_cleanup: bool,
+    ) {
         if let Ok(t) = server.target(self).await {
             let stop = docker_stop_command(30, &d.uuid, server.docker_version());
             let rm = format!("docker rm -f {}", d.uuid);
@@ -262,6 +483,18 @@ impl Jobs {
             now,
         )
         .await;
+        if docker_cleanup {
+            self.spawn_cleanup_after_stop(server.clone());
+        }
+        // The row was read before the stop; a public database loses its proxy too.
+        let public = dbs::find_in_team(&self.0.db, d.team_id, &d.uuid)
+            .await
+            .ok()
+            .flatten()
+            .map_or(d.bool("is_public"), |f| f.bool("is_public"));
+        if public && let Err(e) = self.stop_database_proxy(d).await {
+            tracing::warn!(database = %d.uuid, error = %e, "TCP proxy could not be stopped");
+        }
     }
 
     async fn record_failed_start(&self, d: &DatabaseRow, message: &str, user_id: Option<i64>) {
@@ -350,6 +583,10 @@ impl Jobs {
                 return;
             }
         };
+        // `queueStart`: the proxy is dispatched next to the start job.
+        if d.bool("is_public") && d.int("public_port").is_some_and(|p| p != 0) {
+            self.spawn_database_proxy_start(d.clone());
+        }
         match self.run_start(d, &server, activity).await {
             Ok(()) => {
                 self.refresh_database_status(d, &server).await;
@@ -389,6 +626,26 @@ impl Jobs {
         let volumes = dbs::persistent_volumes(&self.0.db, d.kind, d.id)
             .await
             .map_err(|e| e.to_string())?;
+        // The Start* actions do this before they build the Compose file.
+        let ssl_commands = if matches!(d.kind, Kind::Clickhouse | Kind::Sqlite) {
+            Vec::new()
+        } else {
+            self.ssl_start_commands(d, server).await?
+        };
+        let file_rows = coolify_db::database_parts::file_storages(&self.0.db, d.kind.morph(), d.id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let ensure_commands = self.ensure_content_files(&file_rows, d, server).await;
+        let file_mounts = file_rows
+            .iter()
+            .map(|r| {
+                format!(
+                    "{}:{}",
+                    coolify_db::database_parts::str_of(r, "fs_path").unwrap_or_default(),
+                    coolify_db::database_parts::str_of(r, "mount_path").unwrap_or_default()
+                )
+            })
+            .collect();
         Ok(StartContext {
             db: d,
             secrets,
@@ -397,7 +654,35 @@ impl Jobs {
             network,
             volumes,
             now: now(),
+            ssl_commands,
+            ensure_commands,
+            file_mounts,
+            logging: cleanup::log_drain_configuration(server, d),
         })
+    }
+
+    /// The compose file a start would write, with no change on the server (for checks).
+    pub fn preview_context<'a>(
+        d: &'a DatabaseRow,
+        server: &'a ServerInfo,
+        secrets: std::collections::HashMap<&'static str, String>,
+        variables: Vec<env::Var>,
+        network: String,
+        volumes: Vec<(String, String, Option<String>)>,
+    ) -> StartContext<'a> {
+        StartContext {
+            db: d,
+            secrets,
+            variables,
+            server,
+            network,
+            volumes,
+            now: now(),
+            ssl_commands: vec![format!("rm -rf {CONFIGURATION_DIR}/{}/ssl", d.uuid)],
+            ensure_commands: Vec::new(),
+            file_mounts: Vec::new(),
+            logging: None,
+        }
     }
 
     async fn run_start(

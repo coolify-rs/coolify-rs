@@ -13,7 +13,7 @@ use crate::Jobs;
 /// Upstream `Server::PLACEHOLDER_IPS`.
 const PLACEHOLDER_IPS: &[&str] = &["1.2.3.4", "0.0.0.0", "::"];
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ServerInfo {
     pub id: i64,
     pub team_id: i64,

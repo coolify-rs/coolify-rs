@@ -7,8 +7,8 @@ use serde_json::Value;
 
 use super::StartContext;
 use super::common::{
-    CONFIGURATION_DIR, b64, cpuset, database_labels, finish_commands, healthcheck, limits,
-    networks, php_filled, ports, volume_entries,
+    CONFIGURATION_DIR, b64, ca_mount, cpuset, database_labels, finish_commands, healthcheck,
+    limits, networks, php_filled, ports, volume_entries,
 };
 use super::env::{add_coolify_variables, has_key};
 
@@ -29,10 +29,11 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         "echo 'Creating directories.'".into(),
         format!("mkdir -p {dir}"),
         "echo 'Directories created successfully.'".into(),
-        // enable_ssl is false (SSL is not ported; the caller refuses it).
-        format!("rm -rf {dir}/ssl"),
     ];
-    let (volume_list, volume_names) = volume_entries(&ctx.volumes);
+    commands.extend(ctx.ssl_commands.iter().cloned());
+    commands.extend(ctx.ensure_commands.iter().cloned());
+    let (mut volume_list, volume_names) = volume_entries(&ctx.volumes);
+    volume_list.extend(ctx.file_mounts.iter().map(|m| PhpValue::from(m.as_str())));
 
     // generate_environment_variables
     let root_password = ctx.secret(&format!("{col}_root_password"));
@@ -115,7 +116,11 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
     if let Some(p) = ports(d) {
         service.set("ports", p);
     }
+    ctx.apply_logging(&mut service);
     let mut volumes = PhpValue::list(volume_list);
+    if d.bool("enable_ssl") {
+        volumes.push(ca_mount("/etc/mysql/certs/coolify-ca.crt"));
+    }
     if conf.is_some() {
         volumes.push(PhpValue::map([
             ("type", PhpValue::from("bind")),
@@ -128,6 +133,19 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         ]));
     }
     service.set("volumes", volumes);
+    ctx.apply_docker_options(&mut service);
+    if d.bool("enable_ssl") {
+        service.set(
+            "command",
+            PhpValue::strings([
+                if mysql { "mysqld" } else { "mariadbd" },
+                "--ssl-cert=/etc/mysql/certs/server.crt",
+                "--ssl-key=/etc/mysql/certs/server.key",
+                "--ssl-ca=/etc/mysql/certs/coolify-ca.crt",
+                "--require-secure-transport=1",
+            ]),
+        );
+    }
     if d.raw.get("health_check_enabled").and_then(Value::as_bool) == Some(false) {
         service.remove("healthcheck");
     }
@@ -139,6 +157,13 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         compose.set("volumes", volume_names);
     }
     let compose_yaml = yaml::dump(&compose, 10);
-    finish_commands(&mut commands, d, ctx.server, &compose_yaml, ctx.now, &[]);
+    let extra: Vec<String> = if d.bool("enable_ssl") {
+        vec![format!(
+            "docker compose -f {dir}/docker-compose.yml run --rm --no-deps --user root --entrypoint chown {name} mysql:mysql /etc/mysql/certs/server.key /etc/mysql/certs/server.crt < /dev/null"
+        )]
+    } else {
+        Vec::new()
+    };
+    finish_commands(&mut commands, d, ctx.server, &compose_yaml, ctx.now, &extra);
     (commands, compose_yaml)
 }

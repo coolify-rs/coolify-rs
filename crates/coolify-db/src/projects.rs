@@ -122,6 +122,21 @@ pub async fn environment_record(db: &Db, env_id: i64) -> DbResult<Record> {
 }
 
 /// Upstream looks the environment up by name first, then by uuid.
+/// `Environment::ownedByCurrentTeamAPI($teamId)->whereUuid($uuid)`: `(id, project uuid, environment uuid)`.
+pub async fn team_environment_by_uuid(
+    db: &Db,
+    team_id: TeamId,
+    uuid: &str,
+) -> DbResult<Option<(i64, String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT e.id, p.uuid, e.uuid FROM environments e JOIN projects p ON p.id = e.project_id WHERE e.uuid = $1 AND p.team_id = $2 LIMIT 1",
+    )
+    .bind(uuid)
+    .bind(team_id)
+    .fetch_optional(db.pool())
+    .await?)
+}
+
 pub async fn find_environment(
     db: &Db,
     project_id: i64,

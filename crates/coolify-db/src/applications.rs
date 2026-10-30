@@ -445,6 +445,29 @@ pub async fn persistent_volumes(
     .await?)
 }
 
+/// `CleanupDocker::activeDeployment`: a queued or running deployment that is not stuck.
+pub async fn server_has_active_deployment(db: &Db, server_id: i64) -> DbResult<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM application_deployment_queues q LEFT JOIN server_settings s ON s.server_id = $1 \
+         WHERE (q.server_id = $1 OR q.build_server_id = $1) AND q.status IN ('queued', 'in_progress') \
+         AND q.updated_at >= (now() AT TIME ZONE 'UTC') - make_interval(secs => COALESCE(s.dynamic_timeout, 3600)))",
+    )
+    .bind(server_id)
+    .fetch_one(db.pool())
+    .await?)
+}
+
+/// `$app->docker_registry_image_name ?? $app->uuid` of a server's applications.
+pub async fn server_image_repositories(db: &Db, server_id: i64) -> DbResult<Vec<String>> {
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT DISTINCT COALESCE(a.docker_registry_image_name, a.uuid) FROM applications a JOIN standalone_dockers sd ON sd.id = a.destination_id \
+         WHERE a.destination_type = '{STANDALONE_DOCKER_MORPH}' AND a.deleted_at IS NULL AND sd.server_id = $1"
+    ))
+    .bind(server_id)
+    .fetch_all(db.pool())
+    .await?)
+}
+
 /// Servers with at least one application on a standalone Docker destination.
 pub async fn servers_with_applications(db: &Db) -> DbResult<Vec<i64>> {
     Ok(sqlx::query_scalar(&format!(
