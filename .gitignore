@@ -6,3 +6,5 @@
 /compat/diff/last-report.json
 /compat/testing-host/secrets/
 __pycache__/
+/compat/ui/node_modules/
+/compat/ui/shots/

@@ -325,7 +325,10 @@ async fn main() -> Result<()> {
             if let Some(jobs) = &state.jobs {
                 // Container statuses of databases, every minute (upstream's ServerManagerJob).
                 jobs.spawn_status_poller();
-                jobs.fail_interrupted_deployments().await;
+                // Several dev instances on one host must not fail each other's deployments.
+                if env("COOLIFY_RS_SKIP_STARTUP_CLEANUP").is_none() {
+                    jobs.fail_interrupted_deployments().await;
+                }
             }
             let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
             axum::serve(
