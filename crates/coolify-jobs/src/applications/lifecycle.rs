@@ -12,7 +12,7 @@ use crate::server::ServerInfo;
 
 impl Jobs {
     /// The application's containers on its server (`getCurrentApplicationContainerStatus`).
-    async fn application_containers(
+    pub(crate) async fn application_containers(
         &self,
         target: &coolify_remote::Target,
         uuid: &str,

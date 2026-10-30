@@ -42,6 +42,13 @@ pub(super) fn field_error(field: &str, message: impl Into<String>) -> ApiError {
 }
 
 /// PHP string conversion of a request value; an array cannot convert ("Array to string").
+/// A validation error with a message string instead of a list (`'errors' => [$field => '...']`).
+pub(super) fn field_message(field: &str, message: &str) -> ApiError {
+    let mut errors = Map::new();
+    errors.insert(field.to_owned(), Value::String(message.to_owned()));
+    ApiError::Validation(errors)
+}
+
 pub(super) fn php_text(v: &Value) -> Result<Option<String>, ApiError> {
     Ok(match v {
         Value::Null => None,
@@ -680,6 +687,15 @@ pub(super) fn gpu_options_valid(options: &str) -> bool {
 /// The `docker_compose_domains.*` rules, in rule order: the item (`array:name,domain,redirect`),
 /// then each key.
 pub(super) fn compose_domain_rules(v: &Value) -> Vec<(String, String)> {
+    compose_domain_rules_with(v, false)
+}
+
+/// The rules of `update_preview_by_pull_request_id`: `distinct` on the names, no custom message.
+pub(super) fn compose_domain_rules_distinct(v: &Value) -> Vec<(String, String)> {
+    compose_domain_rules_with(v, true)
+}
+
+fn compose_domain_rules_with(v: &Value, distinct: bool) -> Vec<(String, String)> {
     let items: Vec<(String, &Value)> = match v {
         Value::Array(a) => a
             .iter()
@@ -701,7 +717,12 @@ pub(super) fn compose_domain_rules(v: &Value) -> Vec<(String, String)> {
         if !ok {
             errors.push((
                 format!("docker_compose_domains.{k}"),
-                "An item in the docker_compose_domains array has invalid fields. Only name, domain, and redirect fields are supported.".to_owned(),
+                if distinct {
+                    // `array:name,domain,redirect` with Laravel's own message.
+                    format!("The docker_compose_domains.{k} field must be an array.")
+                } else {
+                    "An item in the docker_compose_domains array has invalid fields. Only name, domain, and redirect fields are supported.".to_owned()
+                },
             ));
         }
     }
@@ -711,7 +732,17 @@ pub(super) fn compose_domain_rules(v: &Value) -> Vec<(String, String)> {
             None | Some(Value::Null) => {
                 errors.push((attr.clone(), format!("The {attr} field is required.")));
             }
-            Some(Value::String(_)) => {}
+            Some(Value::String(name)) => {
+                let duplicate = items.iter().any(|(other, i)| {
+                    other != k && i.get("name").and_then(Value::as_str) == Some(name)
+                });
+                if distinct && duplicate {
+                    errors.push((
+                        attr.clone(),
+                        format!("The {attr} field has a duplicate value."),
+                    ));
+                }
+            }
             Some(other) => {
                 errors.push((attr.clone(), format!("The {attr} field must be a string.")));
                 if other.as_array().is_some_and(Vec::is_empty) {

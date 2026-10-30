@@ -1909,7 +1909,7 @@ pub(super) fn extra_field_errors(input: &Input, errors: &mut Map<String, Value>,
 }
 
 /// `Str::random($n)`.
-fn random_str(n: usize) -> String {
+pub(super) fn random_str(n: usize) -> String {
     use rand::Rng as _;
     const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let mut rng = rand::thread_rng();

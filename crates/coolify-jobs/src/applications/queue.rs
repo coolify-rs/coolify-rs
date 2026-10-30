@@ -42,21 +42,31 @@ pub struct QueueOptions {
     pub no_questions_asked: bool,
     pub rollback: bool,
     pub docker_registry_image_tag: Option<String>,
+    /// 0 for a production deployment, the pull request id for a preview.
+    pub pull_request_id: i64,
+    pub git_type: Option<String>,
 }
 
 /// `validateGitRef($commit, 'deployment commit')`.
 pub fn validate_commit(commit: &str) -> Result<String, String> {
+    validate_git_ref(commit, "deployment commit")
+}
+
+/// `validateGitRef($input, $context)`.
+pub fn validate_git_ref(commit: &str, context: &str) -> Result<String, String> {
     let c = commit.trim();
     if c.is_empty() || c == "HEAD" {
         return Ok(c.to_owned());
     }
     if c.starts_with('-') {
-        return Err("Invalid deployment commit: must not start with a hyphen.".into());
+        return Err(format!("Invalid {context}: must not start with a hyphen."));
     }
     let mut chars = c.chars();
     let first_ok = chars.next().is_some_and(|ch| ch.is_ascii_alphanumeric());
     if !first_ok || !chars.all(|ch| ch.is_ascii_alphanumeric() || "._-/".contains(ch)) {
-        return Err("Invalid deployment commit: contains disallowed characters. Only alphanumeric characters, dots, hyphens, underscores, and slashes are allowed.".into());
+        return Err(format!(
+            "Invalid {context}: contains disallowed characters. Only alphanumeric characters, dots, hyphens, underscores, and slashes are allowed."
+        ));
     }
     Ok(c.to_owned())
 }
@@ -115,7 +125,7 @@ impl Jobs {
                 .map_err(|e| e.to_string())?;
             if let Some(existing) = open.iter().find(|d| {
                 d.str("commit") == Some(commit.as_str())
-                    && d.int("pull_request_id").unwrap_or(0) == 0
+                    && d.int("pull_request_id").unwrap_or(0) == o.pull_request_id
                     && d.str("docker_registry_image_tag") == o.docker_registry_image_tag.as_deref()
             }) && !(o.force_rebuild || o.rollback || o.no_questions_asked)
             {
@@ -139,7 +149,7 @@ impl Jobs {
                     "/project/{project_uuid}/environment/{env_uuid}/application/{}/deployment/{deployment_uuid}",
                     a.uuid
                 ),
-                pull_request_id: 0,
+                pull_request_id: o.pull_request_id,
                 force_rebuild: o.force_rebuild,
                 commit: commit.clone(),
                 status: "queued".into(),
@@ -148,7 +158,7 @@ impl Jobs {
                 restart_only: o.restart_only,
                 rollback: o.rollback,
                 only_this_server: false,
-                git_type: None,
+                git_type: o.git_type.clone(),
                 commit_message: None,
                 docker_registry_image_tag: o.docker_registry_image_tag.clone(),
                 build_server_id: None,
@@ -157,7 +167,8 @@ impl Jobs {
             queue_id = apps::insert_deployment(db, &new, now)
                 .await
                 .map_err(|e| e.to_string())?;
-            started = o.no_questions_asked || self.next_queuable(server_id, a.id).await;
+            started = o.no_questions_asked
+                || self.next_queuable(server_id, a.id, o.pull_request_id).await;
             if started {
                 apps::update_deployment(
                     db,
@@ -180,15 +191,21 @@ impl Jobs {
         })
     }
 
-    /// `next_queuable()`: no build of the application in progress and a free build slot.
-    async fn next_queuable(&self, server_id: i64, application_id: i64) -> bool {
+    /// `next_queuable()`: no build of the application in progress for the same pull request (a
+    /// production deployment and a preview run side by side) and a free build slot.
+    async fn next_queuable(
+        &self,
+        server_id: i64,
+        application_id: i64,
+        pull_request_id: i64,
+    ) -> bool {
         let db = &self.0.db;
         let in_progress = apps::deployments_with_status(db, application_id, &["in_progress"])
             .await
             .unwrap_or_default();
         if in_progress
             .iter()
-            .any(|d| d.int("pull_request_id").unwrap_or(0) == 0)
+            .any(|d| d.int("pull_request_id").unwrap_or(0) == pull_request_id)
         {
             return false;
         }
@@ -252,7 +269,11 @@ impl Jobs {
                 continue;
             }
             let server_id = fresh.int("server_id").unwrap_or_default();
-            if !self.next_queuable(server_id, fresh.application_id).await {
+            let pull_request_id = fresh.int("pull_request_id").unwrap_or(0);
+            if !self
+                .next_queuable(server_id, fresh.application_id, pull_request_id)
+                .await
+            {
                 continue;
             }
             let _ = apps::update_deployment(

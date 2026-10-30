@@ -7,6 +7,7 @@ pub mod detect;
 pub mod domains;
 pub mod labels;
 mod lifecycle;
+pub mod ops;
 pub mod queue;
 pub mod snapshot;
 pub mod status;

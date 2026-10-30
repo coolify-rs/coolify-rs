@@ -13,6 +13,8 @@ use crate::response::ApiError;
 #[derive(Debug, Clone)]
 pub enum Rule {
     Required,
+    /// `present`: the key is in the request, whatever its value.
+    Present,
     Nullable,
     String,
     Boolean,
@@ -78,6 +80,7 @@ fn message(field: &str, rule: &str, messages: Messages, param: Option<usize>) ->
         .map(|(_, m)| (*m).to_string())
         .unwrap_or_else(|| match rule {
             "required" => "The :attribute field is required.".into(),
+            "present" => "The :attribute field must be present.".into(),
             "string" => "The :attribute field must be a string.".into(),
             "boolean" => "The :attribute field must be true or false.".into(),
             "min" => "The :attribute field must be at least :min characters.".into(),
@@ -221,6 +224,13 @@ pub fn validate(
         // Laravel evaluates rules in declared order and stops after a failed
         // implicit rule (`required`); other failures do not stop it.
         for rule in &f.rules {
+            if let Rule::Present = rule {
+                if value.is_none() {
+                    push(f.name, message(f.name, "present", messages, None));
+                    break;
+                }
+                continue;
+            }
             if let Rule::Required = rule {
                 // validateRequired: null, or an empty array (`count() < 1`).
                 let empty_array = v.as_array().is_some_and(Vec::is_empty)
@@ -235,7 +245,7 @@ pub fn validate(
                 continue;
             }
             match rule {
-                Rule::Required | Rule::Nullable => {}
+                Rule::Required | Rule::Nullable | Rule::Present => {}
                 Rule::String => {
                     if !v.is_string() {
                         push(f.name, message(f.name, "string", messages, None));

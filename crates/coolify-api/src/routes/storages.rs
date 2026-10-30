@@ -194,7 +194,7 @@ fn invalid_for_type(input: &Input, fields: &[&str], kind: &str) -> Result<(), Ap
     }
 }
 
-fn can_deploy(ctx: &AuthCtx) -> bool {
+pub(super) fn can_deploy(ctx: &AuthCtx) -> bool {
     ctx.abilities.can(Ability::Deploy) || ctx.abilities.can(Ability::Root)
 }
 

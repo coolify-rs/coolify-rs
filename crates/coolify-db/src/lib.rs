@@ -10,6 +10,7 @@
 //! same (heap) order upstream returns, which differential tests compare byte
 //! for byte.
 
+pub mod application_ops;
 pub mod applications;
 pub mod auth;
 pub mod compose;

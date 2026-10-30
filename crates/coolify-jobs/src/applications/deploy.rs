@@ -296,34 +296,12 @@ impl Run {
 
     /// `EnvironmentVariable::logRedactionSecretsFor($application)`: values hidden in the log.
     async fn init_redaction(&mut self) {
-        let Some(enc) = self.jobs.0.encrypter.clone() else {
-            return;
-        };
-        let owner = Owner {
-            morph: apps::MORPH,
-            id: self.app.id,
-            team_id: self.app.team_id,
-            project_id: self.app.project.get("id").and_then(Value::as_i64),
-            environment_id: self.app.environment.get("id").and_then(Value::as_i64),
-        };
-        let Ok(variables) =
-            env::load_for(&self.jobs.0.db, &enc, &owner, Some(self.server.id)).await
-        else {
-            return;
-        };
-        let redact_all = self
-            .app
-            .settings
-            .get("redact_all_env_values_in_logs")
-            .and_then(Value::as_bool)
-            != Some(false);
-        for v in variables.iter().filter(|v| !v.is_preview) {
-            if v.is_shown_once {
-                self.locked.extend(log_redaction_values(v));
-            } else if redact_all {
-                self.known.extend(log_redaction_values(v));
-            }
-        }
+        let (known, locked) = self
+            .jobs
+            .log_redaction_secrets(&self.app, self.server.id, false)
+            .await;
+        self.known.extend(known);
+        self.locked.extend(locked);
     }
 
     async fn info(&self, message: &str) {
@@ -651,6 +629,10 @@ impl Jobs {
             return;
         };
         let server_id = q.int("server_id").unwrap_or_default();
+        if q.int("pull_request_id").unwrap_or(0) != 0 {
+            self.refuse_preview_deployment(&q, app.id, server_id).await;
+            return;
+        }
         let Ok(Some(server_row)) = servers::find_by_id(&self.0.db, server_id).await else {
             return;
         };
@@ -777,6 +759,72 @@ fn hostname() -> Option<String> {
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_owned())
+}
+
+impl Jobs {
+    /// The job does not build previews yet, and running the row as if it were production would
+    /// replace the production containers: the row fails with a line that says so.
+    async fn refuse_preview_deployment(
+        &self,
+        q: &apps::Deployment,
+        application_id: i64,
+        server_id: i64,
+    ) {
+        let entry = apps::LogEntry {
+            command: None,
+            output: "Preview deployments are not ported to coolify-rs yet. Nothing was deployed."
+                .into(),
+            kind: "stderr",
+            timestamp: chrono::Utc::now()
+                .format("%Y-%m-%dT%H:%M:%S%.6fZ")
+                .to_string(),
+            hidden: false,
+            batch: 1,
+        };
+        let _ = apps::append_log(&self.0.db, q.id, &[entry], now()).await;
+        let _ = apps::transition_status(&self.0.db, q.id, "failed", now()).await;
+        self.queue_next_deployment(application_id, server_id).await;
+    }
+
+    /// `EnvironmentVariable::logRedactionSecretsFor($application, includePreview: ...)`:
+    /// the known and the locked values, without remote secrets (not ported).
+    pub(crate) async fn log_redaction_secrets(
+        &self,
+        app: &ApplicationRow,
+        server_id: i64,
+        include_preview: bool,
+    ) -> (Vec<String>, Vec<String>) {
+        let (mut known, mut locked) = (Vec::new(), Vec::new());
+        let Some(enc) = self.0.encrypter.clone() else {
+            return (known, locked);
+        };
+        let owner = Owner {
+            morph: apps::MORPH,
+            id: app.id,
+            team_id: app.team_id,
+            project_id: app.project.get("id").and_then(Value::as_i64),
+            environment_id: app.environment.get("id").and_then(Value::as_i64),
+        };
+        let Ok(variables) = env::load_for(&self.0.db, &enc, &owner, Some(server_id)).await else {
+            return (known, locked);
+        };
+        let redact_all = app
+            .settings
+            .get("redact_all_env_values_in_logs")
+            .and_then(Value::as_bool)
+            != Some(false);
+        for v in variables
+            .iter()
+            .filter(|v| include_preview || !v.is_preview)
+        {
+            if v.is_shown_once {
+                locked.extend(log_redaction_values(v));
+            } else if redact_all {
+                known.extend(log_redaction_values(v));
+            }
+        }
+        (known, locked)
+    }
 }
 
 impl Run {
@@ -962,12 +1010,16 @@ impl Run {
             .str("docker_registry_image_name")
             .unwrap_or_default()
             .to_owned();
-        let tag = self
-            .app
-            .str("docker_registry_image_tag")
-            .filter(|t| !t.is_empty())
-            .unwrap_or("latest")
-            .to_owned();
+        // resolveDockerImageTag(): a rollback runs the tag in `commit`.
+        let tag = if self.b.rollback && !self.commit.trim().is_empty() {
+            self.commit.clone()
+        } else {
+            self.app
+                .str("docker_registry_image_tag")
+                .filter(|t| !t.is_empty())
+                .unwrap_or("latest")
+                .to_owned()
+        };
         let (display, image) = match tag.strip_prefix("sha256-") {
             Some(hash) => (
                 format!("{image_name}@sha256:{hash}"),
