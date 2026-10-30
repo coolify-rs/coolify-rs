@@ -15,6 +15,7 @@ pub mod load;
 pub mod php;
 pub mod raw;
 pub mod service;
+pub mod service_parser;
 pub mod validate;
 pub mod volumes;
 

@@ -24,6 +24,7 @@ pub mod projects;
 pub mod records;
 pub mod schema;
 pub mod servers;
+pub mod services;
 pub mod teams;
 #[cfg(feature = "testing")]
 pub mod testing;
