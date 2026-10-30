@@ -86,8 +86,7 @@ pub fn extract_yaml_environment_comments(raw: &str) -> BTreeMap<String, String> 
         if line.trim_matches(PHP_TRIM).is_empty() {
             continue;
         }
-        let current =
-            line.len() - line.trim_start_matches(PHP_TRIM).len();
+        let current = line.len() - line.trim_start_matches(PHP_TRIM).len();
         if let Some(c) = YAML_ENV_BLOCK.captures(line) {
             in_block = true;
             env_indent = c[1].len();
@@ -320,7 +319,9 @@ fn declared_url_names(service: &PhpValue) -> Vec<String> {
     };
     for (k, v) in items {
         let name = match (k, v) {
-            (Key::Int(_), PhpValue::Str(s)) => php::before(s, "=").trim_matches(PHP_TRIM).to_owned(),
+            (Key::Int(_), PhpValue::Str(s)) => {
+                php::before(s, "=").trim_matches(PHP_TRIM).to_owned()
+            }
             (Key::Str(s), _) => s.clone(),
             _ => continue,
         };
@@ -471,7 +472,10 @@ impl<'a> ServiceRun<'a> {
             .map_err(db_err)?
             .ok_or_else(|| format!("Service {service_id} not found."))?;
         let server = load_server(db, &service).await?;
-        let raw = service.str("docker_compose_raw").unwrap_or_default().to_owned();
+        let raw = service
+            .str("docker_compose_raw")
+            .unwrap_or_default()
+            .to_owned();
         let compose = service.str("docker_compose").map(str::to_owned);
         Ok(ServiceRun {
             db,
@@ -560,9 +564,16 @@ impl<'a> ServiceRun<'a> {
             is_shared: Self::is_shared_reference(trimmed.as_deref()),
             comment,
         };
-        let id = store::env_insert(self.db, MORPH, self.service.id, &new, &self.version, self.now)
-            .await
-            .map_err(db_err)?;
+        let id = store::env_insert(
+            self.db,
+            MORPH,
+            self.service.id,
+            &new,
+            &self.version,
+            self.now,
+        )
+        .await
+        .map_err(db_err)?;
         Ok(EnvRow {
             id,
             key: key.to_owned(),
@@ -736,9 +747,10 @@ impl<'a> ServiceRun<'a> {
     /// The model the second and third loops work with.
     async fn resolve_sub(&self, name: &str, is_database: bool) -> Result<SubRow, String> {
         if is_database {
-            if let Some(app) = svc::sub_by_name(self.db, SubKind::Application, self.service.id, name)
-                .await
-                .map_err(db_err)?
+            if let Some(app) =
+                svc::sub_by_name(self.db, SubKind::Application, self.service.id, name)
+                    .await
+                    .map_err(db_err)?
             {
                 return Ok(app);
             }
@@ -808,10 +820,8 @@ impl<'a> ServiceRun<'a> {
                     .unwrap_or(Value::Null),
             );
         }
-        sub.raw.insert(
-            "fqdn".into(),
-            new_fqdn.map_or(Value::Null, Value::String),
-        );
+        sub.raw
+            .insert("fqdn".into(), new_fqdn.map_or(Value::Null, Value::String));
         self.sync_noindex(sub).await
     }
 
@@ -829,8 +839,7 @@ impl<'a> ServiceRun<'a> {
         if current.is_empty() {
             return Ok(());
         }
-        let normalize =
-            |d: &str| app_domains::without_port(&app_domains::normalize_url(d));
+        let normalize = |d: &str| app_domains::without_port(&app_domains::normalize_url(d));
         let domains: Vec<String> = app_domains::domain_list(sub.str("fqdn"))
             .iter()
             .map(|d| normalize(d))
@@ -902,7 +911,10 @@ impl<'a> ServiceRun<'a> {
         let twin = if let Some(rest) = key.strip_prefix("SERVICE_URL_") {
             format!("SERVICE_FQDN_{rest}")
         } else {
-            format!("SERVICE_URL_{}", key.strip_prefix("SERVICE_FQDN_").unwrap_or(key))
+            format!(
+                "SERVICE_URL_{}",
+                key.strip_prefix("SERVICE_FQDN_").unwrap_or(key)
+            )
         };
         let value = php::to_string(value);
         Ok([key, twin.as_str()].iter().any(|k| {
@@ -917,27 +929,26 @@ impl<'a> ServiceRun<'a> {
         sub: &SubRow,
         kind: &str,
     ) -> Result<Vec<String>, String> {
-        let spec: &[(&str, &str, &str, bool)] = if kind.contains("minio")
-            || kind.contains("pgsty/silo")
-        {
-            &[
-                ("MINIO_BROWSER_REDIRECT_URL", "console-", "9001", true),
-                ("MINIO_SERVER_URL", "minio-", "9000", true),
-            ]
-        } else if kind.contains("logto") {
-            &[
-                ("LOGTO_ENDPOINT", "logto-", "3001", false),
-                ("LOGTO_ADMIN_ENDPOINT", "logto-admin-", "3002", false),
-            ]
-        } else if kind.contains("garage") {
-            &[
-                ("GARAGE_S3_API_URL", "s3-", "3900", true),
-                ("GARAGE_WEB_URL", "web-", "3902", true),
-                ("GARAGE_ADMIN_URL", "admin-", "3903", true),
-            ]
-        } else {
-            return Ok(Vec::new());
-        };
+        let spec: &[(&str, &str, &str, bool)] =
+            if kind.contains("minio") || kind.contains("pgsty/silo") {
+                &[
+                    ("MINIO_BROWSER_REDIRECT_URL", "console-", "9001", true),
+                    ("MINIO_SERVER_URL", "minio-", "9000", true),
+                ]
+            } else if kind.contains("logto") {
+                &[
+                    ("LOGTO_ENDPOINT", "logto-", "3001", false),
+                    ("LOGTO_ADMIN_ENDPOINT", "logto-admin-", "3002", false),
+                ]
+            } else if kind.contains("garage") {
+                &[
+                    ("GARAGE_S3_API_URL", "s3-", "3900", true),
+                    ("GARAGE_WEB_URL", "web-", "3902", true),
+                    ("GARAGE_ADMIN_URL", "admin-", "3903", true),
+                ]
+            } else {
+                return Ok(Vec::new());
+            };
         let mut rows = Vec::new();
         for (key, ..) in spec {
             match self.env_first(key).await? {
@@ -1021,7 +1032,11 @@ async fn load_server(db: &Db, service: &ServiceRow) -> Result<ServerInfo, String
         .await
         .map_err(db_err)?
         .ok_or("Server not found.")?;
-    let settings = row.settings.clone().map(Value::Object).unwrap_or(Value::Null);
+    let settings = row
+        .settings
+        .clone()
+        .map(Value::Object)
+        .unwrap_or(Value::Null);
     let ip = row
         .record
         .get("ip")
@@ -1241,7 +1256,9 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
             )
             .await
             .map_err(db_err)?;
-            saved.raw.insert("is_gzip_enabled".into(), Value::Bool(false));
+            saved
+                .raw
+                .insert("is_gzip_enabled".into(), Value::Bool(false));
         }
         let environment = declarations(service);
         let mut magic: Vec<String> = Vec::new();
@@ -1361,28 +1378,29 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
                 let name_for = php::after(&key, prefix).to_lowercase();
                 let random = format!("{}-{uuid}", name_for.replace('_', "-"));
                 let url = run.server.url_base.generate_url(&random);
-                let fqdn = run.server.url_base.generate_fqdn(
-                    &random,
-                    run.parsing_version(),
-                    &run.version,
-                );
+                let fqdn =
+                    run.server
+                        .url_base
+                        .generate_fqdn(&random, run.parsing_version(), &run.version);
                 let env_exists = run.env_first(&key).await?.is_some();
                 let port_suffixed = svc::env_keys_like(run.db, run.service.id, &key)
                     .await
                     .map_err(db_err)?
                     .iter()
                     .any(|k| {
-                        k.strip_prefix(&format!("{key}_"))
-                            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+                        k.strip_prefix(&format!("{key}_")).is_some_and(|rest| {
+                            !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())
+                        })
                     });
                 let exists = run.application_for_env_name(&name_for).await?;
                 let has_port = exists
                     .as_ref()
                     .is_some_and(|e| fqdn_has_port(e.str("fqdn")));
-                if !env_exists && !port_suffixed && !has_port
-                    && let Some(mut e) = exists.filter(|e| {
-                        e.id == saved.id && saved.is_application()
-                    })
+                if !env_exists
+                    && !port_suffixed
+                    && !has_port
+                    && let Some(mut e) =
+                        exists.filter(|e| e.id == saved.id && saved.is_application())
                 {
                     run.save_fqdn(&mut e, Some(url.clone())).await?;
                     saved = e;
@@ -1460,11 +1478,7 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
         let mut logging = php::get(&service, "logging")
             .cloned()
             .unwrap_or(PhpValue::Null);
-        if server_is_log_drain
-            && log_drain_map
-                .iter()
-                .any(|(n, v)| *n == service_name && *v)
-        {
+        if server_is_log_drain && log_drain_map.iter().any(|(n, v)| *n == service_name && *v) {
             logging = service_helpers::generate_log_drain_configuration(&run.server.settings);
         }
         let volumes_list = php::collect(php::get(&service, "volumes"));
@@ -1512,9 +1526,10 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
                     source = parsed.source.unwrap_or_default();
                     target = parsed.target.unwrap_or_default();
                     mode = parsed.mode;
-                    found = store::file_volume_by_mount(run.db, saved.kind.morph(), saved.id, &target)
-                        .await
-                        .map_err(db_err)?;
+                    found =
+                        store::file_volume_by_mount(run.db, saved.kind.morph(), saved.id, &target)
+                            .await
+                            .map_err(db_err)?;
                     if volumes::source_is_local(&source) {
                         kind = "bind".into();
                         if let Some(f) = &found {
@@ -1553,9 +1568,10 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
                             format!("Invalid Docker volume definition (array syntax): {e} Please use safe path names without shell metacharacters.")
                         })?;
                     }
-                    found = store::file_volume_by_mount(run.db, saved.kind.morph(), saved.id, &target)
-                        .await
-                        .map_err(db_err)?;
+                    found =
+                        store::file_volume_by_mount(run.db, saved.kind.morph(), saved.id, &target)
+                            .await
+                            .map_err(db_err)?;
                     if let Some(f) = &found {
                         content = f
                             .content_encrypted
@@ -1651,7 +1667,8 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
                 }
             } else if kind == "volume" {
                 let legacy_name = format!("{uuid}_{}", php::slug(&source));
-                if use_external_as_written(run, &saved, &top_volumes, &source, &legacy_name).await? {
+                if use_external_as_written(run, &saved, &top_volumes, &source, &legacy_name).await?
+                {
                     php::put(&mut volumes_parsed, index.clone(), volume);
                     continue;
                 }
@@ -1825,7 +1842,8 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
                 }
             }
             if parsed_value.starts_with("SERVICE_") {
-                run.env_update_or_create(&key, Some(&value), comment).await?;
+                run.env_update_or_create(&key, Some(&value), comment)
+                    .await?;
                 continue;
             }
             if !value.starts_with('$') {
@@ -1975,10 +1993,7 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
         } else {
             Vec::new()
         };
-        let sub_name = saved
-            .str("human_name")
-            .unwrap_or(&saved.name)
-            .to_owned();
+        let sub_name = saved.str("human_name").unwrap_or(&saved.name).to_owned();
         let default_labels = service_default_labels(
             &uuid,
             &container_name,
@@ -2021,7 +2036,10 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
             let defaults = [
                 ("COOLIFY_APP_NAME", Some(resource_name.clone())),
                 ("COOLIFY_PROJECT_NAME", Some(service_project.clone())),
-                ("COOLIFY_ENVIRONMENT_NAME", Some(service_environment.clone())),
+                (
+                    "COOLIFY_ENVIRONMENT_NAME",
+                    Some(service_environment.clone()),
+                ),
                 ("COOLIFY_SERVER_IP", Some(run.server.ip.clone())),
             ];
             for (k, v) in defaults {
@@ -2084,7 +2102,8 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
             } else {
                 templates::required_port(run.service.str("service_type"))
             };
-            let overrides = overrides_map(json_to_php(saved.raw.get("domain_port_overrides")).as_ref());
+            let overrides =
+                overrides_map(json_to_php(saved.raw.get("domain_port_overrides")).as_ref());
             let traffic = run.server.setting_bool("is_traffic_analytics_enabled");
             let log_append = labels::caddy_supports_log_append(&run.server.proxy);
             let proxy_type = run.server.proxy_type().map(str::to_owned);
@@ -2397,7 +2416,10 @@ pub async fn update_compose(
         if template_names.contains(&declared) {
             continue;
         }
-        if run.is_copied_declaration(&services, &name, &declared).await? {
+        if run
+            .is_copied_declaration(&services, &name, &declared)
+            .await?
+        {
             continue;
         }
         template_names.push(declared);

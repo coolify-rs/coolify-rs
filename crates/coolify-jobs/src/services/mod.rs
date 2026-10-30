@@ -220,7 +220,7 @@ impl Jobs {
                 let name = name.as_string();
                 lines.push(format!(
                     "SERVICE_NAME_{}={name}",
-                    php::upper(&name.replace('-', "_").replace('.', "_"))
+                    php::upper(&name.replace(['-', '.'], "_"))
                 ));
             }
         }
@@ -277,7 +277,10 @@ impl Jobs {
         content: &str,
     ) -> Result<(), String> {
         let encoded = base64::engine::general_purpose::STANDARD.encode(content);
-        let command = format!("echo '{encoded}' | base64 -d | tee {} > /dev/null", quote(path));
+        let command = format!(
+            "echo '{encoded}' | base64 -d | tee {} > /dev/null",
+            quote(path)
+        );
         self.remote()
             .run(
                 target,
@@ -330,7 +333,11 @@ impl Jobs {
                 .map_err(|e| e.to_string())?;
             rows.sort_by_key(|r| r.get("id").and_then(Value::as_i64).unwrap_or_default());
             for r in rows {
-                storages.push_str(r.get("updated_at").and_then(Value::as_str).unwrap_or_default());
+                storages.push_str(
+                    r.get("updated_at")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                );
             }
         }
         let mut noindex: Vec<String> = Vec::new();
@@ -563,14 +570,18 @@ impl Jobs {
                 ));
             }
         }
-        self.run_service_process(&s, &server, &target, commands).await
+        self.run_service_process(&s, &server, &target, commands)
+            .await
     }
 
     /// `StartService::dispatch($service)`.
     pub fn spawn_service_start(&self, service_id: i64, pull_latest: bool, stop_first: bool) {
         let jobs = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = jobs.start_service(service_id, pull_latest, stop_first).await {
+            if let Err(e) = jobs
+                .start_service(service_id, pull_latest, stop_first)
+                .await
+            {
                 tracing::warn!(service_id, error = %e, "service start failed");
             }
         });
@@ -692,7 +703,11 @@ impl Jobs {
         );
         let command = format!("sh -c {}", quote(&script));
         self.remote()
-            .run(&target, &[command.as_str()], RunOptions::op("service.delete"))
+            .run(
+                &target,
+                &[command.as_str()],
+                RunOptions::op("service.delete"),
+            )
             .await
             .map_err(|e| e.message)?;
         let mut failed: Vec<String> = Vec::new();
@@ -748,7 +763,10 @@ impl Jobs {
             let Ok(target) = server.target(&jobs).await else {
                 return;
             };
-            let c = format!("docker restart {}", quote(&format!("{}-{}", sub.name, s.uuid)));
+            let c = format!(
+                "docker restart {}",
+                quote(&format!("{}-{}", sub.name, s.uuid))
+            );
             let _ = jobs
                 .remote()
                 .run(&target, &[c.as_str()], RunOptions::op("service.restart"))
@@ -819,7 +837,10 @@ impl Jobs {
             quote(name),
         );
         let mut commands = vec![
-            format!("echo {}", quote(&format!("Saved configuration files to {dir}."))),
+            format!(
+                "echo {}",
+                quote(&format!("Saved configuration files to {dir}."))
+            ),
             format!("touch {}", quote(&format!("{dir}/{ENV_FILE}"))),
         ];
         if let Some(sub) = svc::sub_by_name(&self.0.db, kind, s.id, name)
@@ -875,7 +896,8 @@ impl Jobs {
         commands.push(format!(
             "docker network connect {safe_project} coolify-proxy >/dev/null 2>&1 || true"
         ));
-        self.run_service_process(&s, &server, &target, commands).await
+        self.run_service_process(&s, &server, &target, commands)
+            .await
     }
 
     pub fn spawn_sub_deploy(
@@ -895,6 +917,137 @@ impl Jobs {
                 tracing::warn!(service_id, error = %e, "service part deploy failed");
             }
         });
+    }
+
+    /// `ScheduledTaskJob::dispatch($task)` for a task of a service, without its notifications.
+    pub fn spawn_scheduled_task(&self, s: ServiceRow, task: coolify_db::records::Record) {
+        let jobs = self.clone();
+        tokio::spawn(async move {
+            jobs.run_scheduled_task(&s, &task).await;
+        });
+    }
+
+    /// `ScheduledTaskJob::handle()`.
+    async fn run_scheduled_task(&self, s: &ServiceRow, task: &coolify_db::records::Record) {
+        let db = &self.0.db;
+        let task_id = task.get("id").and_then(Value::as_i64).unwrap_or_default();
+        let started = std::time::Instant::now();
+        let Ok(execution) = svc::scheduled_task_execution_start(db, task_id, Jobs::now()).await
+        else {
+            return;
+        };
+        let (status, message) = match self.execute_task(s, task).await {
+            Ok(output) => ("success", output),
+            Err(e) => ("failed", e),
+        };
+        let message = self.redact_for_service(s, &message).await;
+        let _ = svc::scheduled_task_execution_finish(
+            db,
+            execution,
+            status,
+            &message,
+            started.elapsed().as_secs_f64(),
+            Jobs::now(),
+        )
+        .await;
+    }
+
+    async fn execute_task(
+        &self,
+        s: &ServiceRow,
+        task: &coolify_db::records::Record,
+    ) -> Result<String, String> {
+        let db = &self.0.db;
+        let mut containers: Vec<String> = Vec::new();
+        for kind in [SubKind::Application, SubKind::Database] {
+            for sub in svc::subs(db, kind, s.id).await.map_err(|e| e.to_string())? {
+                if sub.str("status").unwrap_or_default().contains("running") {
+                    containers.push(format!("{}-{}", sub.name, s.uuid));
+                }
+            }
+        }
+        if containers.is_empty() {
+            return Err("ScheduledTaskJob failed: No containers running.".into());
+        }
+        let wanted = task
+            .get("container")
+            .and_then(Value::as_str)
+            .filter(|c| !c.is_empty() && *c != "0");
+        if containers.len() > 1 && wanted.is_none() {
+            return Err(
+                "ScheduledTaskJob failed: More than one container exists but no container name was provided."
+                    .into(),
+            );
+        }
+        let prefix = wanted.map(|w| format!("{w}-{}", s.uuid));
+        let Some(container) = containers.iter().find(|c| {
+            containers.len() == 1
+                || wanted == Some(c.as_str())
+                || prefix.as_deref().is_some_and(|p| c.starts_with(p))
+        }) else {
+            return Err(
+                "ScheduledTaskJob failed: No valid container was found. Is the container name correct?"
+                    .into(),
+            );
+        };
+        let server = self.service_server(s).await?;
+        let target = server.target(self).await?;
+        let command = task
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let docker = if server.is_non_root() {
+            "sudo docker"
+        } else {
+            "docker"
+        };
+        let exec = format!(
+            "{docker} exec {} sh -c '{}'",
+            quote(container),
+            command.replace('\'', "'\\''")
+        );
+        const MAX: u64 = 5 * 1024 * 1024;
+        let bounded = format!(
+            "output_file=$(mktemp); trap 'rm -f \"$output_file\"' EXIT; set +e; set -o pipefail; {exec} 2>&1 | {{ head -c {read} > \"$output_file\"; cat > /dev/null; }}; exit_code=${{PIPESTATUS[0]}}; if [ \"$(wc -c < \"$output_file\")\" -gt {MAX} ]; then truncate -s {MAX} \"$output_file\"; printf '\n\n[... Output truncated at 5MB limit ...]' >> \"$output_file\"; fi; if [ \"$exit_code\" -eq 0 ]; then cat \"$output_file\"; else cat \"$output_file\" >&2; fi; exit $exit_code",
+            read = MAX + 1,
+        );
+        let timeout = task.get("timeout").and_then(Value::as_u64).unwrap_or(300);
+        self.remote()
+            .run(
+                &target,
+                &[bounded.as_str()],
+                RunOptions::op("service.scheduled_task")
+                    .no_sudo()
+                    .timeout(Duration::from_secs(timeout)),
+            )
+            .await
+            .map(Option::unwrap_or_default)
+            .map_err(|e| e.message)
+    }
+
+    /// `redactText($value, ...logRedactionSecretsFor($service))`.
+    async fn redact_for_service(&self, s: &ServiceRow, text: &str) -> String {
+        let Some(enc) = self.0.encrypter.as_ref() else {
+            return text.to_owned();
+        };
+        let variables = vars::load_for(&self.0.db, enc, &owner(s), s.server_id())
+            .await
+            .unwrap_or_default();
+        let redact_all = s.raw.get("redact_all_env_values_in_logs") != Some(&Value::Bool(false));
+        let (mut known, mut locked): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+        for v in variables {
+            let Some(value) = v.resolved.filter(|x| !x.is_empty()) else {
+                continue;
+            };
+            if v.is_shown_once {
+                locked.push(value);
+            } else if redact_all {
+                known.push(value);
+            }
+        }
+        let known: Vec<&str> = known.iter().map(String::as_str).collect();
+        let locked: Vec<&str> = locked.iter().map(String::as_str).collect();
+        coolify_compat::redact::redact_text(text, &known, &locked)
     }
 
     /// `getContainerStatus($server, $container)`.
@@ -949,7 +1102,11 @@ impl Jobs {
         let command = format!("sh -c {}", quote(&script));
         let out = self
             .remote()
-            .run_quiet(target, &[command.as_str()], RunOptions::op("service.status"))
+            .run_quiet(
+                target,
+                &[command.as_str()],
+                RunOptions::op("service.status"),
+            )
             .await
             .unwrap_or_default();
         out.lines()

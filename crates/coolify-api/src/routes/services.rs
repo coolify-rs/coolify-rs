@@ -37,8 +37,7 @@ const APP_NOT_FOUND: ApiError =
     ApiError::Message(StatusCode::NOT_FOUND, "Service application not found.");
 const DB_NOT_FOUND: ApiError =
     ApiError::Message(StatusCode::NOT_FOUND, "Service database not found.");
-const CONFLICT_WARNING: &str =
-    "Using the same domain for multiple resources can cause routing conflicts and unpredictable behavior.";
+const CONFLICT_WARNING: &str = "Using the same domain for multiple resources can cause routing conflicts and unpredictable behavior.";
 const NOT_ALLOWED: &str = "This field is not allowed.";
 
 fn field(name: &'static str, rules: Vec<Rule>) -> Field {
@@ -120,7 +119,11 @@ fn url_attribute(sub: &SubRow) -> Value {
     let Some(fqdn) = sub.str("fqdn").filter(|f| !f.trim().is_empty()) else {
         return Value::Null;
     };
-    let overrides = sub.raw.get("domain_port_overrides").cloned().unwrap_or(Value::Null);
+    let overrides = sub
+        .raw
+        .get("domain_port_overrides")
+        .cloned()
+        .unwrap_or(Value::Null);
     let urls: Vec<String> = fqdn
         .split(',')
         .map(|url| {
@@ -133,7 +136,11 @@ fn url_attribute(sub: &SubRow) -> Value {
                         "{}://{}:{port}{}",
                         parts.scheme,
                         parts.host,
-                        parts.path.as_deref().filter(|p| *p != "/").unwrap_or_default()
+                        parts
+                            .path
+                            .as_deref()
+                            .filter(|p| *p != "/")
+                            .unwrap_or_default()
                     ),
                     None => url.to_owned(),
                 },
@@ -163,7 +170,9 @@ async fn present_service(
     );
     r.insert(
         "status".into(),
-        service_status(state, s).await?.map_or(Value::Null, Value::String),
+        service_status(state, s)
+            .await?
+            .map_or(Value::Null, Value::String),
     );
     let apps = svc::subs(&state.db, SubKind::Application, s.id).await?;
     let databases = svc::subs(&state.db, SubKind::Database, s.id).await?;
@@ -176,7 +185,11 @@ async fn present_service(
     }
     r.insert(
         "applications".into(),
-        Value::Array(apps.iter().map(|a| Value::Object(application_array(a))).collect()),
+        Value::Array(
+            apps.iter()
+                .map(|a| Value::Object(application_array(a)))
+                .collect(),
+        ),
     );
     r.insert(
         "databases".into(),
@@ -399,7 +412,12 @@ fn common_fields() -> Vec<Field> {
 
 /// `isBase64Encoded($value)`, then the UTF-8 check of the controller.
 fn decode_compose(value: Option<&str>) -> Result<String, ApiError> {
-    let invalid = || errors_with("docker_compose_raw", "The docker_compose_raw should be base64 encoded.");
+    let invalid = || {
+        errors_with(
+            "docker_compose_raw",
+            "The docker_compose_raw should be base64 encoded.",
+        )
+    };
     let value = value.unwrap_or_default();
     let engine = base64::engine::general_purpose::STANDARD;
     let bytes = engine.decode(value).map_err(|_| invalid())?;
@@ -572,7 +590,7 @@ async fn save_application_urls(
         )
         .await?;
     }
-    jobs_of(&state)?
+    jobs_of(state)?
         .update_service_compose(s.id, SubKind::Application, &app.name)
         .await
         .map_err(jobs_error)
@@ -588,7 +606,11 @@ async fn apply_service_urls(
 ) -> Result<Option<UrlFailure>, ApiError> {
     let mut all: Vec<String> = Vec::new();
     for item in urls {
-        if let Some(u) = item.get("url").and_then(Value::as_str).filter(|u| !u.trim().is_empty()) {
+        if let Some(u) = item
+            .get("url")
+            .and_then(Value::as_str)
+            .filter(|u| !u.trim().is_empty())
+        {
             all.extend(
                 app_domains::domain_list(Some(u))
                     .into_iter()
@@ -599,7 +621,8 @@ async fn apply_service_urls(
     }
     let joined = all.join(",");
     let mut errors = app_domains::validate_domains(&joined);
-    let normalized = app_domains::domain_list(app_domains::normalize_domains(Some(&joined)).as_deref());
+    let normalized =
+        app_domains::domain_list(app_domains::normalize_domains(Some(&joined)).as_deref());
     let mut duplicates: Vec<String> = Vec::new();
     for (i, d) in normalized.iter().enumerate() {
         if normalized[..i].contains(d) && !duplicates.contains(d) {
@@ -617,7 +640,10 @@ async fn apply_service_urls(
     }
     let mut conflicts = Vec::new();
     for item in urls {
-        let name = item.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty());
+        let name = item
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|n| !n.trim().is_empty());
         let Some(name) = name else {
             errors.push("Service container name is required to apply URLs.".into());
             continue;
@@ -626,7 +652,10 @@ async fn apply_service_urls(
             errors.push(format!("Service container with '{name}' not found."));
             continue;
         };
-        let raw = item.get("url").and_then(Value::as_str).filter(|u| !u.trim().is_empty());
+        let raw = item
+            .get("url")
+            .and_then(Value::as_str)
+            .filter(|u| !u.trim().is_empty());
         let urls = match raw {
             Some(u) => {
                 let normalized = app_domains::normalize_domains(Some(u));
@@ -750,7 +779,10 @@ pub async fn create(
         input.str("project_uuid").unwrap_or_default(),
     )
     .await?
-    .ok_or(ApiError::Message(StatusCode::NOT_FOUND, "Project not found."))?;
+    .ok_or(ApiError::Message(
+        StatusCode::NOT_FOUND,
+        "Project not found.",
+    ))?;
     let environment_id = svc::project_environment(&state.db, project.id, env_name, env_uuid)
         .await?
         .ok_or(ApiError::Message(
@@ -763,7 +795,10 @@ pub async fn create(
         input.str("server_uuid").unwrap_or_default(),
     )
     .await?
-    .ok_or(ApiError::Message(StatusCode::NOT_FOUND, "Server not found."))?;
+    .ok_or(ApiError::Message(
+        StatusCode::NOT_FOUND,
+        "Server not found.",
+    ))?;
     let is_build = server
         .settings
         .as_ref()
@@ -774,7 +809,9 @@ pub async fn create(
         let mut m = Map::new();
         m.insert(
             "server_uuid".into(),
-            json!(["The specified server is configured as a build server and cannot host resources."]),
+            json!([
+                "The specified server is configured as a build server and cannot host resources."
+            ]),
         );
         return Err(ApiError::Validation(m));
     }
@@ -811,7 +848,9 @@ pub async fn create(
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let keys = templates::service_keys();
 
-    let kind = input.str("type").map(templates::resolve_service_template_key);
+    let kind = input
+        .str("type")
+        .map(templates::resolve_service_template_key);
     let template = kind.as_deref().filter(|k| keys.iter().any(|x| x == k));
     let (service_id, service_uuid, service_type_for_log) = if let Some(kind) = template {
         let Some(compose) = templates::template_compose(kind) else {
@@ -862,7 +901,9 @@ pub async fn create(
         }
         svc::update(&state.db, id, &values, now).await?;
         for line in templates::template_envs(kind) {
-            let (key, value) = line.split_once('=').unwrap_or((line.as_str(), line.as_str()));
+            let (key, value) = line
+                .split_once('=')
+                .unwrap_or((line.as_str(), line.as_str()));
             let generated = template_env_value(value);
             let new = coolify_db::compose::NewEnv {
                 key: key.to_owned(),
@@ -881,18 +922,17 @@ pub async fn create(
                 .await?;
         }
         jobs_of(&state)?
-            .parse_new_service(id, flag("is_container_label_escape_enabled").unwrap_or(false))
+            .parse_new_service(
+                id,
+                flag("is_container_label_escape_enabled").unwrap_or(false),
+            )
             .await
             .map_err(parse_error)?;
         apply_prerequisites(&state, id, kind).await?;
         (id, uuid, kind.to_owned())
     } else if input.filled("docker_compose_raw") {
         let mut errors = Map::new();
-        add_extra_fields(
-            &input,
-            &CREATE_ALLOWED[1..],
-            &mut errors,
-        );
+        add_extra_fields(&input, &CREATE_ALLOWED[1..], &mut errors);
         fail_if_any(errors)?;
         let compose = decode_compose(input.str("docker_compose_raw"))?;
         jobs_services::compose_parses(&compose).map_err(|_| ApiError::Internal)?;
@@ -922,7 +962,10 @@ pub async fn create(
         )
         .await?;
         jobs_of(&state)?
-            .parse_new_service(id, flag("is_container_label_escape_enabled").unwrap_or(false))
+            .parse_new_service(
+                id,
+                flag("is_container_label_escape_enabled").unwrap_or(false),
+            )
             .await
             .map_err(parse_error)?;
         (id, uuid, "docker_compose".to_owned())
@@ -957,7 +1000,10 @@ pub async fn create(
         jobs_of(&state)?.spawn_service_start(service_id, false, false);
     }
     tracing::info!(target: "audit", event = "api.service.created", team_id = ctx.team_id, service_uuid = %service_uuid, service_type = %service_type_for_log, "service created");
-    Ok(created(json!({"uuid": service_uuid, "domains": domains_of(&state, service_id).await?})).into_response())
+    Ok(
+        created(json!({"uuid": service_uuid, "domains": domains_of(&state, service_id).await?}))
+            .into_response(),
+    )
 }
 
 fn parse_error(e: String) -> ApiError {
@@ -1026,8 +1072,14 @@ pub async fn update(
         "include_coolify_default_variables",
     ];
     let mut fields = common_fields();
-    fields.push(field("docker_compose_raw", vec![Rule::String, Rule::Nullable]));
-    fields.push(field("include_coolify_default_variables", vec![Rule::Boolean]));
+    fields.push(field(
+        "docker_compose_raw",
+        vec![Rule::String, Rule::Nullable],
+    ));
+    fields.push(field(
+        "include_coolify_default_variables",
+        vec![Rule::Boolean],
+    ));
     let mut errors = field_errors(&input, &fields)?;
     url_errors(&input, &mut errors);
     add_extra_fields(&input, &allowed, &mut errors);
@@ -1041,7 +1093,10 @@ pub async fn update(
         values.push(("docker_compose_raw", ColumnValue::Text(Some(compose))));
     }
     if input.has("name") {
-        values.push(("name", ColumnValue::Text(Some(strip_tags(input.str("name"))))));
+        values.push((
+            "name",
+            ColumnValue::Text(Some(strip_tags(input.str("name")))),
+        ));
     }
     if input.has("description") {
         values.push((
@@ -1060,8 +1115,13 @@ pub async fn update(
         }
     }
     svc::update(&state.db, s.id, &values, state.now()).await?;
-    jobs_of(&state)?.parse_service(s.id).await.map_err(parse_error)?;
-    let fresh = svc::find_by_id(&state.db, s.id).await?.ok_or(ApiError::Internal)?;
+    jobs_of(&state)?
+        .parse_service(s.id)
+        .await
+        .map_err(parse_error)?;
+    let fresh = svc::find_by_id(&state.db, s.id)
+        .await?
+        .ok_or(ApiError::Internal)?;
     if let Some(Value::Array(urls)) = input.get("urls")
         && let Some(failure) = apply_service_urls(
             &state,
@@ -1202,11 +1262,16 @@ async fn sanitize_logs(state: &AppState, s: &ServiceRow, logs: &str) -> Result<S
     let redact_all = s.raw.get("redact_all_env_values_in_logs") != Some(&Value::Bool(false));
     let (mut known, mut locked): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
     for r in &rows {
-        let Some(value) = env_value(enc, r) else { continue };
+        let Some(value) = env_value(enc, r) else {
+            continue;
+        };
         if value.is_empty() {
             continue;
         }
-        if r.get("is_shown_once").and_then(Value::as_bool).unwrap_or(false) {
+        if r.get("is_shown_once")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
             locked.push(value);
         } else if redact_all {
             known.push(value);
@@ -1232,11 +1297,18 @@ pub async fn logs(
     };
     let s = find(&state, &ctx, &uuid).await?;
     let name = format!("{sub}-{}", s.uuid);
-    let (_, target) = jobs_of(&state)?.service_target(&s).await.map_err(jobs_error)?;
-    let status = jobs_of(&state)?.service_container_status(&target, &name).await;
+    let (_, target) = jobs_of(&state)?
+        .service_target(&s)
+        .await
+        .map_err(jobs_error)?;
+    let status = jobs_of(&state)?
+        .service_container_status(&target, &name)
+        .await;
     if status == "exited" {
         // The owner listing finds no container, or the inspect found none running.
-        let found = jobs_of(&state)?.service_container_exists(&target, &s.uuid, &name).await;
+        let found = jobs_of(&state)?
+            .service_container_exists(&target, &s.uuid, &name)
+            .await;
         if !found {
             return Err(ApiError::Message(
                 StatusCode::NOT_FOUND,
@@ -1268,9 +1340,10 @@ fn env_value(enc: &coolify_compat::Encrypter, r: &Record) -> Option<String> {
     if raw.is_empty() || raw == "0" {
         return None;
     }
-    enc.decrypt_maybe_serialized(raw)
-        .ok()
-        .map(|v| v.trim_matches([' ', '\t', '\n', '\r', '\0', '\x0B']).to_owned())
+    enc.decrypt_maybe_serialized(raw).ok().map(|v| {
+        v.trim_matches([' ', '\t', '\n', '\r', '\0', '\x0B'])
+            .to_owned()
+    })
 }
 
 const BUILDPACK_ALLOWED: &[&str] = &[
@@ -1281,7 +1354,12 @@ const BUILDPACK_ALLOWED: &[&str] = &[
 ];
 
 /// `removeSensitiveData($env)`: the attributes, the appends and the visible values.
-async fn present_env(state: &AppState, ctx: &AuthCtx, s: &ServiceRow, r: &Record) -> Result<Value, ApiError> {
+async fn present_env(
+    state: &AppState,
+    ctx: &AuthCtx,
+    s: &ServiceRow,
+    r: &Record,
+) -> Result<Value, ApiError> {
     present_env_without(state, ctx, s, r, &[]).await
 }
 
@@ -1296,8 +1374,14 @@ async fn present_env_without(
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let value = env_value(enc, r);
     let key = r.get("key").and_then(Value::as_str).unwrap_or_default();
-    let is_required = r.get("is_required").and_then(Value::as_bool).unwrap_or(false);
-    let shown_once = r.get("is_shown_once").and_then(Value::as_bool).unwrap_or(false);
+    let is_required = r
+        .get("is_required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let shown_once = r
+        .get("is_shown_once")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let owner = coolify_jobs::databases::env::Owner {
         morph: svc::MORPH,
         id: s.id,
@@ -1324,9 +1408,9 @@ async fn present_env_without(
         match k.as_str() {
             "id" | "resourceable_id" | "resourceable_type" | "uses_legacy_escaping" | "value" => {}
             "created_at" | "updated_at" => {
-                let v = v
-                    .as_str()
-                    .map_or(Value::Null, |t| Value::String(coolify_db::records::laravel_datetime(t)));
+                let v = v.as_str().map_or(Value::Null, |t| {
+                    Value::String(coolify_db::records::laravel_datetime(t))
+                });
                 out.insert(k.clone(), v);
             }
             _ => {
@@ -1341,7 +1425,10 @@ async fn present_env_without(
         Value::Bool(is_required && real.as_deref().unwrap_or_default().is_empty()),
     );
     out.insert("is_buildpack_control".into(), Value::Bool(is_control));
-    out.insert("is_coolify".into(), Value::Bool(key.starts_with("SERVICE_")));
+    out.insert(
+        "is_coolify".into(),
+        Value::Bool(key.starts_with("SERVICE_")),
+    );
     if ctx.can_read_sensitive && !shown_once {
         out.insert("value".into(), value.map_or(Value::Null, Value::String));
         out.insert("real_value".into(), real.map_or(Value::Null, Value::String));
@@ -1353,8 +1440,6 @@ async fn present_env_without(
 }
 
 /// `GET /services/{uuid}/envs`.
-
-
 pub async fn envs(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -1384,7 +1469,10 @@ fn env_fields() -> Vec<Field> {
         field("is_literal", vec![Rule::Boolean]),
         field("is_multiline", vec![Rule::Boolean]),
         field("is_shown_once", vec![Rule::Boolean]),
-        field("comment", vec![Rule::String, Rule::Nullable, Rule::Max(256)]),
+        field(
+            "comment",
+            vec![Rule::String, Rule::Nullable, Rule::Max(256)],
+        ),
     ]
 }
 
@@ -1429,7 +1517,10 @@ async fn env_upsert(
                     ColumnValue::Text(plain.as_deref().map(|v| enc.encrypt_serialized(v))),
                 ));
             }
-            values.push(("is_shared", ColumnValue::Bool(shared_reference(plain.as_deref()))));
+            values.push((
+                "is_shared",
+                ColumnValue::Bool(shared_reference(plain.as_deref())),
+            ));
         }
         for (k, column) in [
             ("is_literal", "is_literal"),
@@ -1468,7 +1559,11 @@ async fn env_upsert(
 }
 
 fn env_key_of(input: &Input) -> String {
-    input.str("key").unwrap_or_default().trim().replace(' ', "_")
+    input
+        .str("key")
+        .unwrap_or_default()
+        .trim()
+        .replace(' ', "_")
 }
 
 /// `POST /services/{uuid}/envs` (`create_env`).
@@ -1493,7 +1588,12 @@ pub async fn create_env(
     }
     let row = env_upsert(&state, &s, &key, &input, true).await?;
     tracing::info!(target: "audit", event = "api.service.env_created", team_id = ctx.team_id, service_uuid = %s.uuid, env_key = %key, "service variable created");
-    let absent = ["is_preview", "is_required", "order", "preserve_compose_null"];
+    let absent = [
+        "is_preview",
+        "is_required",
+        "order",
+        "preserve_compose_null",
+    ];
     Ok(created(present_env_without(&state, &ctx, &s, &row, &absent).await?).into_response())
 }
 
@@ -1552,8 +1652,19 @@ pub async fn bulk_envs(
         // `updateOrCreate(['key' => $key], $item)`: a new model has only the attributes of the item.
         let mut absent: Vec<&str> = Vec::new();
         if !existed {
-            absent.extend(["is_preview", "is_required", "order", "preserve_compose_null"]);
-            for k in ["comment", "is_literal", "is_multiline", "is_shown_once", "value"] {
+            absent.extend([
+                "is_preview",
+                "is_required",
+                "order",
+                "preserve_compose_null",
+            ]);
+            for k in [
+                "comment",
+                "is_literal",
+                "is_multiline",
+                "is_shown_once",
+                "value",
+            ] {
                 if !one.has(k) {
                     absent.push(k);
                 }
@@ -1599,7 +1710,10 @@ pub async fn move_service(
     let s = find(&state, &ctx, &uuid).await?;
     require_admin(&ctx)?;
     let input = lenient_json(&headers, &uri, &body);
-    let fields = [field("environment_uuid", vec![Rule::Required, Rule::String])];
+    let fields = [field(
+        "environment_uuid",
+        vec![Rule::Required, Rule::String],
+    )];
     let keys: Vec<String> = input.keys().cloned().collect();
     let allowed: Vec<&str> = keys.iter().map(String::as_str).collect();
     validate(&input, &fields, &[], &allowed)?;
@@ -1716,9 +1830,15 @@ pub async fn clone_service(
         None => format!("{}-clone-{new_uuid}", s.name()),
     };
     let now = state.now();
-    let new_id = svc::replicate(&state.db, s.id, &new_uuid, &name, dest_id, morph, server_id, now).await?;
+    let new_id = svc::replicate(
+        &state.db, s.id, &new_uuid, &name, dest_id, morph, server_id, now,
+    )
+    .await?;
     svc::replicate_children(&state.db, s.id, new_id, ctx.team_id, now).await?;
-    jobs_of(&state)?.parse_service(new_id).await.map_err(parse_error)?;
+    jobs_of(&state)?
+        .parse_service(new_id)
+        .await
+        .map_err(parse_error)?;
     for kind in [SubKind::Application, SubKind::Database] {
         for sub in svc::subs(&state.db, kind, new_id).await? {
             svc::sub_set_status(&state.db, kind, sub.id, "exited", state.now()).await?;
@@ -1732,9 +1852,9 @@ pub async fn clone_service(
 
 fn present_tag(r: &Record) -> Value {
     let date = |k: &str| {
-        r.get(k)
-            .and_then(Value::as_str)
-            .map_or(Value::Null, |t| Value::String(coolify_db::records::laravel_datetime(t)))
+        r.get(k).and_then(Value::as_str).map_or(Value::Null, |t| {
+            Value::String(coolify_db::records::laravel_datetime(t))
+        })
     };
     json!({
         "uuid": r.get("uuid"),
@@ -1746,7 +1866,11 @@ fn present_tag(r: &Record) -> Value {
 
 async fn tags_json(state: &AppState, id: i64) -> Result<Value, ApiError> {
     Ok(Value::Array(
-        svc::tags_of(&state.db, id).await?.iter().map(present_tag).collect(),
+        svc::tags_of(&state.db, id)
+            .await?
+            .iter()
+            .map(present_tag)
+            .collect(),
     ))
 }
 
@@ -1794,8 +1918,15 @@ pub async fn create_tag(
             "The tag names field is required when tag name is not present.".into(),
         );
     }
-    if input.get("tag_name").is_some_and(|v| !v.is_string() && !v.is_null()) {
-        add_error(&mut errors, "tag_name", "The tag name field must be a string.".into());
+    if input
+        .get("tag_name")
+        .is_some_and(|v| !v.is_string() && !v.is_null())
+    {
+        add_error(
+            &mut errors,
+            "tag_name",
+            "The tag name field must be a string.".into(),
+        );
     }
     match input.get("tag_names") {
         None | Some(Value::Null) => {}
@@ -1817,7 +1948,11 @@ pub async fn create_tag(
                 }
             }
         }
-        Some(_) => add_error(&mut errors, "tag_names", "The tag names field must be an array.".into()),
+        Some(_) => add_error(
+            &mut errors,
+            "tag_names",
+            "The tag names field must be an array.".into(),
+        ),
     }
     add_extra_fields(&input, &["tag_name", "tag_names"], &mut errors);
     fail_if_any(errors)?;
@@ -1883,10 +2018,12 @@ fn persistent_array(r: &Record) -> Record {
 fn file_array(state: &AppState, ctx: &AuthCtx, r: &Record) -> Record {
     let mut out = r.clone();
     storage_times(&mut out);
-    let plain = out
-        .get("content")
-        .and_then(Value::as_str)
-        .and_then(|c| state.encrypter.as_ref().and_then(|e| e.decrypt_string(c).ok()));
+    let plain = out.get("content").and_then(Value::as_str).and_then(|c| {
+        state
+            .encrypter
+            .as_ref()
+            .and_then(|e| e.decrypt_string(c).ok())
+    });
     if ctx.can_read_sensitive {
         out.insert(
             "content".into(),
@@ -1919,7 +2056,10 @@ pub async fn storages(
         for sub in svc::subs(&state.db, kind, s.id).await? {
             let tag = |mut r: Record| {
                 r.insert("resource_uuid".into(), Value::String(sub.uuid.clone()));
-                r.insert("resource_type".into(), Value::String(kind.sub_type().into()));
+                r.insert(
+                    "resource_type".into(),
+                    Value::String(kind.sub_type().into()),
+                );
                 r
             };
             for r in svc::persistent_storages(&state.db, kind, sub.id).await? {
@@ -1963,16 +2103,6 @@ static VOLUME_NAME: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new
 });
 const STORAGE_TYPES: &[&str] = &["persistent", "file"];
 
-/// `validateFileMountPath($path, $context)`.
-fn validate_mount_path(path: &str, context: &str) -> Result<String, String> {
-    let p = path.trim();
-    if p.is_empty() {
-        return Err(format!("Invalid {context}: path is empty."));
-    }
-    let with_slash = if p.starts_with('/') { p.to_owned() } else { format!("/{p}") };
-    storage::normalize_unix_path(&with_slash).map_err(|e| e.replace("path", context))
-}
-
 /// `POST /services/{uuid}/storages` (`create_storage`).
 #[allow(clippy::too_many_lines)]
 pub async fn create_storage(
@@ -1987,7 +2117,10 @@ pub async fn create_storage(
     let s = find(&state, &ctx, &uuid).await?;
     require_admin(&ctx)?;
     let fields = [
-        field("type", vec![Rule::Required, Rule::String, Rule::In(STORAGE_TYPES)]),
+        field(
+            "type",
+            vec![Rule::Required, Rule::String, Rule::In(STORAGE_TYPES)],
+        ),
         field("resource_uuid", vec![Rule::Required, Rule::String]),
         field("name", vec![Rule::String, Rule::Regex(&VOLUME_NAME)]),
         field("mount_path", vec![Rule::Required, Rule::String]),
@@ -2011,12 +2144,8 @@ pub async fn create_storage(
             "fs_path",
         ],
     )?;
-    let Some(sub) = sub_by_uuid_any(
-        &state,
-        s.id,
-        input.str("resource_uuid").unwrap_or_default(),
-    )
-    .await?
+    let Some(sub) =
+        sub_by_uuid_any(&state, s.id, input.str("resource_uuid").unwrap_or_default()).await?
     else {
         return Err(ApiError::Message(
             StatusCode::NOT_FOUND,
@@ -2066,7 +2195,10 @@ pub async fn create_storage(
         ));
     }
     let dir = jobs_services::workdir(&s.uuid);
-    let (_, target) = jobs_of(&state)?.service_target(&s).await.map_err(jobs_error)?;
+    let (_, target) = jobs_of(&state)?
+        .service_target(&s)
+        .await
+        .map_err(jobs_error)?;
     let fail = |k: &str, e: String| errors_with_owned(k, &e);
     let outside_forbidden = |fs: &str| -> Option<axum::response::Response> {
         if storage::is_outside_resource_directory(fs, &dir) {
@@ -2088,7 +2220,7 @@ pub async fn create_storage(
         };
         let fs_path = storage::resolve_host_path(&dir, fs, "storage source path")
             .map_err(|e| fail("fs_path", e))?;
-        let mount_path = validate_mount_path(mount, "storage destination path")
+        let mount_path = storage::validate_file_mount_path(mount, "storage destination path")
             .map_err(|e| fail("fs_path", e))?;
         if let Some(r) = outside_forbidden(&fs_path) {
             return Ok(r);
@@ -2116,9 +2248,9 @@ pub async fn create_storage(
                 "Content is not valid for host file mounts.",
             ));
         }
-        let fs_path = validate_mount_path(fs, "host file source path")
+        let fs_path = storage::validate_host_file_mount_path(fs, "host file source path")
             .map_err(|e| fail("mount_path", e))?;
-        let mount_path = validate_mount_path(mount, "host file destination path")
+        let mount_path = storage::validate_file_mount_path(mount, "host file destination path")
             .map_err(|e| fail("mount_path", e))?;
         NewFileStorage {
             fs_path,
@@ -2128,7 +2260,7 @@ pub async fn create_storage(
             is_host_file: true,
         }
     } else {
-        let mount_path = validate_mount_path(mount, "file storage path")
+        let mount_path = storage::validate_file_mount_path(mount, "file storage path")
             .map_err(|e| fail("mount_path", e))?;
         let fs_path = if let Some(fs) = input.str("fs_path").filter(|f| !f.is_empty()) {
             let resolved = storage::resolve_host_path(&dir, fs, "file storage source path")
@@ -2141,8 +2273,8 @@ pub async fn create_storage(
                 .map_err(|e| fail("fs_path", e))?;
             resolved
         } else {
-            // confineFileMountPath($dir, $mountPath, ...)
-            format!("{dir}{mount_path}")
+            storage::confine_file_mount_path(&dir, &mount_path, "file storage path")
+                .map_err(|e| fail("mount_path", e))?
         };
         if input.filled("content")
             && let Some(r) = deploy_forbidden(
@@ -2181,7 +2313,7 @@ async fn find_storage(
     persistent: bool,
     column: &str,
     value: &Value,
-) -> Result<Option<Record>, ApiError> {
+) -> Result<Option<(Record, SubRow)>, ApiError> {
     let text = match value {
         Value::String(s) => s.clone(),
         other => other.to_string(),
@@ -2200,7 +2332,7 @@ async fn find_storage(
                     None => String::new(),
                 };
                 if current == text {
-                    return Ok(Some(r));
+                    return Ok(Some((r, sub.clone())));
                 }
             }
         }
@@ -2208,8 +2340,10 @@ async fn find_storage(
     Ok(None)
 }
 
-/// `PATCH /services/{uuid}/storages` (`update_storage`). Every storage of a service part is
-/// read-only (`shouldBeReadOnlyInUI()`), so only `is_preview_suffix_enabled` changes.
+/// `PATCH /services/{uuid}/storages` (`update_storage`). A persistent storage of a service part
+/// is always read-only (`shouldBeReadOnlyInUI()`); a file storage only when the compose file mounts
+/// it read-only.
+#[allow(clippy::too_many_lines)]
 pub async fn update_storage(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -2224,7 +2358,10 @@ pub async fn update_storage(
     let fields = [
         field("uuid", vec![Rule::String]),
         field("id", vec![Rule::Integer]),
-        field("type", vec![Rule::Required, Rule::String, Rule::In(STORAGE_TYPES)]),
+        field(
+            "type",
+            vec![Rule::Required, Rule::String, Rule::In(STORAGE_TYPES)],
+        ),
         field("is_preview_suffix_enabled", vec![Rule::Boolean]),
         field("name", vec![Rule::String, Rule::Regex(&VOLUME_NAME)]),
         field("mount_path", vec![Rule::String]),
@@ -2244,20 +2381,32 @@ pub async fn update_storage(
             "content",
         ],
     )?;
-    let (column, value) = match (input.get("uuid").filter(|v| php_truthy(v)), input.get("id").filter(|v| php_truthy(v))) {
+    let (column, value) = match (
+        input.get("uuid").filter(|v| php_truthy(v)),
+        input.get("id").filter(|v| php_truthy(v)),
+    ) {
         (Some(v), _) => ("uuid", v.clone()),
         (None, Some(v)) => ("id", v.clone()),
         (None, None) => return Err(errors_with("uuid", "Either uuid or id is required.")),
     };
     let persistent = input.str("type") == Some("persistent");
-    let Some(row) = find_storage(&state, s.id, persistent, column, &value).await? else {
-        return Err(ApiError::Message(StatusCode::NOT_FOUND, "Storage not found."));
+    let Some((row, part)) = find_storage(&state, s.id, persistent, column, &value).await? else {
+        return Err(ApiError::Message(
+            StatusCode::NOT_FOUND,
+            "Storage not found.",
+        ));
     };
+    let mount = row
+        .get("mount_path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let read_only =
+        persistent || storage::file_is_read_only(s.str("docker_compose_raw"), &part.name, mount);
     let editable: Vec<&str> = ["name", "mount_path", "content"]
         .into_iter()
         .filter(|f| input.has(f))
         .collect();
-    if !editable.is_empty() {
+    if read_only && !editable.is_empty() {
         return message(
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({
@@ -2266,23 +2415,77 @@ pub async fn update_storage(
             }),
         );
     }
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    let flag = |k: &str| row.get(k).and_then(Value::as_bool).unwrap_or(false);
+    let old_content = row
+        .get("content")
+        .and_then(Value::as_str)
+        .and_then(|c| enc.decrypt_string(c).ok());
+    let mut content_changed = false;
+    if !read_only {
+        let invalid: Vec<&str> = ["name", "host_path"]
+            .into_iter()
+            .filter(|f| input.has(f))
+            .collect();
+        if !invalid.is_empty() {
+            return Err(invalid_for(&invalid, "file"));
+        }
+        if input.has("content")
+            && !flag("is_directory")
+            && !flag("is_host_file")
+            && input.str("content").unwrap_or_default()
+                != old_content.as_deref().unwrap_or_default()
+            && let Some(r) = deploy_forbidden(
+                &ctx,
+                "Coolify writes the file content on the server immediately, so it needs a token with the deploy permission.",
+            )
+        {
+            return Ok(r);
+        }
+    }
     let id = row.get("id").and_then(Value::as_i64).unwrap_or_default();
     let table = if persistent {
         "local_persistent_volumes"
     } else {
         "local_file_volumes"
     };
-    let values: Vec<(&'static str, ColumnValue)> = if input.has("is_preview_suffix_enabled") {
-        vec![(
+    let mut values: Vec<(&'static str, ColumnValue)> = Vec::new();
+    if input.has("is_preview_suffix_enabled") {
+        values.push((
             "is_preview_suffix_enabled",
             ColumnValue::Bool(input_bool(&input, "is_preview_suffix_enabled")),
-        )]
-    } else {
-        Vec::new()
-    };
+        ));
+    }
+    if !read_only {
+        if input.has("mount_path") {
+            values.push((
+                "mount_path",
+                ColumnValue::Text(input.str("mount_path").map(str::to_owned)),
+            ));
+        }
+        if input.has("content") {
+            let new = input.str("content");
+            if new != old_content.as_deref() {
+                content_changed = true;
+                values.push((
+                    "content",
+                    ColumnValue::Text(new.map(|c| enc.encrypt_string(c))),
+                ));
+            }
+        }
+    }
     let fresh = svc::storage_update(&state.db, table, id, &values, state.now())
         .await?
         .ok_or(ApiError::Internal)?;
+    if content_changed {
+        // ServerStorageSaveJob::dispatch($storage)
+        let jobs = jobs_of(&state)?.clone();
+        let service = s.clone();
+        let (_, target) = jobs.service_target(&service).await.map_err(jobs_error)?;
+        tokio::spawn(async move {
+            let _ = storage::save_storage_on_server(&jobs, &service, &target, id).await;
+        });
+    }
     tracing::info!(target: "audit", event = "api.service.storage_updated", team_id = ctx.team_id, service_uuid = %s.uuid, storage_id = id, "service storage updated");
     let out = if persistent {
         persistent_array(&fresh)
@@ -2292,7 +2495,7 @@ pub async fn update_storage(
     Ok(ok(Value::Object(out)).into_response())
 }
 
-/// `DELETE /services/{uuid}/storages/{storage_uuid}` (`delete_storage`): read-only for service parts.
+/// `DELETE /services/{uuid}/storages/{storage_uuid}` (`delete_storage`).
 pub async fn delete_storage(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -2300,27 +2503,52 @@ pub async fn delete_storage(
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
     require_admin(&ctx)?;
-    let needle = Value::String(storage_uuid);
-    let found = match find_storage(&state, s.id, true, "uuid", &needle).await? {
-        Some(r) => Some(r),
-        None => find_storage(&state, s.id, false, "uuid", &needle).await?,
-    };
-    if found.is_none() {
-        return Err(ApiError::Message(StatusCode::NOT_FOUND, "Storage not found."));
-    }
-    Err(ApiError::Message(
+    let needle = Value::String(storage_uuid.clone());
+    let read_only_message = ApiError::Message(
         StatusCode::UNPROCESSABLE_ENTITY,
         "This storage is read-only (managed by docker-compose or service definition) and cannot be deleted.",
-    ))
+    );
+    if find_storage(&state, s.id, true, "uuid", &needle)
+        .await?
+        .is_some()
+    {
+        return Err(read_only_message);
+    }
+    let Some((row, part)) = find_storage(&state, s.id, false, "uuid", &needle).await? else {
+        return Err(ApiError::Message(
+            StatusCode::NOT_FOUND,
+            "Storage not found.",
+        ));
+    };
+    let mount = row
+        .get("mount_path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if storage::file_is_read_only(s.str("docker_compose_raw"), &part.name, mount) {
+        return Err(read_only_message);
+    }
+    let id = row.get("id").and_then(Value::as_i64).unwrap_or_default();
+    if svc::storage_has_backups(&state.db, r"App\Models\LocalFileVolume", id).await? {
+        return Err(ApiError::Abort(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Delete this directory backup schedule and its archives before deleting the directory.",
+        ));
+    }
+    let jobs = jobs_of(&state)?;
+    let (_, target) = jobs.service_target(&s).await.map_err(jobs_error)?;
+    storage::delete_storage_on_server(jobs, &s, &target, id)
+        .await
+        .map_err(jobs_error)?;
+    svc::storage_delete(&state.db, "local_file_volumes", id).await?;
+    tracing::info!(target: "audit", event = "api.service.storage_deleted", team_id = ctx.team_id, service_uuid = %s.uuid, storage_uuid = %storage_uuid, "service storage deleted");
+    Ok(ok(json!({"message": "Storage deleted."})).into_response())
 }
 
 // --- service applications ---------------------------------------------------------------------
 
 fn present_application(sub: &SubRow) -> Value {
     let mut r = application_array(sub);
-    for k in ["id"] {
-        r.shift_remove(k);
-    }
+    r.shift_remove("id");
     Value::Object(serialize_record(r))
 }
 
@@ -2372,7 +2600,9 @@ fn filter_bool(v: Option<&Value>) -> bool {
     match v {
         Some(Value::Bool(b)) => *b,
         Some(Value::Number(n)) => n.as_i64() == Some(1),
-        Some(Value::String(s)) => matches!(s.to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"),
+        Some(Value::String(s)) => {
+            matches!(s.to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes")
+        }
         _ => false,
     }
 }
@@ -2391,15 +2621,34 @@ pub async fn update_application(
     let (s, app) = find_app(&state, &ctx, &uuid, &app_uuid).await?;
     require_admin(&ctx)?;
     let fields = [
-        field("url", vec![Rule::Nullable, Rule::String, Rule::Max(2048), Rule::CustomOwned(domain_rule)]),
+        field(
+            "url",
+            vec![
+                Rule::Nullable,
+                Rule::String,
+                Rule::Max(2048),
+                Rule::CustomOwned(domain_rule),
+            ],
+        ),
         field("noindex_domains", vec![Rule::Array, Rule::Nullable]),
-        field("human_name", vec![Rule::Nullable, Rule::String, Rule::Max(255)]),
+        field(
+            "human_name",
+            vec![Rule::Nullable, Rule::String, Rule::Max(255)],
+        ),
         field("description", vec![Rule::Nullable, Rule::String]),
         field("image", vec![Rule::Nullable, Rule::String]),
         field("exclude_from_status", vec![Rule::Boolean]),
         field("is_log_drain_enabled", vec![Rule::Boolean]),
         field("is_gzip_enabled", vec![Rule::Boolean]),
-        field("traefik_certificate_resolver", vec![Rule::Nullable, Rule::String, Rule::Max(255), Rule::Regex(&RESOLVER)]),
+        field(
+            "traefik_certificate_resolver",
+            vec![
+                Rule::Nullable,
+                Rule::String,
+                Rule::Max(255),
+                Rule::Regex(&RESOLVER),
+            ],
+        ),
         field("is_stripprefix_enabled", vec![Rule::Boolean]),
         field("is_force_https_enabled", vec![Rule::Boolean]),
         field("is_permanent_redirect_enabled", vec![Rule::Boolean]),
@@ -2503,7 +2752,12 @@ pub async fn update_application(
     }
     let now = state.now();
     let mut values: Vec<(&'static str, ColumnValue)> = Vec::new();
-    for (k, column) in [("human_name", "human_name"), ("description", "description"), ("image", "image"), ("redirect", "redirect")] {
+    for (k, column) in [
+        ("human_name", "human_name"),
+        ("description", "description"),
+        ("image", "image"),
+        ("redirect", "redirect"),
+    ] {
         if input.has(k) {
             values.push((column, ColumnValue::Text(input.str(k).map(str::to_owned))));
         }
@@ -2542,7 +2796,11 @@ pub async fn update_application(
         let current: Vec<String> = list.iter().map(|d| normalize(d)).collect();
         let mut out: Vec<String> = Vec::new();
         if let Some(Value::Array(items)) = input.get("noindex_domains") {
-            for d in items.iter().filter_map(Value::as_str).filter(|d| !d.trim().is_empty()) {
+            for d in items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|d| !d.trim().is_empty())
+            {
                 let n = normalize(d);
                 if current.contains(&n) && !out.contains(&n) {
                     out.push(n);
@@ -2594,9 +2852,18 @@ fn has_www_and_non_www(fqdn: Option<&str>) -> bool {
 /// The checks the part actions share: admin, swarm, functional server.
 async fn part_guard(state: &AppState, s: &ServiceRow) -> Result<(), ApiError> {
     let server = server_of(state, s).await?;
-    let settings = server.as_ref().and_then(|x| x.settings.clone()).unwrap_or_default();
-    let swarm = settings.get("is_swarm_manager").and_then(Value::as_bool).unwrap_or(false)
-        || settings.get("is_swarm_worker").and_then(Value::as_bool).unwrap_or(false);
+    let settings = server
+        .as_ref()
+        .and_then(|x| x.settings.clone())
+        .unwrap_or_default();
+    let swarm = settings
+        .get("is_swarm_manager")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || settings
+            .get("is_swarm_worker")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
     if swarm {
         return Err(ApiError::Message(
             StatusCode::NOT_IMPLEMENTED,
@@ -2621,12 +2888,19 @@ async fn part_logs(
 ) -> ApiResult {
     part_guard(state, s).await?;
     let name = format!("{}-{}", sub.name, s.uuid);
-    let (_, target) = jobs_of(&state)?.service_target(s).await.map_err(jobs_error)?;
-    if jobs_of(&state)?.service_container_status(&target, &name).await != "running" {
+    let (_, target) = jobs_of(state)?
+        .service_target(s)
+        .await
+        .map_err(jobs_error)?;
+    if jobs_of(state)?
+        .service_container_status(&target, &name)
+        .await
+        != "running"
+    {
         return Err(ApiError::Message(StatusCode::BAD_REQUEST, not_running));
     }
     let lines = normalize_log_lines(query_param(uri, "lines"));
-    let out = jobs_of(&state)?
+    let out = jobs_of(state)?
         .service_container_logs(&target, &name, &lines, false)
         .await
         .map_err(jobs_error)?;
@@ -2642,7 +2916,14 @@ pub async fn application_logs(
     uri: Uri,
 ) -> ApiResult {
     let (s, app) = find_app(&state, &ctx, &uuid, &app_uuid).await?;
-    part_logs(&state, &s, &app, &uri, "Service application container is not running.").await
+    part_logs(
+        &state,
+        &s,
+        &app,
+        &uri,
+        "Service application container is not running.",
+    )
+    .await
 }
 
 /// `POST /services/{uuid}/applications/{app_uuid}/start`.
@@ -2755,14 +3036,28 @@ pub async fn update_database(
     let (s, d) = find_db(&state, &ctx, &uuid, &database_uuid).await?;
     require_admin(&ctx)?;
     let fields = [
-        field("human_name", vec![Rule::Nullable, Rule::String, Rule::Max(255)]),
+        field(
+            "human_name",
+            vec![Rule::Nullable, Rule::String, Rule::Max(255)],
+        ),
         field("description", vec![Rule::Nullable, Rule::String]),
         field("image", vec![Rule::String]),
         field("exclude_from_status", vec![Rule::Boolean]),
         field("is_log_drain_enabled", vec![Rule::Boolean]),
         field("is_public", vec![Rule::Boolean]),
-        field("public_port", vec![Rule::Nullable, Rule::Integer, Rule::MinNum(1), Rule::MaxNum(65535)]),
-        field("public_port_timeout", vec![Rule::Nullable, Rule::Integer, Rule::MinNum(1)]),
+        field(
+            "public_port",
+            vec![
+                Rule::Nullable,
+                Rule::Integer,
+                Rule::MinNum(1),
+                Rule::MaxNum(65535),
+            ],
+        ),
+        field(
+            "public_port_timeout",
+            vec![Rule::Nullable, Rule::Integer, Rule::MinNum(1)],
+        ),
     ];
     validate(
         &input,
@@ -2822,9 +3117,7 @@ pub async fn update_database(
         );
         return Err(ApiError::Validation(m));
     }
-    if is_public
-        && let (Some(port), Some(srv)) = (public_port, &server)
-    {
+    if is_public && let (Some(port), Some(srv)) = (public_port, &server) {
         let standalone = coolify_db::databases::public_port_used(&state.db, srv.id, port).await?;
         if standalone || svc::public_port_used(&state.db, srv.id, port, d.id).await? {
             return Err(ApiError::Message(
@@ -2879,7 +3172,14 @@ pub async fn database_logs(
     uri: Uri,
 ) -> ApiResult {
     let (s, d) = find_db(&state, &ctx, &uuid, &database_uuid).await?;
-    part_logs(&state, &s, &d, &uri, "Service database container is not running.").await
+    part_logs(
+        &state,
+        &s,
+        &d,
+        &uri,
+        "Service database container is not running.",
+    )
+    .await
 }
 
 /// `POST /services/{uuid}/databases/{database_uuid}/start`.
@@ -2933,8 +3233,7 @@ pub async fn database_stop(
 
 // --- scheduled tasks --------------------------------------------------------------------------
 
-const ENABLED_TASK: &str =
-    "An enabled scheduled task runs commands in the resource containers, so it needs a token with the deploy permission.";
+const ENABLED_TASK: &str = "An enabled scheduled task runs commands in the resource containers, so it needs a token with the deploy permission.";
 
 fn present_task(ctx: &AuthCtx, r: &Record) -> Value {
     let mut out = r.clone();
@@ -2950,7 +3249,14 @@ fn present_task(ctx: &AuthCtx, r: &Record) -> Value {
 
 const TASK_NOT_FOUND: ApiError =
     ApiError::Message(StatusCode::NOT_FOUND, "Scheduled task not found.");
-const TASK_ALLOWED: &[&str] = &["name", "command", "frequency", "container", "timeout", "enabled"];
+const TASK_ALLOWED: &[&str] = &[
+    "name",
+    "command",
+    "frequency",
+    "container",
+    "timeout",
+    "enabled",
+];
 
 /// `GET /services/{uuid}/scheduled-tasks`.
 pub async fn scheduled_tasks(
@@ -2990,7 +3296,10 @@ pub async fn create_scheduled_task(
         field("command", vec![Rule::Required, Rule::String]),
         field("frequency", vec![Rule::Required, Rule::String]),
         field("container", vec![Rule::String, Rule::Nullable]),
-        field("timeout", vec![Rule::Integer, Rule::MinNum(1), Rule::MaxNum(36000)]),
+        field(
+            "timeout",
+            vec![Rule::Integer, Rule::MinNum(1), Rule::MaxNum(36000)],
+        ),
         field("enabled", vec![Rule::Boolean]),
     ];
     validate(&input, &fields, CUSTOM_API_MESSAGES, TASK_ALLOWED)?;
@@ -3002,9 +3311,7 @@ pub async fn create_scheduled_task(
     } else {
         true
     };
-    if enabled
-        && let Some(r) = deploy_forbidden(&ctx, ENABLED_TASK)
-    {
+    if enabled && let Some(r) = deploy_forbidden(&ctx, ENABLED_TASK) {
         return Ok(r);
     }
     let row = svc::scheduled_task_create(
@@ -3041,12 +3348,17 @@ pub async fn update_scheduled_task(
         field("command", vec![Rule::String]),
         field("frequency", vec![Rule::String]),
         field("container", vec![Rule::String, Rule::Nullable]),
-        field("timeout", vec![Rule::Integer, Rule::MinNum(1), Rule::MaxNum(36000)]),
+        field(
+            "timeout",
+            vec![Rule::Integer, Rule::MinNum(1), Rule::MaxNum(36000)],
+        ),
         field("enabled", vec![Rule::Boolean]),
     ];
     validate(&input, &fields, CUSTOM_API_MESSAGES, TASK_ALLOWED)?;
     if input.has("frequency")
-        && !coolify_compat::cron::validate_cron_expression(input.str("frequency").unwrap_or_default())
+        && !coolify_compat::cron::validate_cron_expression(
+            input.str("frequency").unwrap_or_default(),
+        )
     {
         return Err(invalid_frequency());
     }
@@ -3056,16 +3368,19 @@ pub async fn update_scheduled_task(
     let enabled = if input.has("enabled") {
         input_bool(&input, "enabled")
     } else {
-        task.get("enabled").and_then(Value::as_bool).unwrap_or(false)
+        task.get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
     };
-    if enabled
-        && let Some(r) = deploy_forbidden(&ctx, ENABLED_TASK)
-    {
+    if enabled && let Some(r) = deploy_forbidden(&ctx, ENABLED_TASK) {
         return Ok(r);
     }
     let mut values: Vec<(&'static str, ColumnValue)> = Vec::new();
     if input.has("name") {
-        values.push(("name", ColumnValue::Text(Some(strip_tags(input.str("name"))))));
+        values.push((
+            "name",
+            ColumnValue::Text(Some(strip_tags(input.str("name")))),
+        ));
     }
     for k in ["command", "frequency", "container"] {
         if input.has(k) {
@@ -3128,7 +3443,7 @@ pub async fn scheduled_task_executions(
     Ok(ok(Value::Array(out)).into_response())
 }
 
-/// `POST /services/{uuid}/scheduled-tasks/{task_uuid}/execute`: `ScheduledTaskJob` is not ported.
+/// `POST /services/{uuid}/scheduled-tasks/{task_uuid}/execute`.
 pub async fn execute_scheduled_task(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -3136,8 +3451,10 @@ pub async fn execute_scheduled_task(
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
     require_admin(&ctx)?;
-    if svc::scheduled_task(&state.db, s.id, &task_uuid).await?.is_none() {
+    let Some(task) = svc::scheduled_task(&state.db, s.id, &task_uuid).await? else {
         return Err(TASK_NOT_FOUND);
-    }
-    Err(ApiError::NotPorted)
+    };
+    jobs_of(&state)?.spawn_scheduled_task(s, task);
+    tracing::info!(target: "audit", event = "api.scheduled_task.executed", team_id = ctx.team_id, task_uuid = %task_uuid, "scheduled task queued");
+    Ok(ok(json!({"message": "Scheduled task execution queued."})).into_response())
 }

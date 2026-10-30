@@ -136,7 +136,7 @@ def shape(value):
 class Scrub:
     def __init__(self, uuid):
         self.map = {uuid: "{S}"}
-        self.secrets = {}
+        self.composed = {}
         for prefix, table in (("A", "service_applications"), ("D", "service_databases")):
             for line in sql(f"SELECT x.uuid, x.name FROM {table} x JOIN services s ON s.id = x.service_id WHERE s.uuid='{uuid}'").splitlines():
                 u, n = line.split("|", 1)
@@ -240,7 +240,10 @@ def same_api(name, method, path_ref, body=None, tok=ROOT_TOKEN, scrub=None, path
 
 
 def compose_view(text, scrub):
-    return scrub.text(text or "")
+    text = text or ""
+    for k, v in scrub.composed.items():
+        text = text.replace(k, v)
+    return scrub.text(text)
 
 
 def by_name(v):
@@ -254,10 +257,20 @@ def by_name(v):
 
 def compare_service(name, ur, urs, tokens=(ROOT_TOKEN, "acme_owner_read", "acme_member_read")):
     sa, sb = Scrub(ur), Scrub(urs)
-    (ra, _), (rb, _) = rows(ur), rows(urs)
+    # The storage jobs run in the background on both sides and change these rows: let them finish.
+    for _ in range(10):
+        (ra, _), (rb, _) = rows(ur), rows(urs)
+        if sa.value(ra) == sb.value(rb):
+            break
+        time.sleep(3)
     compare(f"{name}: rows", sa.value(ra), sb.value(rb))
     ca = sql(f"SELECT docker_compose FROM services WHERE uuid='{ur}'")
     cb = sql(f"SELECT docker_compose FROM services WHERE uuid='{urs}'")
+    # A bare `- SERVICE_USER_X` puts the generated value into the compose file.
+    for scrub, u, side in ((sa, ur, "ref"), (sb, urs, "rs")):
+        for e in api(side, "GET", f"/api/v1/services/{u}/envs")[1] or []:
+            if GENERATED.match(e.get("key", "")) and e.get("value"):
+                scrub.composed[e["value"]] = "<" + e["key"] + ">"
     ok = compose_view(ca, sa) == compose_view(cb, sb)
     if not ok:
         la, lb = compose_view(ca, sa).splitlines(), compose_view(cb, sb).splitlines()
@@ -447,6 +460,43 @@ def subroutes(name, ur, urs):
     s2("storage delete missing", "DELETE", "/storages/nope")
     s2("storage create bad", "POST", "/storages", {"type": "x", "resource_uuid": "r", "mount_path": "/x"})
     s2("storage create no resource", "POST", "/storages", {"type": "file", "resource_uuid": "nope", "mount_path": "/x"})
+    # File storages through the API: created, changed and deleted, with read-only rules.
+    parts_a = api("ref", "GET", f"{P}/{ur}/applications")[1]
+    parts_b = api("rs", "GET", f"{P}/{urs}/applications")[1]
+    if parts_a and parts_b:
+        ra, rb = parts_a[0]["uuid"], parts_b[0]["uuid"]
+        fd = ("id", "uuid", "resource_id", "created_at", "updated_at", "fs_path")
+        for label, extra in (("no mount", {"mount_path": ""}), ("dots", {"mount_path": "/a/../b"}), ("host and dir", {"mount_path": "/x", "is_directory": True, "is_host_file": True}),
+                             ("dir without fs", {"mount_path": "/x", "is_directory": True}), ("host relative", {"mount_path": "/x", "is_host_file": True, "fs_path": "rel"}),
+                             ("host content", {"mount_path": "/x", "is_host_file": True, "fs_path": "/etc/h", "content": "c"}),
+                             ("name on file", {"mount_path": "/x", "name": "n"}), ("outside", {"mount_path": "/x", "fs_path": "../../x"})):
+            a = api("ref", "POST", f"{P}/{ur}/storages", {"type": "file", "resource_uuid": ra, **extra})
+            b = api("rs", "POST", f"{P}/{urs}/storages", {"type": "file", "resource_uuid": rb, **extra})
+            compare(f"{name}: file storage {label}", [a[0], sa.value(a[1], fd)], [b[0], sb.value(b[1], fd)])
+        a = api("ref", "POST", f"{P}/{ur}/storages", {"type": "persistent", "resource_uuid": ra, "name": "extra", "mount_path": "/extra"})
+        b = api("rs", "POST", f"{P}/{urs}/storages", {"type": "persistent", "resource_uuid": rb, "name": "extra", "mount_path": "/extra"})
+        pd = ("id", "uuid", "resource_id", "created_at", "updated_at", "name")
+        compare(f"{name}: persistent storage create", [a[0], sa.value(a[1], pd)], [b[0], sb.value(b[1], pd)])
+        a = api("ref", "POST", f"{P}/{ur}/storages", {"type": "file", "resource_uuid": ra, "mount_path": "/etc/app.conf", "content": "v1"})
+        b = api("rs", "POST", f"{P}/{urs}/storages", {"type": "file", "resource_uuid": rb, "mount_path": "/etc/app.conf", "content": "v1"})
+        fp = ("id", "uuid", "resource_id", "created_at", "updated_at")
+        compare(f"{name}: file storage create", [a[0], sa.value(a[1], fp)], [b[0], sb.value(b[1], fp)])
+        time.sleep(4)
+        compare(f"{name}: file written on the server", file_text(ur, "etc/app.conf"), file_text(urs, "etc/app.conf"))
+        x, y = a[1].get("uuid"), b[1].get("uuid")
+        if x and y:
+            a = api("ref", "PATCH", f"{P}/{ur}/storages", {"uuid": x, "type": "file", "content": "v2"})
+            b = api("rs", "PATCH", f"{P}/{urs}/storages", {"uuid": y, "type": "file", "content": "v2"})
+            compare(f"{name}: file storage update", [a[0], sa.value(a[1], fp)], [b[0], sb.value(b[1], fp)])
+            time.sleep(4)
+            a = api("ref", "PATCH", f"{P}/{ur}/storages", {"uuid": x, "type": "file", "name": "n"})
+            b = api("rs", "PATCH", f"{P}/{urs}/storages", {"uuid": y, "type": "file", "name": "n"})
+            compare(f"{name}: file storage name", list(a), list(b))
+            a = api("ref", "DELETE", f"{P}/{ur}/storages/{x}")
+            b = api("rs", "DELETE", f"{P}/{urs}/storages/{y}")
+            compare(f"{name}: file storage delete", list(a), list(b))
+            time.sleep(2)
+            compare(f"{name}: file removed from the server", file_text(ur, "etc/app.conf"), file_text(urs, "etc/app.conf"))
     # Scheduled tasks
     task = {"name": "t1", "command": "echo hi", "frequency": "daily"}
     td = ("uuid", "created_at", "updated_at")
@@ -565,6 +615,19 @@ def live(name, body, project, http_host=None):
         compare(f"live {name}: restart", list(a), list(b))
         compare(f"live {name}: status after restart", wait_status(ua, running), wait_status(ub, running))
         compare(f"live {name}: containers after restart", containers(ua), containers(ub))
+        # A scheduled task through the same container on both sides.
+        results_t = []
+        for side, u in (("ref", ua), ("rs", ub)):
+            tid = api(side, "POST", f"/api/v1/services/{u}/scheduled-tasks", {"name": "t", "command": "/whoami --help 2>&1 | head -1; echo from-task", "frequency": "daily", "container": part})[1]["uuid"]
+            st = api(side, "POST", f"/api/v1/services/{u}/scheduled-tasks/{tid}/execute")
+            for _ in range(40):
+                ex = api(side, "GET", f"/api/v1/services/{u}/scheduled-tasks/{tid}/executions")[1]
+                if ex and ex[0].get("finished_at"):
+                    break
+                time.sleep(3)
+            results_t.append((st, [{k: e.get(k) for k in ("status", "message", "retry_count")} for e in ex]))
+            api(side, "DELETE", f"/api/v1/services/{u}/scheduled-tasks/{tid}")
+        compare(f"live {name}: scheduled task", [list(results_t[0][0]), results_t[0][1]], [list(results_t[1][0]), results_t[1][1]])
         # Part actions.
         pa = sql(f"SELECT a.uuid FROM service_applications a JOIN services s ON s.id=a.service_id WHERE s.uuid='{ua}' ORDER BY a.name LIMIT 1")
         pb = sql(f"SELECT a.uuid FROM service_applications a JOIN services s ON s.id=a.service_id WHERE s.uuid='{ub}' ORDER BY a.name LIMIT 1")

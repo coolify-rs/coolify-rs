@@ -65,9 +65,7 @@ fn decode(encoded: &str) -> String {
 
 /// `base64_decode(data_get($services, "$type.compose"))`.
 pub fn template_compose(kind: &str) -> Option<String> {
-    field(kind, "compose")
-        .filter(|c| !c.is_empty())
-        .map(decode)
+    field(kind, "compose").filter(|c| !c.is_empty()).map(decode)
 }
 
 /// `str(base64_decode(data_get($services, "$type.envs")))->split('/\r\n|\r|\n/')->filter(...)`.

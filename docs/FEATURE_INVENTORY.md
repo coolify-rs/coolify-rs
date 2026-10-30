@@ -11,7 +11,7 @@ Upstream references are relative to the upstream repository root.
 
 | Resource group | Upstream ops | Ported | Status |
 |---|---|---|---|
-| `services` | 57 | 0 | not started |
+| `services` | 57 | 51 | see KNOWN_LIMITATIONS: volume backups and database imports are not ported; `compat/diff/services_diff.py` |
 | `applications` | 52 | 13 | Docker image applications: list, show, create (`dockerimage`), start, restart, stop (POST + GET → 405), delete verified (`applications_diff.py`, 57/57 on a real VM including a live deployment). Git applications: create `public`, `private-deploy-key` and `private-github-app` for every git build pack (nixpacks, static, dockerfile, dockercompose, railpack) sharing the create prologue; public and deploy-key verified (`applications_public_diff.py`, 276/276: rows, settings, `NIXPACKS_NODE_VERSION` variables, labels, config hash, repository normalisation, generated names, validation messages); GitHub App create verified up to the GitHub API call (validation, 404s), happy path unit-tested only. Start/restart/stop/delete of git apps follow the deploy job's build pack support (dockercompose and inline Dockerfiles 501). Create fields not applied yet (`docker_compose_domains`, `watch_paths`, `custom_nginx_configuration`, basic auth, custom labels, tags, …), PATCH, envs, storages, previews answer 501 |
 | `databases` | 47 | 17 | list, show, create (PostgreSQL, MySQL, MariaDB, MongoDB, Redis, ClickHouse, Dragonfly, KeyDB), start, stop, restart (POST + GET → 405), delete verified (`databases_diff.py --kind <engine>` on a real VM, byte-identical Compose files); SQLite, PATCH, backups, envs, storages, tags, imports, logs, move/clone answer 501 |
 | `servers` | 44 | 7 | list, show, create, update, delete, validate (`POST` + `GET` → 405) verified (194/194 differential; validation job 8/8 in `validate_diff.py`); `install=true`, `instant_validate`, proxy changes, `?force` with resources and cloud-provider deletes answer 501; resources, domains and the rest not started |
@@ -67,7 +67,7 @@ Upstream references are relative to the upstream repository root.
 | Deployment queue, logs, cancellation, previews | `application_deployment_queues`, `bootstrap/helpers/applications.php` | |
 | Standalone databases (9 engines), public proxy | `app/Actions/Database/*` | 8 engines verified (Start* actions with environment variables, StopDatabase, RestartDatabase, DeleteResourceJob, status refresh and the database part of GetContainersStatus; UI: environment resource list, new-resource picker, database page with each engine's General form); SQLite, public TCP proxy, SSL, init scripts upload, the env var page and backups not started |
 | Symfony YAML dump (`Yaml::dump($compose, 10)`) | symfony/yaml 7 | verified against the reference image (48 golden cases) | `symfony_yaml.rs` |
-| One-click services (386 compose templates) | `templates/compose`, `bootstrap/helpers/parsers.php` | |
+| One-click services: API, `serviceParser()`, actions, status polling (the UI is not ported) | `templates/service-templates-latest.json`, `bootstrap/helpers/parsers.php`, `app/Actions/Service` | verified: `compat/diff/services_diff.py`, `crates/coolify-jobs/tests/service_parser.rs` |
 | Domains, Traefik/Caddy labels, TLS (ACME) | `bootstrap/helpers/docker.php`, `proxy.php` | |
 | Environment variables, shared variables, secret managers | `EnvironmentVariable`, `SharedEnvironmentVariable` | value storage format must be confirmed at runtime |
 | Persistent storage, volume backups | `LocalPersistentVolume`, `VolumeBackupJob` | |

@@ -108,14 +108,16 @@ async fn parts(pool: &sqlx::PgPool, enc: &Encrypter, table: &str, morph: &str, s
         .unwrap();
         map.insert(
             "file_volumes".into(),
-            json!(files
-                .into_iter()
-                .map(|f| json!({
-                    "fs_path": f.0, "mount_path": f.1,
-                    "content": f.2.map(|c| enc.decrypt_string(&c).unwrap()),
-                    "is_directory": f.3, "is_host_file": f.4,
-                }))
-                .collect::<Vec<_>>()),
+            json!(
+                files
+                    .into_iter()
+                    .map(|f| json!({
+                        "fs_path": f.0, "mount_path": f.1,
+                        "content": f.2.map(|c| enc.decrypt_string(&c).unwrap()),
+                        "is_directory": f.3, "is_host_file": f.4,
+                    }))
+                    .collect::<Vec<_>>()
+            ),
         );
         let vols: Vec<(String, String)> = sqlx::query_as(
             "SELECT name, mount_path FROM local_persistent_volumes WHERE resource_type = $1 AND resource_id = $2 ORDER BY id",
@@ -127,10 +129,11 @@ async fn parts(pool: &sqlx::PgPool, enc: &Encrypter, table: &str, morph: &str, s
         .unwrap();
         map.insert(
             "persistent_volumes".into(),
-            json!(vols
-                .into_iter()
-                .map(|v| json!({"name": v.0, "mount_path": v.1}))
-                .collect::<Vec<_>>()),
+            json!(
+                vols.into_iter()
+                    .map(|v| json!({"name": v.0, "mount_path": v.1}))
+                    .collect::<Vec<_>>()
+            ),
         );
         out.push(p);
     }
@@ -241,8 +244,12 @@ fn normalize(step: &Value) -> Value {
                 // The harness prints json columns as the text Postgres stores.
                 let parsed = |k: &str, x: &Value| match x {
                     Value::String(s)
-                        if ["domain_port_overrides", "noindex_domains", "domain_dns_statuses"]
-                            .contains(&k) =>
+                        if [
+                            "domain_port_overrides",
+                            "noindex_domains",
+                            "domain_dns_statuses",
+                        ]
+                        .contains(&k) =>
                     {
                         serde_json::from_str(s).unwrap_or_else(|_| x.clone())
                     }
@@ -345,7 +352,9 @@ async fn service_parser_matches_upstream() {
                     .unwrap()
                     .unwrap();
                 let run = ServiceRun::load(&jobs, sid, now).await.unwrap();
-                run.save_part_fqdn(&row, Some(url.to_owned())).await.unwrap();
+                run.save_part_fqdn(&row, Some(url.to_owned()))
+                    .await
+                    .unwrap();
                 drop(run);
                 if let Err(e) =
                     service_parser::update_compose(&jobs, sid, SubKind::Application, part, now)

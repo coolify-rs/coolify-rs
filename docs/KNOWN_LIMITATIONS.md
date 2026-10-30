@@ -117,3 +117,20 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Performance has not been measured for either implementation.
 - Reproducible builds are not claimed: `Cargo.lock` and the toolchain are pinned, but bit-for-bit reproducibility was not
   verified.
+
+## One-click services
+
+The API, the parser, the actions and status polling are ported (`compat/diff/services_diff.py`). Not ported:
+
+| Upstream | coolify-rs | Why |
+| --- | --- | --- |
+| Livewire pages `Project/Service/*`, `one-click-service-*` in `Project/Resource/Create` | not available | later task |
+| `PUT`/`DELETE /services/{uuid}/storages/{storage_uuid}/backups`, `.../backups/run` | `501` | S3 volume backups are not ported |
+| `POST /services/{uuid}/databases/{database_uuid}/imports`, `.../imports/uploads`, `GET .../imports/{activity_id}` | `501` | database imports are not ported |
+| `POST /services/{uuid}/clone` with `clone_volumes: true` | `501` | `VolumeCloneJob` is not ported |
+| `PATCH /services/{uuid}/databases/{database_uuid}` that changes `is_public` | `501` | `StartDatabaseProxy` / `StopDatabaseProxy` are not ported |
+| `POST /services/{uuid}/migrate` in a dev instance | `404`, as upstream outside dev | `MigrateResourceToDestination` only runs in dev upstream |
+| Scheduled tasks on their cron schedule | only `POST .../execute` runs a task | the scheduler is not ported; no notifications |
+| `PullTemplatesFromCDN`, `get_service_templates(force: true)` | the shipped file, or `COOLIFY_RS_TEMPLATES_DIR` | no scheduler |
+| `CleanupDocker` after a stop, maintenance pages, secret managers (`{{vault.*}}` stops a start), managed DNS cleanup on a changed domain, restart limit notifications, `parseDockerComposeFile` for parsing versions below 3 | not run | their subsystems are not ported |
+| Order of `environment_variables`, `applications`, `databases` | ordered by id | upstream has no `ORDER BY`: Postgres returns heap order, which changes after updates |

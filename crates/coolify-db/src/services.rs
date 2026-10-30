@@ -424,11 +424,13 @@ pub async fn force_delete(db: &Db, id: i64) -> DbResult<()> {
         .bind(id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2")
-        .bind(MORPH)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "DELETE FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2",
+    )
+    .bind(MORPH)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("DELETE FROM taggables WHERE taggable_type = $1 AND taggable_id = $2")
         .bind(MORPH)
         .bind(id)
@@ -694,12 +696,7 @@ pub async fn sub_set_status(
 }
 
 /// `$sub->last_online_at = now(); $sub->save()` of `GetContainersStatus`.
-pub async fn sub_touch_online(
-    db: &Db,
-    kind: SubKind,
-    id: i64,
-    now: NaiveDateTime,
-) -> DbResult<()> {
+pub async fn sub_touch_online(db: &Db, kind: SubKind, id: i64, now: NaiveDateTime) -> DbResult<()> {
     db.ensure_writable()?;
     sqlx::query(&format!(
         "UPDATE {} SET last_online_at = $2, updated_at = $2 WHERE id = $1",
@@ -985,7 +982,8 @@ pub async fn env_row_by_key(db: &Db, service_id: i64, key: &str) -> DbResult<Opt
     .bind(key)
     .fetch_optional(db.pool())
     .await?;
-    row.map(|r| decode(&r.0, "environment_variables")).transpose()
+    row.map(|r| decode(&r.0, "environment_variables"))
+        .transpose()
 }
 
 /// One variable of the service by uuid.
@@ -999,7 +997,8 @@ pub async fn env_row_by_uuid(db: &Db, service_id: i64, uuid: &str) -> DbResult<O
     .bind(uuid)
     .fetch_optional(db.pool())
     .await?;
-    row.map(|r| decode(&r.0, "environment_variables")).transpose()
+    row.map(|r| decode(&r.0, "environment_variables"))
+        .transpose()
 }
 
 /// `$env->save()` of the API with the columns that changed.
@@ -1104,19 +1103,25 @@ pub async fn has_tag(db: &Db, service_id: i64, tag_id: i64) -> DbResult<bool> {
 /// `$service->tags()->detach($id)`.
 pub async fn detach_tag(db: &Db, service_id: i64, tag_id: i64) -> DbResult<()> {
     db.ensure_writable()?;
-    sqlx::query("DELETE FROM taggables WHERE taggable_type = $1 AND taggable_id = $2 AND tag_id = $3")
-        .bind(MORPH)
-        .bind(service_id)
-        .bind(tag_id)
-        .execute(db.pool())
-        .await?;
+    sqlx::query(
+        "DELETE FROM taggables WHERE taggable_type = $1 AND taggable_id = $2 AND tag_id = $3",
+    )
+    .bind(MORPH)
+    .bind(service_id)
+    .bind(tag_id)
+    .execute(db.pool())
+    .await?;
     Ok(())
 }
 
 // --- activities -------------------------------------------------------------------------------
 
 /// `Activity::where('properties->type_uuid', $uuid)` in progress or queued: `status` cancelled.
-pub async fn cancel_running_activities(db: &Db, type_uuid: &str, now: NaiveDateTime) -> DbResult<u64> {
+pub async fn cancel_running_activities(
+    db: &Db,
+    type_uuid: &str,
+    now: NaiveDateTime,
+) -> DbResult<u64> {
     db.ensure_writable()?;
     let done = sqlx::query(
         "UPDATE activity_log SET properties = properties || '{\"status\":\"cancelled\"}'::jsonb, updated_at = $2 \
@@ -1143,11 +1148,7 @@ pub async fn has_running_start(db: &Db, type_uuid: &str) -> DbResult<bool> {
 }
 
 /// `activity()->withProperties($properties)->event('inline')->log('[]')` without a subject.
-pub async fn activity_insert(
-    db: &Db,
-    properties: &Value,
-    now: NaiveDateTime,
-) -> DbResult<i64> {
+pub async fn activity_insert(db: &Db, properties: &Value, now: NaiveDateTime) -> DbResult<i64> {
     db.ensure_writable()?;
     Ok(sqlx::query_scalar(
         "INSERT INTO activity_log (log_name, description, properties, event, created_at, updated_at) \
@@ -1362,6 +1363,48 @@ pub async fn scheduled_task_executions(db: &Db, task_id: i64) -> DbResult<Vec<Re
     rows.iter()
         .map(|r| decode(&r.0, "scheduled_task_executions"))
         .collect()
+}
+
+/// `ScheduledTaskExecution::forceCreate([...])`.
+pub async fn scheduled_task_execution_start(
+    db: &Db,
+    task_id: i64,
+    now: NaiveDateTime,
+) -> DbResult<i64> {
+    db.ensure_writable()?;
+    Ok(sqlx::query_scalar(
+        "INSERT INTO scheduled_task_executions (uuid, scheduled_task_id, started_at, retry_count, created_at, updated_at) \
+         VALUES ($1, $2, $3, 0, $3, $3) RETURNING id",
+    )
+    .bind(new_public_id())
+    .bind(task_id)
+    .bind(now)
+    .fetch_one(db.pool())
+    .await?)
+}
+
+/// The final `update()`s of a task execution: `status`, `message`, `finished_at`, `duration`.
+pub async fn scheduled_task_execution_finish(
+    db: &Db,
+    id: i64,
+    status: &str,
+    message: &str,
+    duration: f64,
+    now: NaiveDateTime,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query(
+        "UPDATE scheduled_task_executions SET status = $2, message = $3, finished_at = $4, \
+         duration = round($5::numeric, 2), updated_at = $4 WHERE id = $1",
+    )
+    .bind(id)
+    .bind(status)
+    .bind(message)
+    .bind(now)
+    .bind(duration.to_string())
+    .execute(db.pool())
+    .await?;
+    Ok(())
 }
 
 // --- move -------------------------------------------------------------------------------------

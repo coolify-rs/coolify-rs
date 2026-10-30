@@ -70,7 +70,9 @@ pub fn normalize_unix_path(path: &str) -> Result<String, String> {
             ".." => {
                 if segments.is_empty() || segments.last() == Some(&"..") {
                     if absolute {
-                        return Err("Invalid path: resolves outside the root directory.".into());
+                        return Err(
+                            "Invalid path: resolved path escapes the base directory.".into()
+                        );
                     }
                     segments.push("..");
                 } else {
@@ -90,13 +92,127 @@ pub fn normalize_unix_path(path: &str) -> Result<String, String> {
     })
 }
 
+static SLASHES: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new("/+").unwrap_or_else(|_| unreachable!()));
+
+fn no_relative_segments(path: &str, context: &str) -> Result<(), String> {
+    if path
+        .trim_matches('/')
+        .split('/')
+        .any(|s| s == "." || s == "..")
+    {
+        return Err(format!(
+            "Invalid {context}: relative path segments ('.' or '..') are not allowed."
+        ));
+    }
+    Ok(())
+}
+
+/// `validateFileMountPath($input, $context)`.
+pub fn validate_file_mount_path(input: &str, context: &str) -> Result<String, String> {
+    validate::validate_shell_safe_path(input, context)?;
+    if input.contains('\0') {
+        return Err(format!(
+            "Invalid {context}: contains null byte. Null bytes are not allowed in file mount paths for security reasons."
+        ));
+    }
+    if input.contains('\\') {
+        return Err(format!(
+            "Invalid {context}: backslash directory separators are not allowed."
+        ));
+    }
+    let trimmed = input.trim();
+    let started = if trimmed.starts_with('/') {
+        trimmed.to_owned()
+    } else {
+        format!("/{trimmed}")
+    };
+    let path = SLASHES.replace_all(&started, "/").into_owned();
+    no_relative_segments(&path, context)?;
+    Ok(path)
+}
+
+/// `validateHostFileMountPath($input, $context)`.
+pub fn validate_host_file_mount_path(input: &str, context: &str) -> Result<String, String> {
+    validate::validate_shell_safe_path(input, context)?;
+    if input.contains('\0') {
+        return Err(format!("Invalid {context}: contains null byte."));
+    }
+    if input.contains('\\') {
+        return Err(format!(
+            "Invalid {context}: backslash directory separators are not allowed."
+        ));
+    }
+    let path = SLASHES.replace_all(input.trim(), "/").into_owned();
+    if !path.starts_with('/') {
+        return Err(format!("Invalid {context}: must be an absolute path."));
+    }
+    if path == "/" || path.ends_with('/') {
+        return Err(format!(
+            "Invalid {context}: must point to a file, not a directory."
+        ));
+    }
+    no_relative_segments(&path, context)?;
+    normalize_unix_path(&path)
+}
+
+/// `confineFileMountPath($baseDirectory, $path, $context)`.
+pub fn confine_file_mount_path(base: &str, path: &str, context: &str) -> Result<String, String> {
+    let base = normalize_unix_path(base)?;
+    let mount = validate_file_mount_path(path, context)?;
+    let resolved = normalize_unix_path(&format!("{base}/{mount}"))?;
+    if resolved != base && !resolved.starts_with(&format!("{base}/")) {
+        return Err(format!(
+            "Invalid {context}: resolved path must stay inside the resource configuration directory."
+        ));
+    }
+    Ok(resolved)
+}
+
+/// `LocalFileVolume::isReadOnlyVolume()` of a service part.
+pub fn file_is_read_only(raw: Option<&str>, part: &str, mount_path: &str) -> bool {
+    let Some(yaml) = raw.and_then(|r| validate::parse_docker_compose_yaml(r).ok()) else {
+        return false;
+    };
+    let Some(PhpValue::Array(list)) = php::get(&yaml, "services")
+        .and_then(|s| php::get(s, part))
+        .and_then(|s| php::get(s, "volumes"))
+    else {
+        return false;
+    };
+    let wanted = mount_path.trim_start_matches('/');
+    for (_, volume) in list {
+        match volume {
+            PhpValue::Str(s) => {
+                let parts: Vec<&str> = s.split(':').collect();
+                if parts.len() >= 2
+                    && (parts[1].trim_start_matches('/') == wanted || parts[1] == mount_path)
+                {
+                    return parts.get(2) == Some(&"ro");
+                }
+            }
+            PhpValue::Array(_) => {
+                let target = php::data_get_str(volume, "target", "");
+                if target.trim_start_matches('/') == wanted || target == mount_path {
+                    return php::get(volume, "read_only") == Some(&PhpValue::Bool(true));
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// `LocalFileVolume::resolvedFsPath($workdir)`.
 pub fn resolved_fs_path(fs_path: &str, dir: &str) -> String {
     let path = fs_path.trim();
     if path.starts_with('/') || path.starts_with('~') {
         return path.to_owned();
     }
-    let path = path.strip_prefix('.').unwrap_or(path).trim_start_matches('/');
+    let path = path
+        .strip_prefix('.')
+        .unwrap_or(path)
+        .trim_start_matches('/');
     let dir = dir.trim_end_matches('/');
     if path.is_empty() {
         dir.to_owned()
@@ -124,7 +240,9 @@ pub fn resolve_host_path(dir: &str, path: &str, context: &str) -> Result<String,
         return Err(format!("Invalid {context}: the path is empty."));
     }
     if path.starts_with('~') {
-        return Err(format!("Invalid {context}: use an absolute path instead of ~."));
+        return Err(format!(
+            "Invalid {context}: use an absolute path instead of ~."
+        ));
     }
     validate::validate_shell_safe_path(path, context)?;
     let absolute = path.starts_with('/');
@@ -142,10 +260,14 @@ pub fn resolve_host_path(dir: &str, path: &str, context: &str) -> Result<String,
         ));
     }
     if path.split('/').any(|s| s == "." || s == "..") {
-        return Err(format!("Invalid {context}: '.' and '..' segments are not allowed."));
+        return Err(format!(
+            "Invalid {context}: '.' and '..' segments are not allowed."
+        ));
     }
     if resolved == "/" {
-        return Err(format!("Invalid {context}: the root directory cannot be mounted."));
+        return Err(format!(
+            "Invalid {context}: the root directory cannot be mounted."
+        ));
     }
     Ok(resolved)
 }
@@ -211,10 +333,12 @@ struct FileRow {
 }
 
 fn file_row(jobs: &Jobs, r: &serde_json::Map<String, Value>) -> FileRow {
-    let content = r
-        .get("content")
-        .and_then(Value::as_str)
-        .and_then(|c| jobs.0.encrypter.as_ref().and_then(|e| e.decrypt_string(c).ok()));
+    let content = r.get("content").and_then(Value::as_str).and_then(|c| {
+        jobs.0
+            .encrypter
+            .as_ref()
+            .and_then(|e| e.decrypt_string(c).ok())
+    });
     let text = |k: &str| r.get(k).and_then(Value::as_str).map(str::to_owned);
     let flag = |k: &str| r.get(k).and_then(Value::as_bool).unwrap_or(false);
     FileRow {
@@ -288,7 +412,9 @@ pub async fn assert_not_symlink(jobs: &Jobs, t: &Target, path: &str) -> Result<(
     if run(jobs, t, &c).await?.trim() == "OK" {
         Ok(())
     } else {
-        Err(format!("{path} is a symbolic link on the server. Coolify does not write a file through a symbolic link. Remove the link or use another path."))
+        Err(format!(
+            "{path} is a symbolic link on the server. Coolify does not write a file through a symbolic link. Remove the link or use another path."
+        ))
     }
 }
 
@@ -346,13 +472,19 @@ pub async fn save_storage_on_server(
     let mut commands: Vec<String> = Vec::new();
     if f.is_directory {
         validate::validate_shell_safe_path(&path, "storage path")?;
-        commands.push(format!("mkdir -p {} > /dev/null 2>&1 || true", quote(&path)));
+        commands.push(format!(
+            "mkdir -p {} > /dev/null 2>&1 || true",
+            quote(&path)
+        ));
         commands.push(format!("mkdir -p {} > /dev/null 2>&1 || true", quote(&dir)));
     }
     if path.starts_with('/') || path.starts_with('~') {
         let parent = php::before_last(&path, "/");
         if !parent.is_empty() {
-            commands.push(format!("mkdir -p {} > /dev/null 2>&1 || true", quote(&parent)));
+            commands.push(format!(
+                "mkdir -p {} > /dev/null 2>&1 || true",
+                quote(&parent)
+            ));
         }
     }
     validate::validate_shell_safe_path(&path, "storage path")?;
@@ -361,7 +493,9 @@ pub async fn save_storage_on_server(
     let is_dir = test_path(jobs, t, "-d", &escaped).await?;
     let mut replaces_empty = false;
     if is_file && f.is_directory {
-        let content = run(jobs, t, &format!("head -c 5242881 {escaped}")).await.unwrap_or_default();
+        let content = run(jobs, t, &format!("head -c 5242881 {escaped}"))
+            .await
+            .unwrap_or_default();
         let content = if content.len() > 5_242_880 {
             TOO_LARGE_PLACEHOLDER.to_owned()
         } else {
@@ -376,7 +510,9 @@ pub async fn save_storage_on_server(
         }
         let states = remote_file_states(jobs, t, std::slice::from_ref(&path)).await;
         if outside || states.first().map(String::as_str) != Some("empty-directory") {
-            return Err(format!("The following file is a directory on the server, but you are trying to mark it as a file: {path}<br><br>Please delete the directory on the server or mark it as directory."));
+            return Err(format!(
+                "The following file is a directory on the server, but you are trying to mark it as a file: {path}<br><br>Please delete the directory on the server or mark it as directory."
+            ));
         }
         replaces_empty = true;
     }
@@ -384,10 +520,16 @@ pub async fn save_storage_on_server(
         if replaces_empty {
             commands.push(format!("rmdir {escaped}"));
         }
-        match f.content.as_deref().filter(|c| php::truthy(&PhpValue::Str((*c).to_owned()))) {
+        match f
+            .content
+            .as_deref()
+            .filter(|c| php::truthy(&PhpValue::Str((*c).to_owned())))
+        {
             Some(content) => {
                 let encoded = base64::engine::general_purpose::STANDARD.encode(content);
-                commands.push(format!("echo '{encoded}' | base64 -d | tee {escaped} > /dev/null"));
+                commands.push(format!(
+                    "echo '{encoded}' | base64 -d | tee {escaped} > /dev/null"
+                ));
             }
             None => commands.push(format!("touch {escaped}")),
         }
@@ -507,7 +649,12 @@ pub async fn files_from_server(
     is_init: bool,
 ) -> Result<(), String> {
     let dir = workdir(&s.uuid);
-    run(jobs, t, &format!("mkdir -p -- {} > /dev/null 2>&1 || true", quote(&dir))).await?;
+    run(
+        jobs,
+        t,
+        &format!("mkdir -p -- {} > /dev/null 2>&1 || true", quote(&dir)),
+    )
+    .await?;
     let rows = svc::file_storages(&jobs.0.db, kind, sub_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -523,7 +670,10 @@ pub async fn files_from_server(
         let is_file = test_path(jobs, t, "-f", &escaped).await?;
         let is_dir = test_path(jobs, t, "-d", &escaped).await?;
         let outside = is_outside_resource_directory(&f.fs_path, &dir);
-        let has_content = f.content.as_deref().is_some_and(|c| !c.is_empty() && c != "0");
+        let has_content = f
+            .content
+            .as_deref()
+            .is_some_and(|c| !c.is_empty() && c != "0");
         if is_file {
             set_is_directory(jobs, f.id, false).await?;
         } else if is_dir && !f.is_directory && has_content {
@@ -545,7 +695,11 @@ pub async fn files_from_server(
             let mkdir = format!("mkdir -p -- \"$(dirname -- {escaped})\"");
             let write = format!("echo '{encoded}' | base64 -d | tee -- {escaped}");
             jobs.remote()
-                .run(t, &[mkdir.as_str(), write.as_str()], RunOptions::op("service.storage"))
+                .run(
+                    t,
+                    &[mkdir.as_str(), write.as_str()],
+                    RunOptions::op("service.storage"),
+                )
                 .await
                 .map_err(|e| e.message)?;
         } else if is_init {
@@ -612,7 +766,12 @@ pub async fn ensure_content_files(
                 continue;
             }
             let resolved = resolved_fs_path(&f.fs_path, &dir);
-            let path = if is_admin_controlled(s.str("docker_compose_raw"), &f.fs_path, &f.mount_path, &dir) {
+            let path = if is_admin_controlled(
+                s.str("docker_compose_raw"),
+                &f.fs_path,
+                &f.mount_path,
+                &dir,
+            ) {
                 Ok(resolved)
             } else {
                 resolve_host_path(&dir, &resolved, "storage path")
@@ -649,7 +808,9 @@ pub async fn ensure_content_files(
     }));
     for (f, path) in to_write {
         if let Err(e) = save_storage_on_server(jobs, s, t, f.id).await {
-            out.push(echo(&format!("Warning: Coolify cannot write the configuration file {path}: {e}")));
+            out.push(echo(&format!(
+                "Warning: Coolify cannot write the configuration file {path}: {e}"
+            )));
         }
     }
     out
@@ -661,7 +822,10 @@ mod tests {
 
     #[test]
     fn paths() {
-        assert_eq!(normalize_unix_path("/a/./b/../c").unwrap_or_default(), "/a/c");
+        assert_eq!(
+            normalize_unix_path("/a/./b/../c").unwrap_or_default(),
+            "/a/c"
+        );
         assert_eq!(resolved_fs_path("./x/y", "/d/u"), "/d/u/x/y");
         assert_eq!(resolved_fs_path("/abs", "/d/u"), "/abs");
         assert!(!is_outside_resource_directory("/d/u/f", "/d/u"));

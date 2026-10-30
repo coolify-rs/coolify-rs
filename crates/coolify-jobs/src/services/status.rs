@@ -19,9 +19,10 @@ const HEALTH_WAIT_ATTEMPTS: u32 = 12;
 
 /// `aggregateFromStrings($statuses)`: a restarting container makes the stack degraded.
 pub fn aggregate_for_stack(statuses: &[String]) -> String {
-    if statuses.iter().any(|s| {
-        !s.contains("degraded") && s.contains("restarting")
-    }) && !statuses.iter().any(|s| s.contains("degraded"))
+    if statuses
+        .iter()
+        .any(|s| !s.contains("degraded") && s.contains("restarting"))
+        && !statuses.iter().any(|s| s.contains("degraded"))
     {
         return "degraded:unhealthy".into();
     }
@@ -84,7 +85,8 @@ pub fn aggregate_for_compose(statuses: &[(String, String)], raw: Option<&str>) -
 /// `Service::containerStatus()` from the stored statuses of its applications and databases.
 pub fn container_status_of(subs: &[SubRow]) -> Option<String> {
     let status_of = |s: &SubRow| s.str("status").unwrap_or_default().to_owned();
-    let is_excluded = |s: &SubRow| s.bool("exclude_from_status") || status_of(s).contains(":excluded");
+    let is_excluded =
+        |s: &SubRow| s.bool("exclude_from_status") || status_of(s).contains(":excluded");
     let strip = |s: &SubRow| php::before(&status_of(s), ":excluded");
     let split = |aggregated: String| {
         let mut parts = aggregated.split(':');
@@ -101,7 +103,9 @@ pub fn container_status_of(subs: &[SubRow]) -> Option<String> {
         }
         let (status, health) = split(aggregate_for_stack(&excluded));
         return match (status, health) {
-            (Some(s), Some(h)) if !s.is_empty() && !h.is_empty() => Some(format!("{s}:{h}:excluded")),
+            (Some(s), Some(h)) if !s.is_empty() && !h.is_empty() => {
+                Some(format!("{s}:{h}:excluded"))
+            }
             _ => Some("exited".into()),
         };
     }
@@ -121,12 +125,17 @@ fn labels_of(container: &Value) -> Map<String, Value> {
 }
 
 fn label<'a>(labels: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
-    labels.get(key).and_then(Value::as_str).filter(|v| !v.is_empty())
+    labels
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
 }
 
 fn oneoff(labels: &Map<String, Value>) -> bool {
     matches!(
-        label(labels, "com.docker.compose.oneoff").map(str::to_ascii_lowercase).as_deref(),
+        label(labels, "com.docker.compose.oneoff")
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
         Some("true" | "1" | "on" | "yes")
     )
 }
@@ -153,6 +162,9 @@ fn part_of<'a>(
             .and_then(|i| parts.iter().find(|p| p.id == i))
     })
 }
+
+/// A part, the statuses of its containers by compose name, and its highest restart count.
+type Group = (SubRow, Vec<(String, String)>, i64);
 
 impl Jobs {
     /// `ResourceStatusRefresher::store()`.
@@ -181,7 +193,11 @@ impl Jobs {
         for attempt in 1..=HEALTH_WAIT_ATTEMPTS {
             let Some(out) = self
                 .remote()
-                .run_quiet(&target, &[command.as_str()], RunOptions::op("service.status"))
+                .run_quiet(
+                    &target,
+                    &[command.as_str()],
+                    RunOptions::op("service.status"),
+                )
                 .await
             else {
                 return;
@@ -194,8 +210,12 @@ impl Jobs {
                 return;
             }
             let db = &self.0.db;
-            let apps = svc::subs(db, SubKind::Application, s.id).await.unwrap_or_default();
-            let databases = svc::subs(db, SubKind::Database, s.id).await.unwrap_or_default();
+            let apps = svc::subs(db, SubKind::Application, s.id)
+                .await
+                .unwrap_or_default();
+            let databases = svc::subs(db, SubKind::Database, s.id)
+                .await
+                .unwrap_or_default();
             let mut groups: Vec<(SubRow, Vec<(String, String)>)> = Vec::new();
             for c in &containers {
                 let labels = labels_of(c);
@@ -221,9 +241,9 @@ impl Jobs {
                 let status = aggregate_for_compose(statuses, s.str("docker_compose_raw"));
                 self.store_sub_status(part, &status).await;
             }
-            let starting = containers
-                .iter()
-                .any(|c| c.pointer("/State/Health/Status").and_then(Value::as_str) == Some("starting"));
+            let starting = containers.iter().any(|c| {
+                c.pointer("/State/Health/Status").and_then(Value::as_str) == Some("starting")
+            });
             if !starting || attempt >= HEALTH_WAIT_ATTEMPTS {
                 return;
             }
@@ -266,9 +286,13 @@ impl Jobs {
         }
         let now = Jobs::now();
         for s in &services {
-            let apps = svc::subs(db, SubKind::Application, s.id).await.unwrap_or_default();
-            let databases = svc::subs(db, SubKind::Database, s.id).await.unwrap_or_default();
-            let mut groups: Vec<(SubRow, Vec<(String, String)>, i64)> = Vec::new();
+            let apps = svc::subs(db, SubKind::Application, s.id)
+                .await
+                .unwrap_or_default();
+            let databases = svc::subs(db, SubKind::Database, s.id)
+                .await
+                .unwrap_or_default();
+            let mut groups: Vec<Group> = Vec::new();
             let mut found: Vec<(SubKind, i64)> = Vec::new();
             for c in &containers {
                 let labels = labels_of(c);
@@ -362,12 +386,18 @@ mod tests {
             aggregate_for_stack(&["restarting:unknown".to_owned()]),
             "degraded:unhealthy"
         );
-        assert_eq!(aggregate_for_stack(&["running:healthy".to_owned()]), "running:healthy");
+        assert_eq!(
+            aggregate_for_stack(&["running:healthy".to_owned()]),
+            "running:healthy"
+        );
     }
 
     #[test]
     fn excluded_suffix() {
-        assert_eq!(append_excluded_suffix("running:healthy"), "running:healthy:excluded");
+        assert_eq!(
+            append_excluded_suffix("running:healthy"),
+            "running:healthy:excluded"
+        );
         assert_eq!(append_excluded_suffix("exited"), "exited");
     }
 }
