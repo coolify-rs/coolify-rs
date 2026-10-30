@@ -317,7 +317,9 @@ fn normalize(step: &Value) -> Value {
                 for (from, to) in r {
                     s = s.replace(from, to);
                 }
-                Value::String(s)
+                // The test VM's address changes between runs; its host name is what matters.
+                let ip = regex::Regex::new(r"\d+\.\d+\.\d+\.\d+\.sslip\.io").unwrap();
+                Value::String(ip.replace_all(&s, "<vm-ip>.sslip.io").into_owned())
             }
             Value::Array(a) => Value::Array(a.iter().map(|x| walk(x, r)).collect()),
             Value::Object(o) => {

@@ -17,6 +17,10 @@ APP_KEY_VALUE=$(docker exec coolify-rs-reference-coolify-1 printenv APP_KEY)
 DB_PASS=$(docker exec coolify-rs-reference-postgres-1 printenv POSTGRES_PASSWORD)
 DB_USER=$(docker exec coolify-rs-reference-postgres-1 printenv POSTGRES_USER)
 DB_NAME=$(docker exec coolify-rs-reference-postgres-1 printenv POSTGRES_DB)
+# Use real ssh when the test VM is reachable, otherwise go through orb.
+if ! nc -G 2 -z coolify-rs-e2e.orb.local 22 2>/dev/null; then
+  export COOLIFY_RS_SSH_BINARY="${COOLIFY_RS_SSH_BINARY:-$ROOT/scripts/ssh-via-orb.sh}"
+fi
 env APP_KEY="$APP_KEY_VALUE" DATABASE_URL="postgres://$DB_USER:$DB_PASS@127.0.0.1:15432/$DB_NAME" \
   COOLIFY_RS_LISTEN="127.0.0.1:$PORT" COOLIFY_RS_UI_DIR="$ROOT/frontend/dist" COOLIFY_RS_DATA_DIR="$DIR/data" \
   COOLIFY_RS_SKIP_STARTUP_CLEANUP=1 \

@@ -26,6 +26,9 @@ Git-ignored things are missing in a new worktree. Link them once (M = the main c
   Do not touch other ports. A restart kills deployments your instance is running.
 - Test server: uuid `hml20fsj5eles0xfiqidq8j5`, OrbStack VM `coolify-rs-e2e` (`orb -m coolify-rs-e2e -u root bash -c '...'`),
   project `j8xm2emlllhfnyebjzgyzp7z`, environment uuid `uj3st9yvtvzxh7rul3c3opcz` (production).
+- This Mac may have no network route to the VM (`No route to host`). `scripts/dev-server.sh` then runs server commands
+  through `scripts/ssh-via-orb.sh`: real commands on the real VM, but not real ssh. Real ssh is covered by the testing
+  host (`scripts/testing-host-up.sh`). If you verify something through the wrapper, say so.
 - API differential helpers: `compat/diff/databases_diff.py` (`call(side, method, path, body, tok="acme_owner_root")`,
   `sql()`, `record()`, `same()`). Set `COOLIFY_RS_BASE=http://127.0.0.1:<port>` to aim the `rs` side at your instance.
 - UI: `cd compat/ui && node shots.mjs --rs=<port> [--full] name=/path[@rsPath]`, then `python3 pair.py name`, then read
