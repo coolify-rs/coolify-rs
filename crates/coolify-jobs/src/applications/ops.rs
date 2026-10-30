@@ -369,7 +369,7 @@ pub enum LogsResult {
 
 impl Jobs {
     /// The containers of the application for a pull request (`getCurrentApplicationContainerStatus`).
-    async fn containers_for_pull_request(
+    pub(crate) async fn containers_for_pull_request(
         &self,
         t: &coolify_remote::Target,
         server: &ServerInfo,

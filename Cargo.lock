@@ -517,6 +517,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "chrono-tz",
  "coolify-compat",
  "coolify-db",
  "coolify-domain",
@@ -581,6 +582,7 @@ dependencies = [
  "coolify-api",
  "coolify-compat",
  "coolify-db",
+ "coolify-jobs",
  "coolify-remote",
  "serde_json",
  "tokio",

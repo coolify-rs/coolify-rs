@@ -794,10 +794,6 @@ impl Jobs {
         server_id: i64,
         include_preview: bool,
     ) -> (Vec<String>, Vec<String>) {
-        let (mut known, mut locked) = (Vec::new(), Vec::new());
-        let Some(enc) = self.0.encrypter.clone() else {
-            return (known, locked);
-        };
         let owner = Owner {
             morph: apps::MORPH,
             id: app.id,
@@ -805,14 +801,53 @@ impl Jobs {
             project_id: app.project.get("id").and_then(Value::as_i64),
             environment_id: app.environment.get("id").and_then(Value::as_i64),
         };
-        let Ok(variables) = env::load_for(&self.0.db, &enc, &owner, Some(server_id)).await else {
-            return (known, locked);
-        };
         let redact_all = app
             .settings
             .get("redact_all_env_values_in_logs")
             .and_then(Value::as_bool)
             != Some(false);
+        self.owner_log_redaction_secrets(&owner, redact_all, server_id, include_preview)
+            .await
+    }
+
+    /// `logRedactionSecretsFor($service)`.
+    pub(crate) async fn service_log_redaction_secrets(
+        &self,
+        service_id: i64,
+        team_id: i64,
+        server_id: i64,
+    ) -> (Vec<String>, Vec<String>) {
+        let Ok(Some((environment_id, project_id, redact_all))) =
+            coolify_db::scheduled_tasks::service_log_context(&self.0.db, service_id).await
+        else {
+            return (Vec::new(), Vec::new());
+        };
+        let owner = Owner {
+            morph: "App\\Models\\Service",
+            id: service_id,
+            team_id,
+            project_id,
+            environment_id,
+        };
+        self.owner_log_redaction_secrets(&owner, redact_all, server_id, false)
+            .await
+    }
+
+    /// The loop of `logRedactionSecretsFor()`.
+    async fn owner_log_redaction_secrets(
+        &self,
+        owner: &Owner<'_>,
+        redact_all: bool,
+        server_id: i64,
+        include_preview: bool,
+    ) -> (Vec<String>, Vec<String>) {
+        let (mut known, mut locked) = (Vec::new(), Vec::new());
+        let Some(enc) = self.0.encrypter.clone() else {
+            return (known, locked);
+        };
+        let Ok(variables) = env::load_for(&self.0.db, &enc, owner, Some(server_id)).await else {
+            return (known, locked);
+        };
         for v in variables
             .iter()
             .filter(|v| include_preview || !v.is_preview)

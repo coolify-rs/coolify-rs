@@ -23,6 +23,8 @@ pub mod instance;
 pub mod private_keys;
 pub mod projects;
 pub mod records;
+pub mod scheduled_jobs;
+pub mod scheduled_tasks;
 pub mod schema;
 pub mod secret_managers;
 pub mod servers;

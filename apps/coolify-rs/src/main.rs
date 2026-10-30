@@ -328,6 +328,15 @@ async fn main() -> Result<()> {
                 // Several dev instances on one host must not fail each other's deployments.
                 if env("COOLIFY_RS_SKIP_STARTUP_CLEANUP").is_none() {
                     jobs.fail_interrupted_deployments().await;
+                    jobs.fail_interrupted_scheduled_tasks().await;
+                }
+                // `ScheduledJobManager`. Off in dev: the reference shares the database.
+                let scheduler_setting = env("COOLIFY_RS_SCHEDULER");
+                if coolify_jobs::scheduler::enabled_by_setting(scheduler_setting.as_deref()) {
+                    coolify_jobs::scheduler::Scheduler::with_default_sources(jobs.clone()).spawn();
+                    tracing::info!("scheduler started");
+                } else {
+                    tracing::info!("scheduler is off (COOLIFY_RS_SCHEDULER)");
                 }
             }
             let listener = tokio::net::TcpListener::bind(cfg.listen).await?;

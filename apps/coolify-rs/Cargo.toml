@@ -12,6 +12,7 @@ anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true
 coolify-api.workspace = true
+coolify-jobs.workspace = true
 coolify-compat.workspace = true
 coolify-db.workspace = true
 coolify-remote.workspace = true

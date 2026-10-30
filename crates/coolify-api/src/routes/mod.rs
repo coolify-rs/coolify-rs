@@ -15,6 +15,7 @@ pub mod env_vars;
 pub mod misc;
 pub mod private_keys;
 pub mod projects;
+pub mod scheduled_tasks;
 pub mod secret_manager;
 pub mod servers;
 pub mod storages;
@@ -360,6 +361,42 @@ pub const ROUTES: &[RouteSpec] = &[
         uri: "api/v1/applications/{uuid}/previews/{pull_request_id}",
         group: Group::Main,
         abilities: WD,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/applications/{uuid}/scheduled-tasks",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/applications/{uuid}/scheduled-tasks",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}/executions",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}/execute",
+        group: Group::Main,
+        abilities: D,
     },
     RouteSpec {
         method: "PATCH",
@@ -844,6 +881,42 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::MethodFilter::DELETE,
                 application_previews::delete,
             ),
+        ),
+        (
+            "GET",
+            "api/v1/applications/{uuid}/scheduled-tasks",
+            on_get(scheduled_tasks::application_list),
+        ),
+        (
+            "POST",
+            "api/v1/applications/{uuid}/scheduled-tasks",
+            on_post(scheduled_tasks::application_create),
+        ),
+        (
+            "PATCH",
+            "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}",
+            on(
+                axum::routing::MethodFilter::PATCH,
+                scheduled_tasks::application_update,
+            ),
+        ),
+        (
+            "DELETE",
+            "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}",
+            on(
+                axum::routing::MethodFilter::DELETE,
+                scheduled_tasks::application_delete,
+            ),
+        ),
+        (
+            "GET",
+            "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}/executions",
+            on_get(scheduled_tasks::application_executions),
+        ),
+        (
+            "POST",
+            "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}/execute",
+            on_post(scheduled_tasks::application_execute),
         ),
         (
             "PATCH",
