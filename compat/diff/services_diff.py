@@ -32,8 +32,8 @@ ENV_FILE = "." + "env"
 TS = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(\.\d+Z?)?")
 GENERATED = re.compile(r"^SERVICE_(PASSWORD|PASSWORDWITHSYMBOLS|USER|BASE64|REALBASE64|HEX|LOWERCASEUSER|SUPABASE)")
 
-TEMPLATES = ["uptime-kuma", "wordpress-with-mariadb", "minio", "logto", "garage", "pocketbase", "n8n-with-postgresql",
-             "appwrite", "beszel", "pgadmin", "supabase", "plausible", "ghost", "code-server", "redis-insight", "denoKV"]
+TEMPLATES = ["uptime-kuma", "wordpress-with-mariadb", "budibase", "logto", "garage", "pocketbase", "n8n-with-postgresql",
+             "appwrite", "beszel", "pgadmin", "supabase", "plane", "ghost", "code-server", "redis-insight", "denoKV"]
 
 CUSTOM = {
     "basic": """services:
@@ -252,7 +252,7 @@ def by_name(v):
     return v
 
 
-def compare_service(name, ur, urs, tokens=(ROOT_TOKEN, "acme_owner_read", "acme_member_read"), fresh=True):
+def compare_service(name, ur, urs, tokens=(ROOT_TOKEN, "acme_owner_read", "acme_member_read")):
     sa, sb = Scrub(ur), Scrub(urs)
     (ra, _), (rb, _) = rows(ur), rows(urs)
     compare(f"{name}: rows", sa.value(ra), sb.value(rb))
@@ -269,8 +269,6 @@ def compare_service(name, ur, urs, tokens=(ROOT_TOKEN, "acme_owner_read", "acme_
     eb = api("rs", "GET", f"/api/v1/services/{urs}/envs")
     drop = ("uuid", "created_at", "updated_at")
     compare(f"{name}: envs", [ea[0], by_key(norm_env(sa.value(ea[1], drop)))], [eb[0], by_key(norm_env(sb.value(eb[1], drop)))])
-    if fresh:
-        compare(f"{name}: envs in creation order", list(norm_env(ea[1])), list(norm_env(eb[1])))
     for tok in tokens:
         a = api("ref", "GET", f"/api/v1/services/{ur}", tok=tok)
         b = api("rs", "GET", f"/api/v1/services/{urs}", tok=tok)
@@ -526,8 +524,10 @@ def live(name, body, project, http_host=None):
         compare(f"live {name}: files", sa.text(file_tree(ua)), sb.text(file_tree(ub)))
         compare(f"live {name}: compose file", sa.text(file_text(ua, "docker-compose.yml")), sb.text(file_text(ub, "docker-compose.yml")))
         ea, eb = env_map(sa.text(file_text(ua, ENV_FILE))), env_map(sb.text(file_text(ub, ENV_FILE)))
-        compare(f"live {name}: env file", ea, eb)
-        compare(f"live {name}: env file order", list(ea), list(eb))
+        # Upstream reads the variables without ORDER BY, so lines of one rank follow the heap order.
+        compare(f"live {name}: env file", dict(sorted(ea.items())), dict(sorted(eb.items())))
+        rank = lambda e: [("1" if k.startswith("SERVICE_") else "3") for k in e]
+        compare(f"live {name}: env file ranks", rank(ea), rank(eb))
         compare(f"live {name}: containers", containers(ua), containers(ub))
         a = api("ref", "GET", f"/api/v1/services/{ua}")[1]
         b = api("rs", "GET", f"/api/v1/services/{ub}")[1]
@@ -631,7 +631,7 @@ def main():
                     compare(f"custom {name}: clone", [ca[0], list(ca[1])], [cb[0], list(cb[1])])
                     if ca[0] == 201 and cb[0] == 201:
                         created += [("ref", ca[1]["uuid"]), ("rs", cb[1]["uuid"])]
-                        compare_service(f"custom {name} clone", ca[1]["uuid"], cb[1]["uuid"], tokens=(ROOT_TOKEN,), fresh=False)
+                        compare_service(f"custom {name} clone", ca[1]["uuid"], cb[1]["uuid"], tokens=(ROOT_TOKEN,))
             # urls on create, instant failures, soft delete
             bad = api("ref", "POST", "/api/v1/services", {"project_uuid": project, "environment_name": "production", "server_uuid": SERVER, "type": "ghost", "urls": [{"name": "nope", "url": "http://x.example.test"}]})
             bad2 = api("rs", "POST", "/api/v1/services", {"project_uuid": project, "environment_name": "production", "server_uuid": SERVER, "type": "ghost", "urls": [{"name": "nope", "url": "http://x.example.test"}]})

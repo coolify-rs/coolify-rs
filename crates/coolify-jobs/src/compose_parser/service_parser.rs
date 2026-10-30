@@ -815,6 +815,12 @@ impl<'a> ServiceRun<'a> {
         self.sync_noindex(sub).await
     }
 
+    /// `$part->fqdn = $url; $part->save()`.
+    pub async fn save_part_fqdn(&self, part: &SubRow, fqdn: Option<String>) -> Result<(), String> {
+        let mut part = part.clone();
+        self.save_fqdn(&mut part, fqdn).await
+    }
+
     /// `HasNoindexDomains::syncNoindexDomains()`.
     async fn sync_noindex(&self, sub: &mut SubRow) -> Result<(), String> {
         let Some(PhpValue::Array(current)) = json_to_php(sub.raw.get("noindex_domains")) else {

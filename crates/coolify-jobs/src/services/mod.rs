@@ -236,8 +236,9 @@ impl Jobs {
             }
             3
         };
+        // Upstream has no ORDER BY here (heap order); creation order is what it usually returns.
         let mut sorted: Vec<&vars::Var> = variables.iter().collect();
-        sorted.sort_by_key(|v| rank(v));
+        sorted.sort_by_key(|v| (rank(v), v.id));
         let raw = s.str("docker_compose_raw").or(s.str("docker_compose"));
         for v in sorted {
             let preserves = v.preserve_compose_null && v.value.is_none();

@@ -1650,7 +1650,7 @@ pub async fn migrate(
 ) -> ApiResult {
     find(&state, &ctx, &uuid).await?;
     require_admin(&ctx)?;
-    Err(ApiError::Abort(StatusCode::NOT_FOUND, "Not Found"))
+    Err(ApiError::Abort(StatusCode::NOT_FOUND, ""))
 }
 
 /// `POST /services/{uuid}/clone` (`clone_by_uuid`, `clone_service()`).
