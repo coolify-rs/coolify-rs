@@ -4,6 +4,7 @@
 pub mod compose;
 mod deploy;
 pub mod detect;
+pub mod docker_run;
 pub mod domains;
 pub mod labels;
 mod lifecycle;

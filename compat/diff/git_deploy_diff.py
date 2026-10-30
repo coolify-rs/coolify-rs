@@ -33,6 +33,14 @@ CASES = {
     "compose": dict(build_pack="dockercompose", base_directory="/internal/compose", docker_compose_location="/docker-compose.yaml"),
     "compose-simple": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests",
                            docker_compose_location="/docker-compose-simple.yaml"),
+    # Custom Docker options in the Compose file and the helper's seccomp mount; {seccomp} is a profile on the VM.
+    "custom-options": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80",
+                           custom_docker_run_options="--cap-add=NET_ADMIN --cap-drop SYS_TIME --init --hostname diff-host --ulimit nofile=1024:2048 "
+                           "--shm-size 64m --dns 1.1.1.1 --add-host a.test:1.2.3.4 --tmpfs /run/x --pids-limit 200 "
+                           "--sysctl net.core.somaxconn=1024 -it --network-alias zzz -e FOO=bar --security-opt seccomp={seccomp}"),
+    # --ip stops the rolling update; each side needs its own address ({ip}).
+    "custom-ip": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80",
+                      custom_docker_run_options="--ip {ip}"),
     # A deploy key against a git-over-SSH mirror of the repository (--deploy-key, --ssh-repo).
     "deploykey": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
 }
@@ -47,6 +55,14 @@ def norm(text, pairs):
     # The Compose build fingerprint hashes per-application inputs.
     text = re.sub(r"coolify\.build-fingerprint=[0-9a-f]{64}", "coolify.build-fingerprint=FP", text)
     return text
+
+
+SECCOMP_PROFILE = '{"defaultAction":"SCMP_ACT_ALLOW"}'
+# What the Compose file and the Docker options change on the container.
+HOST_CONFIG = ("{{json .HostConfig.CapAdd}} {{json .HostConfig.CapDrop}} {{json .HostConfig.Init}} {{json .HostConfig.Ulimits}} "
+               "{{json .HostConfig.ShmSize}} {{json .HostConfig.Dns}} {{json .HostConfig.ExtraHosts}} {{json .HostConfig.Tmpfs}} "
+               "{{json .HostConfig.PidsLimit}} {{json .HostConfig.Sysctls}} {{json .HostConfig.SecurityOpt}} {{json .Config.Hostname}} "
+               "{{json .Config.Tty}} {{json .Config.OpenStdin}} {{json .Config.Entrypoint}} {{json .HostConfig.Binds}}")
 
 
 def main():
@@ -69,8 +85,13 @@ def main():
         for _ in range(300):
             d = deployments(u)
             if len(d) >= count and d[count - 1]["status"] in ("finished", "failed", "cancelled-by-user") and d[count - 1]["finished_at"]:
-                # The finally block logs after finished_at.
-                time.sleep(4)
+                # The finally block logs and stops the helper after finished_at.
+                dep = d[count - 1]["deployment_uuid"]
+                for _ in range(60):
+                    q = deployments(u)[count - 1]
+                    if "Gracefully shutting down build container" in (q["logs"] or "") and not vm(f"docker ps -aq --filter name=^{dep}$").strip():
+                        break
+                    time.sleep(2)
                 return deployments(u)[count - 1]
             time.sleep(2)
         return (deployments(u) or [None])[-1]
@@ -84,15 +105,25 @@ def main():
             "git_repository": REPO, "git_branch": "main", "instant_deploy": False}
     created = []
     key_uuid = None
+    run_id = f"{os.getpid()}-{int(time.time())}"
+    seccomp = f"/tmp/git-deploy-diff-{run_id}.json"
     try:
         if "deploykey" in a.case.split(","):
             c, r = call("ref", "POST", "/api/v1/security/keys",
                         {"name": "git-deploy-diff", "private_key": open(a.deploy_key).read()}, tok="acme_owner_root")
             key_uuid = json.loads(r)["uuid"]
         for case in a.case.split(","):
-            spec = CASES[case]
+            template = CASES[case]
             apps = {}
+            ips = {}
+            if "{seccomp}" in json.dumps(template):
+                vm(f"echo '{SECCOMP_PROFILE}' > {seccomp}")
+            if "{ip}" in json.dumps(template):
+                subnet = vm("docker network inspect coolify --format '{{(index .IPAM.Config 0).Subnet}}'").strip()
+                prefix = subnet.rsplit(".", 1)[0]
+                ips = {"ref": f"{prefix}.201", "rs": f"{prefix}.202"}
             for side in ("ref", "rs"):
+                spec = {k: v.replace("{seccomp}", seccomp).replace("{ip}", ips.get(side, "")) if isinstance(v, str) else v for k, v in template.items()}
                 if case == "deploykey":
                     body = dict(base, name=f"{case}-{side}", git_repository=a.ssh_repo, private_key_uuid=key_uuid, **spec)
                     c, r = call("ref", "POST", "/api/v1/applications/private-deploy-key", body, tok="acme_owner_root")
@@ -133,12 +164,20 @@ def main():
 
                 def entries(q, u):
                     pairs = [(u, "U"), (q["deployment_uuid"], "DEP"), (commit, "SHA"), (f"{case}-ref", "NAME"), (f"{case}-rs", "NAME")]
+                    pairs += [(ip, "IP") for ip in ips.values()]
                     out = json.loads(q["logs"] or "[]")
                     visible, compose_lines = [], []
+                    starting = False
                     for e in out:
                         if e["hidden"]:
                             continue
                         text = norm(e["output"], pairs)
+                        # How many attempts see "starting" depends on timing.
+                        if text.startswith("Attempt "):
+                            starting = '"starting"' in text
+                            text = re.sub(r"^Attempt \d+", "Attempt N", text)
+                        if starting:
+                            continue
                         # `docker compose up` output: the line order varies between runs.
                         if e.get("command") is None and (text.startswith("Container ") or text.startswith("time=")) :
                             compose_lines.extend(line.strip() for line in text.splitlines())
@@ -148,6 +187,11 @@ def main():
                     commands, seen = [], set()
                     for e in out:
                         cmd = e.get("command")
+                        # One pair of these per healthcheck attempt.
+                        if cmd and ".State.Health." in cmd:
+                            if cmd in seen:
+                                continue
+                            seen.add(cmd)
                         if cmd and (e["batch"], cmd) not in seen:
                             seen.add((e["batch"], cmd))
                             # The helper container id and hashed build args differ by run.
@@ -168,8 +212,9 @@ def main():
                        "\n".join(difflib.unified_diff([f"{t} {o}" for t, o in vr], [f"{t} {o}" for t, o in vs], lineterm="")))
                 record(f"{label}: logged commands identical", cr == cs,
                        "\n".join(difflib.unified_diff(cr, cs, lineterm="")))
-            fr = norm(vm(f"cat /data/coolify/applications/{ur}/docker-compose.yaml"), [(ur, "U"), (f"{case}-ref", "NAME")])
-            fs = norm(vm(f"cat /data/coolify/applications/{us}/docker-compose.yaml"), [(us, "U"), (f"{case}-rs", "NAME")])
+            ip_pairs = [(ip, "IP") for ip in ips.values()]
+            fr = norm(vm(f"cat /data/coolify/applications/{ur}/docker-compose.yaml"), [(ur, "U"), (f"{case}-ref", "NAME")] + ip_pairs)
+            fs = norm(vm(f"cat /data/coolify/applications/{us}/docker-compose.yaml"), [(us, "U"), (f"{case}-rs", "NAME")] + ip_pairs)
             record(f"[{case}] docker-compose.yaml identical", fr == fs and fr != "",
                    "\n".join(difflib.unified_diff(fr.splitlines(), fs.splitlines(), lineterm="")))
             envs = []
@@ -185,7 +230,7 @@ def main():
                         if re.match(r"^(SERVICE_(PASSWORD|USER|BASE64|REALBASE64|HEX)|[A-Z0-9_]*PASSWORD)", k):
                             return f"{k}=<{len(v)} chars>"
                         return x
-                    per.append((norm(name, [(u, "U")]), state, sorted(secret(norm(x, [(u, "U"), (f"{case}-ref", "NAME"), (f"{case}-rs", "NAME")])) for x in env)))
+                    per.append((norm(name, [(u, "U")]), state, norm(vm(f"docker inspect --format '{HOST_CONFIG}' {name}"), [(u, "U")]), sorted(secret(norm(x, [(u, "U"), (f"{case}-ref", "NAME"), (f"{case}-rs", "NAME")])) for x in env)))
                 envs.append(per)
             record(f"[{case}] containers, states and environment identical", envs[0] == envs[1] and envs[0] != [],
                    "\n".join(difflib.unified_diff([repr(x) for x in envs[0]], [repr(x) for x in envs[1]], lineterm="")))
@@ -215,6 +260,7 @@ def main():
             call("ref", "DELETE", f"/api/v1/applications/{u}?delete_volumes=true", tok="acme_owner_root")
         time.sleep(5)
         call("ref", "DELETE", f"/api/v1/projects/{project}", tok="acme_owner_root")
+        vm(f"rm -f {seccomp}")
         if key_uuid:
             time.sleep(10)
             call("ref", "DELETE", f"/api/v1/security/keys/{key_uuid}", tok="acme_owner_root")

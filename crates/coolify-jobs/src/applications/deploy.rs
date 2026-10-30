@@ -22,6 +22,7 @@ use coolify_remote::{RunOptions, Stream, Target};
 use serde_json::Value;
 
 use super::compose::{self, ENV_FILE};
+use super::docker_run;
 use super::labels::{self, LabelInput};
 use super::snapshot;
 use crate::Jobs;
@@ -1118,14 +1119,17 @@ impl Run {
         let buildx = format!("-v {home}/.docker/buildx:/root/.docker/buildx");
         let net = quote(self.app.network());
         let dep = &self.dep;
-        // `{env_flags}` and `{seccompMounts}` are empty for a Docker image deployment.
+        // `{env_flags}` is empty: build secrets are not ported.
+        // seccompProfileMountFlags(): docker compose runs in this helper and reads the profiles.
+        let seccomp =
+            docker_run::seccomp_profile_mount_flags(self.app.str("custom_docker_run_options"));
         let run_command = if config == "OK" {
             format!(
-                "docker run -d --network {net} --name {dep}  --rm -v {home}/.docker/config.json:/root/.docker/config.json:ro {buildx} -v /var/run/docker.sock:/var/run/docker.sock  {helper}"
+                "docker run -d --network {net} --name {dep}  --rm -v {home}/.docker/config.json:/root/.docker/config.json:ro {buildx} -v /var/run/docker.sock:/var/run/docker.sock {seccomp} {helper}"
             )
         } else {
             format!(
-                "docker run -d --network {net} --name {dep}  --rm {buildx} -v /var/run/docker.sock:/var/run/docker.sock  {helper}"
+                "docker run -d --network {net} --name {dep}  --rm {buildx} -v /var/run/docker.sock:/var/run/docker.sock {seccomp} {helper}"
             )
         };
         self.info(&format!("Preparing container with helper image: {helper}"))
@@ -1219,6 +1223,38 @@ impl Run {
             .await
             .map_err(|e| Fail::new(e.to_string()))?;
         let network = self.app.network().to_owned();
+        let options = self.app.str("custom_docker_run_options").map(str::to_owned);
+        let mut custom = docker_run::convert_docker_run_to_compose(options.as_deref());
+        if self.app.setting_bool("is_gpu_enabled") {
+            let options = self.app.setting_str("gpu_options").map(str::to_owned);
+            if docker_run::parse_gpu_options(options.as_deref()).is_none() {
+                self.info(
+                    "GPU options are not a valid key=value list or YAML mapping. They are ignored.",
+                )
+                .await;
+            }
+            let forget = custom
+                .get_mut("deploy")
+                .and_then(|d| d.get_mut("resources"))
+                .and_then(|r| r.get_mut("reservations"));
+            if let Some(reservations) = forget {
+                reservations.remove("devices");
+                self.info("GPU access is enabled in the GPU settings, so --gpus in Custom Docker Options is ignored.")
+                    .await;
+            }
+        }
+        let unsupported = docker_run::unsupported_docker_run_options(options.as_deref());
+        if !unsupported.is_empty() {
+            self.log(
+                &format!(
+                    "Warning: These custom Docker options are not supported and were not applied: {}. See https://coolify.io/docs/applications/builds/custom-docker-options for the supported options.",
+                    unsupported.join(", ")
+                ),
+                "stderr",
+                false,
+            )
+            .await;
+        }
         let yaml = compose::compose(&compose::ComposeInput {
             a: &self.app,
             container_name: &self.container,
@@ -1226,6 +1262,8 @@ impl Run {
             network: &network,
             labels,
             volumes: &volumes,
+            file_volumes: &[],
+            custom,
         });
         self.generated_compose = Some(yaml);
         Ok(())

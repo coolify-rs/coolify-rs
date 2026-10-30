@@ -381,6 +381,11 @@ pub struct ComposeInput<'a> {
     pub labels: Vec<String>,
     /// `(name, mount_path, host_path)` of the persistent volumes.
     pub volumes: &'a [(String, String, Option<String>)],
+    /// `"$fs_path:$mount_path"` of the file storages.
+    pub file_volumes: &'a [String],
+    /// `convertDockerRunToCompose($application->custom_docker_run_options)`, without the `--gpus`
+    /// devices when the GPU settings apply.
+    pub custom: PhpValue,
 }
 
 /// `generate_compose_file()` → `Yaml::dump($docker_compose, 10)`.
@@ -462,6 +467,21 @@ pub fn compose(c: &ComposeInput<'_>) -> String {
         service.set("cpuset", PhpValue::from(cpuset.as_str()));
     }
     service.set("labels", PhpValue::strings(c.labels.clone()));
+    if a.setting_bool("is_gpu_enabled") {
+        service.set(
+            "deploy",
+            PhpValue::map([(
+                "resources",
+                PhpValue::map([(
+                    "reservations",
+                    PhpValue::map([(
+                        "devices",
+                        PhpValue::list([super::docker_run::gpu_device_reservation(&a.settings)]),
+                    )]),
+                )]),
+            )]),
+        );
+    }
     if let Some(p) = a.str("ports_mappings").filter(|p| !p.is_empty()) {
         service.set("ports", PhpValue::strings(p.split(',').map(str::to_owned)));
     }
@@ -480,14 +500,53 @@ pub fn compose(c: &ComposeInput<'_>) -> String {
             );
         }
     }
+    volume_entries.extend(c.file_volumes.iter().map(|v| PhpValue::from(v.as_str())));
     if !volume_entries.is_empty() {
         service.set("volumes", PhpValue::list(volume_entries));
     }
+    let consistent = a.setting_bool("is_consistent_container_name_enabled");
+    let mut custom = c.custom.clone();
+    if !matches!(&custom, PhpValue::Array(items) if items.is_empty()) {
+        let mut first = |key: &str| {
+            let value = custom.get_mut(key).and_then(|v| match v {
+                PhpValue::Array(items) => items.first().map(|(_, v)| v.clone()),
+                _ => None,
+            });
+            match value {
+                Some(PhpValue::Str(s)) if !s.is_empty() && s != "0" => Some(s),
+                _ => None,
+            }
+        };
+        let (ipv4, ipv6) = (first("ip"), first("ip6"));
+        custom.remove("ip");
+        custom.remove("ip6");
+        if !consistent && (ipv4.is_some() || ipv6.is_some()) {
+            service.remove("networks");
+        }
+        for (key, ip) in [("ipv4_address", ipv4), ("ipv6_address", ipv6)] {
+            let Some(ip) = ip else { continue };
+            if service.get_mut("networks").is_none() {
+                service.set("networks", PhpValue::list([]));
+            }
+            if let Some(networks) = service.get_mut("networks") {
+                if networks.get_mut(c.network).is_none() {
+                    networks.set(c.network, PhpValue::list([]));
+                }
+                if let Some(network) = networks.get_mut(c.network) {
+                    network.set(key, PhpValue::Str(ip));
+                }
+            }
+        }
+        super::docker_run::array_merge_recursive(&mut service, custom);
+    }
+    // `$docker_compose['services'][$this->application->uuid]` with a consistent container name.
+    let service_key = if consistent {
+        a.uuid.clone()
+    } else {
+        c.container_name.to_owned()
+    };
     let mut compose = PhpValue::map([
-        (
-            "services",
-            PhpValue::map([(c.container_name.to_owned(), service)]),
-        ),
+        ("services", PhpValue::map([(service_key, service)])),
         (
             "networks",
             PhpValue::map([(
