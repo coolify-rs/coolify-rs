@@ -13,14 +13,14 @@ Upstream references are relative to the upstream repository root.
 |---|---|---|---|
 | `services` | 57 | 0 | not started |
 | `applications` | 52 | 13 | Docker image applications: list, show, create (`dockerimage`), start, restart, stop (POST + GET → 405), delete verified (`applications_diff.py`, 57/57 on a real VM including a live deployment). Git applications: create `public`, `private-deploy-key` and `private-github-app` for every git build pack (nixpacks, static, dockerfile, dockercompose, railpack) sharing the create prologue; public and deploy-key verified (`applications_public_diff.py`, 276/276: rows, settings, `NIXPACKS_NODE_VERSION` variables, labels, config hash, repository normalisation, generated names, validation messages); GitHub App create verified up to the GitHub API call (validation, 404s), happy path unit-tested only. Start/restart/stop/delete of git apps follow the deploy job's build pack support (dockercompose and inline Dockerfiles 501). Create fields not applied yet (`docker_compose_domains`, `watch_paths`, `custom_nginx_configuration`, basic auth, custom labels, tags, …), PATCH, envs, storages, previews answer 501 |
-| `databases` | 47 | 17 | list, show, create (PostgreSQL, MySQL, MariaDB, MongoDB, Redis, ClickHouse, Dragonfly, KeyDB), start, stop, restart (POST + GET → 405), delete verified (`databases_diff.py --kind <engine>` on a real VM, byte-identical Compose files); SQLite, PATCH, backups, envs, storages, tags, imports, logs, move/clone answer 501 |
+| `databases` | 47 | 44 | all but the three volume backup routes; service databases are counted under services. Verified by `compat/diff/database_resources_diff.py` and `database_server_diff.py` |
 | `servers` | 44 | 7 | list, show, create, update, delete, validate (`POST` + `GET` → 405) verified (194/194 differential; validation job 8/8 in `validate_diff.py`); `install=true`, `instant_validate`, proxy changes, `?force` with resources and cloud-provider deletes answer 501; resources, domains and the rest not started |
 | `projects` | 18 | 10 | verified for project/environment CRUD; canvas links and project-level shared variables not started |
 | `teams` / `team` | 12 | 8 | verified for reads and `PATCH /team`; team invitations not started |
 | `notifications` | 12 | 0 | not started |
 | `cloud-tokens`, `hetzner`, `digitalocean`, `vultr`, `hostinger`, `cloud-init-scripts` | 30 | 0 | not started |
 | `github-apps`, `gitlab-apps` | 10 | 0 | not started |
-| `s3-storages` | 6 | 0 | not started |
+| `s3-storages` | 6 | 6 | list, show, create, update, delete, validate |
 | `security` (private keys, integration tokens) | 6 | 5 | private keys verified (CRUD, differential); integration tokens not started |
 | `destinations`, `tags`, `resources`, `settings`, `audit-events` | 12 | 0 | not started |
 | `deploy`, `deployments` | 6 | 6 | `POST /deploy` by uuid (tags and pull requests 501), `GET /deploy` → 405, deployments list/show/by application, cancel |
@@ -70,8 +70,8 @@ Upstream references are relative to the upstream repository root.
 | One-click services (386 compose templates) | `templates/compose`, `bootstrap/helpers/parsers.php` | |
 | Domains, Traefik/Caddy labels, TLS (ACME) | `bootstrap/helpers/docker.php`, `proxy.php` | |
 | Environment variables, shared variables, secret managers | `EnvironmentVariable`, `SharedEnvironmentVariable` | value storage format must be confirmed at runtime |
-| Persistent storage, volume backups | `LocalPersistentVolume`, `VolumeBackupJob` | |
-| Database backups to S3, restore | `DatabaseBackupJob` | |
+| Persistent storage, volume backups | `LocalPersistentVolume`, `VolumeBackupJob` | database storages implemented; volume backups not started |
+| Database backups to S3, restore | `DatabaseBackupJob`, `StartDatabaseImport` | implemented for every engine with a backup solution; `database_server_diff.py` |
 | Scheduled tasks, scheduler, Horizon queues | `app/Console/Kernel.php`, 72 jobs | |
 | Notifications (email, Discord, Slack, Telegram, Pushover, webhook) | `app/Notifications/*` | SSRF protections must be ported with them |
 | Terminal and file browser | `docker/coolify-terminal`, `ContainerFilesystemService` | high-risk; security review required |

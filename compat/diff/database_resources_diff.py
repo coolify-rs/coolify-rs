@@ -36,6 +36,7 @@ def norm(side, raw):
     for other in SIDES:
         for name, value in sorted(ids[other].items(), key=lambda kv: -len(str(kv[1]))):
             text = text.replace(str(value), f"<{name}>")
+    text = re.sub(r'"last_online_at":"[^"]*"', '"last_online_at":"<date>"', text)
     text = DATE_RE.sub("<date>", text)
     text = NUM_ID_RE.sub(lambda m: f'"{m.group(1)}":"<id>"', text)
     text = UUID_RE.sub("<uuid>", text)
@@ -342,6 +343,7 @@ def main():
         both("backup member", "POST", B, {"frequency": "daily"}, tok="acme_member_write_legacy")
         both("backup on redis", "POST", "/api/v1/databases/{redis}/backups", {"frequency": "daily"})
         both("backup create", "POST", B, {"frequency": "0 2 * * *", "database_backup_retention_amount_locally": 3, "database_backup_retention_max_storage_locally": 1.5, "timeout": 120, "dump_all": False}, save="backup")
+        time.sleep(1.1)  # upstream orders schedules by created_at
         both("backup create s3", "POST", B, {"frequency": "@daily", "save_s3": True, "s3_storage_uuids": ["{s3b}", "{s3a}"], "s3_storage_uuid": "{s3a}", "disable_local_backup": True}, save="backup2")
         both("backup uuid not in list", "POST", B, {"frequency": "daily", "s3_storage_uuids": ["{s3a}"], "s3_storage_uuid": "{s3b}"})
         both("backups list", "GET", B)

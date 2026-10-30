@@ -907,17 +907,17 @@ pub async fn clone_database(
     for file in parts::file_storages(&state.db, morph, d.id).await? {
         let copy =
             parts::replicate_file_volume(&state.db, parts::id_of(&file), new_id, now).await?;
+        // The `created` hook of `LocalFileVolume`.
         if let Some(jobs) = state.jobs.as_ref()
             && !parts::bool_of(&copy, "is_host_file")
         {
-            let dir = format!("/data/coolify/databases/{}", d.uuid);
+            let dir = format!("/data/coolify/databases/{new_uuid}");
             let fs = parts::str_of(&copy, "fs_path").unwrap_or_default();
             if !coolify_jobs::databases::paths::is_outside_resource_directory(fs, &dir) {
-                let _ = jobs;
+                jobs.spawn_file_storage_save(copy.clone(), fresh.clone());
             }
         }
     }
-    let _ = fresh;
     parts::copy_backups_to(&state.db, morph, d.id, new_id, ctx.team_id, now).await?;
     parts::replicate_variables(&state.db, morph, d.id, new_id, now).await?;
     tracing::info!(target: "audit", event = "api.database.cloned", team_id = ctx.team_id, source_uuid = %d.uuid, database_uuid = %new_uuid, "database cloned");

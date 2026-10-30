@@ -369,7 +369,7 @@ impl Kind {
             Kind::Keydb => vec![(format!("keydb-data-{uuid}"), "/data")],
             Kind::Dragonfly => vec![(format!("dragonfly-data-{uuid}"), "/data")],
             Kind::Clickhouse => vec![(format!("clickhouse-data-{uuid}"), "/var/lib/clickhouse")],
-            Kind::Sqlite => vec![(format!("sqlite-data-{uuid}"), "/data")],
+            Kind::Sqlite => vec![(format!("sqlite-data-{uuid}"), "/var/lib/sqlite")],
         }
     }
 

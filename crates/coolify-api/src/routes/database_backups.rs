@@ -716,8 +716,14 @@ fn present_execution(ctx: &AuthCtx, row: &Record, secrets: &[String]) -> Value {
 async fn with_storage_uuids(state: &AppState, row: &Record) -> Result<Record, ApiError> {
     let mut r = SCHEDULED_DATABASE_BACKUP.present(row.clone());
     for f in FLOATS {
+        // The `float` cast: `json_encode` writes 0.0 as 0.
         if let Some(v) = row.get(*f).and_then(number) {
-            r.insert((*f).into(), json!(v));
+            let value = if v.fract() == 0.0 {
+                json!(v as i64)
+            } else {
+                json!(v)
+            };
+            r.insert((*f).into(), value);
         }
     }
     let id = parts::id_of(row);

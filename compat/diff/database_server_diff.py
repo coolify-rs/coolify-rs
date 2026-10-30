@@ -82,7 +82,19 @@ def norm(text, uuids):
     for u in uuids:
         text = text.replace(u, "UUID")
     text = re.sub(r"Latest Deployment Date: .*", "Latest Deployment Date: D", text)
-    return text
+    # Upstream reads file storages and variables without an order (heap order): compare those
+    # runs of lines sorted.
+    def sortable(line):
+        return line.startswith("            - '/data/coolify/databases/") or re.match(r" {12}- [A-Z_]+=", line)
+    lines, out, run = text.split("\n"), [], []
+    for line in lines:
+        if sortable(line):
+            run.append(line)
+            continue
+        out += sorted(run)
+        run = []
+        out.append(line)
+    return "\n".join(out + sorted(run))
 
 
 def same_file(name, path_fn, sides_uuid):
@@ -169,13 +181,21 @@ def run_kind(kind, a, project, s3):
             record(f"{kind}: proxy accepts connections", conn == {"ref": "open", "rs": "open"}, conn)
             for side in SIDES:
                 call(side, "PATCH", f"/api/v1/databases/{u[side]}", {"is_public": False}, ROOT)
-            time.sleep(6)
-            gone = {s: vm_out(f"docker ps -a --filter name={u[s]}-proxy --format '{{{{.Names}}}}'").strip() for s in SIDES}
+            gone = {}
+            for _ in range(20):
+                gone = {s: vm_out(f"docker ps -a --filter name={u[s]}-proxy --format '{{{{.Names}}}}'").strip() for s in SIDES}
+                if gone == {"ref": "", "rs": ""}:
+                    break
+                time.sleep(3)
             record(f"{kind}: proxy removed", gone == {"ref": "", "rs": ""}, gone)
 
         # --- backup, S3, restore
         if "backup" in a.parts and kind in BACKUPS:
             run_backup(kind, u, table, s3)
+
+        # --- clone with its volume data
+        if "clone" in a.parts and kind in SEED:
+            run_clone(kind, u, table)
 
         # --- SSL
         if "ssl" in a.parts and kind in SSL:
@@ -186,6 +206,32 @@ def run_kind(kind, a, project, s3):
         time.sleep(4)
         for side in SIDES:
             cleanup_vm(u[side])
+
+
+def run_clone(kind, u, table):
+    destination = sql(f"SELECT sd.uuid FROM standalone_dockers sd JOIN servers s ON s.id=sd.server_id WHERE s.uuid='{SERVER}' ORDER BY sd.id LIMIT 1")
+    clones = {}
+    for side in SIDES:
+        vm_out(f"docker exec {u[side]} sh -c {json.dumps(SEED[kind][0])}")
+        s, r = call(side, "POST", f"/api/v1/databases/{u[side]}/clone", {"destination_uuid": destination, "clone_volumes": True, "name": "cl"}, ROOT)
+        if s != 201:
+            record(f"{kind}: clone on {side}", False, r)
+            return
+        clones[side] = json.loads(r)["uuid"]
+    # Upstream's Bus chain fails on this reference after the stop (Horizon's job tags: "Nesting level
+    # too deep"): its source stays stopped and the clone empty. The port does what the chain intends,
+    # so this checks coolify-rs alone and brings upstream's source back for the next steps.
+    time.sleep(15)
+    s = wait_status(table, u["rs"])
+    record(f"{kind}: source restarted after clone (coolify-rs)", s.startswith("running"), s)
+    rid = sql(f"SELECT id FROM {table} WHERE uuid='{clones['rs']}'")
+    vols = sql(f"SELECT name FROM local_persistent_volumes WHERE resource_type='App\\Models\\{MODELS[kind]}' AND resource_id={rid} ORDER BY id").splitlines()
+    counts = [int(vm_out(f"docker run --rm -v {v}:/v alpine sh -c 'ls /v | wc -l'").strip() or 0) for v in vols]
+    record(f"{kind}: clone has the volume data (coolify-rs)", any(c > 0 for c in counts), dict(zip(vols, counts)))
+    call("ref", "POST", f"/api/v1/databases/{u['ref']}/start", tok=ROOT)
+    wait_status(table, u["ref"])
+    for side in SIDES:
+        call(side, "DELETE", f"/api/v1/databases/{clones[side]}", tok=ROOT)
 
 
 def run_ssl(kind, u, table, morph):
@@ -277,8 +323,10 @@ def run_backup(kind, u, table, s3):
             record(f"{kind}: backup finished", False, ex)
             return
         keys = ["status", "database_name", "s3_uploaded", "local_storage_deleted", "s3_storage_deleted", "message"]
-        ca = {k: ex["ref"].get(k) for k in keys}
-        cb = {k: ex["rs"].get(k) for k in keys}
+        guid = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+        def clean(e):
+            return {k: guid.sub("<guid>", e[k]) if isinstance(e.get(k), str) else e.get(k) for k in keys}
+        ca, cb = clean(ex["ref"]), clean(ex["rs"])
         record(f"{kind}: execution row", ca == cb and ca["status"] == "success", f"ref {ca}\n  rs  {cb}\n  ref file {ex['ref'].get('filename')}")
         def shape(side):
             return re.sub(r"\d{9,}-[a-z0-9]+", "T-U", ex[side]["filename"]).replace(u[side], "UUID")
@@ -296,7 +344,7 @@ def run_backup(kind, u, table, s3):
         for side in SIDES:
             s, r = call(side, "GET", f"/api/v1/databases/{u[side]}/backups/{bid[side]}/executions", tok=ROOT)
             e = json.loads(r)["executions"][0]
-            lists[side] = (s, list(e.keys()), e["status"], e["message"])
+            lists[side] = (s, list(e.keys()), e["status"], guid.sub("<guid>", e["message"] or ""))
         record(f"{kind}: executions list", lists["ref"] == lists["rs"], lists)
         # --- restore
         if kind in IMPORTS:
@@ -377,7 +425,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--s3", required=True)
     ap.add_argument("--kinds", default="postgresql,mysql,mariadb,mongodb,redis,keydb,dragonfly,clickhouse,sqlite")
-    ap.add_argument("--parts", default="proxy,backup,ssl")
+    ap.add_argument("--parts", default="proxy,backup,clone,ssl")
     ap.add_argument("--port-base", dest="port_base", type=int, default=45100)
     a = ap.parse_args()
     a.parts = a.parts.split(",")

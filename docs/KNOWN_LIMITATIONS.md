@@ -4,7 +4,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 
 ## Scope
 
-- Only 33 of 321 upstream API operations are implemented. Others answer `501 {"message":"This endpoint is not
+- Not every upstream API operation is implemented (`scripts/parity.py`). Others answer `501 {"message":"This endpoint is not
   implemented in coolify-rs yet."}`.
 - The web UI covers the dashboard, projects, environments, private keys, team settings, members and appearance.
   Not available yet: registration and the root setup window, password reset and forced password change, 2FA
@@ -27,14 +27,30 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   "install them manually" messages, and after success coolify-rs neither fetches the server details nor starts the
   proxy or Sentinel (upstream does all three).
 - Validation jobs run inside the coolify-rs process: a restart drops a running validation (upstream's queue keeps it).
-- Databases: every engine but SQLite. Environment variables are read at start (shared `{{team.X}}`-style references
-  resolve; secret manager `{{vault.X}}` references stop the start with a message), but the Environment Variables page is
-  not ported. Upstream stores `config_hash` only when the database page is open after a start; coolify-rs stores it after
-  every start. The ClickHouse "current data is not in the data volume" check is not ported. Making a database public
-  (TCP proxy), SSL, init script upload, file storages, backups, imports, container logs, terminal, metrics, tags, custom Docker run options at start, and
-  `PATCH /databases/{uuid}` are not ported (501, or disabled in the UI). After a start coolify-rs does not run Docker
-  cleanup, and `Str::slug` in container labels does not transliterate non-ASCII names.
-  Reachability changes do not send the Reachable/Unreachable notifications.
+- Databases (all 9 engines; API, proxy, SSL, backups, imports; the pages for them are a later task): the API routes of
+  `/databases/{uuid}/storages/{storage_uuid}/backups` (volume backups, `VolumeBackupJob`) are not ported (501).
+  `PATCH /databases/{uuid}/envs/bulk` applies `key`, `value`, `is_literal`, `is_multiline`, `is_shown_once` and `comment`;
+  upstream's mass assignment also takes other fillable columns of an item, including `resourceable_*`.
+  Secret manager `{{vault.X}}` references stop a start with a message. Upstream stores `config_hash` only when the database
+  page is open after a start; coolify-rs stores it after every start. The ClickHouse "current data is not in the data
+  volume" check is not ported. `Str::slug` in container labels does not transliterate non-ASCII names.
+  Reachability, backup and TCP proxy failure notifications are not sent.
+- Deliberate divergence: upstream's `POST` and `PATCH /databases/{uuid}/storages` answers carry the relation the model
+  loaded on the way (`resource` or `service`): the whole database with `destination.server`, including the saved proxy
+  configuration, also for tokens without `read:sensitive`. coolify-rs leaves this relation out.
+- Clone with `clone_volumes`: same-server copies only, onto a plain `local` volume; `cloneRemoteVolume` and the source
+  volume's driver options are not ported. `migrate` answers 404 as upstream does in production.
+- S3: `testConnection` signs its own `ListObjectsV2`; when the endpoint answers with an error, the message is shaped like
+  Flysystem's but not identical to the AWS SDK's text. The S3 endpoint's DNS is not pinned for the request as
+  `httpClientOptions` does. The "S3 connection error" email is not sent.
+- Docker cleanup after a stop runs the prune commands of `CleanupDocker`; `cleanupApplicationImages` and the buildx prune
+  are not run there.
+- Database imports run in the coolify-rs process: a restart drops a running import, and the stop-after-transport-failure
+  path of `DatabaseImportCleanup` is not ported. `fileContainsPostgresqlProgramExecution` scans plain uploads locally;
+  gzip uploads rely on the scan in the container. The upload's `mime_type` is derived from the file's signature.
+- Scheduled backups run through `Jobs::dispatch_scheduled_backup(id)`; cron timing belongs to the scheduler. Backup
+  overlap protection and the reservation live in the process.
+- SSL certificates are not regenerated when they near expiry (`RegenerateSslCertJob`).
 - Applications in the UI: Docker image applications and git applications from a public repository (new-resource
   "Docker Image" and "Public Git Repository" forms with Smart Scan and env file import, General page for the Docker
   image, Dockerfile, Static, Nixpacks and Railpack build packs, Git Source page, Deployment Logs list and log viewer,
@@ -69,7 +85,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   from trusted proxies (upstream trusts every proxy).
 - The new-server page offers only "IP address or domain" (no cloud provisioning).
 - Deployments: only the Docker image build pack. Git build packs (Dockerfile, static, Railpack, Nixpacks, Compose), previews, additional servers, build servers, registry pushes, basic auth, pre/post-deployment commands and custom Docker options are not ported (501). `current_process_id` stays empty, and commands that upstream feeds on stdin carry their input inside the script. Jobs run in the coolify-rs process: a restart drops a running deployment.
-- No proxy management, backups, scheduler, notifications or webhooks yet. SSH runs without
+- No proxy management, scheduler, notifications or webhooks yet. SSH runs without
   connection multiplexing (one connection per command).
 - coolify-rs cannot bootstrap a new installation: it requires a database created by upstream Coolify at the baseline
   (`main` @ b5823c7, 473 migrations); it runs no upstream DDL. A 4.5.0 database is served read-only until upstream

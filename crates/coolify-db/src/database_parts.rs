@@ -1246,7 +1246,7 @@ pub async fn replicate_persistent_volume(
     Ok(())
 }
 
-/// `$storage->replicate(['id', 'created_at', 'updated_at'])`: the copy gets a new UUID from `BaseModel`.
+/// `$storage->replicate(['id', 'created_at', 'updated_at'])`: the copy keeps the UUID.
 pub async fn replicate_file_volume(
     db: &Db,
     id: i64,
@@ -1257,7 +1257,7 @@ pub async fn replicate_file_volume(
     let cols = replicable_columns(
         db,
         "local_file_volumes",
-        &["id", "uuid", "resource_id", "created_at", "updated_at"],
+        &["id", "resource_id", "created_at", "updated_at"],
     )
     .await?;
     let list = cols
@@ -1266,10 +1266,9 @@ pub async fn replicate_file_volume(
         .collect::<Vec<_>>()
         .join(", ");
     let text: String = sqlx::query_scalar(&format!(
-        "INSERT INTO local_file_volumes (uuid, resource_id, created_at, updated_at, {list}) \
-         SELECT $1, $2, $3, $3, {list} FROM local_file_volumes WHERE id = $4 RETURNING row_to_json(local_file_volumes)::text"
+        "INSERT INTO local_file_volumes (resource_id, created_at, updated_at, {list}) \
+         SELECT $1, $2, $2, {list} FROM local_file_volumes WHERE id = $3 RETURNING row_to_json(local_file_volumes)::text"
     ))
-    .bind(new_public_id())
     .bind(resource_id)
     .bind(now)
     .bind(id)
@@ -1290,7 +1289,7 @@ pub async fn replicate_variables(
     let cols = replicable_columns(
         db,
         "environment_variables",
-        &["id", "uuid", "resourceable_id", "created_at", "updated_at"],
+        &["id", "resourceable_id", "created_at", "updated_at"],
     )
     .await?;
     let list = cols
@@ -1307,10 +1306,9 @@ pub async fn replicate_variables(
     .await?;
     for id in ids {
         sqlx::query(&format!(
-            "INSERT INTO environment_variables (uuid, resourceable_id, created_at, updated_at, {list}) \
-             SELECT $1, $2, $3, $3, {list} FROM environment_variables WHERE id = $4"
+            "INSERT INTO environment_variables (resourceable_id, created_at, updated_at, {list}) \
+             SELECT $1, $2, $2, {list} FROM environment_variables WHERE id = $3"
         ))
-        .bind(new_public_id())
         .bind(to)
         .bind(now)
         .bind(id)

@@ -408,7 +408,7 @@ impl Jobs {
     pub fn spawn_volume_clones(
         &self,
         d: DatabaseRow,
-        _target_server_id: i64,
+        target_server_id: i64,
         clones: Vec<(String, String)>,
     ) {
         let jobs = self.clone();
@@ -416,19 +416,26 @@ impl Jobs {
             let Ok(server) = jobs.server_for(&d).await else {
                 return;
             };
+            // `cloneRemoteVolume` (through the Coolify host) is not ported.
+            if server.id != target_server_id {
+                tracing::warn!(database = %d.uuid, "volume data is not cloned to another server");
+                return;
+            }
             jobs.stop_database(&d, &server, true).await;
             if let Ok(t) = server.target(&jobs).await {
                 for (source, target) in clones {
-                    let command = format!(
-                        "docker volume create {target_q} && docker run --rm -v {source_q}:/source -v {target_q}:/target alpine sh -c 'cd /source && cp -a . /target/'",
-                        source_q = quote(&source),
-                        target_q = quote(&target)
+                    // `VolumeCloneJob::cloneLocalVolume` (a plain `local` target volume).
+                    let create = format!("docker volume create {}", quote(&target));
+                    let copy = format!(
+                        "docker run --rm -v {}:/source -v {}:/target alpine sh -c 'cp -a /source/. /target/'",
+                        quote(&source),
+                        quote(&target)
                     );
                     if let Err(e) = jobs
                         .remote()
                         .run(
                             &t,
-                            &[command.as_str()],
+                            &[create.as_str(), copy.as_str()],
                             RunOptions::op("database.clone").timeout(Duration::from_secs(3600)),
                         )
                         .await
