@@ -23,7 +23,8 @@ Git-ignored things are missing in a new worktree. Link them once (M = the main c
   `coolify-rs-reference-postgres-1`, `psql -U coolify -d coolify`). Run PHP with
   `docker exec coolify-rs-reference-coolify-1 php /var/www/html/artisan tinker --execute '...'`.
 - coolify-rs: `scripts/dev-server.sh <your port>` builds and (re)starts your instance. Use only the port you were given.
-  Do not touch other ports. A restart kills deployments your instance is running.
+  Do not touch other ports. A restart kills deployments your instance is running. The scheduler is off there unless
+  you start it with `COOLIFY_RS_SCHEDULER=on`; the reference schedules over the same rows.
 - Test server: uuid `hml20fsj5eles0xfiqidq8j5`, OrbStack VM `coolify-rs-e2e` (`orb -m coolify-rs-e2e -u root bash -c '...'`),
   project `j8xm2emlllhfnyebjzgyzp7z`, environment uuid `uj3st9yvtvzxh7rul3c3opcz` (production).
 - API differential helpers: `compat/diff/databases_diff.py` (`call(side, method, path, body, tok="acme_owner_root")`,
