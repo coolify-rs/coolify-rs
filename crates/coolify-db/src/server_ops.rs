@@ -489,11 +489,14 @@ pub async fn team_has_services(db: &Db, team_id: i64) -> DbResult<bool> {
     .await?)
 }
 
+/// `id`, `uuid`, `docker_registry_image_name`, `docker_images_to_keep`, `build_pack`.
+pub type CleanupApplication = (i64, String, Option<String>, Option<i64>, Option<String>);
+
 /// `Application` columns the Docker cleanup and proxy jobs read: applications on a server.
 pub async fn applications_for_cleanup(
     db: &Db,
     server_id: i64,
-) -> DbResult<Vec<(i64, String, Option<String>, Option<i64>, Option<String>)>> {
+) -> DbResult<Vec<CleanupApplication>> {
     Ok(sqlx::query_as(
         "SELECT a.id, a.uuid, a.docker_registry_image_name, s.docker_images_to_keep::bigint, a.build_pack \
          FROM applications a LEFT JOIN application_settings s ON s.application_id = a.id \

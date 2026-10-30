@@ -129,9 +129,30 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route_layer(from_fn_with_state(state, crate::session::ui_guard))
 }
 
-/// `$serverStatuses` in upstream livewire/dashboard.blade.php, without the
-/// proxy-version and Sentinel checks (coolify-rs does not track either).
-fn server_status(s: &DashServer) -> (&'static str, &'static str) {
+/// `$server->hasCurrentTraefikOutdatedInfo()` and `isSentinelEnabled() && sentinelStatus() === 'out_of_sync'`.
+fn outdated_or_out_of_sync(
+    row: Option<&coolify_db::servers::ServerRow>,
+    proxy_set: bool,
+) -> (bool, bool) {
+    let Some(row) = row else {
+        return (false, false);
+    };
+    let info = coolify_jobs::server::ServerInfo::from_row(row);
+    let sentinel_enabled = !info.is_build_server()
+        && !info.is_swarm()
+        && info.setting_bool("force_disabled") != Some(true)
+        && !info.transferred;
+    (
+        proxy_set && coolify_jobs::server_ops::checks::has_current_traefik_outdated_info(row),
+        sentinel_enabled && coolify_jobs::server_ops::checks::sentinel_status(row) == "out_of_sync",
+    )
+}
+
+/// `$serverStatuses` in upstream livewire/dashboard.blade.php.
+fn server_status(
+    s: &DashServer,
+    row: Option<&coolify_db::servers::ServerRow>,
+) -> (&'static str, &'static str) {
     let functional = s.is_reachable && s.is_usable && !s.force_disabled;
     let proxy_set = functional
         && s.proxy_type
@@ -145,6 +166,13 @@ fn server_status(s: &DashServer) -> (&'static str, &'static str) {
         _ if proxy_set && s.proxy_status.as_deref() != Some("running") => {
             ("Attention required", "warning")
         }
+        _ if {
+            let (outdated, out_of_sync) = outdated_or_out_of_sync(row, proxy_set);
+            outdated || out_of_sync
+        } =>
+        {
+            ("Attention required", "warning")
+        }
         _ => ("Ready", "success"),
     }
 }
@@ -155,6 +183,7 @@ async fn dashboard_data(
 ) -> ApiResult {
     let projects = dashboard::projects(&state.db, ctx.team_id).await?;
     let servers = dashboard::servers(&state.db, ctx.team_id).await?;
+    let rows = coolify_db::servers::list(&state.db, ctx.team_id).await?;
     let private_keys = dashboard::private_key_count(&state.db, ctx.team_id).await?;
     let projects: Vec<Value> = projects
         .iter()
@@ -172,7 +201,7 @@ async fn dashboard_data(
     let servers: Vec<Value> = servers
         .iter()
         .map(|s| {
-            let (status, status_type) = server_status(s);
+            let (status, status_type) = server_status(s, rows.iter().find(|r| r.uuid == s.uuid));
             json!({
                 "uuid": s.uuid,
                 "name": s.name,
@@ -458,7 +487,12 @@ fn server_facts(s: &coolify_db::servers::ServerRow) -> Value {
         ("Transferred away", "error")
     } else if flag("force_disabled") {
         ("Disabled", "error")
-    } else if functional && proxy_set && proxy_status != Some("running") {
+    } else if functional
+        && ((proxy_set && proxy_status != Some("running")) || {
+            let (outdated, out_of_sync) = outdated_or_out_of_sync(Some(s), proxy_set);
+            outdated || out_of_sync
+        })
+    {
         ("Attention required", "warning")
     } else if functional {
         ("Ready", "success")

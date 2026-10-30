@@ -46,7 +46,7 @@ fn field_matches(field: &str, value: u32, min: u32) -> bool {
             let v = range.parse().unwrap_or(u32::MAX);
             if step > 1 { (v, u32::MAX) } else { (v, v) }
         };
-        value >= lo && value <= hi && (value - lo) % step == 0
+        value >= lo && value <= hi && (value - lo).is_multiple_of(step)
     })
 }
 
@@ -116,7 +116,9 @@ fn skip_due_to_backoff(row: &ServerRow, at: DateTime<Utc>) -> bool {
         return false;
     }
     let hash = crc32(row.id.to_string().as_bytes());
-    (at.minute().wrapping_add(hash % interval)) % interval != 0
+    !at.minute()
+        .wrapping_add(hash % interval)
+        .is_multiple_of(interval)
 }
 
 fn crc32(data: &[u8]) -> u32 {

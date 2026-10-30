@@ -982,6 +982,10 @@ pub async fn update(
             "Missing required permissions: deploy. Changing the proxy type starts the new proxy on the server, so it needs a token with the deploy permission.",
         )?;
     }
+    // Without remote execution the proxy cannot be started and the server cannot be validated.
+    if (proxy_changed || input_bool(&input, "instant_validate")) && state.jobs.is_none() {
+        return Err(ApiError::NotPorted);
+    }
     let now = state.now();
     servers::update_columns(&state.db, s.id, &changes, now).await?;
     // A new address means a new host: drop the pinned host key.

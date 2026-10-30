@@ -325,6 +325,10 @@ async fn main() -> Result<()> {
             if let Some(jobs) = &state.jobs {
                 // Container statuses of databases, every minute (upstream's ServerManagerJob).
                 jobs.spawn_status_poller();
+                // Off when upstream shares the database: its scheduler already checks the servers.
+                if env("COOLIFY_RS_SERVER_SCHEDULER").is_some() {
+                    jobs.start_server_scheduler();
+                }
                 // Several dev instances on one host must not fail each other's deployments.
                 if env("COOLIFY_RS_SKIP_STARTUP_CLEANUP").is_none() {
                     jobs.fail_interrupted_deployments().await;

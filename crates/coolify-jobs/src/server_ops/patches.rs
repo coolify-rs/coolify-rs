@@ -494,7 +494,7 @@ fn add_details(
                     .split(',')
                     .any(|s| s.ends_with("-security"))
             } else {
-                security.is_some_and(|s| s.iter().any(|p| *p == package))
+                security.is_some_and(|s| s.contains(&package))
             };
             if let Some(m) = u.as_object_mut() {
                 m.insert("security".into(), json!(sec));

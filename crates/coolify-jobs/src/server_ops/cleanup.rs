@@ -97,7 +97,7 @@ impl Cleanup<'_> {
     /// `cleanupApplicationImages`.
     async fn application_images(
         &self,
-        apps: &[(i64, String, Option<String>, Option<i64>, Option<String>)],
+        apps: &[ops::CleanupApplication],
         log: &mut Vec<Value>,
     ) -> Result<(), String> {
         if apps.is_empty() {

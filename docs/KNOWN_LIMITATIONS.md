@@ -4,8 +4,8 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 
 ## Scope
 
-- Only 33 of 321 upstream API operations are implemented. Others answer `501 {"message":"This endpoint is not
-  implemented in coolify-rs yet."}`.
+- Upstream API operations that are not ported answer `501 {"message":"This endpoint is not implemented in coolify-rs
+  yet."}`; `scripts/parity.py --missing` lists them.
 - The web UI covers the dashboard, projects, environments, private keys, team settings, members and appearance.
   Not available yet: registration and the root setup window, password reset and forced password change, 2FA
   enrollment and recovery codes, passkeys, OAuth/SSO, team creation and invitations, instance settings, API token
@@ -17,15 +17,23 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Browser sessions live in memory: a restart signs everyone out. Session limits: 10,000 sessions, 7-day idle
   (`SESSION_LIFETIME`), 30-day absolute.
 - Users must sign in with an existing Coolify account (created in upstream Coolify).
-- Servers: validation works (API and UI); nothing else connects to a server yet. `instant_validate`, validating with
-  `install=true` (installing prerequisites, Docker and the proxy), validating a server linked to Vultr, DigitalOcean or
-  Hostinger, changing `proxy_type`, `DELETE ?force=true` on a server with resources, `delete_from_provider`, deleting
-  a transferred server and `GET /servers/{uuid}?resources=1` answer 501; `/servers/{uuid}/resources`, `/domains` and
-  the other server sub-routes are not ported.
-- Validation from the UI does not install anything: the "this will install or update Docker" question upstream asks
-  before revalidating is not shown, missing prerequisites or Docker end the validation with upstream's
-  "install them manually" messages, and after success coolify-rs neither fetches the server details nor starts the
-  proxy or Sentinel (upstream does all three).
+- Servers (API): sub-routes, destinations, proxy, Sentinel, Docker cleanup, log drains, registries, shared variables,
+  install, cloud providers and cloud-init scripts are ported (backend; their UI pages are not, and UI validation still ends
+  with the "install them manually" messages). Not ported: `POST /servers/import`, `GET /servers/import/check`,
+  `POST /servers/{uuid}/migrate`, `POST /servers/{uuid}/transfer/complete` (the 7,000 line transfer services; also deleting
+  a transferred server), `DELETE ?force=true` on a server with resources, `/servers/{uuid}/cloudflare-tunnel` account
+  features outside the API, `/resources`, `/servers/{uuid}/resources` and `/domains` for a team or server with services
+  (501 until services are ported), registry users of build servers and services, `delete_from_provider` for Hostinger
+  (upstream only disables auto renewal there). Throttling of validations exists only on Cloud upstream.
+- Server jobs differ from upstream as follows: `remote_process` activities have no `callEventOnFinish` queue, the proxy
+  file upload goes through the shell instead of scp, maintenance pages are written for "no resource in maintenance"
+  only, the CA certificate's subject key identifier is SHA-256 based, notifications (high disk usage, Traefik outdated,
+  patches, cleanup) are not sent, `PushServerUpdateJob` and `GetContainersStatus` from a Sentinel push are not run (the
+  heartbeat is), `RegenerateSslCertJob` after a CA change is not run, marks upstream keeps in Redis are per process. The
+  scheduler (`ServerManagerJob`) runs only with `COOLIFY_RS_SERVER_SCHEDULER=1`, because an instance sharing its database
+  with upstream must not check servers twice, and evaluates cron expressions in UTC. Compose merge tags (`!reset`,
+  `!override`) in a proxy configuration are ignored when reading it, but traffic analytics does not rewrite a stored
+  configuration.
 - Validation jobs run inside the coolify-rs process: a restart drops a running validation (upstream's queue keeps it).
 - Databases: every engine but SQLite. Environment variables are read at start (shared `{{team.X}}`-style references
   resolve; secret manager `{{vault.X}}` references stop the start with a message), but the Environment Variables page is
@@ -64,12 +72,11 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - At startup upstream (`app:init`) marks every in-progress and queued deployment as failed; coolify-rs marks only the
   in-progress deployments its own host was running (`horizon_job_worker`), so an upstream instance sharing the database
   keeps its deployments. Queued deployments are left queued.
-- Server status in the UI and in `/ui/*` omits the Sentinel and Traefik-update checks.
 - `sentinel_custom_url` for a new server falls back to the request's scheme and host; `X-Forwarded-*` count only
   from trusted proxies (upstream trusts every proxy).
-- The new-server page offers only "IP address or domain" (no cloud provisioning).
+- The new-server page offers only "IP address or domain" (cloud provisioning exists in the API only).
 - Deployments: only the Docker image build pack. Git build packs (Dockerfile, static, Railpack, Nixpacks, Compose), previews, additional servers, build servers, registry pushes, basic auth, pre/post-deployment commands and custom Docker options are not ported (501). `current_process_id` stays empty, and commands that upstream feeds on stdin carry their input inside the script. Jobs run in the coolify-rs process: a restart drops a running deployment.
-- No proxy management, backups, scheduler, notifications or webhooks yet. SSH runs without
+- No backups, notifications or webhooks yet. SSH runs without
   connection multiplexing (one connection per command).
 - coolify-rs cannot bootstrap a new installation: it requires a database created by upstream Coolify at the baseline
   (`main` @ b5823c7, 473 migrations); it runs no upstream DDL. A 4.5.0 database is served read-only until upstream

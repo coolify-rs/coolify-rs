@@ -575,6 +575,7 @@ struct Created {
 }
 
 /// `Team::createServerWithinLimit` + the proxy attribute of a provider server.
+#[allow(clippy::too_many_arguments)]
 async fn create_row(
     state: &AppState,
     ctx: &AuthCtx,
