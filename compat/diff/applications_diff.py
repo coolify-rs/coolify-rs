@@ -184,6 +184,23 @@ def main():
             b_ = call("rs", "GET", f"/api/v1/deployments/{qr['deployment_uuid']}", tok=tok)
             record(f"deployment by uuid [{tok}]", a_ == b_, json_diff(a_, b_))
 
+        # PATCH with instant_deploy: a new deployment on each side.
+        before = {u: deployment_row(u)["id"] for u in (ur, us)}
+        patched = {}
+        for side, u in (("ref", ur), ("rs", us)):
+            c, r = call(side, "PATCH", f"/api/v1/applications/{u}", {"limits_memory": "300m", "instant_deploy": True}, tok="acme_owner_root")
+            patched[side] = (c, r.replace(u.encode(), b"U"))
+        record("patch with instant_deploy answers alike", patched["ref"] == patched["rs"] and patched["rs"][0] == 200, patched)
+        for u in (ur, us):
+            for _ in range(150):
+                d = deployment_row(u)
+                if d["id"] != before[u] and d["status"] in ("finished", "failed"):
+                    break
+                time.sleep(2)
+            record(f"patch deployment finished {u[:6]}", d["id"] != before[u] and d["status"] == "finished", d["status"])
+        limits = [app_row(u)["limits_memory"] for u in (ur, us)]
+        record("patch saved before the deployment", limits == ["300m", "300m"], limits)
+
         # Stop through each side.
         for side, u in (("ref", ur), ("rs", us)):
             call(side, "POST", f"/api/v1/applications/{u}/stop", tok="acme_owner_root")

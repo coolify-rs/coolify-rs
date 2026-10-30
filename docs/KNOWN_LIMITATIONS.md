@@ -52,10 +52,13 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   written as upstream writes it, but for `build_pack = dockercompose` without `instant_deploy` upstream's queued
   `LoadComposeFile` job (clone the repository, read and parse the compose file, store `docker_compose_raw`,
   `docker_compose`, variables and volumes) is not ported, so the compose columns stay empty until a deployment.
-  `docker_compose_domains`, `watch_paths`, `custom_nginx_configuration`, `use_build_server`,
-  `connect_to_docker_network`, HTTP basic auth, custom labels, Docker run options, pre/post-deployment commands,
-  manual webhook secrets, GPU and container-name settings answer 501 when sent with a value. The GitHub App
-  repository check does not apply upstream's `SafeExternalUrl` private-network policy to the GitHub API URL, and the
+  Every create field and `PATCH /applications/{uuid}` store what upstream stores, but the deployment job does not do
+  all of it yet: starting an application with an inline Dockerfile, HTTP basic auth, custom Docker run options or
+  pre/post-deployment commands answers 501, and `instant_deploy` on a create or update that would need those answers
+  501 before saving anything. A request that upstream fails halfway (a value PostgreSQL rejects, such as
+  `gpu_driver: null` or `connect_to_docker_network: "maybe"`) answers the same 500 but leaves no row behind, where
+  upstream keeps the application it had already saved. PATCH does not queue `ReleaseRemovedDnsHostnamesJob`: managed DNS
+  is not ported. The GitHub App repository check does not apply upstream's `SafeExternalUrl` private-network policy to the GitHub API URL, and the
   GitHub App path is not yet verified against a real GitHub App (only up to the lookup of the App).
 - Application envs, storages, tags and the secret manager link are ported; the secret manager stores only the source
   (nothing fetches secrets from Doppler, Infisical or Vault at deployment). File storages are written and deleted on the

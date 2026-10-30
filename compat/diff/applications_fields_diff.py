@@ -667,6 +667,16 @@ def run_caddy(c):
     record("caddy: key created", ck == 201 and bool(key), rk)
     servers = []
     try:
+        # The deploy key type runs the same blocks; its duplicate message ends with a space.
+        dk = "/api/v1/applications/private-deploy-key"
+        keyed = dict(c.base, private_key_uuid=key, git_repository="git@github.com:o/r.git", git_branch="main")
+        pair = c.pair("deploy key every field", dk, dict(keyed, build_pack="nixpacks", ports_exposes="3000", **rich_fields("p2f-dk")))
+        if pair[0]:
+            c.patch("deploy key: github app refused", pair, dict(github_app_uuid="nope"))
+        c.pair("deploy key compose domains", dk, dict(keyed, name="p2f-dk2", build_pack="dockercompose", force_domain_override=True,
+                                                      docker_compose_domains=[{"name": "web", "domain": "https://p2f-dk.example.com:81"}]))
+        c.same_error("deploy key: duplicate urls", dk, dict(keyed, name="p2f-dk3", build_pack="dockercompose", docker_compose_domains=[
+            {"name": "web", "domain": "https://p2f-dk-dup.example.com"}, {"name": "api", "domain": "https://p2f-dk-dup.example.com"}]))
         for label, image, exact in [("211", "lucaslorentz/caddy-docker-proxy:2.11-alpine", False),
                                     ("29", "lucaslorentz/caddy-docker-proxy:2.9-alpine", True),
                                     ("28", "lucaslorentz/caddy-docker-proxy:2.8-alpine", False)]:
