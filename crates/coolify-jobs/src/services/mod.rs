@@ -189,6 +189,10 @@ impl Jobs {
         for pair in &effects.files_from_server {
             if !seen.contains(pair) {
                 seen.push(*pair);
+                // Deleted in the meantime: do not create its directory again.
+                if !matches!(svc::find_by_id(&self.0.db, service_id).await, Ok(Some(_))) {
+                    return;
+                }
                 let _ = storage::files_from_server(self, &s, &target, pair.0, pair.1, true).await;
             }
         }

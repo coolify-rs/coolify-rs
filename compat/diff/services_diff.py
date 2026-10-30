@@ -590,7 +590,13 @@ def live(name, body, project, http_host=None):
             for u in (ua, ub):
                 host = sql(f"SELECT a.fqdn FROM service_applications a JOIN services s ON s.id=a.service_id WHERE s.uuid='{u}' AND a.fqdn IS NOT NULL LIMIT 1")
                 h = re.sub(r"^https?://", "", host).split(":")[0].split("/")[0]
-                codes.append(vm(f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 -H 'Host: {h}' http://127.0.0.1/"))
+                # The proxy picks up a new container a few seconds after it runs.
+                for _ in range(15):
+                    code = vm(f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 -H 'Host: {h}' http://127.0.0.1/")
+                    if code == "200":
+                        break
+                    time.sleep(3)
+                codes.append(code)
             compare(f"live {name}: http through proxy", codes[0], codes[1])
         # Logs
         part = sql(f"SELECT a.name FROM service_applications a JOIN services s ON s.id=a.service_id WHERE s.uuid='{ua}' ORDER BY a.name LIMIT 1")
