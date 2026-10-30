@@ -509,7 +509,12 @@ pub async fn cleanup_update(
             continue;
         }
         let v = match *field {
-            "docker_cleanup_frequency" => text_setting(&input, field),
+            // The model mutator stores the translated expression.
+            "docker_cleanup_frequency" => Setting::Text(
+                input
+                    .str(field)
+                    .map(|f| coolify_compat::cron::translate_cron_expression(f).to_string()),
+            ),
             "docker_cleanup_threshold" => int_setting(&input, field),
             _ => bool_setting(&input, field),
         };

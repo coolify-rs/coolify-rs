@@ -166,14 +166,26 @@ pub async fn proxy_update(
                 return Err(validation_errors(&[("redirect_url", e.as_str())]));
             }
         }
-        Err(ApiError::Validation(mut errors)) => {
-            if let Some(e) = url_error {
-                let mut merged = Map::new();
-                merged.insert("redirect_url".into(), json!([e]));
-                merged.append(&mut errors);
-                return Err(ApiError::Validation(merged));
+        Err(ApiError::Validation(errors)) => {
+            // The rule's message goes after those of the earlier fields.
+            let Some(e) = url_error else {
+                return Err(ApiError::Validation(errors));
+            };
+            let mut merged = Map::new();
+            if let Some(v) = errors.get("redirect_enabled") {
+                merged.insert("redirect_enabled".into(), v.clone());
             }
-            return Err(ApiError::Validation(errors));
+            let mut list = errors
+                .get("redirect_url")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            list.push(json!(e));
+            merged.insert("redirect_url".into(), Value::Array(list));
+            for (k, v) in errors {
+                merged.entry(k).or_insert(v);
+            }
+            return Err(ApiError::Validation(merged));
         }
         Err(e) => return Err(e),
     }
@@ -400,11 +412,36 @@ const NOT_REACHABLE: ApiError = ApiError::Message(
     "The server is not reachable. Validate the server first.",
 );
 
-/// `usersOf`: registries of the images on this server.
+/// The scheme and host `route()` uses for the current request.
+fn request_root(headers: &HeaderMap) -> String {
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("localhost");
+    format!("http://{host}")
+}
+
+/// `$resource->link()`.
+fn resource_link(
+    root: &str,
+    project: &coolify_db::records::Record,
+    environment: &coolify_db::records::Record,
+    kind: &str,
+    uuid: &str,
+) -> Option<String> {
+    let p = project.get("uuid").and_then(Value::as_str)?;
+    let e = environment.get("uuid").and_then(Value::as_str)?;
+    Some(format!("{root}/project/{p}/environment/{e}/{kind}/{uuid}"))
+}
+
+/// `usersOf`: registries of the images on this server. Services and the applications
+/// a build server builds for its team are read with those ports.
 async fn registry_users(
     state: &AppState,
     s: &ServerRow,
+    headers: &HeaderMap,
 ) -> Result<Vec<registries::RegistryUser>, ApiError> {
+    let root = request_root(headers);
     let mut users = Vec::new();
     for a in coolify_db::applications::list_for_server(&state.db, s.id).await? {
         if let Some(image) = a
@@ -415,7 +452,13 @@ async fn registry_users(
                 registries::registry_from_image(image),
                 "Application",
                 a.str("name").unwrap_or_default().to_string(),
-                None,
+                resource_link(
+                    &root,
+                    &a.project,
+                    &a.environment,
+                    "application",
+                    a.str("uuid").unwrap_or_default(),
+                ),
             ));
         }
     }
@@ -425,7 +468,13 @@ async fn registry_users(
                 registries::registry_from_image(image),
                 "Database",
                 d.str("name").unwrap_or_default().to_string(),
-                None,
+                resource_link(
+                    &root,
+                    &d.project,
+                    &d.environment,
+                    "database",
+                    d.str("uuid").unwrap_or_default(),
+                ),
             ));
         }
     }
@@ -436,6 +485,7 @@ pub async fn registries_index(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
     Path(uuid): Path<String>,
+    headers: HeaderMap,
 ) -> ApiResult {
     let s = find_server(&state, &ctx, &uuid).await?;
     authorize_update(&ctx)?;
@@ -451,7 +501,7 @@ pub async fn registries_index(
             Err(_) => error = json!("Could not read the Docker configuration on this server."),
         }
     }
-    let users = registry_users(&state, &s).await?;
+    let users = registry_users(&state, &s, &headers).await?;
     let mut m = Map::new();
     m.insert(
         "registries".into(),

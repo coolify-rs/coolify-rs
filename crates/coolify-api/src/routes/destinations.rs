@@ -24,13 +24,21 @@ use crate::routes::server_settings::{
     authorize_update, find_server, json_status, validation_errors,
 };
 use crate::routes::servers::as_php_string;
-use crate::serialize::{php_truthy, serialize_record};
+use crate::serialize::php_truthy;
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
 
 /// The JSON body of Laravel's handler for `firstOrFail()`.
 fn model_not_found(model: &'static str) -> ApiError {
-    ApiError::Message(StatusCode::NOT_FOUND, model)
+    ApiError::Abort(StatusCode::NOT_FOUND, model)
+}
+
+/// `HasSafeStringAttribute` is only on `StandaloneDocker`.
+fn stored_name(kind: Kind, name: &str) -> String {
+    match kind {
+        Kind::Standalone => strip_tags(Some(name)),
+        Kind::Swarm => name.to_string(),
+    }
 }
 
 const NO_SWARM_DOCKER: &str = "No query results for model [App\\Models\\SwarmDocker].";
@@ -199,12 +207,12 @@ pub async fn create(
         }
     }
     let uuid = new_public_id();
-    let stored_name = strip_tags(Some(&name));
+    let name_value = stored_name(kind, &name);
     let created = dest::create(
         &state.db,
         kind,
         &uuid,
-        &stored_name,
+        &name_value,
         &network,
         s.id,
         state.now(),
@@ -251,7 +259,7 @@ pub async fn update(
     )?;
     let d = find(&state, &ctx, &uuid).await?;
     authorize_update(&ctx)?;
-    let name = strip_tags(input.str("name"));
+    let name = stored_name(d.kind, input.str("name").unwrap_or_default());
     dest::update_name(&state.db, d.kind, d.id, &name, state.now()).await?;
     tracing::info!(target: "audit", event = "api.destination.updated", team_id = ctx.team_id, destination_uuid = %uuid, "destination updated");
     let fresh = find(&state, &ctx, &uuid).await?;
@@ -305,23 +313,97 @@ pub async fn resources(
     let apps = coolify_db::applications::list_for_team(&state.db, ctx.team_id).await?;
     for a in &apps {
         let v = crate::routes::applications::present(&state, &ctx, a, false).await?;
-        let mut m = match v {
-            Value::Object(m) => m,
-            _ => Map::new(),
-        };
-        m.insert("type".into(), json!("application"));
-        items.push(Value::Object(serialize_record(m)));
+        items.push(
+            model_order(
+                &state,
+                v,
+                &a.raw,
+                "application",
+                a.int("environment_id"),
+                &[
+                    "additional_servers_count",
+                    "additional_networks_count",
+                    "laravel_through_key",
+                    "server_status",
+                    "additional_servers",
+                    "destination",
+                ],
+                ctx.can_read_sensitive,
+            )
+            .await?,
+        );
     }
     for d in coolify_db::databases::list_for_team(&state.db, ctx.team_id).await? {
         let v = crate::routes::databases::present(&state, &ctx, &d, false, Some(json!([]))).await?;
-        let mut m = match v {
-            Value::Object(m) => m,
-            _ => Map::new(),
-        };
-        m.insert("type".into(), json!(d.kind.type_name()));
-        items.push(Value::Object(serialize_record(m)));
+        items.push(
+            model_order(
+                &state,
+                v,
+                &d.raw,
+                d.kind.type_name(),
+                d.int("environment_id"),
+                &[
+                    "laravel_through_key",
+                    "internal_db_url",
+                    "external_db_url",
+                    "database_type",
+                    "server_status",
+                    "destination",
+                ],
+                ctx.can_read_sensitive,
+            )
+            .await?,
+        );
     }
     Ok(ok(Value::Array(items)).into_response())
+}
+
+/// `$resource->toArray()`, which `serializeApiResponse` does not reorder for this list: the
+/// columns in table order, with `id` and `private_key_id`, the relation key, the appended
+/// attributes, then `type`.
+async fn model_order(
+    state: &AppState,
+    presented: Value,
+    raw: &coolify_db::records::Record,
+    kind: &str,
+    environment_id: Option<i64>,
+    tail: &[&str],
+    sensitive: bool,
+) -> Result<Value, ApiError> {
+    let Value::Object(mut from) = presented else {
+        return Ok(presented);
+    };
+    let mut out = Map::new();
+    for key in raw.keys() {
+        match key.as_str() {
+            "id" | "private_key_id" => {
+                out.insert(key.clone(), raw.get(key).cloned().unwrap_or(Value::Null));
+            }
+            // `exposeSensitiveFields` also shows these, which the application API keeps hidden.
+            "domain_dns_statuses" | "domain_port_overrides" if sensitive => {
+                out.insert(key.clone(), raw.get(key).cloned().unwrap_or(Value::Null));
+            }
+            k => {
+                if let Some(v) = from.shift_remove(k) {
+                    out.insert(key.clone(), v);
+                }
+            }
+        }
+    }
+    for key in tail {
+        if *key == "laravel_through_key" {
+            let project: Option<i64> = coolify_db::server_ops::environment_project(
+                &state.db,
+                environment_id.unwrap_or_default(),
+            )
+            .await?;
+            out.insert((*key).into(), project.map_or(Value::Null, Value::from));
+        } else if let Some(v) = from.shift_remove(*key) {
+            out.insert((*key).into(), v);
+        }
+    }
+    out.insert("type".into(), json!(kind));
+    Ok(Value::Object(out))
 }
 
 /// `ServersController::resources_by_server`.
@@ -337,14 +419,8 @@ pub async fn resources_by_server(
     {
         return Err(ApiError::NotPorted);
     }
-    let items = defined_resources(&state, s.id)
-        .await?
-        .into_iter()
-        .map(|v| match v {
-            Value::Object(m) => Value::Object(serialize_record(m)),
-            o => o,
-        })
-        .collect();
+    // `serializeApiResponse` does not reorder this list either.
+    let items = defined_resources(&state, s.id).await?;
     Ok(ok(Value::Array(items)).into_response())
 }
 
@@ -491,13 +567,5 @@ pub async fn domains_by_server(
             Value::Object(m)
         })
         .collect();
-    Ok(ok(Value::Array(
-        out.into_iter()
-            .map(|v| match v {
-                Value::Object(m) => Value::Object(serialize_record(m)),
-                o => o,
-            })
-            .collect(),
-    ))
-    .into_response())
+    Ok(ok(Value::Array(out)).into_response())
 }

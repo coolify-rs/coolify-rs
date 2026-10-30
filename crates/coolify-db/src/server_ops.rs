@@ -506,3 +506,13 @@ pub async fn applications_for_cleanup(
     .fetch_all(db.pool())
     .await?)
 }
+
+/// `environment.project_id`.
+pub async fn environment_project(db: &Db, environment_id: i64) -> DbResult<Option<i64>> {
+    Ok(
+        sqlx::query_scalar("SELECT project_id FROM environments WHERE id = $1")
+            .bind(environment_id)
+            .fetch_optional(db.pool())
+            .await?,
+    )
+}
