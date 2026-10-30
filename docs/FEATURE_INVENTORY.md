@@ -72,7 +72,7 @@ Upstream references are relative to the upstream repository root.
 | Environment variables, shared variables, secret managers | `EnvironmentVariable`, `SharedEnvironmentVariable` | value storage format must be confirmed at runtime |
 | Persistent storage, volume backups | `LocalPersistentVolume`, `VolumeBackupJob` | |
 | Database backups to S3, restore | `DatabaseBackupJob` | |
-| Scheduled tasks, scheduler, Horizon queues | `app/Console/Kernel.php`, 72 jobs | |
+| Scheduled tasks, scheduler, Horizon queues | `app/Console/Kernel.php`, 72 jobs | application tasks API and `ScheduledTaskJob` ported; scheduler with a source interface (`coolify_jobs::scheduler`), tasks registered; backups, cleanups and other jobs not |
 | Notifications (email, Discord, Slack, Telegram, Pushover, webhook) | `app/Notifications/*` | SSRF protections must be ported with them |
 | Terminal and file browser | `docker/coolify-terminal`, `ContainerFilesystemService` | high-risk; security review required |
 | Cloud providers (Hetzner, DigitalOcean, Vultr, Hostinger), cloud-init | controllers + jobs | |

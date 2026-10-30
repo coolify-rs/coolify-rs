@@ -84,6 +84,25 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
     writes nothing where upstream leaves a half-made clone. Deleting a Compose preview removes the volumes from the stored rows.
   - Managed DNS records (`ManagedDnsRecordCleanup`) are not released when a preview's domains change or it is deleted, and
     log redaction does not resolve remote secrets.
+- Scheduled tasks and the scheduler are ported for applications (`compat/diff/applications_scheduled_tasks_diff.py`).
+  - The scheduler starts with the process. `COOLIFY_RS_SCHEDULER=off` (also `0`, `false`, `no`) turns it off, and
+    `scripts/dev-server.sh` sets it to off unless the caller says otherwise, because the reference runs its own scheduler
+    on the same database. Both use `scheduled_job_states` and `scheduled_job_deliveries`, so running both still runs an
+    occurrence once; a manual execute works with the scheduler off.
+  - Only the `tasks` source is registered. Database backups, volume backups and Docker cleanups register their sources
+    with `Scheduler::with_default_sources` when they are ported. Notifications are not ported: `TaskSuccess` and
+    `TaskFailed` end in `notify_task_success()` and `notify_task_failed()`, the missed-run throttle too. The
+    `ScheduledTaskDone` broadcast and the manager's cache heartbeat for the UI are not ported.
+  - Jobs run on tokio tasks, not on a queue. A job that finds the overlap lock of its task held does nothing, as upstream's
+    middleware says, but with one Horizon worker upstream's second job only starts after the first ended, so it runs then
+    (a manual execute during a run: one execution here, two on the reference). The lock lives in the process, not in Redis.
+    A process restart fails the running executions at startup ("The worker stopped..."), without a trace in `error_details`.
+  - Service tasks: the job and the scheduler handle them, untested, since services are not ported. The routes are not
+    registered (`routes/scheduled_tasks.rs` has the generic handlers), and a service that is starting counts as running
+    if its containers run, because `isStarting()` needs the service start activities.
+  - `subscription_unpaid` is not ported: it applies to Coolify Cloud only. Redaction does not resolve remote secrets. A
+    timezone uses chrono-tz data, not PHP's, so a future rule change could differ until both update. A cron step below zero
+    (`*/-5`) is invalid here and an endless loop upstream; `validate_cron_expression()` refuses it anyway.
 - Docker Compose applications deploy (build, pull, `docker compose up`, build fingerprint reuse, raw mode). Not ported:
   custom Compose start/build commands, "preserve repository", preview deployments, configuration files with content
   (file storages Coolify writes), build secrets. The startup cleanup scopes interrupted deployments by host name, so

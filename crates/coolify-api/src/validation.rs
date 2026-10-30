@@ -183,6 +183,15 @@ fn is_laravel_boolean(v: &Value) -> bool {
     }
 }
 
+/// Laravel's `getSize` under a numeric rule: the number, the size of an array, else the string length.
+fn numeric_rule_size(v: &Value) -> f64 {
+    match v {
+        Value::Array(a) => a.len() as f64,
+        Value::Object(o) => o.len() as f64,
+        _ => php_number(v).unwrap_or_else(|| php_string(v).chars().count() as f64),
+    }
+}
+
 /// Validates `input` against `fields`, then reports keys outside `allowed`
 /// with "This field is not allowed." (the controllers' `$extraFields` check).
 pub fn validate(
@@ -284,16 +293,13 @@ pub fn validate(
                     }
                 }
                 Rule::Between(min, max) => {
-                    // Laravel's getSize: the number when numeric, else the string length.
-                    let size =
-                        php_number(v).unwrap_or_else(|| php_string(v).chars().count() as f64);
+                    let size = numeric_rule_size(v);
                     if size < *min as f64 || size > *max as f64 {
                         push(f.name, message_between(f.name, messages, *min, *max));
                     }
                 }
                 Rule::MinNum(n) | Rule::MaxNum(n) => {
-                    let size =
-                        php_number(v).unwrap_or_else(|| php_string(v).chars().count() as f64);
+                    let size = numeric_rule_size(v);
                     let (failed, rule) = match rule {
                         Rule::MinNum(_) => (size < *n as f64, "min.numeric"),
                         _ => (size > *n as f64, "max.numeric"),
