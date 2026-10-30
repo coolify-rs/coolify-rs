@@ -18,7 +18,7 @@ use crate::Jobs;
 use crate::server::ServerInfo;
 
 mod clickhouse;
-mod common;
+pub(crate) mod common;
 pub mod connection;
 pub mod env;
 mod keydb;

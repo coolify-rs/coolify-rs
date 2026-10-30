@@ -6,10 +6,12 @@
 
 pub mod applications;
 pub mod checks;
+pub mod cloud;
 pub mod compose_parser;
 pub mod databases;
 pub mod github;
 pub mod server;
+pub mod server_ops;
 mod validate;
 
 use std::collections::{HashMap, HashSet};

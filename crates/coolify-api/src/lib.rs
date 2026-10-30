@@ -12,6 +12,7 @@ pub mod ip;
 pub mod laravel_url;
 pub mod response;
 pub mod routes;
+pub mod safe_url;
 pub mod serialize;
 pub mod session;
 pub mod state;

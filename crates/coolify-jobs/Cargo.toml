@@ -16,6 +16,7 @@ coolify-domain.workspace = true
 coolify-remote.workspace = true
 fancy-regex.workspace = true
 md-5.workspace = true
+p521 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
 rand.workspace = true
 regex.workspace = true
 reqwest.workspace = true
