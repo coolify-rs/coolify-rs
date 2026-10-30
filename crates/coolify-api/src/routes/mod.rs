@@ -11,6 +11,7 @@ pub mod misc;
 pub mod private_keys;
 pub mod projects;
 pub mod servers;
+pub mod services;
 pub mod teams;
 
 use axum::Router;
@@ -40,9 +41,11 @@ pub struct RouteSpec {
     pub abilities: &'static [&'static [Ability]],
 }
 
-use Ability::{Deploy, Read, Write};
+use Ability::{Deploy, Read, ReadSensitive, Write};
 
 const R: &[&[Ability]] = &[&[Read]];
+/// `api.ability:read:sensitive`.
+const RS: &[&[Ability]] = &[&[ReadSensitive]];
 const W: &[&[Ability]] = &[&[Write]];
 const NONE: &[&[Ability]] = &[];
 /// `api.ability:deploy`.
@@ -477,6 +480,312 @@ pub const ROUTES: &[RouteSpec] = &[
         group: Group::Main,
         abilities: W,
     },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/services/{uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/services/{uuid}",
+        group: Group::Main,
+        abilities: WD,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/storages",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/storages",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/services/{uuid}/storages",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/services/{uuid}/storages/{storage_uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/envs",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/envs",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/services/{uuid}/envs/bulk",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/services/{uuid}/envs",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/services/{uuid}/envs/{env_uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/logs",
+        group: Group::Main,
+        abilities: RS,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/tags",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/tags",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/services/{uuid}/tags/{tag_uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/move",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/migrate",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/clone",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/start",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/restart",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/stop",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/start",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/restart",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/stop",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/applications",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/applications/{app_uuid}",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/services/{uuid}/applications/{app_uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/applications/{app_uuid}/logs",
+        group: Group::Main,
+        abilities: RS,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/applications/{app_uuid}/logs",
+        group: Group::Main,
+        abilities: RS,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/applications/{app_uuid}/start",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/applications/{app_uuid}/restart",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/applications/{app_uuid}/stop",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/applications/{app_uuid}/start",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/applications/{app_uuid}/restart",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/applications/{app_uuid}/stop",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/databases",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/databases/{database_uuid}",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/services/{uuid}/databases/{database_uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/databases/{database_uuid}/logs",
+        group: Group::Main,
+        abilities: RS,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/databases/{database_uuid}/start",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/databases/{database_uuid}/restart",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/databases/{database_uuid}/stop",
+        group: Group::Main,
+        abilities: D,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/scheduled-tasks",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/scheduled-tasks",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}/executions",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}/execute",
+        group: Group::Main,
+        abilities: D,
+    },
 ];
 
 /// Prefix of the browser-session bridge: `/ui/api/v1/...` mirrors the main
@@ -774,6 +1083,57 @@ pub fn router(state: AppState) -> Router {
             "api/v1/security/keys/{uuid}",
             on(axum::routing::MethodFilter::DELETE, private_keys::delete),
         ),
+        ("GET", "api/v1/services", on_get(services::list)),
+        ("POST", "api/v1/services", on_post(services::create)),
+        ("GET", "api/v1/services/{uuid}", on_get(services::show)),
+        ("PATCH", "api/v1/services/{uuid}", on(axum::routing::MethodFilter::PATCH, services::update)),
+        ("DELETE", "api/v1/services/{uuid}", on(axum::routing::MethodFilter::DELETE, services::delete)),
+        ("GET", "api/v1/services/{uuid}/storages", on_get(services::storages)),
+        ("POST", "api/v1/services/{uuid}/storages", on_post(services::create_storage)),
+        ("PATCH", "api/v1/services/{uuid}/storages", on(axum::routing::MethodFilter::PATCH, services::update_storage)),
+        ("DELETE", "api/v1/services/{uuid}/storages/{storage_uuid}", on(axum::routing::MethodFilter::DELETE, services::delete_storage)),
+        ("GET", "api/v1/services/{uuid}/envs", on_get(services::envs)),
+        ("POST", "api/v1/services/{uuid}/envs", on_post(services::create_env)),
+        ("PATCH", "api/v1/services/{uuid}/envs/bulk", on(axum::routing::MethodFilter::PATCH, services::bulk_envs)),
+        ("PATCH", "api/v1/services/{uuid}/envs", on(axum::routing::MethodFilter::PATCH, services::update_env)),
+        ("DELETE", "api/v1/services/{uuid}/envs/{env_uuid}", on(axum::routing::MethodFilter::DELETE, services::delete_env)),
+        ("GET", "api/v1/services/{uuid}/logs", on_get(services::logs)),
+        ("GET", "api/v1/services/{uuid}/tags", on_get(services::tags)),
+        ("POST", "api/v1/services/{uuid}/tags", on_post(services::create_tag)),
+        ("DELETE", "api/v1/services/{uuid}/tags/{tag_uuid}", on(axum::routing::MethodFilter::DELETE, services::delete_tag)),
+        ("POST", "api/v1/services/{uuid}/move", on_post(services::move_service)),
+        ("POST", "api/v1/services/{uuid}/migrate", on_post(services::migrate)),
+        ("POST", "api/v1/services/{uuid}/clone", on_post(services::clone_service)),
+        ("GET", "api/v1/services/{uuid}/start", on_get(misc::post_required)),
+        ("GET", "api/v1/services/{uuid}/restart", on_get(misc::post_required)),
+        ("GET", "api/v1/services/{uuid}/stop", on_get(misc::post_required)),
+        ("POST", "api/v1/services/{uuid}/start", on_post(services::start)),
+        ("POST", "api/v1/services/{uuid}/restart", on_post(services::restart)),
+        ("POST", "api/v1/services/{uuid}/stop", on_post(services::stop)),
+        ("GET", "api/v1/services/{uuid}/applications", on_get(services::applications)),
+        ("GET", "api/v1/services/{uuid}/applications/{app_uuid}", on_get(services::application)),
+        ("PATCH", "api/v1/services/{uuid}/applications/{app_uuid}", on(axum::routing::MethodFilter::PATCH, services::update_application)),
+        ("GET", "api/v1/services/{uuid}/applications/{app_uuid}/logs", on_get(services::application_logs)),
+        ("POST", "api/v1/services/{uuid}/applications/{app_uuid}/logs", on_post(services::application_logs)),
+        ("GET", "api/v1/services/{uuid}/applications/{app_uuid}/start", on_get(misc::post_required)),
+        ("GET", "api/v1/services/{uuid}/applications/{app_uuid}/restart", on_get(misc::post_required)),
+        ("GET", "api/v1/services/{uuid}/applications/{app_uuid}/stop", on_get(misc::post_required)),
+        ("POST", "api/v1/services/{uuid}/applications/{app_uuid}/start", on_post(services::application_start)),
+        ("POST", "api/v1/services/{uuid}/applications/{app_uuid}/restart", on_post(services::application_restart)),
+        ("POST", "api/v1/services/{uuid}/applications/{app_uuid}/stop", on_post(services::application_stop)),
+        ("GET", "api/v1/services/{uuid}/databases", on_get(services::databases)),
+        ("GET", "api/v1/services/{uuid}/databases/{database_uuid}", on_get(services::database)),
+        ("PATCH", "api/v1/services/{uuid}/databases/{database_uuid}", on(axum::routing::MethodFilter::PATCH, services::update_database)),
+        ("GET", "api/v1/services/{uuid}/databases/{database_uuid}/logs", on_get(services::database_logs)),
+        ("POST", "api/v1/services/{uuid}/databases/{database_uuid}/start", on_post(services::database_start)),
+        ("POST", "api/v1/services/{uuid}/databases/{database_uuid}/restart", on_post(services::database_restart)),
+        ("POST", "api/v1/services/{uuid}/databases/{database_uuid}/stop", on_post(services::database_stop)),
+        ("GET", "api/v1/services/{uuid}/scheduled-tasks", on_get(services::scheduled_tasks)),
+        ("POST", "api/v1/services/{uuid}/scheduled-tasks", on_post(services::create_scheduled_task)),
+        ("PATCH", "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}", on(axum::routing::MethodFilter::PATCH, services::update_scheduled_task)),
+        ("DELETE", "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}", on(axum::routing::MethodFilter::DELETE, services::delete_scheduled_task)),
+        ("GET", "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}/executions", on_get(services::scheduled_task_executions)),
+        ("POST", "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}/execute", on_post(services::execute_scheduled_task)),
     ];
 
     // Group handlers by path so one MethodRouter serves all verbs of a path.

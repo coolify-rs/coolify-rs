@@ -694,6 +694,12 @@ impl Jobs {
                         jobs.check_server_databases(id).await;
                     }
                 }
+                // GetContainersStatus also covers the services of a server.
+                if let Ok(ids) = coolify_db::services::servers_with_services(&jobs.0.db).await {
+                    for id in ids {
+                        jobs.check_server_services(id).await;
+                    }
+                }
                 // GetContainersStatus also covers the applications of a server.
                 if let Ok(ids) =
                     coolify_db::applications::servers_with_applications(&jobs.0.db).await

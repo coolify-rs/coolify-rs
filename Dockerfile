@@ -23,9 +23,11 @@ RUN apt-get update \
  && install -d -o 10001 -g 10001 -m 0700 /data/coolify-rs
 COPY --from=build /coolify-rs /usr/local/bin/coolify-rs
 COPY --from=ui /ui/dist /usr/share/coolify-rs/ui
+COPY templates/service-templates-latest.json /usr/share/coolify-rs/templates/service-templates-latest.json
 USER 10001
 ENV COOLIFY_RS_LISTEN=0.0.0.0:8080 \
     COOLIFY_RS_UI_DIR=/usr/share/coolify-rs/ui \
+    COOLIFY_RS_TEMPLATES_DIR=/usr/share/coolify-rs/templates \
     COOLIFY_RS_DATA_DIR=/data/coolify-rs
 # Pinned SSH host keys; key files are only written for the length of a command.
 VOLUME /data/coolify-rs

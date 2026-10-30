@@ -913,6 +913,23 @@ impl Jobs {
             .map_err(|e| e.message)
     }
 
+    /// `getCurrentServiceSubContainerStatus($server, $service, $name)` found a container.
+    pub async fn service_container_exists(&self, target: &Target, uuid: &str, name: &str) -> bool {
+        let script = format!(
+            "{}; [ -z \"$container_ids\" ] || docker container inspect $container_ids --format '{{{{json .Config.Labels}}}}'",
+            container_ids_script(uuid)
+        );
+        let command = format!("sh -c {}", quote(&script));
+        let out = self
+            .remote()
+            .run_quiet(target, &[command.as_str()], RunOptions::op("service.status"))
+            .await
+            .unwrap_or_default();
+        out.lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
+            .any(|labels| labels.get("coolify.name").and_then(Value::as_str) == Some(name))
+    }
+
     /// The SSH target of a service's server when it is functional and not a swarm.
     pub async fn service_target(&self, s: &ServiceRow) -> Result<(ServerInfo, Target), String> {
         let server = self.service_server(s).await?;

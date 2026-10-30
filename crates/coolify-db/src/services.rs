@@ -706,6 +706,35 @@ pub async fn destination_network(db: &Db, service: &ServiceRow) -> DbResult<Stri
     Ok(row.map_or_else(|| "coolify".to_owned(), |r| r.0))
 }
 
+/// `$service->destination` as `StandaloneDocker::toArray()`.
+pub async fn destination_record(db: &Db, service: &ServiceRow) -> DbResult<Option<Record>> {
+    let id = service.int("destination_id").unwrap_or_default();
+    let swarm = service
+        .str("destination_type")
+        .is_some_and(|t| t.ends_with("SwarmDocker"));
+    let table = if swarm {
+        "swarm_dockers"
+    } else {
+        "standalone_dockers"
+    };
+    let row: Option<(String,)> = sqlx::query_as(&format!(
+        "SELECT row_to_json(d)::text FROM {table} d WHERE d.id = $1"
+    ))
+    .bind(id)
+    .fetch_optional(db.pool())
+    .await?;
+    row.map(|r| {
+        decode(&r.0, table).map(|d| {
+            if swarm {
+                d
+            } else {
+                crate::records::STANDALONE_DOCKER.present(d)
+            }
+        })
+    })
+    .transpose()
+}
+
 // --- storages --------------------------------------------------------------------------------
 
 /// One `local_file_volumes` row by id.
@@ -1119,4 +1148,281 @@ pub async fn latest_activity(db: &Db, type_uuid: &str) -> DbResult<Option<(Value
     .fetch_optional(db.pool())
     .await?;
     Ok(row)
+}
+
+// --- domains ----------------------------------------------------------------------------------
+
+/// `ServiceApplication::ownedByCurrentTeamAPI($teamId)` with `fqdn`: `(uuid, service name, fqdn)`.
+pub async fn application_fqdns_of_team(
+    db: &Db,
+    team_id: TeamId,
+) -> DbResult<Vec<(String, String, Option<String>)>> {
+    Ok(sqlx::query_as(
+        "SELECT a.uuid, s.name, a.fqdn FROM service_applications a JOIN services s ON s.id = a.service_id \
+         JOIN environments e ON e.id = s.environment_id JOIN projects p ON p.id = e.project_id \
+         WHERE p.team_id = $1 AND a.deleted_at IS NULL AND s.deleted_at IS NULL ORDER BY a.name",
+    )
+    .bind(team_id)
+    .fetch_all(db.pool())
+    .await?)
+}
+
+// --- clone ------------------------------------------------------------------------------------
+
+/// `$source->replicate(['id', 'created_at', 'updated_at'])->fill($overrides)->save()`.
+#[allow(clippy::too_many_arguments)]
+pub async fn replicate(
+    db: &Db,
+    source_id: i64,
+    uuid: &str,
+    name: &str,
+    destination_id: i64,
+    destination_type: &str,
+    server_id: i64,
+    now: NaiveDateTime,
+) -> DbResult<i64> {
+    db.ensure_writable()?;
+    Ok(sqlx::query_scalar(
+        "INSERT INTO services (uuid, name, environment_id, server_id, description, docker_compose_raw, docker_compose, \
+         destination_type, destination_id, connect_to_docker_network, config_hash, service_type, is_container_label_escape_enabled, \
+         compose_parsing_version, redact_all_env_values_in_logs, is_maintenance_enabled, maintenance_page, include_coolify_default_variables, \
+         created_at, updated_at) \
+         SELECT $2, $3, environment_id, $4, description, docker_compose_raw, docker_compose, $5, $6, connect_to_docker_network, config_hash, \
+         service_type, is_container_label_escape_enabled, '5', redact_all_env_values_in_logs, is_maintenance_enabled, maintenance_page, \
+         include_coolify_default_variables, $7, $7 FROM services WHERE id = $1 RETURNING id",
+    )
+    .bind(source_id)
+    .bind(uuid)
+    .bind(name)
+    .bind(server_id)
+    .bind(destination_type)
+    .bind(destination_id)
+    .bind(now)
+    .fetch_one(db.pool())
+    .await?)
+}
+
+/// The tags, scheduled tasks and variables `clone_service()` copies.
+pub async fn replicate_children(
+    db: &Db,
+    source_id: i64,
+    new_id: i64,
+    team_id: TeamId,
+    now: NaiveDateTime,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query(
+        "INSERT INTO taggables (tag_id, taggable_id, taggable_type) \
+         SELECT tag_id, $2, taggable_type FROM taggables WHERE taggable_type = $3 AND taggable_id = $1",
+    )
+    .bind(source_id)
+    .bind(new_id)
+    .bind(MORPH)
+    .execute(db.pool())
+    .await?;
+    let tasks: Vec<(i64,)> =
+        sqlx::query_as("SELECT id FROM scheduled_tasks WHERE service_id = $1 ORDER BY name ASC")
+            .bind(source_id)
+            .fetch_all(db.pool())
+            .await?;
+    for (task,) in tasks {
+        sqlx::query(
+            "INSERT INTO scheduled_tasks (uuid, enabled, name, command, frequency, container, timeout, team_id, service_id, created_at, updated_at) \
+             SELECT $2, enabled, name, command, frequency, container, timeout, $3, $4, $5, $5 FROM scheduled_tasks WHERE id = $1",
+        )
+        .bind(task)
+        .bind(new_public_id())
+        .bind(team_id)
+        .bind(new_id)
+        .bind(now)
+        .execute(db.pool())
+        .await?;
+    }
+    sqlx::query(
+        "INSERT INTO environment_variables (key, value, is_preview, is_required, is_multiline, is_literal, is_shown_once, is_runtime, \
+         is_buildtime, is_shared, comment, resourceable_type, resourceable_id, uuid, version, preserve_compose_null, uses_legacy_escaping, \"order\", created_at, updated_at) \
+         SELECT key, value, is_preview, is_required, is_multiline, is_literal, is_shown_once, is_runtime, is_buildtime, is_shared, comment, \
+         resourceable_type, $2, uuid, version, preserve_compose_null, uses_legacy_escaping, \"order\", $4, $4 \
+         FROM environment_variables WHERE resourceable_type = $3 AND resourceable_id = $1 ORDER BY id",
+    )
+    .bind(source_id)
+    .bind(new_id)
+    .bind(MORPH)
+    .bind(now)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
+// --- scheduled tasks --------------------------------------------------------------------------
+
+/// `$service->scheduled_tasks` (`orderBy('name', 'asc')`).
+pub async fn scheduled_tasks(db: &Db, service_id: i64) -> DbResult<Vec<Record>> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT row_to_json(t)::text FROM scheduled_tasks t WHERE t.service_id = $1 ORDER BY t.name ASC",
+    )
+    .bind(service_id)
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter()
+        .map(|r| decode(&r.0, "scheduled_tasks"))
+        .collect()
+}
+
+/// `$service->scheduled_tasks()->where('uuid', $uuid)->first()`.
+pub async fn scheduled_task(db: &Db, service_id: i64, uuid: &str) -> DbResult<Option<Record>> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT row_to_json(t)::text FROM scheduled_tasks t WHERE t.service_id = $1 AND t.uuid = $2 ORDER BY t.name ASC LIMIT 1",
+    )
+    .bind(service_id)
+    .bind(uuid)
+    .fetch_optional(db.pool())
+    .await?;
+    row.map(|r| decode(&r.0, "scheduled_tasks")).transpose()
+}
+
+/// `$task->save()` for a new task of a service.
+#[allow(clippy::too_many_arguments)]
+pub async fn scheduled_task_create(
+    db: &Db,
+    service_id: i64,
+    team_id: TeamId,
+    name: &str,
+    command: &str,
+    frequency: &str,
+    container: Option<&str>,
+    timeout: i64,
+    enabled: bool,
+    now: NaiveDateTime,
+) -> DbResult<Record> {
+    db.ensure_writable()?;
+    let row: (String,) = sqlx::query_as(
+        "INSERT INTO scheduled_tasks AS t (uuid, enabled, name, command, frequency, container, timeout, team_id, service_id, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10) RETURNING row_to_json(t)::text",
+    )
+    .bind(new_public_id())
+    .bind(enabled)
+    .bind(name)
+    .bind(command)
+    .bind(frequency)
+    .bind(container)
+    .bind(i32::try_from(timeout).unwrap_or(300))
+    .bind(team_id)
+    .bind(service_id)
+    .bind(now)
+    .fetch_one(db.pool())
+    .await?;
+    decode(&row.0, "scheduled_tasks")
+}
+
+/// `$task->update($request->only($allowedFields))`.
+pub async fn scheduled_task_update(
+    db: &Db,
+    id: i64,
+    values: &[(&'static str, ColumnValue)],
+    now: NaiveDateTime,
+) -> DbResult<Option<Record>> {
+    storage_update(db, "scheduled_tasks", id, values, now).await
+}
+
+/// `$task->delete()`.
+pub async fn scheduled_task_delete(db: &Db, id: i64) -> DbResult<()> {
+    storage_delete(db, "scheduled_tasks", id).await
+}
+
+/// `$task->executions()->get()` (`orderBy('created_at', 'desc')`).
+pub async fn scheduled_task_executions(db: &Db, task_id: i64) -> DbResult<Vec<Record>> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT row_to_json(x)::text FROM scheduled_task_executions x WHERE x.scheduled_task_id = $1 ORDER BY x.created_at DESC",
+    )
+    .bind(task_id)
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter()
+        .map(|r| decode(&r.0, "scheduled_task_executions"))
+        .collect()
+}
+
+// --- move -------------------------------------------------------------------------------------
+
+/// `Environment::ownedByCurrentTeamAPI($teamId)->whereUuid($uuid)->first()`: `(id, project uuid)`.
+pub async fn environment_of_team(
+    db: &Db,
+    team_id: TeamId,
+    uuid: &str,
+) -> DbResult<Option<(i64, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT e.id, p.uuid FROM environments e JOIN projects p ON p.id = e.project_id WHERE p.team_id = $1 AND e.uuid = $2 LIMIT 1",
+    )
+    .bind(team_id)
+    .bind(uuid)
+    .fetch_optional(db.pool())
+    .await?)
+}
+
+/// `$project->environments()->where('name', $name)->first()`, then by uuid.
+pub async fn project_environment(
+    db: &Db,
+    project_id: i64,
+    name: Option<&str>,
+    uuid: Option<&str>,
+) -> DbResult<Option<i64>> {
+    let by_name: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM environments WHERE project_id = $1 AND name = $2 LIMIT 1")
+            .bind(project_id)
+            .bind(name)
+            .fetch_optional(db.pool())
+            .await?;
+    if let Some((id,)) = by_name {
+        return Ok(Some(id));
+    }
+    let by_uuid: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM environments WHERE project_id = $1 AND uuid = $2 LIMIT 1")
+            .bind(project_id)
+            .bind(uuid)
+            .fetch_optional(db.pool())
+            .await?;
+    Ok(by_uuid.map(|r| r.0))
+}
+
+/// A team's destination by uuid: `(id, morph, server_id)` (`StandaloneDocker`, then `SwarmDocker`).
+pub async fn team_destination_by_uuid(
+    db: &Db,
+    team_id: TeamId,
+    uuid: &str,
+) -> DbResult<Option<(i64, &'static str, i64)>> {
+    for (table, morph) in [
+        ("standalone_dockers", r"App\Models\StandaloneDocker"),
+        ("swarm_dockers", r"App\Models\SwarmDocker"),
+    ] {
+        let row: Option<(i64, i64)> = sqlx::query_as(&format!(
+            "SELECT d.id, d.server_id FROM {table} d JOIN servers s ON s.id = d.server_id WHERE s.team_id = $1 AND d.uuid = $2 LIMIT 1"
+        ))
+        .bind(team_id)
+        .bind(uuid)
+        .fetch_optional(db.pool())
+        .await?;
+        if let Some((id, server_id)) = row {
+            return Ok(Some((id, morph, server_id)));
+        }
+    }
+    Ok(None)
+}
+
+/// Whether another public service database of the server uses the port.
+pub async fn public_port_used(
+    db: &Db,
+    server_id: i64,
+    port: i64,
+    except_id: i64,
+) -> DbResult<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM service_databases d JOIN services s ON s.id = d.service_id \
+         WHERE s.server_id = $1 AND d.public_port = $2 AND d.is_public AND d.id <> $3 AND d.deleted_at IS NULL)",
+    )
+    .bind(server_id)
+    .bind(i32::try_from(port).unwrap_or(0))
+    .bind(except_id)
+    .fetch_one(db.pool())
+    .await?)
 }
