@@ -23,7 +23,10 @@ pub mod private_keys;
 pub mod projects;
 pub mod records;
 pub mod schema;
+pub mod secret_managers;
 pub mod servers;
+pub mod storages;
+pub mod tags;
 pub mod teams;
 #[cfg(feature = "testing")]
 pub mod testing;

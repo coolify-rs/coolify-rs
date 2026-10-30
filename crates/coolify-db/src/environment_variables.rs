@@ -270,3 +270,195 @@ pub async fn upsert(
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// The resource API (`envs`, `create_env`, `update_env_by_uuid`, `create_bulk_envs`,
+// `delete_env_by_uuid` of the application, database and service controllers).
+
+/// The attributes `$resource->environment_variables()->create([...])` passes. `value_encrypted`
+/// is `encrypt($value)`; `is_shared` is what the `saving` hook derives from the value.
+#[derive(Clone)]
+pub struct NewResourceVariable {
+    pub key: String,
+    pub value_encrypted: Option<String>,
+    pub is_preview: bool,
+    pub is_literal: bool,
+    pub is_multiline: bool,
+    pub is_shown_once: bool,
+    pub is_runtime: bool,
+    pub is_buildtime: bool,
+    pub comment: Option<String>,
+    pub is_shared: bool,
+}
+
+impl std::fmt::Debug for NewResourceVariable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NewResourceVariable")
+            .field("key", &self.key)
+            .field("is_preview", &self.is_preview)
+            .finish_non_exhaustive()
+    }
+}
+
+fn decode_row(t: &str) -> DbResult<Record> {
+    parse_row(t).map_err(|e| DbError::Schema(format!("decoding environment variable row: {e}")))
+}
+
+async fn insert_resource_variable(
+    db: &Db,
+    resource_type: &str,
+    resource_id: i64,
+    v: &NewResourceVariable,
+    version: &str,
+    now: NaiveDateTime,
+) -> DbResult<Record> {
+    let row: String = sqlx::query_scalar(
+        "INSERT INTO environment_variables (key, value, is_preview, is_literal, is_multiline, is_shown_once, is_runtime, is_buildtime, \
+         comment, resourceable_type, resourceable_id, is_shared, uuid, version, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15) RETURNING row_to_json(environment_variables)::text",
+    )
+    .bind(&v.key)
+    .bind(&v.value_encrypted)
+    .bind(v.is_preview)
+    .bind(v.is_literal)
+    .bind(v.is_multiline)
+    .bind(v.is_shown_once)
+    .bind(v.is_runtime)
+    .bind(v.is_buildtime)
+    .bind(&v.comment)
+    .bind(resource_type)
+    .bind(resource_id)
+    .bind(v.is_shared)
+    .bind(new_public_id())
+    .bind(version)
+    .bind(now)
+    .fetch_one(db.pool())
+    .await?;
+    decode_row(&row)
+}
+
+/// `EnvironmentVariable::create(...)` with the model's `created` hook: a non-preview variable of
+/// an application also gets a preview copy unless one with the key exists. `preview_value_encrypted`
+/// is the copy's own `encrypt($value)`. Returns the row of the created variable.
+pub async fn create_on_resource(
+    db: &Db,
+    (resource_type, resource_id): (&str, i64),
+    v: &NewResourceVariable,
+    preview_value_encrypted: Option<&str>,
+    version: &str,
+    now: NaiveDateTime,
+) -> DbResult<Record> {
+    db.ensure_writable()?;
+    let row = insert_resource_variable(db, resource_type, resource_id, v, version, now).await?;
+    if resource_type == crate::applications::MORPH
+        && !v.is_preview
+        && first_by_key(db, resource_type, resource_id, &v.key, true)
+            .await?
+            .is_none()
+    {
+        let copy = NewResourceVariable {
+            is_preview: true,
+            value_encrypted: preview_value_encrypted.map(str::to_owned),
+            ..v.clone()
+        };
+        insert_resource_variable(db, resource_type, resource_id, &copy, version, now).await?;
+    }
+    Ok(row)
+}
+
+/// `$resource->environment_variables` / `environment_variables_preview`, `->sortBy('id')`.
+pub async fn rows_for_resource(
+    db: &Db,
+    resource_type: &str,
+    resource_id: i64,
+    is_preview: bool,
+) -> DbResult<Vec<Record>> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT row_to_json(v)::text FROM environment_variables v \
+         WHERE resourceable_type = $1 AND resourceable_id = $2 AND is_preview = $3 ORDER BY id",
+    )
+    .bind(resource_type)
+    .bind(resource_id)
+    .bind(is_preview)
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter().map(|t| decode_row(t)).collect()
+}
+
+/// `$resource->environment_variables[_preview]()->where('key', $key)->first()`.
+pub async fn first_by_key(
+    db: &Db,
+    resource_type: &str,
+    resource_id: i64,
+    key: &str,
+    is_preview: bool,
+) -> DbResult<Option<Record>> {
+    let row: Option<String> = sqlx::query_scalar(
+        "SELECT row_to_json(v)::text FROM environment_variables v \
+         WHERE resourceable_type = $1 AND resourceable_id = $2 AND key = $3 AND is_preview = $4 LIMIT 1",
+    )
+    .bind(resource_type)
+    .bind(resource_id)
+    .bind(key)
+    .bind(is_preview)
+    .fetch_optional(db.pool())
+    .await?;
+    row.map(|t| decode_row(&t)).transpose()
+}
+
+/// `EnvironmentVariable::where('uuid', ...)->where('resourceable_type', ...)->where('resourceable_id', ...)->first()`:
+/// `(id, key)`.
+pub async fn id_by_uuid(
+    db: &Db,
+    resource_type: &str,
+    resource_id: i64,
+    uuid: &str,
+) -> DbResult<Option<(i64, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT id, key FROM environment_variables WHERE uuid = $1 AND resourceable_type = $2 AND resourceable_id = $3 LIMIT 1",
+    )
+    .bind(uuid)
+    .bind(resource_type)
+    .bind(resource_id)
+    .fetch_optional(db.pool())
+    .await?)
+}
+
+/// `$env->save()` with the dirty columns; without any, nothing is written. Returns the row.
+pub async fn save_dirty(
+    db: &Db,
+    id: i64,
+    dirty: &[(&'static str, crate::servers::ColumnValue)],
+    now: NaiveDateTime,
+) -> DbResult<Record> {
+    if !dirty.is_empty() {
+        db.ensure_writable()?;
+        let set = dirty
+            .iter()
+            .enumerate()
+            .map(|(i, (c, _))| format!("\"{c}\" = ${}", i + 3))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("UPDATE environment_variables SET {set}, updated_at = $1 WHERE id = $2");
+        crate::servers::bind_all(sqlx::query(&sql).bind(now).bind(id), dirty)
+            .execute(db.pool())
+            .await?;
+    }
+    let row: String = sqlx::query_scalar(
+        "SELECT row_to_json(v)::text FROM environment_variables v WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(db.pool())
+    .await?;
+    decode_row(&row)
+}
+
+/// `$env->forceDelete()`.
+pub async fn force_delete(db: &Db, id: i64) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query("DELETE FROM environment_variables WHERE id = $1")
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+    Ok(())
+}

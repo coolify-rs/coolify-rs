@@ -693,6 +693,92 @@ pub static APPLICATION_DEPLOYMENT_QUEUE: ModelSpec = ModelSpec {
     datetimes: &["created_at", "updated_at", "finished_at"],
 };
 
+/// `EnvironmentVariable`: `value` is added by the caller when the token may read it.
+pub static ENVIRONMENT_VARIABLE: ModelSpec = ModelSpec {
+    table: "environment_variables",
+    known: &[
+        "id",
+        "key",
+        "value",
+        "is_preview",
+        "created_at",
+        "updated_at",
+        "is_shown_once",
+        "is_multiline",
+        "version",
+        "is_literal",
+        "uuid",
+        "order",
+        "is_required",
+        "is_shared",
+        "resourceable_type",
+        "resourceable_id",
+        "is_runtime",
+        "is_buildtime",
+        "comment",
+        "uses_legacy_escaping",
+        "preserve_compose_null",
+    ],
+    hidden: &["value", "uses_legacy_escaping"],
+    timestamps: &["created_at", "updated_at"],
+    datetimes: &["created_at", "updated_at"],
+};
+
+pub static LOCAL_PERSISTENT_VOLUME: ModelSpec = ModelSpec {
+    table: "local_persistent_volumes",
+    known: &[
+        "id",
+        "name",
+        "mount_path",
+        "host_path",
+        "container_id",
+        "resource_type",
+        "resource_id",
+        "created_at",
+        "updated_at",
+        "is_preview_suffix_enabled",
+        "uuid",
+        "standalone_sqlite_id",
+        "ignores_compose_driver_options",
+    ],
+    hidden: &[],
+    timestamps: &["created_at", "updated_at"],
+    datetimes: &["created_at", "updated_at"],
+};
+
+/// `LocalFileVolume`: `content` stays in the record encrypted; the caller decides.
+pub static LOCAL_FILE_VOLUME: ModelSpec = ModelSpec {
+    table: "local_file_volumes",
+    known: &[
+        "id",
+        "uuid",
+        "fs_path",
+        "mount_path",
+        "content",
+        "resource_type",
+        "resource_id",
+        "created_at",
+        "updated_at",
+        "is_directory",
+        "chown",
+        "chmod",
+        "is_based_on_git",
+        "is_preview_suffix_enabled",
+        "is_host_file",
+    ],
+    hidden: &[],
+    timestamps: &["created_at", "updated_at"],
+    datetimes: &["created_at", "updated_at"],
+};
+
+pub static TAG: ModelSpec = ModelSpec {
+    table: "tags",
+    known: &["id", "uuid", "name", "team_id", "created_at", "updated_at"],
+    hidden: &[],
+    timestamps: &["created_at", "updated_at"],
+    datetimes: &["created_at", "updated_at"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

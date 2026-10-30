@@ -10,6 +10,7 @@ pub mod compose_parser;
 pub mod databases;
 pub mod github;
 pub mod server;
+pub mod storages;
 mod validate;
 
 use std::collections::{HashMap, HashSet};

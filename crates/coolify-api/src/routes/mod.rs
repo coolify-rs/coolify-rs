@@ -7,10 +7,14 @@
 
 pub mod applications;
 pub mod databases;
+pub mod env_vars;
 pub mod misc;
 pub mod private_keys;
 pub mod projects;
+pub mod secret_manager;
 pub mod servers;
+pub mod storages;
+pub mod tags;
 pub mod teams;
 
 use axum::Router;
@@ -260,6 +264,84 @@ pub const ROUTES: &[RouteSpec] = &[
         uri: "api/v1/databases/{uuid}",
         group: Group::Main,
         abilities: R,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/applications/{uuid}/secret-manager",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/applications/{uuid}/envs",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/applications/{uuid}/envs",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/applications/{uuid}/envs/bulk",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/applications/{uuid}/envs",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/applications/{uuid}/envs/{env_uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/applications/{uuid}/storages",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/applications/{uuid}/storages",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/applications/{uuid}/storages",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/applications/{uuid}/storages/{storage_uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/applications/{uuid}/tags",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/applications/{uuid}/tags",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/applications/{uuid}/tags/{tag_uuid}",
+        group: Group::Main,
+        abilities: W,
     },
     RouteSpec {
         method: "GET",
@@ -571,6 +653,92 @@ pub fn router(state: AppState) -> Router {
             on_get(projects::environment_details),
         ),
         ("GET", "api/v1/security/keys", on_get(private_keys::list)),
+        (
+            "PATCH",
+            "api/v1/applications/{uuid}/secret-manager",
+            on(
+                axum::routing::MethodFilter::PATCH,
+                secret_manager::application_update,
+            ),
+        ),
+        (
+            "GET",
+            "api/v1/applications/{uuid}/envs",
+            on_get(env_vars::application_list),
+        ),
+        (
+            "POST",
+            "api/v1/applications/{uuid}/envs",
+            on_post(env_vars::application_create),
+        ),
+        (
+            "PATCH",
+            "api/v1/applications/{uuid}/envs/bulk",
+            on(
+                axum::routing::MethodFilter::PATCH,
+                env_vars::application_bulk,
+            ),
+        ),
+        (
+            "PATCH",
+            "api/v1/applications/{uuid}/envs",
+            on(
+                axum::routing::MethodFilter::PATCH,
+                env_vars::application_update,
+            ),
+        ),
+        (
+            "DELETE",
+            "api/v1/applications/{uuid}/envs/{env_uuid}",
+            on(
+                axum::routing::MethodFilter::DELETE,
+                env_vars::application_delete,
+            ),
+        ),
+        (
+            "GET",
+            "api/v1/applications/{uuid}/storages",
+            on_get(storages::application_list),
+        ),
+        (
+            "POST",
+            "api/v1/applications/{uuid}/storages",
+            on_post(storages::application_create),
+        ),
+        (
+            "PATCH",
+            "api/v1/applications/{uuid}/storages",
+            on(
+                axum::routing::MethodFilter::PATCH,
+                storages::application_update,
+            ),
+        ),
+        (
+            "DELETE",
+            "api/v1/applications/{uuid}/storages/{storage_uuid}",
+            on(
+                axum::routing::MethodFilter::DELETE,
+                storages::application_delete,
+            ),
+        ),
+        (
+            "GET",
+            "api/v1/applications/{uuid}/tags",
+            on_get(tags::application_list),
+        ),
+        (
+            "POST",
+            "api/v1/applications/{uuid}/tags",
+            on_post(tags::application_create),
+        ),
+        (
+            "DELETE",
+            "api/v1/applications/{uuid}/tags/{tag_uuid}",
+            on(
+                axum::routing::MethodFilter::DELETE,
+                tags::application_delete,
+            ),
+        ),
         ("GET", "api/v1/applications", on_get(applications::list)),
         (
             "POST",

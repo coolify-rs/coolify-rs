@@ -401,6 +401,11 @@ pub async fn force_delete(db: &Db, id: i64, now: NaiveDateTime) -> DbResult<()> 
             "resourceable_id",
         ),
         ("taggables", "taggable_type", "taggable_id"),
+        (
+            "secret_manager_links",
+            "resourceable_type",
+            "resourceable_id",
+        ),
     ] {
         sqlx::query(&format!(
             "DELETE FROM {table} WHERE {col_type} = $1 AND {col_id} = $2"

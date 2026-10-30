@@ -54,9 +54,15 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   `docker_compose`, variables and volumes) is not ported, so the compose columns stay empty until a deployment.
   `docker_compose_domains`, `watch_paths`, `custom_nginx_configuration`, `use_build_server`,
   `connect_to_docker_network`, HTTP basic auth, custom labels, Docker run options, pre/post-deployment commands,
-  manual webhook secrets, GPU and container-name settings and tags answer 501 when sent with a value. The GitHub App
+  manual webhook secrets, GPU and container-name settings answer 501 when sent with a value. The GitHub App
   repository check does not apply upstream's `SafeExternalUrl` private-network policy to the GitHub API URL, and the
   GitHub App path is not yet verified against a real GitHub App (only up to the lookup of the App).
+- Application envs, storages, tags and the secret manager link are ported; the secret manager stores only the source
+  (nothing fetches secrets from Doppler, Infisical or Vault at deployment). File storages are written and deleted on the
+  server by the API, but deploying or deleting an application that has file storages with content still answers 501.
+  `DELETE /applications/{uuid}/envs/bulk` answers 405 instead of upstream's 404 (the literal path wins over `{env_uuid}`).
+  Responses of a created or updated storage include the owning application with its server, as upstream does, also
+  `proxy.last_saved_proxy_configuration` for tokens without `read:sensitive`: an upstream leak kept for parity.
 - Docker Compose applications deploy (build, pull, `docker compose up`, build fingerprint reuse, raw mode). Not ported:
   custom Compose start/build commands, "preserve repository", preview deployments, configuration files with content
   (file storages Coolify writes), build secrets. The startup cleanup scopes interrupted deployments by host name, so

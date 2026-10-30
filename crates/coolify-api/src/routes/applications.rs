@@ -1,7 +1,7 @@
 //! `ApplicationsController` and `DeployController` for Docker image applications:
 //! list, show, create (`dockerimage`, and `public` for the git build packs), start,
-//! restart, stop, delete, and the deployment endpoints. The other create types,
-//! PATCH, envs, storages, previews and the rest answer 501.
+//! restart, stop, delete, and the deployment endpoints. Envs, storages, tags and the secret
+//! manager are in their own modules. The other create types, PATCH, previews and the rest answer 501.
 //! compat/notes/applications-api.md and deployment-job-git.md describe upstream.
 
 use axum::Extension;
@@ -145,10 +145,15 @@ pub async fn list(
     Extension(ctx): Extension<AuthCtx>,
     uri: Uri,
 ) -> ApiResult {
-    if query_param(&uri, "tag").is_some() {
-        return Err(ApiError::NotPorted);
+    let mut rows = apps::list_for_team(&state.db, ctx.team_id).await?;
+    // `->when($tagName, fn ($q) => $q->whereHas('tags', ...))`.
+    if let Some(tag) = query_param(&uri, "tag")
+        .map(|t| t.trim().to_owned())
+        .filter(|t| !t.is_empty() && t != "0")
+    {
+        let ids = coolify_db::tags::resource_ids_with_tag(&state.db, apps::MORPH, &tag).await?;
+        rows.retain(|a| ids.contains(&a.id));
     }
-    let rows = apps::list_for_team(&state.db, ctx.team_id).await?;
     let mut items = Vec::with_capacity(rows.len());
     for a in &rows {
         items.push(present(&state, &ctx, a, false).await?);
@@ -762,6 +767,8 @@ struct CreateContext {
     server_settings: Map<String, Value>,
     environment_id: i64,
     destination_id: i64,
+    /// `$tagNames`.
+    tag_names: Vec<String>,
 }
 
 /// `create_application($request, $type)` up to the type branch (applications-api.md 2.1
@@ -812,10 +819,12 @@ async fn create_prologue(
     if let Err(ApiError::Validation(mut errors)) =
         validate(&input, &base, CUSTOM_API_MESSAGES, &present_keys)
     {
+        crate::routes::tags::tag_item_errors(&input, &mut errors);
         extra_field_errors(&input, &mut errors);
         return Err(ApiError::Validation(errors));
     }
     let mut extra = Map::new();
+    crate::routes::tags::tag_item_errors(&input, &mut extra);
     extra_field_errors(&input, &mut extra);
     if !extra.is_empty() {
         return Err(ApiError::Validation(extra));
@@ -827,12 +836,7 @@ async fn create_prologue(
     }) {
         return Err(ApiError::NotPorted);
     }
-    if input
-        .get("tags")
-        .is_some_and(|t| t.as_array().is_some_and(|a| !a.is_empty()))
-    {
-        return Err(ApiError::NotPorted);
-    }
+    let tag_names = crate::routes::tags::validate_tags_parameter(&input)?;
     let env_uuid = input
         .get("environment_uuid")
         .filter(|v| php_truthy(v))
@@ -959,6 +963,7 @@ async fn create_prologue(
         server_settings,
         environment_id: env.id,
         destination_id,
+        tag_names,
     })
 }
 
@@ -1289,6 +1294,14 @@ async fn finish_create(
         id,
         &[("config_hash", ColumnValue::Text(Some(hash)))],
         now,
+    )
+    .await?;
+    crate::routes::tags::attach_tags_to_resource(
+        state,
+        apps::MORPH,
+        id,
+        &cx.tag_names,
+        ctx.team_id,
     )
     .await?;
     if cx.instant {
@@ -2007,6 +2020,17 @@ async fn deployment_application(
     ctx: &AuthCtx,
     a: &ApplicationRow,
 ) -> Result<Value, ApiError> {
+    model_array(state, a, true, ctx.can_read_sensitive).await
+}
+
+/// `$application->toArray()`: the model with its `$hidden`, accessors and the relations its
+/// appends load (`environment` only when the caller loaded it too).
+pub(crate) async fn model_array(
+    state: &AppState,
+    a: &ApplicationRow,
+    with_environment: bool,
+    sensitive_payload: bool,
+) -> Result<Value, ApiError> {
     let server = match a.server_id() {
         Some(id) => servers::find_by_id(&state.db, id).await?,
         None => None,
@@ -2031,18 +2055,20 @@ async fn deployment_application(
         "server_status".into(),
         Value::Bool(server.as_ref().is_some_and(server_functional)),
     );
-    let mut project = a.project.clone();
-    project.insert("team".into(), Value::Object(a.team.clone()));
-    let mut env = a.environment.clone();
-    env.insert("project".into(), Value::Object(project));
-    r.insert("environment".into(), Value::Object(env));
+    if with_environment {
+        let mut project = a.project.clone();
+        project.insert("team".into(), Value::Object(a.team.clone()));
+        let mut env = a.environment.clone();
+        env.insert("project".into(), Value::Object(project));
+        r.insert("environment".into(), Value::Object(env));
+    }
     r.insert("additional_servers".into(), json!([]));
     if let Some(dest) = &a.destination {
         let mut dest = dest.clone();
         if let Some(s) = &server {
             dest.insert(
                 "server".into(),
-                nested_server_with(state, s, false, ctx.can_read_sensitive)?,
+                nested_server_with(state, s, false, sensitive_payload)?,
             );
         }
         r.insert("destination".into(), Value::Object(dest));
