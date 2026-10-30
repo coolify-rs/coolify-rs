@@ -49,6 +49,10 @@ pub(crate) async fn run(
     }
     v.server_columns(&[("validation_logs", ColumnValue::Text(None))])
         .await?;
+    // The provider checks of `ValidateServer::handle`.
+    if let Some(message) = crate::cloud::validation_block(jobs, &row).await? {
+        return v.log_failure(message).await;
+    }
     v.steps().await
 }
 
