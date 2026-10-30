@@ -173,7 +173,17 @@ impl Jobs {
             return;
         };
         for id in &effects.new_file_volumes {
-            let _ = storage::save_storage_on_server(self, &s, &target, *id).await;
+            // The `created` hook: a mount outside the resource directory is written by a start.
+            let outside = match svc::file_storage_by_id(&self.0.db, *id).await {
+                Ok(Some(r)) => storage::is_outside_resource_directory(
+                    r.get("fs_path").and_then(Value::as_str).unwrap_or_default(),
+                    &workdir(&s.uuid),
+                ),
+                _ => true,
+            };
+            if !outside {
+                let _ = storage::save_storage_on_server(self, &s, &target, *id).await;
+            }
         }
         let mut seen: Vec<(SubKind, i64)> = Vec::new();
         for pair in &effects.files_from_server {
