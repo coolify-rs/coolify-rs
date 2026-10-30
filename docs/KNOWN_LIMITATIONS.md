@@ -66,6 +66,22 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   `DELETE /applications/{uuid}/envs/bulk` answers 405 instead of upstream's 404 (the literal path wins over `{env_uuid}`).
   Responses of a created or updated storage include the owning application with its server, as upstream does, also
   `proxy.last_saved_proxy_configuration` for tokens without `read:sensitive`: an upstream leak kept for parity.
+- Application operations are ported in the API (`compat/diff/applications_ops_diff.py`): previews, clone, rollback,
+  logs, move, destinations. What they do not do yet:
+  - The deployment job does not build previews. `POST /previews` creates the same preview row and queues the same
+    `application_deployment_queues` row, then the job fails that row at once with the log line "Preview deployments are
+    not ported to coolify-rs yet. Nothing was deployed." The response still says "Preview deployment queued.", as
+    upstream's does when it queues. An application with a preview or an additional destination answers 501 to start,
+    restart and rollback (`unported_parts`).
+  - `POST /migrate` answers 404 like upstream outside a Coolify development instance (`isDev()`), so
+    `MigrateResourceToDestination` is not ported.
+  - `clone_volumes` copies data on one server only. A copy to another server (upstream goes through scp on the Coolify
+    host) is logged and the new volume stays empty. A source the job cannot deploy answers 501 before anything is created.
+  - Upstream reads the service names of a Compose preview from `parse(pull_request_id)`. The preview branch of the parser
+    is not ported: names and named volumes come from `docker_compose_raw`; bind mounts get no `LocalFileVolume` rows and
+    no `ServerFilesFromServerJob` runs. Deleting a Compose preview removes the volumes from the stored rows.
+  - Managed DNS records (`ManagedDnsRecordCleanup`) are not released when a preview's domains change or it is deleted, and
+    log redaction does not resolve remote secrets.
 - Docker Compose applications deploy (build, pull, `docker compose up`, build fingerprint reuse, raw mode). Not ported:
   custom Compose start/build commands, "preserve repository", preview deployments, configuration files with content
   (file storages Coolify writes), build secrets. The startup cleanup scopes interrupted deployments by host name, so

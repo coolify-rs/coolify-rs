@@ -225,11 +225,11 @@ async fn source_git_type(
     Ok(found.then_some(kind))
 }
 
+/// `missing`: any value fails, `Expand` only runs when the key is there.
 fn missing_rule(
     attribute: &'static str,
     message: fn(&Value) -> Vec<(String, String)>,
 ) -> crate::validation::Field {
-    let _ = attribute;
     field(attribute, vec![Rule::Expand(message)])
 }
 
@@ -490,13 +490,10 @@ pub async fn store(
 /// `applicationDomainRules()` with the errors of the closure already evaluated.
 fn domain_rules(input: &Input) -> Vec<Rule> {
     let mut rules = vec![Rule::Present, Rule::Nullable, Rule::String, Rule::Max(2048)];
-    match input.get("domains") {
-        Some(Value::String(s)) => {
-            for e in domains::validate_domains(s) {
-                rules.push(Rule::Evaluated(Some(e)));
-            }
+    if let Some(Value::String(s)) = input.get("domains") {
+        for e in domains::validate_domains(s) {
+            rules.push(Rule::Evaluated(Some(e)));
         }
-        _ => {}
     }
     rules
 }

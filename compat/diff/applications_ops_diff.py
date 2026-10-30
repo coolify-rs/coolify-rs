@@ -800,7 +800,7 @@ def setup_side_apps(base):
         name = f"opsdiff-{RUN}-{side}-vol"
         state["volumes"].append(name)
         save()
-        status, raw = call(side, "POST", fill(side, "/api/v1/applications/<cv>/storages"), {"type": "persistent", "name": f"{ctx[side]['cv']}-vol", "mount_path": "/data"}, ROOT_TOK)
+        status, raw = call(side, "POST", fill(side, "/api/v1/applications/<cv>/storages"), {"type": "persistent", "name": "vol", "mount_path": "/data"}, ROOT_TOK)
         if status >= 300:
             raise SystemExit(f"volume: {status} {raw[:300]}")
         state["volumes"].append(f"{ctx[side]['cv']}-vol")
