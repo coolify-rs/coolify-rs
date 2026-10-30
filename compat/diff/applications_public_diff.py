@@ -23,6 +23,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from applications_fields_diff import Cases, run_caddy, run_git_create, run_update  # noqa: E402
 from databases_diff import call, record, results, sql  # noqa: E402
 
 ENDPOINT = "/api/v1/applications/public"
@@ -329,6 +330,15 @@ def main():
             ("non-string github_app_uuid", dict(okg, github_app_uuid=5)),
         ]:
             same_error(f"github app error: {name}", body, path=gh)
+
+        # Every other create field, compose domains, PATCH /applications/{uuid}.
+        fields = Cases(base)
+        try:
+            run_git_create(fields)
+            run_update(fields)
+            run_caddy(fields)
+        finally:
+            fields.cleanup()
     finally:
         for u in created:
             call("ref", "DELETE", f"/api/v1/applications/{u}", tok=TOKEN)

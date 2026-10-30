@@ -1,7 +1,7 @@
-//! `ApplicationsController` and `DeployController` for Docker image applications:
-//! list, show, create (`dockerimage`, and `public` for the git build packs), start,
-//! restart, stop, delete, and the deployment endpoints. Envs, storages, tags and the secret
-//! manager are in their own modules. The other create types, PATCH, previews and the rest answer 501.
+//! `ApplicationsController` and `DeployController`: list, show, create (every type), start,
+//! restart, stop, delete, and the deployment endpoints. Update is in `application_update`, the
+//! fields both share in `application_fields`; envs, storages, tags and the secret manager are in
+//! their own modules. Previews and the rest answer 501.
 //! compat/notes/applications-api.md and deployment-job-git.md describe upstream.
 
 use axum::Extension;
@@ -22,6 +22,9 @@ use crate::auth::AuthCtx;
 use crate::git_urls;
 use crate::input::{Input, lenient_json, query_param, validated_json};
 use crate::response::{ApiError, ApiResult, PhpJson, created, ok};
+use crate::routes::application_fields::{
+    self as fields, Columns, SERVER_ERROR, conflict_response, field_error, put,
+};
 use crate::routes::databases::{
     input_bool, nested_server, nested_server_with, query_bool, server_functional,
 };
@@ -29,6 +32,7 @@ use crate::serialize::{php_truthy, serialize_record};
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
 
+pub(super) const NOT_FOUND_APPLICATION: ApiError = NOT_FOUND_NO_PERIOD;
 const NOT_FOUND: ApiError = ApiError::Message(StatusCode::NOT_FOUND, "Application not found.");
 const NOT_FOUND_NO_PERIOD: ApiError =
     ApiError::Message(StatusCode::NOT_FOUND, "Application not found");
@@ -298,94 +302,6 @@ const ALLOWED: &[&str] = &[
     "custom_container_name_prefix",
 ];
 
-/// The fields coolify-rs applies on create, for every type; any other allowed field
-/// answers 501.
-const SUPPORTED: &[&str] = &[
-    "project_uuid",
-    "environment_name",
-    "environment_uuid",
-    "server_uuid",
-    "destination_uuid",
-    "name",
-    "description",
-    "domains",
-    "ports_exposes",
-    "ports_mappings",
-    "instant_deploy",
-    "autogenerate_domain",
-    "force_domain_override",
-    "is_force_https_enabled",
-    "is_auto_deploy_enabled",
-    "redirect",
-    "health_check_enabled",
-    "health_check_type",
-    "health_check_command",
-    "health_check_path",
-    "health_check_port",
-    "health_check_host",
-    "health_check_method",
-    "health_check_return_code",
-    "health_check_scheme",
-    "health_check_response_text",
-    "health_check_interval",
-    "health_check_timeout",
-    "health_check_retries",
-    "health_check_start_period",
-    "limits_memory",
-    "limits_memory_swap",
-    "limits_memory_swappiness",
-    "limits_memory_reservation",
-    "limits_cpus",
-    "limits_cpuset",
-    "limits_cpu_shares",
-    "is_container_label_escape_enabled",
-    "is_gzip_enabled",
-    "is_stripprefix_enabled",
-    "stop_grace_period",
-    "rolling_update_drain_seconds",
-    "include_coolify_default_variables",
-    "redact_all_env_values_in_logs",
-    "tags",
-    // Removed from the request (`removeUnnecessaryFieldsFromRequest`) except in their own
-    // branch, where they pick the GitHub App or deploy key.
-    "github_app_uuid",
-    "private_key_uuid",
-];
-
-/// The fields only `dockerimage` applies.
-const SUPPORTED_DOCKERIMAGE: &[&str] = &["docker_registry_image_name", "docker_registry_image_tag"];
-
-/// The fields only the git types (`public`) apply.
-const SUPPORTED_GIT: &[&str] = &[
-    "git_repository",
-    "git_branch",
-    "git_commit_sha",
-    "build_pack",
-    "install_command",
-    "build_command",
-    "start_command",
-    "base_directory",
-    "publish_directory",
-    "static_image",
-    "dockerfile_location",
-    "dockerfile_target_build",
-    "docker_compose_location",
-    "docker_compose_custom_start_command",
-    "docker_compose_custom_build_command",
-    "is_static",
-    "is_spa",
-    "is_preview_deployments_enabled",
-    "use_build_secrets",
-    "is_preserve_repository_enabled",
-    "is_git_submodules_enabled",
-    "is_git_lfs_enabled",
-    "is_git_shallow_clone_enabled",
-    "disable_build_cache",
-    "inject_build_args_to_dockerfile",
-    "include_source_commit_in_build",
-    "is_raw_compose_deployment_enabled",
-];
-
 /// `GithubApp::class` (the morph type of a git source).
 const GITHUB_APP_MORPH: &str = r"App\Models\GithubApp";
 
@@ -443,6 +359,15 @@ static DOCKER_TARGET: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::n
 /// `ValidationPatterns::CONTAINER_NAME_PATTERN`.
 static CONTAINER_NAME: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z").unwrap_or_else(|_| unreachable!())
+});
+
+/// `ServerSetting::TRAEFIK_CERTIFICATE_RESOLVER_PATTERN`.
+static TRAEFIK_RESOLVER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^[A-Za-z0-9_-]+$").unwrap_or_else(|_| unreachable!())
+});
+/// `ApplicationSetting::GPU_COUNT_PATTERN`.
+static GPU_COUNT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^(all|\d+)$").unwrap_or_else(|_| unreachable!())
 });
 
 /// The `DockerImageFormat` rule.
@@ -527,7 +452,31 @@ fn health_host_rule(v: &Value) -> Option<String> {
     (!ok).then(|| "The health check host must be a hostname or an IP address.".to_owned())
 }
 
-fn field(name: &'static str, rules: Vec<Rule>) -> Field {
+/// The closure rule of `gpu_options`.
+fn gpu_options_rule(v: &Value) -> Option<String> {
+    let text = match v {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(true) => "1".to_owned(),
+        _ => String::new(),
+    };
+    (!fields::gpu_options_valid(&text))
+        .then(|| "The gpu_options must be key=value pairs or a YAML mapping.".to_owned())
+}
+
+/// `ManualWebhookSecret` without a stored value (create).
+fn webhook_secret_rule(v: &Value) -> Option<String> {
+    fields::webhook_secret_failure(v, None)
+}
+
+/// Rule objects with a `?string` parameter throw a `TypeError` on an array.
+pub(super) fn gpu_options_throws(input: &Input) -> bool {
+    input
+        .get("gpu_options")
+        .is_some_and(|v| v.is_array() || v.is_object())
+}
+
+pub(super) fn field(name: &'static str, rules: Vec<Rule>) -> Field {
     Field { name, rules }
 }
 
@@ -558,7 +507,7 @@ fn container_name_rules() -> Vec<Rule> {
 
 /// `sharedDataApplications()` for the rules coolify-rs ports, in upstream order. A type's
 /// overrides keep the shared position (`array_merge`); new keys are appended.
-fn shared_rules(overrides: Vec<Field>) -> Vec<Field> {
+pub(super) fn shared_rules(overrides: Vec<Field>) -> Vec<Field> {
     let boolean = |name| field(name, vec![Rule::Boolean]);
     let mut fields = vec![
         field("git_repository", vec![Rule::String]),
@@ -588,15 +537,55 @@ fn shared_rules(overrides: Vec<Field>) -> Vec<Field> {
         "is_gzip_enabled",
         "is_stripprefix_enabled",
         "is_permanent_redirect_enabled",
+    ] {
+        fields.push(boolean(name));
+    }
+    fields.push(field(
+        "traefik_certificate_resolver",
+        vec![
+            Rule::Nullable,
+            Rule::String,
+            Rule::Max(255),
+            Rule::Regex(&TRAEFIK_RESOLVER),
+        ],
+    ));
+    for name in [
         "is_container_label_readonly_enabled",
         "is_raw_compose_deployment_enabled",
         "is_log_drain_enabled",
         "is_gpu_enabled",
-        "is_consistent_container_name_enabled",
     ] {
         fields.push(boolean(name));
     }
     fields.extend([
+        field("gpu_driver", vec![Rule::String, Rule::Nullable]),
+        field(
+            "gpu_count",
+            vec![Rule::String, Rule::Nullable, Rule::Regex(&GPU_COUNT)],
+        ),
+        field("gpu_device_ids", vec![Rule::String, Rule::Nullable]),
+        field(
+            "gpu_options",
+            vec![
+                Rule::String,
+                Rule::Nullable,
+                Rule::CustomOwned(gpu_options_rule),
+            ],
+        ),
+        boolean("is_consistent_container_name_enabled"),
+        field(
+            "custom_internal_name",
+            vec![
+                Rule::Nullable,
+                Rule::String,
+                Rule::Max(255),
+                Rule::Regex(&CONTAINER_NAME),
+            ],
+        ),
+        field(
+            "custom_container_name_prefix",
+            vec![Rule::String, Rule::Nullable, Rule::Max(30)],
+        ),
         field("preview_url_template", vec![Rule::String]),
         field("max_restart_count", vec![Rule::Integer, Rule::MinNum(0)]),
         field(
@@ -627,6 +616,10 @@ fn shared_rules(overrides: Vec<Field>) -> Vec<Field> {
             ],
         ),
         field("noindex_domains", vec![Rule::Array, Rule::Nullable]),
+        field(
+            "noindex_domains.*",
+            vec![Rule::Expand(fields::noindex_item_rules)],
+        ),
         field("redirect", vec![Rule::In(&["www", "non-www", "both"])]),
         field(
             "git_commit_sha",
@@ -718,6 +711,38 @@ fn shared_rules(overrides: Vec<Field>) -> Vec<Field> {
         field("post_deployment_command_container", container_name_rules()),
         field("pre_deployment_command", vec![Rule::String, Rule::Nullable]),
         field("pre_deployment_command_container", container_name_rules()),
+        field(
+            "manual_webhook_secret_github",
+            vec![
+                Rule::Nullable,
+                Rule::String,
+                Rule::CustomOwned(webhook_secret_rule),
+            ],
+        ),
+        field(
+            "manual_webhook_secret_gitlab",
+            vec![
+                Rule::Nullable,
+                Rule::String,
+                Rule::CustomOwned(webhook_secret_rule),
+            ],
+        ),
+        field(
+            "manual_webhook_secret_bitbucket",
+            vec![
+                Rule::Nullable,
+                Rule::String,
+                Rule::CustomOwned(webhook_secret_rule),
+            ],
+        ),
+        field(
+            "manual_webhook_secret_gitea",
+            vec![
+                Rule::Nullable,
+                Rule::String,
+                Rule::CustomOwned(webhook_secret_rule),
+            ],
+        ),
         field("dockerfile_location", path_rules(255, &FILE_PATH)),
         field("dockerfile_target_build", path_rules(128, &DOCKER_TARGET)),
         field("docker_compose_location", path_rules(255, &FILE_PATH)),
@@ -753,9 +778,6 @@ fn shared_rules(overrides: Vec<Field>) -> Vec<Field> {
     fields
 }
 
-/// A thrown exception rendered by Laravel's handler (`APP_DEBUG=false`).
-const SERVER_ERROR: ApiError = ApiError::Abort(StatusCode::INTERNAL_SERVER_ERROR, "Server Error");
-
 /// What the shared prologue of `create_application()` resolved.
 struct CreateContext {
     input: Input,
@@ -769,16 +791,17 @@ struct CreateContext {
     destination_id: i64,
     /// `$tagNames`.
     tag_names: Vec<String>,
+    /// `$applicationSettings`.
+    settings: Vec<(&'static str, Value)>,
 }
 
 /// `create_application($request, $type)` up to the type branch (applications-api.md 2.1
-/// steps 1-23). `supported` lists the fields coolify-rs applies for this type.
+/// steps 1-23).
 async fn create_prologue(
     state: &AppState,
     ctx: &AuthCtx,
     request: (&HeaderMap, &Uri, &Bytes),
     kind: &str,
-    supported: &[&[&str]],
 ) -> Result<CreateContext, ApiError> {
     use coolify_domain::Ability;
     let (headers, uri, body) = request;
@@ -820,21 +843,27 @@ async fn create_prologue(
         validate(&input, &base, CUSTOM_API_MESSAGES, &present_keys)
     {
         crate::routes::tags::tag_item_errors(&input, &mut errors);
-        extra_field_errors(&input, &mut errors);
+        extra_field_errors(&input, &mut errors, ALLOWED);
         return Err(ApiError::Validation(errors));
     }
     let mut extra = Map::new();
     crate::routes::tags::tag_item_errors(&input, &mut extra);
-    extra_field_errors(&input, &mut extra);
+    extra_field_errors(&input, &mut extra, ALLOWED);
     if !extra.is_empty() {
         return Err(ApiError::Validation(extra));
     }
-    // Fields coolify-rs does not apply yet.
-    if input.keys().any(|k| {
-        !supported.iter().any(|s| s.contains(&k.as_str()))
-            && input.get(k).is_some_and(|v| !v.is_null())
-    }) {
-        return Err(ApiError::NotPorted);
+    if input.filled("docker_compose_raw") {
+        let raw = input
+            .str("docker_compose_raw")
+            .ok_or_else(|| {
+                field_error(
+                    "docker_compose_raw",
+                    "The docker_compose_raw field must be a string.",
+                )
+            })?
+            .to_owned();
+        coolify_jobs::compose_parser::validate::validate_docker_compose_for_injection(&raw)
+            .map_err(|e| field_error("docker_compose_raw", e))?;
     }
     let tag_names = crate::routes::tags::validate_tags_parameter(&input)?;
     let env_uuid = input
@@ -867,17 +896,17 @@ async fn create_prologue(
     } else {
         Some(kind)
     };
+    let settings = fields::settings_from_request(&input);
     if input.has("is_raw_compose_deployment_enabled")
         && input_bool(&input, "is_raw_compose_deployment_enabled")
         && requested_build_pack != Some("dockercompose")
     {
-        let mut m = Map::new();
-        m.insert(
-            "is_raw_compose_deployment_enabled".into(),
-            json!("Raw compose deployment can only be enabled for Docker Compose applications."),
-        );
-        return Err(ApiError::Validation(m));
+        return Err(field_error(
+            "is_raw_compose_deployment_enabled",
+            "Raw compose deployment can only be enabled for Docker Compose applications.",
+        ));
     }
+    fields::check_custom_nginx(&input)?;
     let project = coolify_db::projects::find(
         &state.db,
         ctx.team_id,
@@ -954,6 +983,10 @@ async fn create_prologue(
                 ApiError::Validation(m)
             })?;
     }
+    fields::check_container_name_prefix(state, &settings, server.id, None).await?;
+    fields::check_custom_internal_name(&settings)?;
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    fields::check_webhook_secret_ability(ctx, &input, enc, None)?;
     Ok(CreateContext {
         input,
         instant,
@@ -964,43 +997,52 @@ async fn create_prologue(
         environment_id: env.id,
         destination_id,
         tag_names,
+        settings,
     })
 }
 
-/// `validateDataApplications($request, $server)`: `ports_mappings`, then the domains (when
-/// the proxy runs). `Some` is the early answer.
-async fn validate_data_applications(
+/// `validateDataApplications($request, $server)`. `Some` is the early answer. `input` gets the
+/// normalized `custom_labels` and `domains`.
+pub(super) async fn validate_data_applications(
     state: &AppState,
-    ctx: &AuthCtx,
-    cx: &CreateContext,
+    team_id: i64,
+    input: &mut Input,
+    server: &servers::ServerRow,
+    uuid: Option<&str>,
 ) -> Result<Option<Response>, ApiError> {
-    let input = &cx.input;
-    if let Some(p) = input.str("ports_mappings") {
+    if input.str("http_basic_auth_hash_algorithm") == Some("argon2id")
+        && !coolify_jobs::applications::labels::caddy_supports_argon2id(server)
+    {
+        return Err(field_error(
+            "http_basic_auth_hash_algorithm",
+            "Argon2id needs a server that runs the Caddy proxy, version 2.11 or newer.",
+        ));
+    }
+    if let Some(v) = input.get("ports_mappings") {
+        let text = fields::php_text(v)?.unwrap_or_default();
         let mut seen: Vec<&str> = Vec::new();
-        for m in p.split(',') {
+        for m in text.split(',') {
             let first = m.split(':').next().unwrap_or_default();
             if seen.contains(&first) {
-                let mut e = Map::new();
-                e.insert(
-                    "ports_mappings".into(),
-                    json!("The first number before : should be unique between mappings."),
-                );
-                return Err(ApiError::Validation(e));
+                return Err(field_error(
+                    "ports_mappings",
+                    "The first number before : should be unique between mappings.",
+                ));
             }
             seen.push(first);
         }
     }
-    let proxy_type = cx
-        .server
-        .record
-        .get("proxy")
-        .and_then(|p| p.get("type"))
-        .and_then(Value::as_str)
-        .unwrap_or("NONE");
-    let proxy_should_run = proxy_type != "NONE"
-        && !crate::routes::servers::effective_role_is_build(&cx.server_settings);
-    if input.has("domains") && proxy_should_run {
-        let errors = domains::validate_domains(input.str("domains").unwrap_or_default());
+    fields::normalize_custom_labels(input)?;
+    if input.has("domains") && fields::proxy_should_run(server) {
+        // `validateApplicationDomains()`: blank is valid, then the type.
+        let value = input.get("domains").cloned().unwrap_or(Value::Null);
+        let errors = match &value {
+            Value::Null => Vec::new(),
+            Value::String(s) => domains::validate_domains(s),
+            Value::Array(a) if a.is_empty() => Vec::new(),
+            Value::Object(o) if o.is_empty() => Vec::new(),
+            _ => vec!["The domains field must be a string.".to_owned()],
+        };
         if !errors.is_empty() {
             return Ok(Some(
                 PhpJson(
@@ -1010,177 +1052,148 @@ async fn validate_data_applications(
                 .into_response(),
             ));
         }
-        if let Some(conflicts) =
-            domain_conflicts(state, ctx.team_id, cx.fqdn.as_deref(), None).await?
-            && !input_bool(input, "force_domain_override")
-        {
-            return Ok(Some(PhpJson(
-                StatusCode::CONFLICT,
-                json!({
-                    "message": "Domain conflicts detected. Use force_domain_override=true to proceed.",
-                    "conflicts": conflicts,
-                    "warning": "Using the same domain for multiple resources can cause routing conflicts and unpredictable behavior.",
-                }),
-            )
-            .into_response()));
+        // `normalizeApplicationDomains(?string)` throws a `TypeError` on an empty array.
+        if value.is_array() || value.is_object() {
+            return Err(SERVER_ERROR);
+        }
+        let normalized = domains::normalize_domains(value.as_str());
+        input.0.insert(
+            "domains".into(),
+            normalized.clone().map_or(Value::Null, Value::String),
+        );
+        let urls = domains::domain_list(normalized.as_deref());
+        let conflicts = fields::domain_conflicts(state, team_id, &urls, uuid).await?;
+        if !conflicts.is_empty() && !input_bool(input, "force_domain_override") {
+            return Ok(Some(conflict_response(conflicts)));
         }
     }
     Ok(None)
 }
 
-/// `$application->fill($request->only($allowedFields))` for the columns every type shares.
-fn fill_columns(input: &Input, name: String) -> Vec<(&'static str, ColumnValue)> {
-    let mut columns: Vec<(&'static str, ColumnValue)> =
-        vec![("name", ColumnValue::Text(Some(name)))];
-    if input.has("description") {
-        columns.push((
-            "description",
-            ColumnValue::Text(Some(strip_tags(input.str("description")))),
-        ));
-    }
-    for key in [
-        "ports_exposes",
-        "ports_mappings",
-        "redirect",
-        "static_image",
-        "dockerfile_target_build",
-        "docker_compose_custom_start_command",
-        "docker_compose_custom_build_command",
-        "health_check_type",
-        "health_check_command",
-        "health_check_path",
-        "health_check_port",
-        "health_check_host",
-        "health_check_method",
-        "health_check_scheme",
-        "health_check_response_text",
-        "limits_memory",
-        "limits_memory_swap",
-        "limits_memory_reservation",
-        "limits_cpus",
-        "limits_cpuset",
-    ] {
-        if input.has(key) {
-            let v = match input.get(key) {
-                Some(Value::String(s)) => Some(s.clone()),
-                Some(Value::Null) | None => None,
-                Some(other) => Some(other.to_string()),
-            };
-            // The `ports_mappings` setter stores '' as null.
-            let v = v.filter(|s| !(key == "ports_mappings" && s.is_empty()));
-            columns.push((key, ColumnValue::Text(v)));
+/// The `creating` hook (random manual webhook secrets, unless sent) and the `saving` hook's
+/// domain normalization (ports move to `domain_port_overrides`, flags stay for domains the
+/// application has). Runs after `build_pack` and `docker_compose_domains` are in `columns`.
+fn creating_columns(enc: &Encrypter, fqdn: Option<&str>, input: &Input, columns: &mut Columns) {
+    for k in fields::WEBHOOK_SECRETS {
+        let sent = columns
+            .iter()
+            .any(|(c, v)| *c == k && matches!(v, ColumnValue::Text(Some(_))));
+        if !sent {
+            put(
+                columns,
+                k,
+                ColumnValue::Text(Some(enc.encrypt_string(&random_str(40)))),
+            );
         }
     }
-    for key in [
-        "health_check_return_code",
-        "health_check_interval",
-        "health_check_timeout",
-        "health_check_retries",
-        "health_check_start_period",
-        "limits_memory_swappiness",
-        "limits_cpu_shares",
-    ] {
-        if let Some(v) = input.get(key) {
-            let n = v
-                .as_i64()
-                .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
-                .or_else(|| v.as_f64().map(|f| f as i64));
-            columns.push((key, n.map_or(ColumnValue::Text(None), ColumnValue::Int)));
-        }
-    }
-    if input.has("health_check_enabled") {
-        columns.push((
-            "health_check_enabled",
-            ColumnValue::Bool(input_bool(input, "health_check_enabled")),
-        ));
-    }
-    columns
-}
-
-/// The `creating` hook (random manual webhook secrets) and the `saving` hook's domain
-/// normalization (ports move to `domain_port_overrides`).
-fn creating_columns(
-    enc: &Encrypter,
-    fqdn: Option<&str>,
-    columns: &mut Vec<(&'static str, ColumnValue)>,
-) {
-    for k in [
-        "manual_webhook_secret_github",
-        "manual_webhook_secret_gitlab",
-        "manual_webhook_secret_bitbucket",
-        "manual_webhook_secret_gitea",
-    ] {
-        columns.push((
-            k,
-            ColumnValue::Text(Some(enc.encrypt_string(&random_str(40)))),
-        ));
-    }
-    let (stored_fqdn, overrides) = domains::normalize_port_overrides(fqdn, &Default::default());
-    columns.push(("fqdn", ColumnValue::Text(stored_fqdn.clone())));
-    if let Some(o) = &overrides {
-        columns.push((
+    let text_of = |columns: &Columns, key: &str| {
+        columns
+            .iter()
+            .find(|(c, _)| *c == key)
+            .and_then(|(_, v)| match v {
+                ColumnValue::Text(t) => t.clone(),
+                _ => None,
+            })
+    };
+    let compose = text_of(columns, "build_pack").as_deref() == Some("dockercompose");
+    let mut stored_fqdn = fqdn.map(str::to_owned).filter(|f| !f.is_empty());
+    if !compose || stored_fqdn.as_deref().is_some_and(|f| !f.trim().is_empty()) {
+        let existing: std::collections::BTreeMap<String, i64> =
+            text_of(columns, "domain_port_overrides")
+                .and_then(|j| serde_json::from_str(&j).ok())
+                .unwrap_or_default();
+        let (normalized, overrides) = domains::normalize_port_overrides(fqdn, &existing);
+        put(
+            columns,
             "domain_port_overrides",
-            ColumnValue::Text(Some(domains::overrides_json(stored_fqdn.as_deref(), o))),
-        ));
+            ColumnValue::Text(
+                overrides.map(|o| domains::overrides_json(normalized.as_deref(), &o)),
+            ),
+        );
+        stored_fqdn = normalized;
+    }
+    put(columns, "fqdn", ColumnValue::Text(stored_fqdn.clone()));
+    // fill() sets the flags; `syncNoindexDomains()` keeps them unless blank.
+    if let Some(v) = input.get("noindex_domains") {
+        let values = fields::noindex_values(input);
+        let json = if v.is_null() {
+            None
+        } else if values.is_empty() {
+            Some("[]".to_owned())
+        } else {
+            let compose_domains = text_of(columns, "docker_compose_domains");
+            Some(fields::noindex_json(
+                &values,
+                stored_fqdn.as_deref(),
+                compose_domains.as_deref(),
+            ))
+        };
+        put(columns, "noindex_domains", ColumnValue::Text(json));
     }
 }
 
-/// `applicationSettingsFromRequest()` + `applyApplicationSettings()`, then the explicit
-/// settings writes of the type branch: each `explicit` key only when sent (`isset`),
-/// `is_container_label_escape_enabled` always, `is_preserve_repository_enabled` always
-/// when `preserve` (the git branches).
+/// `applyApplicationSettings()` and the explicit settings writes of the type branch: each
+/// `explicit` pair `(request key, column)` when sent (`isset`), `is_container_label_escape_enabled`
+/// always, `is_preserve_repository_enabled` always when `preserve` (the git branches).
 fn request_settings(
-    input: &Input,
-    explicit: &[&'static str],
+    cx: &CreateContext,
+    explicit: &[(&str, &'static str)],
     preserve: bool,
-) -> Vec<(&'static str, ColumnValue)> {
-    let mut settings: Vec<(&'static str, ColumnValue)> = Vec::new();
-    for &key in [
-        "is_git_submodules_enabled",
-        "is_git_lfs_enabled",
-        "is_git_shallow_clone_enabled",
-        "disable_build_cache",
-        "inject_build_args_to_dockerfile",
-        "include_source_commit_in_build",
-        "redact_all_env_values_in_logs",
-        "include_coolify_default_variables",
-        "is_gzip_enabled",
-        "is_stripprefix_enabled",
-        "is_raw_compose_deployment_enabled",
-    ]
-    .iter()
-    .chain(explicit)
-    {
-        if input.get(key).is_some_and(|v| !v.is_null()) {
-            settings.push((key, ColumnValue::Bool(input_bool(input, key))));
+) -> Result<Columns, ApiError> {
+    let input = &cx.input;
+    let mut settings = fields::settings_columns(&cx.settings)?;
+    for (key, column) in explicit {
+        if let Some(v) = input.get(key).filter(|v| !v.is_null()) {
+            // These two have no rule; their columns default to false.
+            if matches!(
+                *column,
+                "connect_to_docker_network" | "is_build_server_enabled"
+            ) {
+                if let Some(b) = fields::unvalidated_flag(v, false)? {
+                    put(&mut settings, column, ColumnValue::Bool(b));
+                }
+            } else {
+                put(
+                    &mut settings,
+                    column,
+                    ColumnValue::Bool(fields::pg_bool(v)?),
+                );
+            }
         }
     }
-    for key in ["stop_grace_period", "rolling_update_drain_seconds"] {
-        if let Some(v) = input.get(key) {
-            let n = v
-                .as_i64()
-                .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()));
-            settings.push((key, n.map_or(ColumnValue::Text(None), ColumnValue::Int)));
-        }
-    }
-    settings.push((
+    put(
+        &mut settings,
         "is_container_label_escape_enabled",
         ColumnValue::Bool(
             !input.has("is_container_label_escape_enabled")
                 || input_bool(input, "is_container_label_escape_enabled"),
         ),
-    ));
+    );
     if preserve {
-        settings.push((
+        put(
+            &mut settings,
             "is_preserve_repository_enabled",
             ColumnValue::Bool(input_bool(input, "is_preserve_repository_enabled")),
-        ));
+        );
     }
-    settings
+    Ok(settings)
 }
 
+/// The settings writes `dockerfile` and `dockerimage` share.
+const IMAGE_SETTINGS: &[(&str, &str)] = &[
+    ("is_auto_deploy_enabled", "is_auto_deploy_enabled"),
+    ("is_force_https_enabled", "is_force_https_enabled"),
+    (
+        "is_preview_deployments_enabled",
+        "is_preview_deployments_enabled",
+    ),
+    ("connect_to_docker_network", "connect_to_docker_network"),
+    ("use_build_server", "is_build_server_enabled"),
+    ("use_build_secrets", "use_build_secrets"),
+];
+
 /// PHP `trim()` (the model's `saving` hook trims git and command columns).
-fn php_trim(s: &str) -> String {
+pub(crate) fn php_trim(s: &str) -> String {
     s.trim_matches([' ', '\t', '\n', '\r', '\0', '\x0B'])
         .to_owned()
 }
@@ -1196,6 +1209,22 @@ async fn finish_create(
     application_type: &'static str,
 ) -> ApiResult {
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    // The deployment job does not do these yet (`deployable()` on start answers the same).
+    if cx.instant
+        && columns.iter().any(|(k, v)| match (*k, v) {
+            ("is_http_basic_auth_enabled", ColumnValue::Bool(b)) => *b,
+            (
+                "dockerfile"
+                | "custom_docker_run_options"
+                | "pre_deployment_command"
+                | "post_deployment_command",
+                ColumnValue::Text(Some(t)),
+            ) => !t.trim().is_empty(),
+            _ => false,
+        })
+    {
+        return Err(ApiError::NotPorted);
+    }
     let build_pack = columns
         .iter()
         .rev()
@@ -1218,7 +1247,8 @@ async fn finish_create(
         },
         now,
     )
-    .await?;
+    .await
+    .map_err(fields::save_error)?;
     // `created`: Nixpacks applications get NIXPACKS_NODE_VERSION=22 (and its preview copy).
     if build_pack == "nixpacks" {
         coolify_db::environment_variables::create_for_application(
@@ -1253,7 +1283,7 @@ async fn finish_create(
         let instance = coolify_db::instance::deployment_settings(&state.db).await?;
         let public = instance.public_ipv4.or(instance.public_ipv6);
         let url = domains::generate_url(wildcard.as_deref(), &ip, public.as_deref(), &uuid).await;
-        let (f, o) = domains::normalize_port_overrides(Some(&url), &Default::default());
+        let (f, o) = domains::normalize_port_overrides(Some(&url), &fields::stored_overrides(&app));
         let mut values = vec![("fqdn", ColumnValue::Text(f.clone()))];
         if let Some(o) = o {
             values.push((
@@ -1268,13 +1298,11 @@ async fn finish_create(
     }
     // Read-only labels: generated and stored as plain text.
     if app.setting_bool("is_container_label_readonly_enabled") {
-        let labels = coolify_jobs::applications::labels::application(
-            &coolify_jobs::applications::labels::LabelInput::new(&app, &cx.server),
-        );
+        let labels = fields::generated_labels(&app, &cx.server, enc)?;
         apps::update_if_changed(
             &state.db,
             id,
-            &[("custom_labels", ColumnValue::Text(Some(labels.join("\n"))))],
+            &[("custom_labels", ColumnValue::Text(Some(labels)))],
             now,
         )
         .await?;
@@ -1306,7 +1334,7 @@ async fn finish_create(
     .await?;
     if cx.instant {
         let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
-        let _ = jobs
+        let result = jobs
             .queue_application_deployment(
                 &app,
                 &coolify_domain::new_public_id(),
@@ -1321,6 +1349,9 @@ async fn finish_create(
                 tracing::error!(error = %e, "deployment could not be queued");
                 ApiError::Internal
             })?;
+        if let Queued::Skipped { .. } = result {
+            return Ok(ok(json!({"message": result.message()})).into_response());
+        }
     }
     // Without instant deploy, upstream dispatches `LoadComposeFile` for dockercompose
     // (clone, read and parse the compose file); not ported (docs/KNOWN_LIMITATIONS.md).
@@ -1347,14 +1378,7 @@ pub async fn create_dockerimage(
     uri: Uri,
     body: Bytes,
 ) -> ApiResult {
-    let cx = create_prologue(
-        &state,
-        &ctx,
-        (&headers, &uri, &body),
-        "dockerimage",
-        &[SUPPORTED, SUPPORTED_DOCKERIMAGE],
-    )
-    .await?;
+    let mut cx = create_prologue(&state, &ctx, (&headers, &uri, &body), "dockerimage").await?;
     let input = &cx.input;
     let present_keys: Vec<&str> = input.keys().map(String::as_str).collect();
     let rules = shared_rules(vec![
@@ -1376,13 +1400,27 @@ pub async fn create_dockerimage(
             vec![Rule::String, Rule::Regex(&PORTS_EXPOSES), Rule::Nullable],
         ),
     ]);
+    if gpu_options_throws(input) {
+        return Err(SERVER_ERROR);
+    }
     validate(input, &rules, CUSTOM_API_MESSAGES, &present_keys)?;
     let name = match input.get("name") {
         Some(v) => strip_tags(v.as_str()),
         None => format!("docker-image-{}", coolify_domain::new_public_id()),
     };
-    if let Some(early) = validate_data_applications(&state, &ctx, &cx).await? {
+    let server = cx.server.clone();
+    if let Some(early) =
+        validate_data_applications(&state, ctx.team_id, &mut cx.input, &server, None).await?
+    {
         return Ok(early);
+    }
+    let input = &cx.input;
+    // fill() keeps the request's array: "Array to string conversion" on save.
+    if input
+        .get("docker_compose_domains")
+        .is_some_and(|v| !v.is_null())
+    {
+        return Err(SERVER_ERROR);
     }
     let (image_name, image_tag) = parse_image(
         input.str("docker_registry_image_name").unwrap_or_default(),
@@ -1390,28 +1428,113 @@ pub async fn create_dockerimage(
     );
     // fill(): the fillable request values, then the explicit ones.
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-    let mut columns = fill_columns(input, name);
-    columns.push((
+    let mut columns = fields::fill_columns(input, enc, Some(name), input.str("build_pack"), None)?;
+    put(
+        &mut columns,
         "docker_registry_image_name",
         ColumnValue::Text(Some(image_name)),
-    ));
-    columns.push((
+    );
+    put(
+        &mut columns,
         "docker_registry_image_tag",
         ColumnValue::Text(Some(image_tag)),
-    ));
-    columns.push(("build_pack", ColumnValue::Text(Some("dockerimage".into()))));
-    columns.push((
+    );
+    put(
+        &mut columns,
+        "build_pack",
+        ColumnValue::Text(Some("dockerimage".into())),
+    );
+    put(
+        &mut columns,
         "git_repository",
         ColumnValue::Text(Some("coollabsio/coolify".into())),
-    ));
-    columns.push(("git_branch", ColumnValue::Text(Some("main".into()))));
-    creating_columns(enc, cx.fqdn.as_deref(), &mut columns);
-    let settings = request_settings(
-        input,
-        &["is_auto_deploy_enabled", "is_force_https_enabled"],
-        false,
     );
+    put(
+        &mut columns,
+        "git_branch",
+        ColumnValue::Text(Some("main".into())),
+    );
+    creating_columns(enc, cx.fqdn.as_deref(), input, &mut columns);
+    let settings = request_settings(&cx, IMAGE_SETTINGS, false)?;
     finish_create(&state, &ctx, &cx, columns, settings, "dockerimage").await
+}
+
+/// `POST /applications/dockerfile` (`create_application($request, 'dockerfile')`).
+pub async fn create_dockerfile(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> ApiResult {
+    const NOT_BASE64: &str = "The dockerfile should be base64 encoded.";
+    let mut cx = create_prologue(&state, &ctx, (&headers, &uri, &body), "dockerfile").await?;
+    let input = &cx.input;
+    let present_keys: Vec<&str> = input.keys().map(String::as_str).collect();
+    let rules = shared_rules(vec![field(
+        "dockerfile",
+        vec![Rule::String, Rule::Required],
+    )]);
+    if gpu_options_throws(input) {
+        return Err(SERVER_ERROR);
+    }
+    validate(input, &rules, CUSTOM_API_MESSAGES, &present_keys)?;
+    let name = match input.get("name") {
+        Some(v) => strip_tags(v.as_str()),
+        None => format!("dockerfile-{}", coolify_domain::new_public_id()),
+    };
+    let server = cx.server.clone();
+    if let Some(early) =
+        validate_data_applications(&state, ctx.team_id, &mut cx.input, &server, None).await?
+    {
+        return Ok(early);
+    }
+    let input = &cx.input;
+    let encoded = input.str("dockerfile").unwrap_or_default();
+    let dockerfile = fields::base64_bytes(encoded)
+        .ok_or_else(|| field_error("dockerfile", NOT_BASE64))
+        .and_then(|b| String::from_utf8(b).map_err(|_| field_error("dockerfile", NOT_BASE64)))?;
+    // Upstream reads the port from the request value, which is still base64.
+    let port = fields::port_from_dockerfile(encoded)
+        .filter(|p| *p != 0)
+        .unwrap_or(80);
+    // fill() keeps the request's array: "Array to string conversion" on save.
+    if input
+        .get("docker_compose_domains")
+        .is_some_and(|v| !v.is_null())
+    {
+        return Err(SERVER_ERROR);
+    }
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    let mut columns = fields::fill_columns(input, enc, Some(name), input.str("build_pack"), None)?;
+    put(
+        &mut columns,
+        "ports_exposes",
+        ColumnValue::Text(Some(port.to_string())),
+    );
+    put(
+        &mut columns,
+        "build_pack",
+        ColumnValue::Text(Some("dockerfile".into())),
+    );
+    put(
+        &mut columns,
+        "dockerfile",
+        ColumnValue::Text(Some(dockerfile)),
+    );
+    put(
+        &mut columns,
+        "git_repository",
+        ColumnValue::Text(Some("coollabsio/coolify".into())),
+    );
+    put(
+        &mut columns,
+        "git_branch",
+        ColumnValue::Text(Some("main".into())),
+    );
+    creating_columns(enc, cx.fqdn.as_deref(), input, &mut columns);
+    let settings = request_settings(&cx, IMAGE_SETTINGS, false)?;
+    finish_create(&state, &ctx, &cx, columns, settings, "dockerfile").await
 }
 
 /// `POST /applications/public` (`create_application($request, 'public')`): an application
@@ -1494,14 +1617,7 @@ async fn create_git(
     request: (&HeaderMap, &Uri, &Bytes),
     kind: GitKind,
 ) -> ApiResult {
-    let mut cx = create_prologue(
-        state,
-        ctx,
-        request,
-        kind.name(),
-        &[SUPPORTED, SUPPORTED_GIT],
-    )
-    .await?;
+    let mut cx = create_prologue(state, ctx, request, kind.name()).await?;
     let compose = cx.input.str("build_pack") == Some("dockercompose");
     // Public: ports_exposes is not required for dockercompose, the request value becomes '80'
     // before validation. The private types set it after validation.
@@ -1557,16 +1673,21 @@ async fn create_git(
         "docker_compose_domains",
         vec![Rule::Array, Rule::Nullable],
     ));
+    overrides.push(field(
+        "docker_compose_domains.*",
+        vec![Rule::Expand(fields::compose_domain_rules)],
+    ));
     let rules = shared_rules(overrides);
     let present_keys: Vec<&str> = cx.input.keys().map(String::as_str).collect();
+    if gpu_options_throws(&cx.input) {
+        return Err(SERVER_ERROR);
+    }
     validate(&cx.input, &rules, &[], &present_keys)?;
     if compose && cx.input.has("domains") {
-        let mut m = Map::new();
-        m.insert(
-            "domains".into(),
-            json!("The domains field cannot be used for dockercompose applications. Use docker_compose_domains instead to set domains for individual services."),
-        );
-        return Err(ApiError::Validation(m));
+        return Err(field_error(
+            "domains",
+            "The domains field cannot be used for dockercompose applications. Use docker_compose_domains instead to set domains for individual services.",
+        ));
     }
     let repository = cx
         .input
@@ -1581,7 +1702,20 @@ async fn create_git(
     if compose {
         cx.input.0.insert("ports_exposes".into(), json!("80"));
     }
-    if let Some(early) = validate_data_applications(state, ctx, &cx).await? {
+    let server = cx.server.clone();
+    if let Some(early) =
+        validate_data_applications(state, ctx.team_id, &mut cx.input, &server, None).await?
+    {
+        return Ok(early);
+    }
+    // The public branch checks the domains before it reads the repository URL, the others after
+    // they found the GitHub App or the key.
+    let duplicate_suffix = if kind == GitKind::Public { "" } else { " " };
+    if kind == GitKind::Public
+        && let Some(early) =
+            fields::check_compose_domain_urls(state, ctx.team_id, &cx.input, duplicate_suffix, None)
+                .await?
+    {
         return Ok(early);
     }
     // The type's source.
@@ -1697,63 +1831,33 @@ async fn create_git(
             source_columns.push(("private_key_id", ColumnValue::Int(key.id)));
         }
     }
+    if kind != GitKind::Public
+        && let Some(early) =
+            fields::check_compose_domain_urls(state, ctx.team_id, &cx.input, duplicate_suffix, None)
+                .await?
+    {
+        return Ok(early);
+    }
     let input = &cx.input;
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let build_pack = input.str("build_pack").unwrap_or_default().to_owned();
     // fill(): `build_pack` precedes the location setters in `$allowedFields`.
-    let mut columns = fill_columns(input, name);
+    let mut columns = fields::fill_columns(input, enc, Some(name), Some(&build_pack), None)?;
     columns.push(("build_pack", ColumnValue::Text(Some(build_pack.clone()))));
     columns.push(("git_branch", ColumnValue::Text(Some(php_trim(&branch)))));
-    if let Some(sha) = input.str("git_commit_sha") {
-        columns.push(("git_commit_sha", ColumnValue::Text(Some(php_trim(sha)))));
-    }
-    // `saving` stores `str($value)->trim()`, so a null command becomes ''.
-    for key in ["install_command", "build_command", "start_command"] {
-        if input.has(key) {
-            let v = php_trim(input.str(key).unwrap_or_default());
-            columns.push((key, ColumnValue::Text(Some(v))));
+    if input.has("docker_compose_domains") {
+        let entries = fields::compose_entries_for_create(input);
+        if !entries.is_empty() {
+            let (json, overrides) = fields::normalize_compose_domains(entries, &Default::default());
+            columns.push(("docker_compose_domains", ColumnValue::Text(Some(json))));
+            columns.push(("domain_port_overrides", ColumnValue::Text(overrides)));
+        } else if input
+            .get("docker_compose_domains")
+            .is_some_and(|v| !v.is_null())
+        {
+            // fill() keeps the request's empty array: "Array to string conversion" on save.
+            return Err(SERVER_ERROR);
         }
-    }
-    // `baseDirectory` setter: '/'.ltrim($value, '/').
-    if input.has("base_directory") {
-        let v = input.str("base_directory").unwrap_or_default();
-        let v = php_trim(&format!("/{}", v.trim_start_matches('/')));
-        columns.push(("base_directory", ColumnValue::Text(Some(v))));
-    }
-    // `publishDirectory` setter: '/'.ltrim or null; the `saving` hook then sets the trimmed
-    // Stringable, which is truthy even when empty, so null ends up as '/'.
-    if input.has("publish_directory") {
-        let v = input
-            .get("publish_directory")
-            .filter(|v| php_truthy(v))
-            .and_then(Value::as_str)
-            .map(|v| format!("/{}", php_trim(v).trim_start_matches('/')))
-            .unwrap_or_else(|| "/".into());
-        columns.push(("publish_directory", ColumnValue::Text(Some(v))));
-    }
-    // `dockerfileLocation` / `dockerComposeLocation` setters.
-    let location = |v: &str| {
-        if v == "/" {
-            "/".to_owned()
-        } else {
-            format!(
-                "/{}",
-                v.strip_suffix('/').unwrap_or(v).trim_start_matches('/')
-            )
-        }
-    };
-    if input.has("dockerfile_location") {
-        let v = match input.str("dockerfile_location") {
-            Some(v) => Some(location(v)),
-            None => (build_pack == "dockerfile").then(|| "/Dockerfile".to_owned()),
-        };
-        columns.push(("dockerfile_location", ColumnValue::Text(v)));
-    }
-    if input.has("docker_compose_location") {
-        let v = input
-            .str("docker_compose_location")
-            .map_or_else(|| "/docker-compose.yaml".to_owned(), location);
-        columns.push(("docker_compose_location", ColumnValue::Text(Some(v))));
     }
     columns.push((
         "git_repository",
@@ -1764,26 +1868,31 @@ async fn create_git(
     if input.get("is_static").is_some_and(php_truthy) {
         columns.push(("ports_exposes", ColumnValue::Text(Some("80".into()))));
     }
-    creating_columns(enc, cx.fqdn.as_deref(), &mut columns);
+    creating_columns(enc, cx.fqdn.as_deref(), input, &mut columns);
     let settings = request_settings(
-        input,
+        &cx,
         &[
-            "is_static",
-            "is_spa",
-            "is_auto_deploy_enabled",
-            "is_force_https_enabled",
-            "is_preview_deployments_enabled",
-            "use_build_secrets",
+            ("is_static", "is_static"),
+            ("is_spa", "is_spa"),
+            ("is_auto_deploy_enabled", "is_auto_deploy_enabled"),
+            ("is_force_https_enabled", "is_force_https_enabled"),
+            (
+                "is_preview_deployments_enabled",
+                "is_preview_deployments_enabled",
+            ),
+            ("connect_to_docker_network", "connect_to_docker_network"),
+            ("use_build_server", "is_build_server_enabled"),
+            ("use_build_secrets", "use_build_secrets"),
         ],
         true,
-    );
+    )?;
     finish_create(state, ctx, &cx, columns, settings, kind.name()).await
 }
 
 /// The extra-field messages of `create_application` (`fqdn` has its own).
-fn extra_field_errors(input: &Input, errors: &mut Map<String, Value>) {
+pub(super) fn extra_field_errors(input: &Input, errors: &mut Map<String, Value>, allowed: &[&str]) {
     for k in input.keys() {
-        if !ALLOWED.contains(&k.as_str()) {
+        if !allowed.contains(&k.as_str()) {
             let msg = if k == "fqdn" {
                 "Use the domains field to set application URLs."
             } else {
@@ -1809,48 +1918,8 @@ fn random_str(n: usize) -> String {
         .collect()
 }
 
-/// `checkIfDomainIsAlreadyUsedViaAPI`: conflicts with the team's other applications.
-async fn domain_conflicts(
-    state: &AppState,
-    team_id: i64,
-    fqdn: Option<&str>,
-    exclude_uuid: Option<&str>,
-) -> Result<Option<Vec<Value>>, ApiError> {
-    let key = |d: &str| {
-        let d = d.trim().trim_end_matches('/');
-        let lower = d.to_lowercase();
-        lower
-            .strip_prefix("https://")
-            .or_else(|| lower.strip_prefix("http://"))
-            .unwrap_or(&lower)
-            .to_owned()
-    };
-    let wanted: Vec<String> = domains::domain_list(fqdn);
-    if wanted.is_empty() {
-        return Ok(None);
-    }
-    let mut conflicts = Vec::new();
-    for (uuid, name, other) in apps::fqdns_of_team(&state.db, team_id).await? {
-        if Some(uuid.as_str()) == exclude_uuid {
-            continue;
-        }
-        for d in &wanted {
-            if other.split(',').any(|o| key(o) == key(d)) {
-                conflicts.push(json!({
-                    "domain": key(d),
-                    "resource_name": name,
-                    "resource_uuid": uuid,
-                    "resource_type": "application",
-                    "message": format!("Domain {} is already in use by application '{name}'", key(d)),
-                }));
-            }
-        }
-    }
-    Ok((!conflicts.is_empty()).then_some(conflicts))
-}
-
 /// What a start, restart, stop or delete of this application needs that coolify-rs lacks.
-async fn deployable(state: &AppState, a: &ApplicationRow) -> Result<(), ApiError> {
+pub(super) async fn deployable(state: &AppState, a: &ApplicationRow) -> Result<(), ApiError> {
     // The deploy job builds Docker images and the dockerfile, static, nixpacks and railpack
     // git build packs; dockercompose and an inline Dockerfile are not ported.
     let unsupported = !matches!(

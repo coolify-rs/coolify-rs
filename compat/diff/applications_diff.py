@@ -24,6 +24,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from applications_fields_diff import Cases, run_image_create  # noqa: E402
 from databases_diff import call, json_diff, record, results, same, sql  # noqa: E402
 
 
@@ -124,6 +125,13 @@ def main():
         same("deploy unknown uuid", "POST", "/api/v1/deploy", {"uuid": "nope"}, tok="acme_owner_root")
         same("deployment missing", "GET", "/api/v1/deployments/nope", tok="acme_owner_root")
         same("delete missing", "DELETE", "/api/v1/applications/nope", tok="acme_owner_root")
+
+        # Every other create field on this type, and POST /applications/dockerfile.
+        fields = Cases(base)
+        try:
+            run_image_create(fields)
+        finally:
+            fields.cleanup()
 
         # Deploy one plain application through each side.
         deployed = {}

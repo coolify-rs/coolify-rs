@@ -42,6 +42,12 @@ pub enum Rule {
     Custom(fn(&Value) -> Option<&'static str>),
     /// A closure rule whose message is built from the value.
     CustomOwned(fn(&Value) -> Option<String>),
+    /// A rule object already evaluated against the value (it holds state, such as the stored
+    /// value `ManualWebhookSecret` compares with); runs like `CustomOwned`.
+    Evaluated(Option<String>),
+    /// Wildcard rules (`field.*`, `field.*.key`): given the value of the part before the first
+    /// dot, the `(attribute, message)` failures in rule order. The field's name is only a label.
+    Expand(fn(&Value) -> Vec<(String, String)>),
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +200,15 @@ pub fn validate(
     };
 
     for f in fields {
+        if let [Rule::Expand(expand)] = f.rules.as_slice() {
+            let parent = f.name.split('.').next().unwrap_or_default();
+            if let Some(v) = input.get(parent) {
+                for (attribute, msg) in expand(v) {
+                    push(&attribute, msg);
+                }
+            }
+            continue;
+        }
         let value = input.get(f.name);
         let nullable = f.rules.iter().any(|r| matches!(r, Rule::Nullable));
         // Missing key, or null on a nullable field: only implicit rules run.
@@ -315,6 +330,12 @@ pub fn validate(
                         push(f.name, msg.replace(":attribute", &attribute(f.name)));
                     }
                 }
+                Rule::Evaluated(failure) => {
+                    if let Some(msg) = failure {
+                        push(f.name, msg.replace(":attribute", &attribute(f.name)));
+                    }
+                }
+                Rule::Expand(_) => {}
             }
         }
     }

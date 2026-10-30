@@ -238,6 +238,10 @@ pub async fn create(db: &Db, n: NewApplication, now: NaiveDateTime) -> DbResult<
         .iter()
         .enumerate()
         .map(|(i, (c, v))| {
+            // A NULL is written as a literal: a text-typed NULL parameter does not fit other columns.
+            if matches!(v, ColumnValue::Text(None)) {
+                return "NULL".to_owned();
+            }
             let cast = match v {
                 ColumnValue::Int(_) => "::integer",
                 ColumnValue::Text(_)
@@ -273,6 +277,9 @@ pub async fn create(db: &Db, n: NewApplication, now: NaiveDateTime) -> DbResult<
     let names: Vec<String> = settings.iter().map(|(c, _)| format!("\"{c}\"")).collect();
     let placeholders: Vec<String> = (0..settings.len())
         .map(|i| {
+            if matches!(settings[i].1, ColumnValue::Text(None)) {
+                return "NULL".to_owned();
+            }
             let cast = if matches!(settings[i].1, ColumnValue::Int(_)) {
                 "::bigint"
             } else {
@@ -460,15 +467,82 @@ pub async fn servers_with_applications(db: &Db) -> DbResult<Vec<i64>> {
     .await?)
 }
 
-/// Whether a domain (portless, without scheme) is used by another application of the team.
-pub async fn fqdns_of_team(db: &Db, team_id: TeamId) -> DbResult<Vec<(String, String, String)>> {
+/// A row of [`domain_rows_of_team`]: `(uuid, name, fqdn, build_pack, docker_compose_domains)`.
+pub type DomainRow = (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+/// The columns `checkIfDomainIsAlreadyUsedViaAPI` loads of the team's applications, by name.
+pub async fn domain_rows_of_team(db: &Db, team_id: TeamId) -> DbResult<Vec<DomainRow>> {
     Ok(sqlx::query_as(
-        "SELECT a.uuid, a.name, a.fqdn FROM applications a JOIN environments e ON e.id = a.environment_id \
-         JOIN projects p ON p.id = e.project_id WHERE p.team_id = $1 AND a.deleted_at IS NULL AND a.fqdn IS NOT NULL ORDER BY a.id",
+        "SELECT a.uuid, a.name, a.fqdn, a.build_pack, a.docker_compose_domains FROM applications a \
+         JOIN environments e ON e.id = a.environment_id JOIN projects p ON p.id = e.project_id \
+         WHERE p.team_id = $1 AND a.deleted_at IS NULL ORDER BY a.name",
     )
     .bind(team_id)
     .fetch_all(db.pool())
     .await?)
+}
+
+/// `ServiceApplication::ownedByCurrentTeamAPI`, by name: `(uuid, fqdn, service name)`.
+pub async fn service_domain_rows_of_team(
+    db: &Db,
+    team_id: TeamId,
+) -> DbResult<Vec<(String, Option<String>, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT sa.uuid, sa.fqdn, s.name FROM service_applications sa JOIN services s ON s.id = sa.service_id \
+         JOIN environments e ON e.id = s.environment_id JOIN projects p ON p.id = e.project_id \
+         WHERE p.team_id = $1 AND sa.deleted_at IS NULL ORDER BY sa.name",
+    )
+    .bind(team_id)
+    .fetch_all(db.pool())
+    .await?)
+}
+
+/// `instanceSettings()->fqdn`.
+pub async fn instance_fqdn(db: &Db) -> DbResult<Option<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT fqdn FROM instance_settings WHERE id = 0")
+            .fetch_optional(db.pool())
+            .await?
+            .flatten(),
+    )
+}
+
+/// Whether a `morphTo` source exists (`data_get($application, 'source')`).
+pub async fn source_exists(db: &Db, source_type: &str, source_id: i64) -> DbResult<bool> {
+    let table = match source_type {
+        r"App\Models\GithubApp" => "github_apps",
+        r"App\Models\GitlabApp" => "gitlab_apps",
+        r"App\Models\BitbucketApp" => "bitbucket_apps",
+        r"App\Models\GiteaApp" => "gitea_apps",
+        _ => return Ok(false),
+    };
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT EXISTS (SELECT 1 FROM {table} WHERE id = $1)"
+    ))
+    .bind(source_id)
+    .fetch_one(db.pool())
+    .await?)
+}
+
+/// The `saving` hook when the build pack leaves `dockercompose`: `SERVICE_FQDN_*` and
+/// `SERVICE_URL_*` variables go, preview copies included.
+pub async fn delete_service_url_variables(db: &Db, id: i64) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query(
+        "DELETE FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 \
+         AND (key LIKE 'SERVICE_FQDN_%' OR key LIKE 'SERVICE_URL_%')",
+    )
+    .bind(MORPH)
+    .bind(id)
+    .execute(db.pool())
+    .await?;
+    Ok(())
 }
 
 /// `GithubApp::where('uuid', $uuid)->where(team_id = $teamId OR is_system_wide)->first()`

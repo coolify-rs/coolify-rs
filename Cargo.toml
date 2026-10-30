@@ -33,6 +33,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 regex = "1"
 fancy-regex = "0.14"
+argon2 = "0.5"
 bcrypt = "0.19"
 sha1 = "0.10"
 md-5 = "0.10"
