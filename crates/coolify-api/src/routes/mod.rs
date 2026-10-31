@@ -22,6 +22,7 @@ pub mod s3_storages;
 pub mod servers;
 pub mod services;
 pub mod shared_envs;
+pub mod storage_backups;
 pub mod tags;
 pub mod teams;
 
@@ -1013,6 +1014,60 @@ pub const ROUTES: &[RouteSpec] = &[
     RouteSpec {
         method: "PATCH",
         uri: "api/v1/services/{uuid}/storages",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PUT",
+        uri: "api/v1/applications/{uuid}/storages/{storage_uuid}/backups",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/applications/{uuid}/storages/{storage_uuid}/backups/run",
+        group: Group::Main,
+        abilities: WD,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/applications/{uuid}/storages/{storage_uuid}/backups",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PUT",
+        uri: "api/v1/databases/{uuid}/storages/{storage_uuid}/backups",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/databases/{uuid}/storages/{storage_uuid}/backups/run",
+        group: Group::Main,
+        abilities: WD,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/databases/{uuid}/storages/{storage_uuid}/backups",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PUT",
+        uri: "api/v1/services/{uuid}/storages/{storage_uuid}/backups",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/storages/{storage_uuid}/backups/run",
+        group: Group::Main,
+        abilities: WD,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/services/{uuid}/storages/{storage_uuid}/backups",
         group: Group::Main,
         abilities: W,
     },
@@ -2106,6 +2161,51 @@ pub fn router(state: AppState) -> Router {
             "DELETE",
             "api/v1/databases/{uuid}/envs/{env_uuid}",
             del(database_envs::delete),
+        ),
+        (
+            "PUT",
+            "api/v1/applications/{uuid}/storages/{storage_uuid}/backups",
+            axum::routing::put(storage_backups::put_application),
+        ),
+        (
+            "POST",
+            "api/v1/applications/{uuid}/storages/{storage_uuid}/backups/run",
+            on_post(storage_backups::run_application),
+        ),
+        (
+            "DELETE",
+            "api/v1/applications/{uuid}/storages/{storage_uuid}/backups",
+            del(storage_backups::delete_application),
+        ),
+        (
+            "PUT",
+            "api/v1/databases/{uuid}/storages/{storage_uuid}/backups",
+            axum::routing::put(storage_backups::put_database),
+        ),
+        (
+            "POST",
+            "api/v1/databases/{uuid}/storages/{storage_uuid}/backups/run",
+            on_post(storage_backups::run_database),
+        ),
+        (
+            "DELETE",
+            "api/v1/databases/{uuid}/storages/{storage_uuid}/backups",
+            del(storage_backups::delete_database),
+        ),
+        (
+            "PUT",
+            "api/v1/services/{uuid}/storages/{storage_uuid}/backups",
+            axum::routing::put(storage_backups::put_service),
+        ),
+        (
+            "POST",
+            "api/v1/services/{uuid}/storages/{storage_uuid}/backups/run",
+            on_post(storage_backups::run_service),
+        ),
+        (
+            "DELETE",
+            "api/v1/services/{uuid}/storages/{storage_uuid}/backups",
+            del(storage_backups::delete_service),
         ),
         (
             "GET",

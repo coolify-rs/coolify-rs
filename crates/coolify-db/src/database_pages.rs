@@ -310,6 +310,7 @@ pub async fn live_replica_storages(
         if let Some(id) = storage
             && let Some(row) = parts::s3_by_id(db, id).await?
             && row.get("team_id").and_then(Value::as_i64) == Some(team_id)
+            && row.get("is_usable").and_then(Value::as_bool) == Some(true)
         {
             out.push(row);
         }

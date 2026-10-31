@@ -469,7 +469,221 @@ try {
         if (act && !['queued', 'in_progress'].includes(act.status)) break;
       }
       out.restore = act;
+      console.log(h.label, kind, 'restore', JSON.stringify(act));
       await h.shot(`dbf-${kind}-restore`, false);
+      return out;
+    });
+    await cleanup();
+  }
+
+  if (on('ssl')) {
+    await flow(port, 'alice', async (h) => {
+      const uuid = await createDb('postgresql', `pages-pg-${h.label}`);
+      const out = {};
+      psql(`update standalone_postgresqls set enable_ssl = true where uuid = '${uuid}'`);
+      await api('POST', `/databases/${uuid}/start`);
+      for (let i = 0; i < 60; i++) {
+        await sleep(3000);
+        if (String((await api('GET', `/databases/${uuid}`)).json.status).startsWith('running')) break;
+      }
+      const cert = () => psql(`select count(*), max(md5(ssl_certificate)) from ssl_certificates where resource_type = 'App\\Models\\StandalonePostgresql' and resource_id = (select id from standalone_postgresqls where uuid = '${uuid}')`);
+      const before = cert();
+      await h.go(`${URL_BASE}/${uuid}`);
+      await h.shot('dbf-ssl-on');
+      out.mount = vm(`ls /data/coolify/databases/${uuid}/ssl 2>/dev/null | sort | tr '\\n' ' '`);
+      await h.button('Regenerate SSL Certificates').click();
+      await h.page.waitForTimeout(300);
+      await h.shot('dbf-ssl-confirm', false);
+      await passwordStep(h, null);
+      out.toast = await h.toasts(4000);
+      const after = cert();
+      out.changed = before !== after;
+      out.count = after.split('|')[0];
+      out.mount_after = vm(`ls /data/coolify/databases/${uuid}/ssl 2>/dev/null | sort | tr '\\n' ' '`);
+      return out;
+    });
+    await cleanup();
+  }
+
+  if (on('s3')) {
+    const NAME = 'coolify-rs-pages-minio';
+    const MINIO = '19087';
+    const ip = execFileSync('ipconfig', ['getifaddr', 'en0'], { encoding: 'utf8' }).trim();
+    const docker = (...a) => execFileSync('docker', a, { encoding: 'utf8' }).trim();
+    const php = (code) => docker('exec', 'coolify-rs-reference-coolify-1', 'php', '/var/www/html/artisan', 'tinker', '--execute', code);
+    docker('rm', '-f', NAME);
+    docker('run', '-d', '--name', NAME, '-p', `0.0.0.0:${MINIO}:9000`, '-e', 'MINIO_ROOT_USER=pageskey', '-e', 'MINIO_ROOT_PASSWORD=pagessecret', 'minio/minio', 'server', '/data');
+    await sleep(4000);
+    docker('exec', NAME, 'mkdir', '-p', '/data/pagesbucket');
+    let storage = '';
+    try {
+      storage = php(`echo App\\Models\\S3Storage::forceCreate(['name'=>'pages-s3','region'=>'us-east-1','key'=>'pageskey','secret'=>'pagessecret','bucket'=>'pagesbucket','endpoint'=>'http://${ip}:${MINIO}','is_usable'=>true,'team_id'=>4])->uuid;`).split('\n').pop();
+      await flow(port, 'alice', async (h) => {
+        const uuid = await createDb('postgresql', `pages-pg-${h.label}`, true);
+        const out = {};
+        psql(`update s3_storages set is_usable = true where uuid = '${storage}'`);
+        const bkc = await api('POST', `/databases/${uuid}/backups`, { frequency: 'daily', enabled: true });
+        const bk = bkc.json.uuid;
+        console.log(h.label, 'storage', storage, psql(`select count(*), bool_or(is_usable), max(team_id) from s3_storages where uuid = '${storage}'`), 'backup', bk ?? JSON.stringify(bkc));
+        const row = () => JSON.parse(psql(`select row_to_json(r) from (select save_s3, disable_local_backup, s3_storage_id is not null as primary_set, (select count(*) from scheduled_database_backup_s3_storage p where p.scheduled_database_backup_id = b.id) as storages from scheduled_database_backups b where uuid = '${bk}') r`));
+        await h.go(`${URL_BASE}/${uuid}/backups/${bk}`);
+        await h.shot('dbf-s3-on-default');
+        await h.button('Disable S3').click();
+        out.disable = await h.toasts(2000);
+        out.row_off = row();
+        await h.go(`${URL_BASE}/${uuid}/backups/${bk}`);
+        await h.shot('dbf-s3-off');
+        await h.button('Enable S3').click();
+        out.enable = await h.toasts(2000);
+        out.row_on = row();
+        await h.go(`${URL_BASE}/${uuid}/backups/${bk}`);
+        await h.shot('dbf-s3-on');
+        await h.go(`${URL_BASE}/${uuid}/backups`);
+        await h.shot('dbf-s3-index');
+        await h.go(`${URL_BASE}/${uuid}/backups/${bk}`);
+        await h.page.locator('#resource-action-hud-slot').getByRole('button', { name: 'Back up now' }).dispatchEvent('click');
+        await h.page.waitForURL(/\/executions$/, { timeout: 15000 });
+        let ex = null;
+        for (let i = 0; i < 40; i++) {
+          await sleep(3000);
+          ex = JSON.parse(psql(`select row_to_json(r) from (select e.id, e.status, e.filename, e.s3_uploaded, e.s3_storage_deleted, e.local_storage_deleted, e.message, (select json_agg(json_build_object('uploaded', x.s3_uploaded, 'deleted', x.s3_storage_deleted, 'message', x.message)) from database_backup_s3_replicas x where x.execution_id = e.id) as replicas from scheduled_database_backup_executions e join scheduled_database_backups b on b.id = e.scheduled_database_backup_id where b.uuid = '${bk}' order by e.id desc limit 1) r`) || 'null');
+          if (ex && ex.status !== 'running') break;
+        }
+        await sleep(2000);
+        out.execution = JSON.parse(JSON.stringify({ ...ex, id: 'ID', filename: 'F', message: (ex?.message ?? '').replaceAll(uuid, 'UUID') }).replaceAll(ex.filename, 'F'));
+        out.object = docker('exec', NAME, 'sh', '-c', `test -e '/data/pagesbucket${ex.filename}' && echo present || echo missing`);
+        await h.go(`${URL_BASE}/${uuid}/backups/${bk}/executions`);
+        await h.shot('dbf-s3-exec');
+        out.usable_after_backup = psql(`select is_usable from s3_storages where uuid = '${storage}'`);
+        psql(`update s3_storages set is_usable = true where uuid = '${storage}'`);
+        // Import from S3: the check goes through testConnection.
+        await h.go(`${URL_BASE}/${uuid}/import-backup`);
+        await h.page.getByRole('button', { name: /^S3 storage/ }).first().dispatchEvent('click');
+        await h.page.waitForTimeout(300);
+        await h.shot('dbf-s3-import');
+        await h.listbox('S3 storage', 'pages-s3');
+        const path = h.page.locator('input[placeholder="/backups/database-backup.gz"]:visible');
+        await path.fill(ex.filename);
+        await path.press('Tab');
+        await h.page.waitForTimeout(600);
+        await h.page.getByRole('button', { name: 'Check file' }).last().dispatchEvent('click');
+        out.check_s3 = await h.toasts(4000);
+        await h.shot('dbf-s3-import-checked', false);
+        out.usable_after = psql(`select is_usable from s3_storages where uuid = '${storage}'`);
+        // Delete the execution from S3 as well.
+        psql(`update s3_storages set is_usable = true where uuid = '${storage}'`);
+        await h.go(`${URL_BASE}/${uuid}/backups/${bk}/executions`);
+        await h.page.locator('[aria-label="Delete backup"]').first().dispatchEvent('click');
+        await h.page.waitForTimeout(300);
+        await h.shot('dbf-s3-exec-del', false);
+        const box = h.page.locator(':is(.fixed, [role=dialog]) input[type=checkbox]:visible').first();
+        if (await box.count()) await box.check({ force: true });
+        await passwordStep(h, ex.filename);
+        out.delete_exec = (await h.toasts(4000)).map((t) => t.replaceAll(ex.filename, 'F'));
+        out.object_after = docker('exec', NAME, 'sh', '-c', `test -e '/data/pagesbucket${ex.filename}' && echo present || echo missing`);
+        await api('DELETE', `/databases/${uuid}/backups/${bk}`);
+        return out;
+      });
+    } finally {
+      await cleanup();
+      if (storage) {
+        psql(`delete from scheduled_database_backup_s3_storage where s3_storage_id in (select id from s3_storages where uuid = '${storage}')`);
+        psql(`delete from s3_storages where uuid = '${storage}'`);
+      }
+      docker('rm', '-f', NAME);
+    }
+  }
+
+  if (on('volume-download')) {
+    await flow(port, 'alice', async (h) => {
+      const uuid = await createDb('postgresql', `pages-pg-${h.label}`, true);
+      const out = {};
+      const storage = (await api('GET', `/databases/${uuid}/storages`)).json.persistent_storages[0].uuid;
+      const put = await api('PUT', `/databases/${uuid}/storages/${storage}/backups`, { frequency: 'daily' });
+      await api('POST', `/databases/${uuid}/storages/${storage}/backups/run`);
+      let ex = null;
+      for (let i = 0; i < 40; i++) {
+        await sleep(3000);
+        ex = JSON.parse(psql(`select row_to_json(r) from (select e.id, e.status, e.filename from scheduled_volume_backup_executions e join scheduled_volume_backups b on b.id = e.scheduled_volume_backup_id where b.uuid = '${put.json.uuid}' order by e.id desc limit 1) r`) || 'null');
+        if (ex && ex.status !== 'running') break;
+      }
+      const sum = vm(`sha256sum '${ex.filename}' | cut -d' ' -f1`);
+      const dl = await h.page.request.get(`${h.base}/download/volume-backup/${ex.id}`, { failOnStatusCode: false });
+      const crypto = await import('node:crypto');
+      const bytes = await dl.body();
+      out.same_bytes = crypto.createHash('sha256').update(bytes).digest('hex') === sum;
+      console.log(h.label, 'download', bytes.length, 'file', vm(`stat -c %s '${ex.filename}'`), bytes.subarray(0, 4).toString('hex'));
+      out.headers = [dl.status(), dl.headers()['content-type'], (dl.headers()['content-disposition'] ?? '').replace(/volume-[^"]*/, 'FILE')];
+      const nf = await h.page.request.get(`${h.base}/download/volume-backup/999999999`, { failOnStatusCode: false });
+      out.missing = [nf.status(), await nf.text()];
+      await api('DELETE', `/databases/${uuid}/storages/${storage}/backups`);
+      return out;
+    });
+    await cleanup();
+  }
+
+  if (on('sqlite-connect')) {
+    await flow(port, 'alice', async (h) => {
+      const uuid = await createDb('sqlite', `pages-sqlite-${h.label}`);
+      const out = {};
+      const app = await api('POST', '/applications/dockerimage', { project_uuid: PROJECT, environment_uuid: ENV, server_uuid: SERVER, docker_registry_image_name: 'nginx', docker_registry_image_tag: 'alpine', ports_exposes: '80', name: `pages-app-${h.label}`, instant_deploy: false });
+      const compose = await api('POST', '/applications/dockercompose', { project_uuid: PROJECT, environment_uuid: ENV, server_uuid: SERVER, name: `pages-compose-${h.label}`, instant_deploy: false, docker_compose_raw: Buffer.from('services:\n  web:\n    image: nginx:alpine\n').toString('base64') });
+      try {
+        const norm = (t) => t.replaceAll(uuid, 'DB').replaceAll(app.json.uuid, 'APP').replace(/-(ref|rs)\b/g, '-SIDE');
+        await h.go(`${URL_BASE}/${uuid}`);
+        await h.shot('dbf-sqlite-connect');
+        const pick = async (name) => {
+          await h.page.locator('#applicationUuid, button:visible', { hasText: /Select an application|pages-/ }).first().click();
+          await h.page.waitForTimeout(250);
+          await h.page.locator('.listbox-option:visible', { hasText: name }).first().click();
+          await h.page.waitForTimeout(250);
+        };
+        await pick(`pages-compose-${h.label}`);
+        await h.field('Mount path').fill('bad path');
+        await h.button('Mount volume').click();
+        out.bad_path = (await h.toasts(1500)).concat(await h.page.locator('.text-red-500:visible').allInnerTexts());
+        await h.field('Mount path').fill('/srv/db');
+        await h.button('Mount volume').click();
+        await h.page.waitForTimeout(1500);
+        await h.shot('dbf-sqlite-compose');
+        out.snippet = norm(await h.page.locator('pre:visible').first().innerText());
+        await pick(`pages-app-${h.label}`);
+        await h.button('Mount volume').click();
+        await h.page.waitForURL(/persistent-storage$/, { timeout: 8000 }).catch(() => {});
+        out.redirect = norm(new URL(h.page.url()).pathname);
+        const row = () => JSON.parse(psql(`select coalesce(json_agg(r), '[]') from (select v.name, v.mount_path, v.host_path, v.resource_type, v.is_preview_suffix_enabled, v.uuid is not null as has_uuid from local_persistent_volumes v where v.standalone_sqlite_id = (select id from standalone_sqlites where uuid = '${uuid}')) r`));
+        out.rows = JSON.parse(norm(JSON.stringify(row())));
+        await h.go(`${URL_BASE}/${uuid}`);
+        await h.shot('dbf-sqlite-linked');
+        out.again_toast = null;
+        await pick(`pages-app-${h.label}`);
+        await h.button('Mount volume').click();
+        out.again_toast = (await h.toasts(1500)).map(norm);
+        await h.go(`${URL_BASE}/${uuid}`);
+        await h.button('Unlink').click();
+        out.unlink = await h.toasts(1500);
+        out.rows_after = row();
+      } finally {
+        for (const a of [app, compose]) {
+          if (a.json?.uuid) await api('DELETE', `/applications/${a.json.uuid}?delete_volumes=true&delete_configurations=true&docker_cleanup=false`);
+        }
+      }
+      return out;
+    });
+    await cleanup();
+  }
+
+  if (on('member')) {
+    const uuid = await createDb('postgresql', 'pages-member');
+    const sq = await createDb('sqlite', 'pages-member-sq');
+    const bk = (await api('POST', `/databases/${uuid}/backups`, { frequency: 'daily', enabled: true })).json.uuid;
+    await flow(port, 'bob', async (h) => {
+      const out = {};
+      for (const [n, p] of [['general', uuid], ['health', `${uuid}/healthcheck`], ['import', `${uuid}/import-backup`], ['backups', `${uuid}/backups`], ['sqlite', sq], ['backup', `${uuid}/backups/${bk}`], ['backup-exec', `${uuid}/backups/${bk}/executions`]]) {
+        await h.go(`${URL_BASE}/${p}`);
+        await h.shot(`dbf-member-${n}`);
+        out[n] = (await h.page.locator('button:visible').allInnerTexts()).filter((t) => /Add|Enable|Disable|Back up|Clean|Mount|Unlink|Details/i.test(t));
+      }
       return out;
     });
     await cleanup();

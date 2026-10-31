@@ -46,6 +46,7 @@ pub mod testing;
 pub mod traffic;
 pub mod ui_servers;
 pub mod users;
+pub mod volume_backups;
 
 use std::time::Duration;
 

@@ -45,7 +45,7 @@ fn pipe_to_file(source: &str, sink: &str, escaped_file: &str) -> String {
 }
 
 /// `BackupCompression::compressorCommand`.
-fn compressor_command(percentage: i64) -> String {
+pub(crate) fn compressor_command(percentage: i64) -> String {
     let p = if [25, 50, 75, 100].contains(&percentage) {
         percentage
     } else {

@@ -38,6 +38,7 @@ pub mod ssl;
 pub mod storage;
 mod ui_ops;
 pub mod variables;
+pub mod volume_backup;
 
 pub(crate) use common::docker_stop_command;
 pub use common::slug;

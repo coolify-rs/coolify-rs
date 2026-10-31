@@ -5,6 +5,7 @@
   import Callout from './Callout.svelte';
   import Checkbox from './Checkbox.svelte';
   import ConfirmModal from './ConfirmModal.svelte';
+  import DatabaseActivityMonitor from './DatabaseActivityMonitor.svelte';
   import Empty from './Empty.svelte';
   import FormInput from './FormInput.svelte';
   import FormTextarea from './FormTextarea.svelte';
@@ -468,7 +469,7 @@
 {#if monitor}
   <ProcessDialog title="Database Restore Output" closeWithX size="xl" onclose={() => (monitor = false)}>
     <div class="flex h-full min-h-0 flex-col">
-      <pre class="h-full min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-4 font-mono text-xs">{activity?.output ?? ''}</pre>
+      <DatabaseActivityMonitor activity={activity && { id: activityId ?? 0, status: activity.status as 'finished', entries: [{ order: 1, output: activity.output ?? '', timestamp: '', type: 'stdout', hidden: false } as never] }} />
     </div>
   </ProcessDialog>
 {/if}

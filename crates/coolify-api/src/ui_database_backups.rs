@@ -17,6 +17,7 @@ use coolify_db::database_parts::{self as parts, NewBackup};
 use coolify_db::databases::{self as dbs, DatabaseRow, Kind};
 use coolify_db::records::Record;
 use coolify_db::servers::ColumnValue;
+use coolify_db::volume_backups as vb;
 use coolify_jobs::databases::s3::S3Target;
 use futures_util::stream;
 use serde_json::{Map, Value, json};
@@ -56,6 +57,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
             post(delete_execution),
         )
         .route("/download/backup/{execution}", get(download))
+        .route("/download/volume-backup/{execution}", get(download_volume))
         .route_layer(from_fn_with_state(state, crate::session::ui_guard))
 }
 
@@ -663,6 +665,139 @@ async fn download(
     }
 }
 
+/// The `StreamedResponse` of `streamBackupFromServer`.
+fn file_response(
+    read: coolify_jobs::databases::ServerFileStream,
+    filename: &str,
+    content_type: &str,
+) -> Response {
+    let base = filename.rsplit('/').next().unwrap_or(filename).to_owned();
+    let stream = stream::unfold(read, |mut read| async move {
+        let mut buf = vec![0u8; 64 * 1024];
+        match read.stdout.read(&mut buf).await {
+            Ok(0) | Err(_) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some((Ok::<_, std::io::Error>(Bytes::from(buf)), read))
+            }
+        }
+    });
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, content_type.to_owned()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{base}\""),
+            ),
+        ],
+        Body::from_stream(stream),
+    )
+        .into_response()
+}
+
+/// `s3DownloadUrl`: a temporary link to the first live copy, the primary storage first.
+fn s3_link(
+    state: &AppState,
+    storages: &mut [Record],
+    primary: Option<i64>,
+    filename: &str,
+) -> Result<Option<Response>, ApiError> {
+    storages.sort_by_key(|s| i32::from(Some(parts::id_of(s)) != primary));
+    let (Some(storage), Some(enc)) = (storages.first(), state.encrypter.as_ref()) else {
+        return Ok(None);
+    };
+    let target = S3Target::from_row(enc, storage).map_err(|_| ApiError::Internal)?;
+    // `FileDownloadStorageService::LINK_TTL_MINUTES`.
+    let url = target
+        .presigned_get(filename.trim_start_matches('/'), 15 * 60)
+        .map_err(|_| ApiError::Internal)?;
+    Ok(Some(Redirect::to(&url).into_response()))
+}
+
+/// `Route::get('/download/volume-backup/{executionId}')`.
+async fn download_volume(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(execution): Path<String>,
+) -> Response {
+    match download_volume_inner(&state, &ctx, &execution).await {
+        Ok(r) => r,
+        Err(_) => message(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to download backup.",
+        ),
+    }
+}
+
+async fn download_volume_inner(
+    state: &AppState,
+    ctx: &AuthCtx,
+    execution: &str,
+) -> Result<Response, ApiError> {
+    if !ctx.is_team_admin() {
+        return Ok(message(
+            StatusCode::FORBIDDEN,
+            "Only team admins/owners can download backups.",
+        ));
+    }
+    let id = execution.parse::<i64>().map_err(|_| ApiError::Internal)?;
+    let (row, backup) = vb::execution_by_id(&state.db, id)
+        .await?
+        .ok_or(ApiError::Internal)?;
+    let team = backup.get("team_id").and_then(Value::as_i64).unwrap_or(-1);
+    if ctx.team_id != 0 && ctx.team_id != team {
+        return Ok(message(StatusCode::FORBIDDEN, "Permission denied."));
+    }
+    const NOT_LOCAL: &str = "Backup not found locally on the server.";
+    let filename = parts::str_of(&row, "filename")
+        .unwrap_or_default()
+        .to_owned();
+    if filename.is_empty() {
+        return Ok(message(StatusCode::NOT_FOUND, NOT_LOCAL));
+    }
+    let local_deleted = parts::bool_of(&row, "local_storage_deleted");
+    let mut server = None;
+    if !local_deleted
+        && let Some(target) = vb::target_of(&state.db, &backup).await?
+        && let Some(server_id) = vb::resource_server(
+            &state.db,
+            parts::str_of(&target.row, "resource_type").unwrap_or_default(),
+            target
+                .row
+                .get("resource_id")
+                .and_then(Value::as_i64)
+                .unwrap_or(-1),
+        )
+        .await?
+    {
+        server = coolify_db::servers::find_by_id(&state.db, server_id)
+            .await?
+            .map(|r| coolify_jobs::server::ServerInfo::from_row(&r));
+    }
+    if let Some(server) = &server {
+        let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+        match jobs.read_server_file(server, &filename).await {
+            Ok(Some(read)) => return Ok(file_response(read, &filename, "application/gzip")),
+            Ok(None) => {}
+            Err(_) => return Err(ApiError::Internal),
+        }
+    }
+    let mut storages = vb::live_storages(&state.db, id, team).await?;
+    if let Some(link) = s3_link(
+        state,
+        &mut storages,
+        row.get("s3_storage_id").and_then(Value::as_i64),
+        &filename,
+    )? {
+        return Ok(link);
+    }
+    if !local_deleted && server.is_none() {
+        return Ok(message(StatusCode::NOT_FOUND, "Server not found."));
+    }
+    Ok(message(StatusCode::NOT_FOUND, NOT_LOCAL))
+}
+
 fn message(code: StatusCode, text: &str) -> Response {
     PhpJson(code, json!({"message": text})).into_response()
 }
@@ -713,29 +848,7 @@ async fn download_inner(
         let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
         match jobs.read_server_file(&server, &filename).await {
             Ok(Some(read)) => {
-                let base = filename.rsplit('/').next().unwrap_or(&filename).to_owned();
-                let stream = stream::unfold(read, |mut read| async move {
-                    let mut buf = vec![0u8; 64 * 1024];
-                    match read.stdout.read(&mut buf).await {
-                        Ok(0) | Err(_) => None,
-                        Ok(n) => {
-                            buf.truncate(n);
-                            Some((Ok::<_, std::io::Error>(Bytes::from(buf)), read))
-                        }
-                    }
-                });
-                return Ok((
-                    StatusCode::OK,
-                    [
-                        (header::CONTENT_TYPE, "application/octet-stream".to_owned()),
-                        (
-                            header::CONTENT_DISPOSITION,
-                            format!("attachment; filename=\"{base}\""),
-                        ),
-                    ],
-                    Body::from_stream(stream),
-                )
-                    .into_response());
+                return Ok(file_response(read, &filename, "application/octet-stream"));
             }
             Ok(None) => {}
             Err(_) => return Err(ApiError::Internal),
@@ -747,16 +860,8 @@ async fn download_inner(
         let primary = backup.get("s3_storage_id").and_then(Value::as_i64);
         let mut storages =
             pages::live_replica_storages(&state.db, parts::id_of(&row), team).await?;
-        storages.sort_by_key(|s| i32::from(Some(parts::id_of(s)) != primary));
-        if let Some(storage) = storages.first()
-            && let Some(enc) = state.encrypter.as_ref()
-        {
-            let target = S3Target::from_row(enc, storage).map_err(|_| ApiError::Internal)?;
-            // `FileDownloadStorageService::LINK_TTL_MINUTES`.
-            let url = target
-                .presigned_get(filename.trim_start_matches('/'), 15 * 60)
-                .map_err(|_| ApiError::Internal)?;
-            return Ok(Redirect::to(&url).into_response());
+        if let Some(link) = s3_link(state, &mut storages, primary, &filename)? {
+            return Ok(link);
         }
     }
     if parts::bool_of(&backup, "disable_local_backup") && parts::bool_of(&backup, "save_s3") {
