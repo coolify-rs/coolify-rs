@@ -127,7 +127,7 @@
     {:else if router.current.name === 'servers'}
       <Servers />
     {:else if router.current.name === 'server-new' || router.current.name === 'server-new-type'}
-      {#key router.path}<ServerNew type={params.type} />{/key}
+      {#key router.path}<ServerNew type={params.type} token={params.token} />{/key}
     {:else if router.current.name === 'server'}
       {#key params.uuid}<Server uuid={params.uuid} />{/key}
     {:else if router.current.name === 'server-section' && params.section === 'danger'}

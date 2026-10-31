@@ -19,6 +19,7 @@ pub mod state;
 pub mod ui;
 pub mod ui_applications;
 pub mod ui_databases;
+pub mod ui_server_cloud;
 pub mod ui_server_destinations;
 pub mod ui_server_general;
 pub mod ui_server_metrics;

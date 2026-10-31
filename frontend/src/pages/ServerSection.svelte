@@ -18,6 +18,7 @@
   import ServerProxyCertificates from './ServerProxyCertificates.svelte';
   import ServerLogsPage from './ServerLogsPage.svelte';
   import ServerCaCertificate from './ServerCaCertificate.svelte';
+  import ServerCloudProviderToken from './ServerCloudProviderToken.svelte';
   import ServerDestinations from './ServerDestinations.svelte';
   import ServerPrivateKey from './ServerPrivateKey.svelte';
   import ServerResources from './ServerResources.svelte';
@@ -42,6 +43,7 @@
     'proxy/certificates': ServerProxyCertificates,
     'proxy/logs': ServerLogsPage,
     'ca-certificate': ServerCaCertificate,
+    'cloud-provider-token': ServerCloudProviderToken,
     destinations: ServerDestinations,
     'private-key': ServerPrivateKey,
     resources: ServerResources,

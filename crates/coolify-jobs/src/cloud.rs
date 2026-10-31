@@ -82,6 +82,8 @@ pub struct Client {
     provider: Provider,
     token: String,
     http: reqwest::Client,
+    /// Status and body of the last rejected response, as a `RequestException` carries them.
+    failure: std::sync::Arc<std::sync::Mutex<Option<(u16, String)>>>,
 }
 
 impl Client {
@@ -94,7 +96,13 @@ impl Client {
                 .connect_timeout(Duration::from_secs(10))
                 .build()
                 .unwrap_or_default(),
+            failure: Default::default(),
         }
+    }
+
+    /// Status and body of the last rejected response.
+    pub fn last_failure(&self) -> Option<(u16, String)> {
+        self.failure.lock().ok().and_then(|f| f.clone())
     }
 
     fn attempts(&self, method: &Method) -> u32 {
@@ -151,7 +159,16 @@ impl Client {
                 Ok(r) => {
                     let status = r.status();
                     let headers = r.headers().clone();
-                    let body = r.json::<Value>().await.unwrap_or(Value::Null);
+                    let bytes = r.bytes().await.unwrap_or_default();
+                    let body = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
+                    if !status.is_success()
+                        && let Ok(mut f) = self.failure.lock()
+                    {
+                        *f = Some((
+                            status.as_u16(),
+                            String::from_utf8_lossy(&bytes).into_owned(),
+                        ));
+                    }
                     let retryable = !status.is_success()
                         && (self.provider != Provider::Hostinger || status.is_server_error());
                     last = Some((status, body, headers));
@@ -756,30 +773,49 @@ pub fn hetzner_server_ipv6(network: Option<&str>) -> Option<String> {
     Some(parsed.to_string())
 }
 
-/// `CloudProviderTokensController::validateProviderToken`: the error message when invalid.
-pub async fn validate_provider_token(provider: &str, token: &str) -> Result<(), String> {
-    let Some(p) = Provider::from_name(provider) else {
-        return Err("Unsupported provider.".to_string());
-    };
-    let endpoint = match p {
-        Provider::Hetzner => "/servers",
-        Provider::DigitalOcean | Provider::Vultr => "/account",
-        Provider::Hostinger => "/api/vps/v1/virtual-machines",
-    };
+/// `Http::withToken($token)->timeout(10)->get($endpoint)->successful()`: one request without retries.
+pub async fn probe(
+    provider: Provider,
+    token: &str,
+    endpoint: &str,
+    accept_json: bool,
+) -> Result<bool, String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap_or_default();
     let mut req = client
-        .get(format!("{}{endpoint}", p.base()))
+        .get(format!("{}{endpoint}", provider.base()))
         .header("Authorization", format!("Bearer {token}"))
         .header("User-Agent", "GuzzleHttp/7");
-    if p == Provider::Hostinger {
+    if accept_json {
         req = req.header("Accept", "application/json");
     }
     match req.send().await {
-        Ok(r) if r.status().is_success() => Ok(()),
-        Ok(_) => Err(format!(
+        Ok(r) => Ok(r.status().is_success()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+impl Provider {
+    /// The endpoint every token of the provider can read.
+    pub fn validation_endpoint(self) -> &'static str {
+        match self {
+            Self::Hetzner => "/servers",
+            Self::DigitalOcean | Self::Vultr => "/account",
+            Self::Hostinger => "/api/vps/v1/virtual-machines",
+        }
+    }
+}
+
+/// `CloudProviderTokensController::validateProviderToken`: the error message when invalid.
+pub async fn validate_provider_token(provider: &str, token: &str) -> Result<(), String> {
+    let Some(p) = Provider::from_name(provider) else {
+        return Err("Unsupported provider.".to_string());
+    };
+    match probe(p, token, p.validation_endpoint(), p == Provider::Hostinger).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!(
             "Invalid {provider} token. Please check your API token."
         )),
         Err(_) => Err("Failed to validate token with provider API.".to_string()),

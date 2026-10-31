@@ -70,6 +70,17 @@ pub async fn create_token(
     .await?)
 }
 
+/// The `description` of `CloudProviderToken::create()` in `CloudProviderTokenForm::addToken`.
+pub async fn set_token_description(db: &Db, id: i64, description: &str) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query("UPDATE cloud_provider_tokens SET description = $1 WHERE id = $2")
+        .bind(description)
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+    Ok(())
+}
+
 pub async fn update_token_name(db: &Db, id: i64, name: &str, now: NaiveDateTime) -> DbResult<()> {
     db.ensure_writable()?;
     sqlx::query(

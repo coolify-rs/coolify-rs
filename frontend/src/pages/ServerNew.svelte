@@ -1,19 +1,21 @@
 <script lang="ts">
   // Port of upstream livewire/server/create.blade.php with
-  // livewire/server/new/by-ip.blade.php. Provisioning through cloud
-  // providers is not available in coolify-rs, so only "IP address or domain"
-  // is offered.
+  // livewire/server/new/by-ip.blade.php; the provider forms are their own pages.
   import Reicon from '../components/Reicon.svelte';
   import FormInput from '../components/FormInput.svelte';
   import Listbox from '../components/Listbox.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
   import Unported from './Unported.svelte';
+  import ServerNewDigitalOcean from './ServerNewDigitalOcean.svelte';
+  import ServerNewHetzner from './ServerNewHetzner.svelte';
+  import ServerNewHostinger from './ServerNewHostinger.svelte';
+  import ServerNewVultr from './ServerNewVultr.svelte';
   import { keysUi, serversUi, ApiError } from '../lib/api';
   import { link, router } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
   import { notify } from '../lib/toast.svelte';
 
-  let { type }: { type?: string } = $props();
+  let { type, token }: { type?: string; token?: string } = $props();
 
   let keys = $state<{ id: number; name: string }[]>([]);
   let privateKeyId = $state<string>('');
@@ -80,11 +82,13 @@
 
   const card =
     'group flex min-h-32 flex-col rounded-xl border border-neutral-200 bg-white p-3 shadow-sm transition-all hover:-translate-y-px hover:border-neutral-300 hover:no-underline hover:shadow-md dark:border-white/[0.08] dark:bg-white/[0.05] dark:hover:border-white/[0.14]';
+  // Upstream's Hostinger card is a shade lighter in dark mode.
+  const hostingerCard = card.replace('dark:bg-white/[0.05]', 'dark:bg-white/[0.025]');
 </script>
 
 <svelte:window onclick={(e) => keyMenu && keyMenuRoot && !keyMenuRoot.contains(e.target as Node) && (keyMenu = false)} />
 
-{#if type && type !== 'manual'}
+{#if (type && !['manual', 'hetzner', 'vultr', 'digital-ocean', 'hostinger'].includes(type)) || (type === 'manual' && token)}
   <Unported />
 {:else}
   <div class="w-full">
@@ -120,6 +124,83 @@
             </div>
           </div>
         </section>
+
+        {#if session.isAdmin}
+          <section class="application-settings-section">
+            <div class="application-settings-section-header">
+              <h2 class="application-settings-section-title">Provision a server</h2>
+              <p class="application-settings-section-description">Create a server with a cloud provider.</p>
+            </div>
+            <div class="application-settings-section-body is-flush">
+              <div class="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-4">
+                <a href="/servers/new/hetzner" use:link class={card}>
+                  <div class="flex items-start">
+                    <img src="/svgs/hetzner.svg" alt="Hetzner" class="size-8" />
+                  </div>
+                  <div class="mt-auto pt-5">
+                    <h3 class="text-[13px]! font-semibold! text-black dark:text-fg">Hetzner</h3>
+                    <p class="mt-1 text-[11px] leading-4 text-neutral-500 dark:text-fg-faint">Provision from Hetzner Cloud.</p>
+                  </div>
+                </a>
+
+                <a href="/servers/new/vultr" use:link class={card}>
+                  <div class="flex items-start">
+                    <img src="https://www.vultr.com/media/logo_ondark.svg" alt="Vultr" class="h-8 w-20 object-contain object-left" />
+                  </div>
+                  <div class="mt-auto pt-5">
+                    <h3 class="text-[13px]! font-semibold! text-black dark:text-fg">Vultr</h3>
+                    <p class="mt-1 text-[11px] leading-4 text-neutral-500 dark:text-fg-faint">Provision from Vultr Cloud.</p>
+                  </div>
+                </a>
+
+                <a href="/servers/new/digital-ocean" use:link class={card}>
+                  <div class="flex items-start">
+                    <svg class="size-8 shrink-0" fill="#0080FF" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <title>DigitalOcean</title>
+                      <path
+                        d="M12.04 0C5.408-.02.005 5.37.005 11.992h4.638c0-4.923 4.882-8.731 10.064-6.855a6.95 6.95 0 014.147 4.148c1.889 5.177-1.924 10.055-6.84 10.064v-4.61H7.391v4.623h4.61V24c7.86 0 13.967-7.588 11.397-15.83-1.115-3.59-3.985-6.446-7.575-7.575A12.8 12.8 0 0012.039 0zM7.39 19.362H3.828v3.564H7.39zm-3.563 0v-2.978H.85v2.978z"
+                      />
+                    </svg>
+                  </div>
+                  <div class="mt-auto pt-5">
+                    <h3 class="text-[13px]! font-semibold! text-black dark:text-fg">DigitalOcean</h3>
+                    <p class="mt-1 text-[11px] leading-4 text-neutral-500 dark:text-fg-faint">Provision a new Droplet.</p>
+                  </div>
+                </a>
+
+                <a href="/servers/new/hostinger" use:link class={hostingerCard}>
+                  <div class="flex items-start">
+                    <svg class="size-8 text-[#673de6]" viewBox="0 0 26 30" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Hostinger">
+                      <title>Hostinger</title>
+                      <path
+                        fill-rule="evenodd"
+                        clip-rule="evenodd"
+                        d="M0.000249566 14.046V0.000497794L6.99464 3.78046V10.1086L16.2538 10.1132L23.3617 14.046H0.000249566ZM18.1472 8.95059V0L25.3302 3.68591V13.1797L18.1472 8.95059ZM18.1472 26.1177V19.8441L8.81663 19.8376C8.82534 19.8793 1.59081 15.8418 1.59081 15.8418L25.3302 15.9547V30L18.1472 26.1177ZM0 26.1177L0.000248849 16.9393L6.99464 21.0683V29.8033L0 26.1177Z"
+                        fill="currentColor"
+                      />
+                    </svg>
+                  </div>
+                  <div class="mt-auto pt-5">
+                    <h3 class="text-[13px]! font-semibold! text-black dark:text-fg">Hostinger</h3>
+                    <p class="mt-1 text-[11px] leading-4 text-neutral-500 dark:text-fg-faint">Purchase and provision a new VPS.</p>
+                  </div>
+                </a>
+              </div>
+            </div>
+          </section>
+        {/if}
+      </div>
+    {:else if type !== 'manual'}
+      <div class="application-settings-form">
+        {#if type === 'hetzner'}
+          <ServerNewHetzner tokenUuid={token} />
+        {:else if type === 'vultr'}
+          <ServerNewVultr tokenUuid={token} />
+        {:else if type === 'digital-ocean'}
+          <ServerNewDigitalOcean tokenUuid={token} />
+        {:else}
+          <ServerNewHostinger tokenUuid={token} />
+        {/if}
       </div>
     {:else}
       <div class="application-settings-form">

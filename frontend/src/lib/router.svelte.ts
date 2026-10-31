@@ -32,6 +32,7 @@ const routes: { name: string; pattern: string }[] = [
   { name: 'servers', pattern: '/servers' },
   { name: 'server-new', pattern: '/servers/new' },
   { name: 'server-new-type', pattern: '/servers/new/:type' },
+  { name: 'server-new-type', pattern: '/servers/new/:type/:token' },
   { name: 'server', pattern: '/server/:uuid' },
   { name: 'server-section', pattern: '/server/:uuid/:section' },
   { name: 'server-section', pattern: '/server/:uuid/:section/:sub' },

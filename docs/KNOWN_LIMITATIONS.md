@@ -20,8 +20,9 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   (`SESSION_LIFETIME`), 30-day absolute.
 - Users must sign in with an existing Coolify account (created in upstream Coolify).
 - Servers (API): sub-routes, destinations, proxy, Sentinel, Docker cleanup, log drains, registries, shared variables,
-  install, cloud providers and cloud-init scripts are ported (backend; their UI pages are not, and UI validation still ends
-  with the "install them manually" messages). Not ported: `POST /servers/import`, `GET /servers/import/check`,
+  install, cloud providers and cloud-init scripts are ported (backend; of the UI, the provider forms and the server's Cloud
+  Token page are, the Security pages for tokens and scripts are not, and UI validation still ends with the "install them
+  manually" messages). Not ported: `POST /servers/import`, `GET /servers/import/check`,
   `POST /servers/{uuid}/migrate`, `POST /servers/{uuid}/transfer/complete` (the 7,000 line transfer services; also deleting
   a transferred server), `DELETE ?force=true` on a server with resources, `/servers/{uuid}/cloudflare-tunnel` account
   features outside the API, `delete_from_provider` for Hostinger
@@ -39,8 +40,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   Certificate, Swarm, server Destinations, Resources (no canvas toggle), Proxy (configuration, dynamic configurations, TLS
   list, logs, start/stop/restart), Sentinel (configuration, logs), Docker Cleanup with executions, Images, Log Drains,
   Registries (server and `/registries`), Terminal Access and the settings of Traffic Analytics. Not ported yet (the page
-  says "not available"): Metrics/Charts, Cloudflare Tunnel, GitHub Runners, Security Patches, Transfer, the
-  `By{DigitalOcean,Hetzner,Hostinger,Vultr}` forms, Cloud Token, the Terminal page. Within the ported pages: deleting TLS
+  says "not available"): Metrics/Charts, Cloudflare Tunnel, GitHub Runners, Security Patches, Transfer, the Terminal page. Within the ported pages: deleting TLS
   certificates and acme.json backups, enabling traffic analytics (`ConfigureTrafficAnalytics`) and the analytics charts, the
   "Proxy Startup Logs" dialog, the Docker cleanup "may be stalled" warning, and the toolbar of the shared log viewer (search,
   filter, copy, download) are missing. Saving a CA certificate checks it against P-521 keys only and does not run
@@ -101,7 +101,6 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   keeps its deployments. Queued deployments are left queued.
 - `sentinel_custom_url` for a new server falls back to the request's scheme and host; `X-Forwarded-*` count only
   from trusted proxies (upstream trusts every proxy).
-- The new-server page offers only "IP address or domain" (cloud provisioning exists in the API only).
 - Deployments: only the Docker image build pack. Git build packs (Dockerfile, static, Railpack, Nixpacks, Compose), previews, additional servers, build servers, registry pushes, basic auth, pre/post-deployment commands and custom Docker options are not ported (501). `current_process_id` stays empty, and commands that upstream feeds on stdin carry their input inside the script. Jobs run in the coolify-rs process: a restart drops a running deployment.
 - No backups, notifications or webhooks yet. SSH runs without
 - No proxy management, scheduler, notifications or webhooks yet. SSH runs without

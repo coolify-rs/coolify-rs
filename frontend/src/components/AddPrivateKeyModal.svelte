@@ -6,7 +6,7 @@
   import { api, ApiError, keysUi } from '../lib/api';
   import { notify } from '../lib/toast.svelte';
 
-  let { onclose, oncreated }: { onclose: () => void; oncreated: (key: { uuid: string }) => void } = $props();
+  let { title = 'Add Private Key Manually', onclose, oncreated }: { title?: string; onclose: () => void; oncreated: (key: { uuid: string }) => void } = $props();
 
   let newName = $state('');
   let newDescription = $state('');
@@ -40,7 +40,7 @@
   }
 </script>
 
-<Modal title="Add Private Key Manually" {onclose}>
+<Modal {title} {onclose}>
   <div class="application-settings-form">
     <form class="flex flex-col gap-4" onsubmit={create}>
       <div class="grid gap-4 lg:grid-cols-2">
