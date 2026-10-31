@@ -254,6 +254,17 @@ class Handler(BaseHTTPRequestHandler):
                 "id": STATE["github_app_id"], "slug": "fake-app", "client_id": "Iv1.fake",
                 "client_secret": "fake-client-secret", "pem": pem(), "webhook_secret": "fake-webhook-secret",
             })
+        # GithubRunnerApi
+        if p == "/orgs/acme/actions/runner-groups" and m == "POST":
+            return self.send(201, {"id": 31, "name": data.get("name"), "default": False})
+        if p.startswith("/orgs/acme/actions/runner-groups/"):
+            return self.send(200, {"id": int(p.rsplit("/", 1)[1]), "default": False})
+        if p == "/orgs/acme/actions/runners/generate-jitconfig":
+            return self.send(201, {"runner": {"id": 901}, "encoded_jit_config": "bm90LWEtcmVhbC1qaXQtY29uZmln"})
+        if p.startswith("/orgs/acme/actions/runners/") and m == "DELETE":
+            return self.send(204, b"")
+        if "/actions/runs/" in p and p.startswith("/repos/"):
+            return self.send(200, {"event": "pull_request" if p.endswith("/77") else "push"})
         if p.startswith("/repos/o/"):
             segs = p.split("/")[3:]
             name = segs[0]

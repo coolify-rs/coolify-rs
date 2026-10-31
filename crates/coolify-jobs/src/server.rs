@@ -67,6 +67,11 @@ impl ServerInfo {
         self.settings.get(key).and_then(Value::as_bool)
     }
 
+    /// `canBuildApplications()`: every role but `deployment`.
+    pub fn can_build(&self) -> bool {
+        self.settings.get("server_role").and_then(Value::as_str) != Some("deployment")
+    }
+
     pub fn is_build_server(&self) -> bool {
         match self.settings.get("server_role").and_then(Value::as_str) {
             Some(role) => role == "build",

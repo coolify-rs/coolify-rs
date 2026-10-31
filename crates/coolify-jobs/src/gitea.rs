@@ -156,8 +156,8 @@ pub(crate) async fn refresh(
         db,
         flow.table,
         id,
-        &enc.encrypt_serialized(&access),
-        &enc.encrypt_serialized(&new_refresh),
+        &enc.encrypt_string(&access),
+        &enc.encrypt_string(&new_refresh),
         chrono::Utc::now().timestamp() + expires_in,
     )
     .await

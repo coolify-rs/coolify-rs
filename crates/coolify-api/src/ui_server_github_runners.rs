@@ -31,7 +31,7 @@ use crate::validation::{Field, Rule, validate};
 const UNAUTHORIZED: &str = "This action is unauthorized.";
 const NEEDS_BUILD_ROLE: &str =
     "GitHub Actions runners need a server with the Builds only or Deployments and builds role.";
-const NOT_PORTED: &str = "Running GitHub Actions jobs is not available in coolify-rs yet.";
+const DEFAULT_GROUP: &str = "Runners use the Default runner group of the organization. Check which repositories can use that group on GitHub.";
 const NOT_READY: &str = "The GitHub App is not ready for runners. Coolify cannot take workflow jobs until you update its permissions on GitHub.";
 /// `GithubRunners::RESERVED_LABELS`.
 const RESERVED_LABELS: [&str; 7] = [
@@ -262,12 +262,28 @@ fn filled(input: &Input, k: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// `prepareRunnerGroup`: its warning. A ready App would need the GitHub API.
-fn prepare_group(app: &Value) -> Result<Option<&'static str>, String> {
+/// `prepareRunnerGroup`: its warning.
+async fn prepare_group(state: &AppState, app: &Value) -> Result<Option<&'static str>, String> {
     if !missing_requirements(app).is_empty() {
         return Ok(Some(NOT_READY));
     }
-    Err(NOT_PORTED.to_string())
+    let id = app.get("id").and_then(Value::as_i64).unwrap_or_default();
+    let source = coolify_db::git_sources::github_app(&state.db, id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("GitHub App not found.")?;
+    let enc = state
+        .encrypter
+        .as_ref()
+        .ok_or("No application encryption key has been specified.")?;
+    let (_, is_default) = coolify_jobs::server_ops::github_runner_jobs::ensure_runner_group(
+        &state.db,
+        enc,
+        &source,
+        state.now(),
+    )
+    .await?;
+    Ok(is_default.then_some(DEFAULT_GROUP))
 }
 
 async fn do_submit(state: &AppState, s: &ServerRow, input: Input) -> ApiResult {
@@ -308,7 +324,7 @@ async fn do_submit(state: &AppState, s: &ServerRow, input: Input) -> ApiResult {
         .is_none_or(|c| c.get("is_enabled").and_then(Value::as_bool) != Some(false));
     let mut warning = None;
     if enabled {
-        match prepare_group(app) {
+        match prepare_group(state, app).await {
             Ok(w) => warning = w,
             Err(e) => return toast_error(e),
         }
@@ -373,8 +389,8 @@ async fn toggle(
         db::set_enabled(&state.db, s.id, false, state.now()).await?;
         tracing::info!(target: "audit", event = "ui.server.github_runners.disabled", team_id = team, server_uuid = %s.uuid, "github runners disabled");
         let config_id = config.get("id").and_then(Value::as_i64).unwrap_or_default();
-        let srv = Srv::from_row(jobs(&state)?, s.clone());
-        for (id, uuid) in db::idle_executions(&state.db, config_id).await? {
+        let j = jobs(&state)?;
+        for (id, _uuid) in db::idle_executions(&state.db, config_id).await? {
             db::finish_execution(
                 &state.db,
                 id,
@@ -383,7 +399,7 @@ async fn toggle(
                 state.now(),
             )
             .await?;
-            runners::spawn_cleanup(&srv, uuid);
+            j.spawn_cleanup_runner(id);
         }
         return Ok(ok(
             json!({"message": "GitHub runners disabled. Running jobs continue until they finish."}),
@@ -398,10 +414,12 @@ async fn toggle(
     let app = apps
         .iter()
         .find(|a| a.get("id").and_then(Value::as_i64) == app_id);
-    let warning = match app.map(prepare_group) {
-        Some(Ok(w)) => w,
-        Some(Err(e)) => return toast_error(e),
-        None => return toast_error(UNAUTHORIZED),
+    let Some(app) = app else {
+        return toast_error(UNAUTHORIZED);
+    };
+    let warning = match prepare_group(&state, app).await {
+        Ok(w) => w,
+        Err(e) => return toast_error(e),
     };
     db::set_enabled(&state.db, s.id, true, state.now()).await?;
     tracing::info!(target: "audit", event = "ui.server.github_runners.enabled", team_id = team, server_uuid = %s.uuid, "github runners enabled");
@@ -464,7 +482,7 @@ async fn cancel(
         return toast_error(UNAUTHORIZED);
     }
     let app = app_of(&state, &s).await?;
-    let Some((execution, status, server)) = db::execution(&state.db, s.id, app, id).await? else {
+    let Some((_uuid, status, server)) = db::execution(&state.db, s.id, app, id).await? else {
         return toast_error("Not found.");
     };
     if !matches!(
@@ -482,8 +500,7 @@ async fn cancel(
     )
     .await?;
     if server.is_some() {
-        let srv = Srv::from_row(jobs(&state)?, s);
-        runners::spawn_cleanup(&srv, execution);
+        jobs(&state)?.spawn_cleanup_runner(id);
     }
     Ok(ok(json!({"message": "Runner cancelled."})).into_response())
 }

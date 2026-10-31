@@ -544,7 +544,7 @@ async fn create_oauth(
         _ => (
             "organization",
             "webhook_secret",
-            enc.encrypt_serialized(&token),
+            enc.encrypt_string(&token),
         ),
     };
     sqlx::query(&format!(
@@ -854,7 +854,7 @@ pub async fn update_github(
         if plain != current {
             values.push((
                 k,
-                ColumnValue::Text(plain.map(|p| enc.encrypt_serialized(&p))),
+                ColumnValue::Text(plain.map(|p| enc.encrypt_string(&p))),
             ));
         }
     }
@@ -1311,7 +1311,7 @@ async fn update_oauth(
     {
         values.push((
             "client_secret",
-            ColumnValue::Text(Some(enc.encrypt_serialized(&s))),
+            ColumnValue::Text(Some(enc.encrypt_string(&s))),
         ));
     }
     if let Some(w) = text(&m, "webhook_secret") {
@@ -1323,7 +1323,7 @@ async fn update_oauth(
         } else if secret(&state, &row, "webhook_secret").as_deref() != Some(w.as_str()) {
             values.push((
                 "webhook_secret",
-                ColumnValue::Text(Some(enc.encrypt_serialized(&w))),
+                ColumnValue::Text(Some(enc.encrypt_string(&w))),
             ));
         }
     }
@@ -1634,11 +1634,11 @@ pub async fn github_redirect(
             ("client_id", ColumnValue::Text(Some(client_id))),
             (
                 "client_secret",
-                ColumnValue::Text(Some(enc.encrypt_serialized(&client_secret))),
+                ColumnValue::Text(Some(enc.encrypt_string(&client_secret))),
             ),
             (
                 "webhook_secret",
-                ColumnValue::Text(Some(enc.encrypt_serialized(&webhook_secret))),
+                ColumnValue::Text(Some(enc.encrypt_string(&webhook_secret))),
             ),
             ("private_key_id", ColumnValue::Int(key_id)),
         ],
@@ -1849,8 +1849,8 @@ async fn oauth_redirect(
         &state.db,
         p.table(),
         id,
-        &enc.encrypt_serialized(access),
-        &enc.encrypt_serialized(refresh),
+        &enc.encrypt_string(access),
+        &enc.encrypt_string(refresh),
         chrono::Utc::now().timestamp() + expires_in,
     )
     .await;

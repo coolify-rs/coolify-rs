@@ -270,6 +270,9 @@ impl Jobs {
                 if let Err(e) = server_manager_tick(&jobs).await {
                     tracing::warn!(error = %e, "server manager tick failed");
                 }
+                // `ReconcileGithubRunnersJob`, every minute.
+                let runners = jobs.clone();
+                tokio::spawn(async move { runners.reconcile_github_runners().await });
             }
         });
     }

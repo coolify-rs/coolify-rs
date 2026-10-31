@@ -38,10 +38,14 @@ pub fn fake_origin() -> Option<String> {
         .and_then(|v| loopback_origin(&v))
 }
 
-/// `production`, or `{fake}/{provider}` under the test-only setting.
+/// `production`, or `{fake}/{provider}` under the test-only setting. A test run (the setting of the
+/// test database) never reaches a real provider: it gets a closed local port.
 pub fn hosted(provider: &str, production: &str) -> String {
     match fake_origin() {
         Some(origin) => format!("{origin}/{provider}"),
+        None if std::env::var("COOLIFY_RS_TEST_DATABASE_URL").is_ok() => {
+            format!("http://127.0.0.1:9/{provider}")
+        }
         None => production.to_owned(),
     }
 }

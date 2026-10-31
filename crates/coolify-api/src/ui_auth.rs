@@ -30,7 +30,7 @@ use crate::rules::{is_email, normalize_email_identity, throttle, too_many};
 use crate::session::{self, Flash, NO_TEAM, SessionUser};
 use crate::state::AppState;
 use crate::ui_notifications::{summarize, toast_error};
-use crate::ui_profile::{app_name, decrypted, passkey_settings, password_errors_for};
+use crate::ui_profile::{app_name, decrypted, passkey_settings, password_errors_with_leaks};
 use crate::ui_teams::toast_with_errors;
 
 /// `RootSetupWindow::MINUTES`.
@@ -264,7 +264,7 @@ async fn register(State(state): State<AppState>, meta: Meta, Json(body): Json<Va
     }
     let pass = str_of(&body, "password");
     let password_errors =
-        password_errors_for("password", pass, str_of(&body, "password_confirmation"));
+        password_errors_with_leaks("password", pass, str_of(&body, "password_confirmation")).await;
     if !password_errors.is_empty() {
         errors.insert("password".into(), json!(password_errors));
     }
@@ -442,7 +442,7 @@ async fn reset_password(
         return Ok(one_error("email", PASSWORD_TOKEN_INVALID));
     }
     let password_errors =
-        password_errors_for("password", pass, str_of(&body, "password_confirmation"));
+        password_errors_with_leaks("password", pass, str_of(&body, "password_confirmation")).await;
     if !password_errors.is_empty() {
         let mut errors = Map::new();
         errors.insert("password".into(), json!(password_errors));
@@ -513,7 +513,7 @@ async fn force_password_reset(
     }
     let pass = str_of(&body, "password");
     let password_errors =
-        password_errors_for("password", pass, str_of(&body, "password_confirmation"));
+        password_errors_with_leaks("password", pass, str_of(&body, "password_confirmation")).await;
     if !password_errors.is_empty() {
         fields.insert("password".into(), json!(password_errors));
     }
