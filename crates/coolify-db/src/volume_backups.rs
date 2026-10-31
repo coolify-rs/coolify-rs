@@ -145,6 +145,53 @@ pub async fn target_of(db: &Db, backup: &Record) -> DbResult<Option<BackupTarget
         .map(|row| BackupTarget { morph, row }))
 }
 
+/// `$backup->targetResource()?->name` and the path of `resourceUrl()`: a service's own link for its parts.
+pub async fn resource_link(
+    db: &Db,
+    morph: &str,
+    id: i64,
+) -> DbResult<(Option<String>, Option<String>)> {
+    let (table, segment, service) = match morph {
+        r"App\Models\ServiceApplication" => ("service_applications", "service", true),
+        r"App\Models\ServiceDatabase" => ("service_databases", "service", true),
+        r"App\Models\Application" => ("applications", "application", false),
+        r"App\Models\StandalonePostgresql" => ("standalone_postgresqls", "database", false),
+        r"App\Models\StandaloneRedis" => ("standalone_redis", "database", false),
+        r"App\Models\StandaloneMongodb" => ("standalone_mongodbs", "database", false),
+        r"App\Models\StandaloneMysql" => ("standalone_mysqls", "database", false),
+        r"App\Models\StandaloneMariadb" => ("standalone_mariadbs", "database", false),
+        r"App\Models\StandaloneKeydb" => ("standalone_keydbs", "database", false),
+        r"App\Models\StandaloneDragonfly" => ("standalone_dragonflies", "database", false),
+        r"App\Models\StandaloneClickhouse" => ("standalone_clickhouses", "database", false),
+        r"App\Models\StandaloneSqlite" => ("standalone_sqlites", "database", false),
+        _ => return Ok((None, None)),
+    };
+    let query = if service {
+        format!(
+            "SELECT x.name::text, p.uuid::text, e.uuid::text, s.uuid::text FROM {table} x
+             JOIN services s ON s.id = x.service_id JOIN environments e ON e.id = s.environment_id JOIN projects p ON p.id = e.project_id WHERE x.id = $1"
+        )
+    } else {
+        format!(
+            "SELECT x.name::text, p.uuid::text, e.uuid::text, x.uuid::text FROM {table} x
+             JOIN environments e ON e.id = x.environment_id JOIN projects p ON p.id = e.project_id WHERE x.id = $1"
+        )
+    };
+    let row: Option<(Option<String>, String, String, String)> = sqlx::query_as(&query)
+        .bind(id)
+        .fetch_optional(db.pool())
+        .await?;
+    Ok(match row {
+        Some((name, project, environment, uuid)) => (
+            name,
+            Some(format!(
+                "/project/{project}/environment/{environment}/{segment}/{uuid}"
+            )),
+        ),
+        None => (None, None),
+    })
+}
+
 /// `$backup->server()`: the server id and, for an application, its uuid (`workdir()`).
 pub async fn resource_server(db: &Db, morph: &str, id: i64) -> DbResult<Option<i64>> {
     let query = match morph {
@@ -445,6 +492,50 @@ pub enum ExecutionField {
     Finished,
 }
 
+/// `recordSuccess` (`None`) and `recordFailure` of `VolumeBackupRecoveryJob`, and the first update of
+/// `retryRecovery` (`Some((None, false))`, which keeps the last attempt).
+pub async fn set_recovery_state(
+    db: &Db,
+    id: i64,
+    outcome: Option<(Option<&str>, bool)>,
+    now: NaiveDateTime,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    match outcome {
+        Some((None, needs_attention)) => {
+            sqlx::query(
+                "UPDATE scheduled_volume_backup_executions SET recovery_needs_attention = $1, updated_at = $2 WHERE id = $3",
+            )
+            .bind(needs_attention)
+            .bind(now)
+            .bind(id)
+            .execute(db.pool())
+            .await?;
+        }
+        Some((Some(category), needs_attention)) => {
+            sqlx::query(
+                "UPDATE scheduled_volume_backup_executions SET recovery_last_attempt_at = $1, recovery_error = $2, recovery_needs_attention = $3, updated_at = $1 WHERE id = $4",
+            )
+            .bind(now)
+            .bind(category)
+            .bind(needs_attention)
+            .bind(id)
+            .execute(db.pool())
+            .await?;
+        }
+        None => {
+            sqlx::query(
+                "UPDATE scheduled_volume_backup_executions SET recovery_last_attempt_at = NULL, recovery_error = NULL, recovery_needs_attention = false, updated_at = $1 WHERE id = $2",
+            )
+            .bind(now)
+            .bind(id)
+            .execute(db.pool())
+            .await?;
+        }
+    }
+    Ok(())
+}
+
 pub async fn update_execution(
     db: &Db,
     id: i64,
@@ -617,6 +708,142 @@ pub async fn delete_exhausted(db: &Db, backup_id: i64) -> DbResult<()> {
     .bind(backup_id)
     .execute(db.pool())
     .await?;
+    Ok(())
+}
+
+/// `$target->scheduledBackups()->firstOrNew()` with `Create::submit`'s fill: `(uuid, created, changed fields)`.
+pub async fn set_frequency(
+    db: &Db,
+    morph: &str,
+    target_id: i64,
+    team_id: TeamId,
+    frequency: &str,
+    now: NaiveDateTime,
+) -> DbResult<(String, bool, Vec<&'static str>)> {
+    db.ensure_writable()?;
+    if let Some(row) = schedule_of(db, morph, target_id).await? {
+        let id = row.get("id").and_then(Value::as_i64).unwrap_or_default();
+        let uuid = row
+            .get("uuid")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let mut changed = Vec::new();
+        if row.get("frequency").and_then(Value::as_str) != Some(frequency) {
+            changed.push("frequency");
+        }
+        if row.get("enabled").and_then(Value::as_bool) != Some(true) {
+            changed.push("enabled");
+        }
+        if changed.is_empty() {
+            return Ok((uuid, false, changed));
+        }
+        sqlx::query(
+            "UPDATE scheduled_volume_backups SET frequency = $1, enabled = true, team_id = $2, updated_at = $3 WHERE id = $4",
+        )
+        .bind(frequency)
+        .bind(team_id)
+        .bind(now)
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+        return Ok((uuid, false, changed));
+    }
+    let uuid = new_public_id();
+    sqlx::query(
+        "INSERT INTO scheduled_volume_backups (uuid, team_id, backupable_type, backupable_id, frequency, enabled, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, true, $6, $6)",
+    )
+    .bind(&uuid)
+    .bind(team_id)
+    .bind(morph)
+    .bind(target_id)
+    .bind(frequency)
+    .bind(now)
+    .execute(db.pool())
+    .await?;
+    Ok((uuid, true, Vec::new()))
+}
+
+/// `toggleEnabled`.
+pub async fn set_enabled(db: &Db, id: i64, enabled: bool, now: NaiveDateTime) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query("UPDATE scheduled_volume_backups SET enabled = $1, updated_at = $2 WHERE id = $3")
+        .bind(enabled)
+        .bind(now)
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+    Ok(())
+}
+
+/// `$backup->executions()->paginate()`: the page and the total count, newest first.
+pub async fn executions_page(
+    db: &Db,
+    backup_id: i64,
+    skip: i64,
+    take: i64,
+) -> DbResult<(Vec<Record>, i64)> {
+    let total: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM scheduled_volume_backup_executions WHERE scheduled_volume_backup_id = $1",
+    )
+    .bind(backup_id)
+    .fetch_one(db.pool())
+    .await?;
+    let texts: Vec<String> = sqlx::query_scalar(
+        "SELECT row_to_json(e)::text FROM scheduled_volume_backup_executions e WHERE e.scheduled_volume_backup_id = $1 ORDER BY e.created_at DESC, e.id DESC LIMIT $2 OFFSET $3",
+    )
+    .bind(backup_id)
+    .bind(take)
+    .bind(skip)
+    .fetch_all(db.pool())
+    .await?;
+    Ok((decode(texts), total))
+}
+
+/// `s3Replicas.s3`: the copies of an execution with the storage's name.
+pub async fn replica_rows(db: &Db, execution_id: i64) -> DbResult<Vec<Record>> {
+    let texts: Vec<String> = sqlx::query_scalar(
+        "SELECT row_to_json(x)::text FROM (SELECT r.id, r.s3_uploaded, r.s3_storage_deleted, r.message, s.name AS s3_name FROM volume_backup_s3_replicas r LEFT JOIN s3_storages s ON s.id = r.s3_storage_id WHERE r.execution_id = $1 ORDER BY r.id) x",
+    )
+    .bind(execution_id)
+    .fetch_all(db.pool())
+    .await?;
+    Ok(decode(texts))
+}
+
+/// `cleanupFailed`.
+pub async fn delete_failed_executions(db: &Db, backup_id: i64) -> DbResult<u64> {
+    db.ensure_writable()?;
+    Ok(sqlx::query(
+        "DELETE FROM scheduled_volume_backup_executions WHERE scheduled_volume_backup_id = $1 AND status = 'failed' AND stop_recovery_pending = false AND s3_cleanup_pending = false AND (filename IS NULL OR local_storage_deleted = true)",
+    )
+    .bind(backup_id)
+    .execute(db.pool())
+    .await?
+    .rows_affected())
+}
+
+/// `cleanupDeleted`.
+pub async fn delete_local_deleted_executions(db: &Db, backup_id: i64) -> DbResult<u64> {
+    db.ensure_writable()?;
+    Ok(sqlx::query(
+        "DELETE FROM scheduled_volume_backup_executions e WHERE e.scheduled_volume_backup_id = $1 AND e.local_storage_deleted = true AND e.stop_recovery_pending = false AND e.s3_cleanup_pending = false
+         AND (e.s3_storage_deleted = true OR e.s3_uploaded IS NULL OR e.s3_uploaded = false)
+         AND NOT EXISTS (SELECT 1 FROM volume_backup_s3_replicas r WHERE r.execution_id = e.id AND r.s3_uploaded = true AND r.s3_storage_deleted = false)",
+    )
+    .bind(backup_id)
+    .execute(db.pool())
+    .await?
+    .rows_affected())
+}
+
+pub async fn delete_execution(db: &Db, id: i64) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query("DELETE FROM scheduled_volume_backup_executions WHERE id = $1")
+        .bind(id)
+        .execute(db.pool())
+        .await?;
     Ok(())
 }
 

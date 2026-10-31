@@ -228,10 +228,10 @@
       {#key router.path + router.search}<ResourceNew uuid={params.uuid} env={params['env']} />{/key}
     {:else if router.current.name === 'database' || router.current.name === 'database-section' || router.current.name === 'database-backup'}
       {#key router.path}<Database uuid={params.uuid} env={params['env']} db={params['db']} section={params['section'] ?? (params['backup'] ? 'backups' : 'general')} backup={params['backup']} backupSection={params['backupSection']} />{/key}
-    {:else if router.current.name === 'service' || router.current.name === 'service-section'}
-      {#key router.path}<Service uuid={params.uuid} env={params['env']} service={params['service']} section={params['section'] ?? 'general'} />{/key}
-    {:else if router.current.name === 'application' || router.current.name === 'application-section'}
-      {#key router.path}<Application uuid={params.uuid} env={params['env']} app={params['app']} section={params['section'] ?? 'general'} />{/key}
+    {:else if router.current.name === 'service' || router.current.name === 'service-section' || router.current.name === 'service-import-backup' || router.current.name === 'service-volume-backup' || router.current.name === 'service-database-backups' || router.current.name === 'service-database-import'}
+      {#key router.path}<Service uuid={params.uuid} env={params['env']} service={params['service']} section={params['section'] ?? (router.current.name === 'service-import-backup' ? 'import-backup' : 'general')} route={router.current.name} stack={params['stack']} backup={params['backup']} />{/key}
+    {:else if router.current.name === 'application' || router.current.name === 'application-section' || router.current.name === 'application-backup'}
+      {#key router.path}<Application uuid={params.uuid} env={params['env']} app={params['app']} section={params['section'] ?? (params['backup'] ? 'backups' : 'general')} backup={params['backup']} backupSection={params['backupSection']} />{/key}
     {:else if router.current.name === 'application-deployment'}
       {#key params['app']}<Application uuid={params.uuid} env={params['env']} app={params['app']} section="deployment" dep={params['dep']} />{/key}
     {:else if router.current.name === 'keys'}

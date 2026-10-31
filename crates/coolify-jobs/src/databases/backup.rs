@@ -193,6 +193,12 @@ impl Jobs {
         let morph = parts::str_of(backup, "database_type")?;
         let id = backup.get("database_id").and_then(Value::as_i64)?;
         let team = backup.get("team_id").and_then(Value::as_i64)?;
+        if morph == dbs::SERVICE_DATABASE_MORPH {
+            return dbs::service_database_by_id(&self.0.db, id)
+                .await
+                .ok()
+                .flatten();
+        }
         let kind = Kind::ALL.into_iter().find(|k| k.morph() == morph)?;
         let uuid: String = dbs::uuid_by_id(&self.0.db, kind, id).await.ok().flatten()?;
         dbs::find_in_team(&self.0.db, team, &uuid)
@@ -235,7 +241,7 @@ impl Jobs {
                 .map_err(|e| e.to_string())?;
             return Ok(());
         };
-        let database = self
+        let mut database = self
             .backup_database(&backup)
             .await
             .ok_or("Database not found?!")?;
@@ -288,6 +294,17 @@ impl Jobs {
         let mut to_backup = parts::str_of(&backup, "databases_to_backup")
             .filter(|s| !s.trim().is_empty())
             .map(str::to_owned);
+        let mut service_secrets = std::collections::HashMap::new();
+        if database.is_service() {
+            let target = server.target(self).await?;
+            let Some(found) = self
+                .service_database_environment(&mut database, &backup, &target, &mut service_secrets)
+                .await?
+            else {
+                return Ok(());
+            };
+            to_backup = found;
+        }
         if to_backup.is_none() {
             to_backup = match kind {
                 Kind::Postgresql => database.str("postgres_db").map(str::to_owned),
@@ -323,9 +340,17 @@ impl Jobs {
             .encrypter
             .as_ref()
             .ok_or("No application encryption key has been specified.")?;
-        let credentials = conn::credentials(db, enc, &database)
-            .await
-            .map_err(|e| e.to_string())?;
+        let credentials = if database.is_service() {
+            conn::Credentials {
+                secrets: service_secrets,
+                variables: Vec::new(),
+                locked: false,
+            }
+        } else {
+            conn::credentials(db, enc, &database)
+                .await
+                .map_err(|e| e.to_string())?
+        };
         let mut secrets: Vec<String> = kind
             .encrypted_columns()
             .iter()
@@ -339,11 +364,20 @@ impl Jobs {
                 secrets.push(t.secret);
             }
         }
-        let directory = format!(
-            "{}-{}",
-            slug(database.str("name").unwrap_or_default()),
-            database.uuid
-        );
+        // The container name is validated first in a service, so it is a safe folder name.
+        let directory = if database.is_service() {
+            format!(
+                "{}-{}",
+                slug(database.str("__service_name").unwrap_or_default()),
+                database.container()
+            )
+        } else {
+            format!(
+                "{}-{}",
+                slug(database.str("name").unwrap_or_default()),
+                database.uuid
+            )
+        };
         let backup_dir = format!(
             "/data/coolify/backups/databases/{}-{team_id}/{directory}",
             slug(&team_name)
@@ -628,7 +662,7 @@ impl Jobs {
         credentials: &conn::Credentials,
     ) -> Result<Option<String>, (String, Option<i32>)> {
         let d = run.database;
-        let container = quote(&d.uuid);
+        let container = quote(d.container());
         let escaped_location = quote(location);
         let mut commands = run.directory_commands();
         let bad = |e: String| (e, None);
@@ -668,7 +702,28 @@ impl Jobs {
                 }
             }
             Kind::Mongodb => {
-                let url = quote(&conn::internal_url(d, credentials));
+                // Service databases build the URL from the container's environment.
+                let url = if d.is_service() {
+                    let (user, password) = (
+                        credentials.secret("mongo_root_username"),
+                        credentials.secret("mongo_root_password"),
+                    );
+                    if user.is_empty() || password.is_empty() {
+                        return Err((
+                            "MongoDB credentials not found. Ensure MONGO_INITDB_ROOT_USERNAME and MONGO_INITDB_ROOT_PASSWORD environment variables are available in the container."
+                                .to_owned(),
+                            None,
+                        ));
+                    }
+                    quote(&format!(
+                        "mongodb://{}:{}@{}:27017",
+                        conn::rawurlencode(&user),
+                        conn::rawurlencode(&password),
+                        d.container()
+                    ))
+                } else {
+                    quote(&conn::internal_url(d, credentials))
+                };
                 let old_image = d.str("image").unwrap_or_default().starts_with("mongo:4");
                 if name == "all" {
                     if old_image {
@@ -1191,11 +1246,202 @@ impl Jobs {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .contains(&d.uuid);
-        reserved
+        if reserved
             || dbs::live_operation(&self.0.db, &d.uuid)
                 .await
                 .unwrap_or(false)
+        {
+            return true;
+        }
+        // A start of the whole service counts too.
+        match d.str("__service_uuid") {
+            Some(service) => coolify_db::services::has_running_start(&self.0.db, service)
+                .await
+                .unwrap_or(false),
+            None => false,
+        }
     }
+
+    /// The service branch of `DatabaseBackupJob::handle`: the user, passwords and database names come from the
+    /// container's environment. `Ok(None)` when the run ended here.
+    async fn service_database_environment(
+        &self,
+        d: &mut DatabaseRow,
+        backup: &Record,
+        target: &Target,
+        secrets: &mut std::collections::HashMap<&'static str, String>,
+    ) -> Result<Option<Option<String>>, String> {
+        let container = d.container().to_owned();
+        if !valid_container_name(&container) {
+            return Err("Invalid database container name.".to_owned());
+        }
+        let escaped = quote(&container);
+        let command = match d.kind {
+            Kind::Postgresql => {
+                format!("docker exec {escaped} env | grep -E '^(POSTGRES|PGUSER=)'")
+            }
+            Kind::Mysql => format!("docker exec {escaped} env | grep MYSQL_"),
+            Kind::Mariadb => format!("docker exec {escaped} env"),
+            Kind::Mongodb => format!("docker exec {escaped} env | grep MONGO_INITDB_"),
+            _ => {
+                tracing::warn!(
+                    skip_reason = "unsupported_database_type",
+                    "database backup job ended without a backup"
+                );
+                return Ok(None);
+            }
+        };
+        let output = self
+            .remote()
+            .run(
+                target,
+                &[command.as_str()],
+                RunOptions::op("database.backup"),
+            )
+            .await;
+        let output = match output {
+            Ok(o) => o.unwrap_or_default(),
+            // Mongo continues without the variables; the dump then reports them as missing.
+            Err(_) if d.kind == Kind::Mongodb => String::new(),
+            Err(e) => return Err(e.message),
+        };
+        let first = |name: &str| -> Option<String> {
+            output
+                .lines()
+                .find_map(|l| l.strip_prefix(name)?.strip_prefix('=').map(str::to_owned))
+        };
+        let configured = || -> Option<String> {
+            if parts::bool_of(backup, "dump_all") {
+                return Some("all".to_owned());
+            }
+            parts::str_of(backup, "databases_to_backup")
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_owned)
+        };
+        let names = match d.kind {
+            Kind::Postgresql => {
+                // `PostgresUser::fromEnvLines`
+                let user = ["POSTGRES_USER", "PGUSER", "POSTGRESQL_USERNAME"]
+                    .iter()
+                    .find_map(|k| first(k).filter(|v| !v.is_empty()))
+                    .unwrap_or_else(|| "postgres".to_owned());
+                d.raw.insert("postgres_user".into(), user.clone().into());
+                if let Some(p) = first("POSTGRES_PASSWORD") {
+                    secrets.insert("postgres_password", p);
+                }
+                Some(first("POSTGRES_DB").unwrap_or(user))
+            }
+            Kind::Mysql | Kind::Mariadb => {
+                let maria = d.kind == Kind::Mariadb;
+                let password = if maria {
+                    first("MARIADB_ROOT_PASSWORD").or_else(|| first("MYSQL_ROOT_PASSWORD"))
+                } else {
+                    first("MYSQL_ROOT_PASSWORD")
+                };
+                if let Some(p) = password {
+                    secrets.insert(
+                        if maria {
+                            "mariadb_root_password"
+                        } else {
+                            "mysql_root_password"
+                        },
+                        p,
+                    );
+                }
+                let database = if maria {
+                    first("MARIADB_DATABASE").or_else(|| first("MYSQL_DATABASE"))
+                } else {
+                    first("MYSQL_DATABASE")
+                };
+                match database.or_else(configured) {
+                    Some(n) => Some(n),
+                    None => {
+                        let env_names = if maria {
+                            "MARIADB_DATABASE or MYSQL_DATABASE"
+                        } else {
+                            "MYSQL_DATABASE"
+                        };
+                        self.record_undetermined_databases(backup, d, env_names)
+                            .await?;
+                        return Ok(None);
+                    }
+                }
+            }
+            _ => {
+                if let Some(p) = first("MONGO_INITDB_ROOT_PASSWORD") {
+                    secrets.insert("mongo_root_password", p);
+                }
+                if let Some(u) = first("MONGO_INITDB_ROOT_USERNAME") {
+                    secrets.insert("mongo_root_username", u);
+                }
+                Some("*".to_owned())
+            }
+        };
+        Ok(Some(names))
+    }
+
+    /// `recordUndeterminedDatabases`: shows the run in the execution list and notifies the team.
+    async fn record_undetermined_databases(
+        &self,
+        backup: &Record,
+        d: &DatabaseRow,
+        env_names: &str,
+    ) -> Result<(), String> {
+        use crate::notifications::{Notification, lookup, notify};
+        let message = format!(
+            "No database to back up: the container does not set {env_names}. Select \"All databases\" or enter the databases to back up in the backup settings."
+        );
+        let names = if parts::bool_of(backup, "dump_all") {
+            Some("all".to_owned())
+        } else {
+            parts::str_of(backup, "databases_to_backup").map(str::to_owned)
+        };
+        parts::create_execution(
+            &self.0.db,
+            parts::id_of(backup),
+            &new_public_id(),
+            names
+                .filter(|n| !n.trim().is_empty())
+                .map(|n| n.chars().take(250).collect::<String>())
+                .as_deref(),
+            None,
+            Some("failed"),
+            Some(&message),
+            now(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        let Some(team_id) = backup.get("team_id").and_then(Value::as_i64) else {
+            return Ok(());
+        };
+        let details = lookup::database_backup(
+            &self.0.db,
+            d.str("name").unwrap_or_default(),
+            &d.uuid,
+            d.int("environment_id"),
+            Some("unknown"),
+            parts::str_of(backup, "frequency").unwrap_or_default(),
+        )
+        .await;
+        notify(
+            &self.0.db,
+            self.0.encrypter.as_ref(),
+            team_id,
+            Notification::BackupFailed {
+                backup: details,
+                output: message,
+            },
+        )
+        .await;
+        Ok(())
+    }
+}
+
+/// `ValidationPatterns::isValidContainerName`.
+fn valid_container_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
 fn number(v: Option<&Value>) -> f64 {

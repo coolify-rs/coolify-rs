@@ -42,7 +42,7 @@ fn toast(kind: &str, message: &str) -> Response {
 }
 
 async fn find(state: &AppState, ctx: &AuthCtx, uuid: &str) -> Result<DatabaseRow, ApiError> {
-    dbs::find_in_team(&state.db, ctx.team_id, uuid)
+    dbs::find_with_service(&state.db, ctx.team_id, uuid)
         .await?
         .ok_or(NOT_FOUND)
 }

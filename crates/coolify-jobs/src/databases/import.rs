@@ -524,6 +524,14 @@ impl Jobs {
         if !d.str("status").unwrap_or_default().starts_with("running") {
             return fail("The database must be running before an import can start.");
         }
+        if d.str("destination_type")
+            .is_some_and(|t| t.contains("SwarmDocker"))
+        {
+            return Err(ImportError {
+                message: "Database imports are not supported for Swarm servers yet.".to_owned(),
+                status: 501,
+            });
+        }
         let sqlite_file = if d.kind == Kind::Sqlite {
             let files = sqlite_files(d);
             let chosen = source.sqlite_database.clone().or_else(|| {
@@ -604,7 +612,7 @@ impl Jobs {
             status: 400,
         })?;
         let operation = uuid4();
-        let container = d.uuid.clone();
+        let container = d.container().to_owned();
         let network = d
             .destination
             .as_ref()
@@ -797,11 +805,11 @@ impl Jobs {
             "status": "queued",
             "team_id": server.team_id,
             "operation": IMPORT_OPERATION,
-            "resource_kind": "standalone_database",
+            "resource_kind": if d.is_service() { "service_database" } else { "standalone_database" },
             "operation_uuid": operation,
             "cleanup": cleanup,
         });
-        let activity = dbs::insert_activity(&self.0.db, d.kind, d.id, &props, now())
+        let activity = dbs::insert_activity(&self.0.db, d.morph(), d.id, &props, now())
             .await
             .map_err(|e| ImportError {
                 message: e.to_string(),

@@ -5,6 +5,9 @@
   // main sidebar) and the section. General, Git Source, Deployment Logs and
   // Danger zone are ported; the other sections show the "not available in
   // coolify-rs yet" page in the same frame.
+  import ApplicationBackups from '../components/ApplicationBackups.svelte';
+  import VolumeBackups from '../components/shared/VolumeBackups.svelte';
+  import { volumeBackupsUi } from '../lib/volumeBackupsApi';
   import Empty from '../components/Empty.svelte';
   import ApplicationHeading from '../components/ApplicationHeading.svelte';
   import ApplicationGeneral from '../components/ApplicationGeneral.svelte';
@@ -25,7 +28,7 @@
   import Webhooks from '../components/shared/Webhooks.svelte';
   import Unported from './Unported.svelte';
   import { appUi, dbUi, uiApi, ApiError, type ApplicationRecord, type ApplicationState, type DeploymentDetail } from '../lib/api';
-  import { applicationNavContext, applicationSection } from '../lib/applicationMenu';
+  import { applicationBackupNavContext, applicationNavContext, applicationSection } from '../lib/applicationMenu';
   import { setProjectCrumbs } from '../lib/crumbs';
   import { strnatcmp } from '../lib/natsort';
   import { page } from '../lib/page.svelte';
@@ -38,7 +41,9 @@
     app,
     section,
     dep = null,
-  }: { uuid: string; env: string; app: string; section: string; dep?: string | null } = $props();
+    backup = null,
+    backupSection = null,
+  }: { uuid: string; env: string; app: string; section: string; dep?: string | null; backup?: string | null; backupSection?: string | null } = $props();
 
   let record = $state<ApplicationRecord | null>(null);
   let appState = $state<ApplicationState | null>(null);
@@ -49,6 +54,7 @@
   let switching = $state(false);
 
   const active = $derived(dep ? 'deployment' : applicationSection(section));
+  const currentBackupSection = $derived<'general' | 'executions' | 'danger'>(backupSection === 'executions' || backupSection === 'danger' ? backupSection : 'general');
   const base = $derived(`/project/${uuid}/environment/${env}/application/${app}`);
   const canUpdate = $derived(appState?.can_update ?? false);
   const timezone = $derived(appState?.server_timezone ?? 'UTC');
@@ -88,16 +94,30 @@
       }
     }
     record = r;
-    const suffix = dep ? 'Deployment' : active === 'deployment' ? 'Deployments' : 'Configuration';
+    const suffix = dep ? 'Deployment' : active === 'deployment' ? 'Deployments' : active === 'backups' ? 'Backups' : 'Configuration';
     document.title = `${limit10(r.name ?? '')} > ${suffix} | coolify-rs`;
     const bp = r.build_pack ?? '';
-    page.navContext = applicationNavContext(base, active, {
+    const menu = applicationNavContext(base, active, {
       canAccessTerminal: session.isAdmin,
       // Application::git_based()
       gitBased: !r.dockerfile && bp !== 'dockerimage',
       dockerImage: bp === 'dockerimage',
       compose: bp === 'dockercompose',
     });
+    page.navContext = backup ? applicationBackupNavContext(base, backup, currentBackupSection, menu) : menu;
+    if (backup) {
+      // `Route::redirect('/backups/{backup_uuid}/s3')` and `/retention`.
+      if (backupSection === 's3' || backupSection === 'retention') return router.go(`${base}/backups/${backup}`, true);
+      try {
+        await volumeBackupsUi.show('application', app, backup);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) {
+          missing = true;
+          return;
+        }
+        throw e;
+      }
+    }
     uiApi.project(uuid).then((d) => setProjectCrumbs(d, env));
     dbUi
       .resources(uuid, env)
@@ -183,6 +203,21 @@
             {:else if active === 'environment-variables'}
               <EnvironmentVariables kind="application" uuid={app} onconfigurationchanged={() => refresh().catch(() => {})} />
               <SecretManagerLinks kind="application" uuid={app} />
+            {:else if active === 'backups' && backup}
+              {#key `${backup}-${currentBackupSection}`}
+                <VolumeBackups
+                  kind="application"
+                  uuid={app}
+                  backupUuid={backup}
+                  section={currentBackupSection}
+                  actionsInHeader
+                  {canUpdate}
+                  onexecutions={() => router.go(`${base}/backups/${backup}/executions`)}
+                  ondeleted={() => router.go(`${base}/backups`)}
+                />
+              {/key}
+            {:else if active === 'backups'}
+              <ApplicationBackups uuid={app} {base} />
             {:else if active === 'persistent-storage'}
               <Storages kind="application" uuid={app} onchange={() => refresh().catch(() => {})} />
             {:else if active === 'logs'}

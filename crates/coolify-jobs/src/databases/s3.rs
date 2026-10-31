@@ -751,7 +751,17 @@ impl Jobs {
         if endpoint.is_empty() {
             result = Err("S3 endpoint is not allowed: The endpoint field is required.".to_owned());
         } else if let Some(error) =
-            endpoint_error(endpoint, "endpoint", &policy, "/settings/advanced").await
+            // `route('settings.advanced')` outside a request: `config('app.url')`.
+            endpoint_error(
+                endpoint,
+                "endpoint",
+                &policy,
+                &format!(
+                    "{}/settings/advanced",
+                    crate::notifications::Ctx::load(&self.0.db).await.app_url
+                ),
+            )
+            .await
         {
             result = Err(format!("S3 endpoint is not allowed: {error}"));
         } else if !valid_bucket_name(bucket) {

@@ -1,8 +1,7 @@
 <script lang="ts">
   // Port of upstream livewire/project/service/storage.blade.php and
   // livewire/project/shared/storages/all.blade.php (Project\Service\Storage, Project\Shared\Storages\All).
-  // Volume backup modals belong to the backup pages and are not ported; external Compose volumes
-  // and the stale-entry actions of Compose volumes are not ported either.
+  // External Compose volumes and the stale-entry actions of Compose volumes are not ported.
   import Reicon from '../Reicon.svelte';
   import Modal from '../Modal.svelte';
   import Callout from '../Callout.svelte';
@@ -15,6 +14,9 @@
   import ConfirmModal from '../ConfirmModal.svelte';
   import SettingsSection from '../SettingsSection.svelte';
   import FileStorage from './FileStorage.svelte';
+  import BackupTargetForm from '../BackupTargetForm.svelte';
+  import { link, router } from '../../lib/router.svelte';
+  import { volumeBackupsUi, type BackupOwner, type BackupTargetOption } from '../../lib/volumeBackupsApi';
   import { ApiError, request } from '../../lib/api';
   import { resPath, type ResourceKind } from '../../lib/sharedApi';
   import { notify } from '../../lib/toast.svelte';
@@ -39,7 +41,16 @@
   let modal = $state<'volume' | 'file' | 'host-file' | 'directory' | null>(null);
   let error = $state<ApiError | null>(null);
   let deleting = $state<Volume | null>(null);
-  let backupModal = $state(false);
+  let backupModal = $state<number | null>(null);
+  let backupTargets = $state<BackupTargetOption[]>([]);
+  const backupOwner = $derived<BackupOwner>(kind === 'application' ? 'application' : 'service');
+  const backupOwnerUuid = $derived<string>(kind === 'application' ? uuid : (data?.service_uuid ?? ''));
+
+  /** The `x-modal-input` of the Backup button: `Application/Backup/Create` or `Service/VolumeBackup/Create`. */
+  async function openBackup(id: number) {
+    backupTargets = (await volumeBackupsUi.index(backupOwner, backupOwnerUuid)).targets;
+    backupModal = id;
+  }
 
   let name = $state('');
   let mountPath = $state('');
@@ -140,6 +151,19 @@
   }
 </script>
 
+{#snippet backupCell(id: number)}
+  {@const meta = data?.volume_backup_meta?.[id]}
+  {#if meta?.enabled}
+    {#if meta.url}
+      <a use:link href={meta.url} class="table-badge underline-offset-2 hover:underline {meta.s3 ? 'table-badge-success' : ''}" title="Volume backup is enabled" aria-label={meta.s3 ? 'Backups are saved to S3' : 'Backups are stored locally only'}>{meta.s3 ? 'S3' : 'Local'}</a>
+    {:else}
+      <span class="table-badge {meta.s3 ? 'table-badge-success' : ''}" title="Volume backup is enabled" aria-label={meta.s3 ? 'Backups are saved to S3' : 'Backups are stored locally only'}>{meta.s3 ? 'S3' : 'Local'}</span>
+    {/if}
+  {:else}
+    <span class="data-table-cell-dash">-</span>
+  {/if}
+{/snippet}
+
 {#snippet tabs()}
   {#if hasAny}
     <div class="inline-flex items-center gap-0.5 rounded-lg bg-neutral-100 p-1 dark:bg-white/[0.04]">
@@ -204,12 +228,12 @@
               {/if}
               <div class="volumes-col-backup flex items-center justify-center gap-1.5">
                 <span class="volumes-mobile-label volumes-field-label">Backup</span>
-                <span class="data-table-cell-dash">-</span>
+                {@render backupCell(v.id)}
               </div>
               {#if data.show_backup_action}
                 <div class="volumes-col-actions volumes-cell-actions flex flex-nowrap items-center justify-end gap-1.5">
                   {#if canUpdate}
-                    <button type="button" class="button !px-2.5 !text-xs" onclick={() => (backupModal = true)}>Backup</button>
+                    <button type="button" class="button !px-2.5 !text-xs" onclick={() => openBackup(v.id)}>Backup</button>
                   {:else}
                     <span class="text-neutral-400 dark:text-fg-faint">—</span>
                   {/if}
@@ -251,12 +275,12 @@
               {/if}
               <div class="volumes-col-backup flex items-center justify-center gap-1.5">
                 <span class="volumes-mobile-label volumes-field-label">Backup</span>
-                <span class="data-table-cell-dash">-</span>
+                {@render backupCell(v.id)}
               </div>
               <div class="volumes-col-actions volumes-cell-actions flex flex-nowrap items-center justify-end gap-1.5">
                 <button type="submit" class="button !px-2.5 !text-xs">Update</button>
                 {#if !v.is_shared}
-                  <button type="button" class="button !px-2.5 !text-xs" onclick={() => (backupModal = true)}>Backup</button>
+                  <button type="button" class="button !px-2.5 !text-xs" onclick={() => openBackup(v.id)}>Backup</button>
                   <button type="button" class="button button-error" onclick={() => (deleting = v)}>Delete</button>
                 {/if}
               </div>
@@ -410,9 +434,19 @@
     </Modal>
   {/if}
 
-  {#if backupModal}
-    <Modal title="Configure Volume Backup" onclose={() => (backupModal = false)}>
-      <Empty size="sm" title="Volume backups are not available in coolify-rs yet" iconName="database" />
+  {#if backupModal !== null}
+    <Modal title="Configure Volume Backup" onclose={() => (backupModal = null)}>
+      <BackupTargetForm
+        kind={backupOwner}
+        uuid={backupOwnerUuid}
+        targets={backupTargets}
+        selectedTargetKey="volume:{backupModal}"
+        oncreated={(b) => {
+          backupModal = null;
+          load();
+          router.go(`${data?.backup_base}/${b}`);
+        }}
+      />
     </Modal>
   {/if}
 

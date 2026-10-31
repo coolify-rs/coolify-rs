@@ -67,7 +67,7 @@ fn backup_available(kind: Kind) -> bool {
 }
 
 async fn find(state: &AppState, ctx: &AuthCtx, uuid: &str) -> Result<DatabaseRow, ApiError> {
-    dbs::find_in_team(&state.db, ctx.team_id, uuid)
+    dbs::find_with_service(&state.db, ctx.team_id, uuid)
         .await?
         .ok_or(NOT_FOUND)
 }
@@ -78,7 +78,7 @@ async fn find_backup(
     d: &DatabaseRow,
     backup: &str,
 ) -> Result<Record, ApiError> {
-    parts::backup_of(&state.db, ctx.team_id, d.kind.morph(), d.id, backup)
+    parts::backup_of(&state.db, ctx.team_id, d.morph(), d.id, backup)
         .await?
         .ok_or(ApiError::Message(StatusCode::NOT_FOUND, "Not found."))
 }
@@ -111,7 +111,7 @@ async fn index(
     if !backup_available(d.kind) {
         return Ok(ok(json!({"unavailable": true})).into_response());
     }
-    let rows = pages::scheduled_backups(&state.db, d.kind.morph(), d.id).await?;
+    let rows = pages::scheduled_backups(&state.db, d.morph(), d.id).await?;
     let mut schedules = Vec::with_capacity(rows.len());
     for row in &rows {
         let latest = parts::latest_execution(&state.db, parts::id_of(row)).await?;
@@ -186,7 +186,7 @@ async fn create(
         &state.db,
         &NewBackup {
             team_id: d.team_id,
-            morph: d.kind.morph(),
+            morph: d.morph(),
             database_id: d.id,
             fields,
             numeric_fields: vec![],
@@ -824,10 +824,14 @@ async fn download_inner(
         .get("database_id")
         .and_then(Value::as_i64)
         .unwrap_or(-1);
-    let Some(kind) = Kind::ALL.into_iter().find(|k| k.morph() == morph) else {
-        return Ok(message(StatusCode::NOT_FOUND, "Team not found."));
+    let database = if morph == dbs::SERVICE_DATABASE_MORPH {
+        dbs::service_database_by_id(&state.db, database_id).await?
+    } else {
+        let Some(kind) = Kind::ALL.into_iter().find(|k| k.morph() == morph) else {
+            return Ok(message(StatusCode::NOT_FOUND, "Team not found."));
+        };
+        dbs::find_of_kind(&state.db, kind, database_id).await?
     };
-    let database = dbs::find_of_kind(&state.db, kind, database_id).await?;
     let team_id = database.as_ref().map(|d| d.team_id);
     if ctx.team_id != 0 {
         let Some(team) = team_id else {

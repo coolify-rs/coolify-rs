@@ -529,7 +529,7 @@ impl Jobs {
             "team_id": server.team_id,
             "operation": "database-start",
         });
-        dbs::insert_activity(&self.0.db, d.kind, d.id, &props, now())
+        dbs::insert_activity(&self.0.db, d.morph(), d.id, &props, now())
             .await
             .map_err(|e| e.to_string())
     }

@@ -13,6 +13,8 @@
   import Reicon from '../components/Reicon.svelte';
   import ServiceHeading from '../components/ServiceHeading.svelte';
   import ServiceResourceCard from '../components/ServiceResourceCard.svelte';
+  import ServiceBackups from '../components/ServiceBackups.svelte';
+  import ServiceImportBackup from '../components/ServiceImportBackup.svelte';
   import ServiceSharedPlaceholder from '../components/ServiceSharedPlaceholder.svelte';
   import ServiceStackForm from '../components/ServiceStackForm.svelte';
   import ServiceStorage from '../components/ServiceStorage.svelte';
@@ -26,11 +28,44 @@
   import { strnatcmp } from '../lib/natsort';
   import { page } from '../lib/page.svelte';
   import { router } from '../lib/router.svelte';
+  import { volumeBackupsUi } from '../lib/volumeBackupsApi';
 
-  let { uuid, env, service, section }: { uuid: string; env: string; service: string; section: string } = $props();
+  let {
+    uuid,
+    env,
+    service,
+    section,
+    route = 'service',
+    stack = null,
+    backup = null,
+  }: { uuid: string; env: string; service: string; section: string; route?: string; stack?: string | null; backup?: string | null } = $props();
 
   const base = $derived(`/project/${uuid}/environment/${env}/service/${service}`);
   const isSection = $derived(section === 'general' || SERVICE_SECTIONS.includes(section));
+
+  /**
+   * `VolumeBackup/Show`, `DatabaseBackups` and the `{stack}/import` route never render: they check the
+   * record and redirect. Answers whether this page redirected.
+   */
+  async function redirected(): Promise<boolean> {
+    if (route === 'service-database-import') {
+      router.go(`${base}/import-backup/${stack}`, true);
+      return true;
+    }
+    if (route !== 'service-volume-backup' && route !== 'service-database-backups') return false;
+    const r = await volumeBackupsUi.index('service', service);
+    if (route === 'service-volume-backup') {
+      if (r.backups.some((b) => b.uuid === backup)) router.go(`${base}/storage-backups`, true);
+      else missing = true;
+      return true;
+    }
+    const database = r.databases.find((d) => d.uuid === stack);
+    if (!database) router.go(base, true);
+    else if (!database.backup_available && !database.is_migrated) router.go(base, true);
+    else if (!backup || r.database_backups.some((b) => b.uuid === backup && b.database_uuid === stack)) router.go(`${base}/storage-backups`, true);
+    else missing = true;
+    return true;
+  }
 
   let data = $state<ServicePage | null>(null);
   let storages = $state<ServiceStoragePart[] | null>(null);
@@ -66,6 +101,7 @@
       router.go(base);
       return;
     }
+    if (await redirected()) return;
     let d: ServicePage;
     try {
       d = await servicesApi.page(service);
@@ -77,7 +113,8 @@
       throw e;
     }
     data = d;
-    document.title = `${d.service.name.slice(0, 10)} > Configuration | coolify-rs`;
+    const titleSuffix = section === 'storage-backups' ? 'Backups' : section === 'import-backup' ? 'Import Backup' : 'Configuration';
+    document.title = `${d.service.name.slice(0, 10)} > ${titleSuffix} | coolify-rs`;
     page.navContext = serviceNavContext(base, section, {
       isDeployable: d.is_deployable,
       canAccessTerminal: d.can_access_terminal,
@@ -163,6 +200,10 @@
                 </div>
               </SettingsSection>
             </div>
+          {:else if section === 'storage-backups'}
+            <ServiceBackups {service} {base} />
+          {:else if section === 'import-backup'}
+            <ServiceImportBackup {service} {stack} {base} canUpdate={data.can_update} />
           {:else if section === 'domains'}
             <ServiceDomains serviceUuid={service} />
             <div class="mt-6"><ServiceSharedPlaceholder section="Project/Shared/Maintenance" /></div>

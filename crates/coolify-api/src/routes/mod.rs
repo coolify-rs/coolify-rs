@@ -20,6 +20,7 @@ pub mod private_keys;
 pub mod projects;
 pub mod s3_storages;
 pub mod servers;
+pub mod service_imports;
 pub mod services;
 pub mod shared_envs;
 pub mod storage_backups;
@@ -1268,6 +1269,24 @@ pub const ROUTES: &[RouteSpec] = &[
         uri: "api/v1/services/{uuid}/databases/{database_uuid}",
         group: Group::Main,
         abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/databases/{database_uuid}/imports/uploads",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/databases/{database_uuid}/imports",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/databases/{database_uuid}/imports/{activity_id}",
+        group: Group::Main,
+        abilities: R,
     },
     RouteSpec {
         method: "GET",
@@ -2594,6 +2613,23 @@ pub fn router(state: AppState) -> Router {
             on_post(services::application_stop),
         ),
         (
+            "POST",
+            "api/v1/services/{uuid}/databases/{database_uuid}/imports/uploads",
+            on_post(service_imports::upload_import).route_layer(
+                axum::extract::DefaultBodyLimit::max(11 * 1024 * 1024 * 1024),
+            ),
+        ),
+        (
+            "POST",
+            "api/v1/services/{uuid}/databases/{database_uuid}/imports",
+            on_post(service_imports::create_import),
+        ),
+        (
+            "GET",
+            "api/v1/services/{uuid}/databases/{database_uuid}/imports/{activity_id}",
+            on_get(service_imports::show_import),
+        ),
+        (
             "GET",
             "api/v1/services/{uuid}/databases",
             on_get(services::databases),
@@ -3102,6 +3138,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::ui_storages::routes(state.clone()))
         .merge(crate::ui_database_general::routes(state.clone()))
         .merge(crate::ui_database_backups::routes(state.clone()))
+        .merge(crate::ui_volume_backups::routes(state.clone()))
         .merge(crate::ui_database_import::routes(state.clone()))
         .merge(crate::ui_shared_variables::routes(state.clone()))
         .merge(crate::ui_shared::routes(state.clone()))

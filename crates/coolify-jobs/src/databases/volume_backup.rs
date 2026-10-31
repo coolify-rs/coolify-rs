@@ -1,6 +1,6 @@
-//! `VolumeBackupJob`, `DeleteScheduledVolumeBackup` and the recovery steps of
-//! `VolumeBackupRecoveryJob`. The team notifications and the retried recovery job are not ported:
-//! recovery runs once in the job and its failure stays in the execution's message.
+//! `VolumeBackupJob`, `DeleteScheduledVolumeBackup` and `VolumeBackupRecoveryJob`. The job's own
+//! recovery runs once; `retry_volume_recovery` is `retryRecovery`. Starting recovery and missing
+//! backup checks from the scheduler is not ported.
 
 use chrono::{Duration, Utc};
 use coolify_db::database_parts as parts;
@@ -15,6 +15,7 @@ use super::backup::compressor_command;
 use super::common::{helper_image, now, slug};
 use super::s3::{S3Target, minio_resolve_options};
 use crate::Jobs;
+use crate::notifications::{Notification, VolumeBackup, notify};
 use crate::server::ServerInfo;
 
 const OP: &str = "volume.backup";
@@ -285,7 +286,7 @@ impl Jobs {
             )
             .await;
         let outcome = match result {
-            Ok(()) => Ok(()),
+            Ok(warning) => Ok(warning),
             Err(e) => {
                 let message = if stream {
                     format!(
@@ -301,7 +302,173 @@ impl Jobs {
             }
         };
         let _ = vb::update_execution(db, execution, &[F::Finished], now()).await;
-        outcome
+        // `$team->notify(new BackupSuccess(...))` and `failed()`.
+        let details = self.volume_backup_details(&backup, &target).await;
+        let (notification, result) = match outcome {
+            Ok(warning) => (
+                Notification::VolumeBackupSuccess {
+                    backup: details,
+                    warning,
+                },
+                Ok(()),
+            ),
+            Err(output) => (
+                Notification::VolumeBackupFailed {
+                    backup: details,
+                    output: output.clone(),
+                },
+                Err(output),
+            ),
+        };
+        notify(db, self.0.encrypter.as_ref(), team_id, notification).await;
+        result
+    }
+
+    /// The fields the `VolumeBackup` notifications read from the schedule.
+    async fn volume_backup_details(&self, backup: &Record, target: &BackupTarget) -> VolumeBackup {
+        let db = &self.0.db;
+        let (kind, name) = if target.morph == FILE_MORPH {
+            ("Directory", str_of(&target.row, "fs_path"))
+        } else {
+            ("Volume", str_of(&target.row, "name"))
+        };
+        let (resource_name, url) = vb::resource_link(
+            db,
+            str_of(&target.row, "resource_type"),
+            target
+                .row
+                .get("resource_id")
+                .and_then(Value::as_i64)
+                .unwrap_or(-1),
+        )
+        .await
+        .unwrap_or_default();
+        let base = crate::notifications::Ctx::load(db).await.base_url;
+        VolumeBackup {
+            resource_name,
+            target: format!("{kind} {name}"),
+            frequency: str_of(backup, "frequency").to_owned(),
+            url: url.map(|path| format!("{}{path}", base.trim_end_matches('/'))),
+        }
+    }
+
+    /// `VolumeBackups::retryRecovery`, then `VolumeBackupRecoveryJob::recoverWithBounds`: one attempt
+    /// whose outcome is recorded. An unreachable server waits; any other failure needs attention
+    /// and notifies the team.
+    pub async fn retry_volume_recovery(&self, execution_id: i64) -> Result<(), String> {
+        let db = &self.0.db;
+        let text = |e: coolify_db::DbError| e.to_string();
+        let (execution, backup) = vb::execution_by_id(db, execution_id)
+            .await
+            .map_err(text)?
+            .ok_or("Backup execution not found.")?;
+        let flag = |k: &str| execution.get(k).and_then(Value::as_bool) == Some(true);
+        let (stop_pending, cleanup_pending) =
+            (flag("stop_recovery_pending"), flag("s3_cleanup_pending"));
+        if !stop_pending && !cleanup_pending {
+            return Ok(());
+        }
+        let target = vb::target_of(db, &backup).await.map_err(text)?;
+        let mut failure: Option<&'static str> = None;
+        if stop_pending {
+            let server = match &target {
+                Some(t) => vb::resource_server(
+                    db,
+                    str_of(&t.row, "resource_type"),
+                    t.row
+                        .get("resource_id")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(-1),
+                )
+                .await
+                .map_err(text)?,
+                None => None,
+            };
+            let server = match server {
+                Some(id) => servers::find_by_id(db, id)
+                    .await
+                    .map_err(text)?
+                    .map(|r| ServerInfo::from_row(&r)),
+                None => None,
+            };
+            match server {
+                Some(server) if server.is_functional() => match server.target(self).await {
+                    Ok(t) => {
+                        let run = Run {
+                            execution: execution_id,
+                            target: t,
+                            server,
+                            timeout: std::time::Duration::from_secs(300),
+                            secrets: Vec::new(),
+                        };
+                        if self
+                            .recover_volume_containers(&run, str_of(&execution, "uuid"))
+                            .await
+                            .is_err()
+                        {
+                            failure = Some("remote_command");
+                        }
+                    }
+                    Err(_) => failure = Some("server_unreachable"),
+                },
+                _ => failure = Some("server_unreachable"),
+            }
+        }
+        if cleanup_pending
+            && let Err(e) = self
+                .cleanup_volume_upload(execution_id, str_of(&execution, "filename"))
+                .await
+            && failure.is_none()
+        {
+            failure = Some(if e.contains("NoSuchBucket") {
+                "s3_bucket"
+            } else if [
+                "InvalidAccessKeyId",
+                "SignatureDoesNotMatch",
+                "AccessDenied",
+            ]
+            .iter()
+            .any(|c| e.contains(c))
+            {
+                "s3_auth"
+            } else {
+                "unknown"
+            });
+        }
+        let Some(category) = failure else {
+            return vb::set_recovery_state(db, execution_id, None, now())
+                .await
+                .map_err(text);
+        };
+        let needs_attention = category != "server_unreachable";
+        // `$execution` was read after `retryRecovery` cleared the flag, so a failure enters it again.
+        vb::set_recovery_state(
+            db,
+            execution_id,
+            Some((Some(category), needs_attention)),
+            now(),
+        )
+        .await
+        .map_err(text)?;
+        if needs_attention && let Some(team_id) = backup.get("team_id").and_then(Value::as_i64) {
+            let details = match &target {
+                Some(t) => Some(self.volume_backup_details(&backup, t).await),
+                None => None,
+            };
+            notify(
+                db,
+                self.0.encrypter.as_ref(),
+                team_id,
+                Notification::VolumeBackupRecoveryFailed {
+                    backup: details,
+                    execution_uuid: str_of(&execution, "uuid").to_owned(),
+                    recovery_error: Some(category.to_owned()),
+                    containers_stopped: stop_pending,
+                },
+            )
+            .await;
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -315,7 +482,7 @@ impl Jobs {
         location: &str,
         directory: &str,
         stream: bool,
-    ) -> Result<(), String> {
+    ) -> Result<Option<String>, String> {
         let db = &self.0.db;
         let text = |e: coolify_db::DbError| e.to_string();
         let execution = run.execution;
@@ -486,7 +653,7 @@ impl Jobs {
             execution,
             &[
                 F::Status("success"),
-                F::Message(warning),
+                F::Message(warning.clone()),
                 F::Size(size),
                 F::Filename(Some(location.to_owned())),
                 F::CleanupPending(cleanup_pending),
@@ -502,7 +669,7 @@ impl Jobs {
         {
             tracing::warn!(backup = backup_id_of(backup), error = %run.redact(&e), "Volume backup retention cleanup failed");
         }
-        Ok(())
+        Ok(warning)
     }
 
     /// `uploadToDestinations` and `uploadToS3`.
@@ -876,6 +1043,8 @@ impl Jobs {
         &self,
         backup: &Record,
         server: Option<&ServerInfo>,
+        delete_local: bool,
+        delete_s3: bool,
     ) -> Result<(), String> {
         let db = &self.0.db;
         let text = |e: coolify_db::DbError| e.to_string();
@@ -890,7 +1059,7 @@ impl Jobs {
             .map(|e| str_of(e, "filename").to_owned())
             .filter(|f| !f.is_empty())
             .collect();
-        if !files.is_empty() {
+        if delete_local && !files.is_empty() {
             let Some(server) = server else {
                 return Err(
                     "The server is unavailable, so local backup archives cannot be deleted."
@@ -899,12 +1068,23 @@ impl Jobs {
             };
             self.delete_local_backups(&files, server).await;
         }
+        if delete_s3 {
+            for e in &rows {
+                self.delete_volume_s3_copies(parts::id_of(e), str_of(e, "filename"))
+                    .await?;
+            }
+        }
+        vb::delete_schedule(db, id).await.map_err(text)
+    }
+
+    /// `ScheduledVolumeBackupExecution::deleteS3Copies`.
+    pub async fn delete_volume_s3_copies(&self, execution: i64, file: &str) -> Result<(), String> {
+        let db = &self.0.db;
+        let text = |e: coolify_db::DbError| e.to_string();
         let enc = self.0.encrypter.as_ref();
-        for e in &rows {
-            let eid = parts::id_of(e);
-            let file = str_of(e, "filename");
+        let result: Result<(), String> = async {
             for (replica, storage, uploaded, deleted) in
-                vb::replicas_of(db, eid).await.map_err(text)?
+                vb::replicas_of(db, execution).await.map_err(text)?
             {
                 if uploaded != Some(true) || deleted {
                     continue;
@@ -924,9 +1104,13 @@ impl Jobs {
                     .await
                     .map_err(text)?;
             }
-            vb::refresh_summary(db, eid, now()).await.map_err(text)?;
+            Ok(())
         }
-        vb::delete_schedule(db, id).await.map_err(text)
+        .await;
+        vb::refresh_summary(db, execution, now())
+            .await
+            .map_err(text)?;
+        result
     }
 }
 
