@@ -204,6 +204,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - coolify-rs cannot bootstrap a new installation: it requires a database created by upstream Coolify at the baseline
   (`main` @ b5823c7, 473 migrations); it runs no upstream DDL. A 4.5.0 database is served read-only until upstream
   is upgraded.
+  New installations are planned as Milestone 7 of IMPLEMENTATION_ROADMAP.md.
 
 ## Keys, notifications, tags, shared variables and S3 pages
 

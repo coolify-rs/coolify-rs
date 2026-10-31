@@ -70,8 +70,27 @@ checks, rolling update, cancellation, recovery after restart. Each build pack is
 ## Milestone 6+
 
 Proxy/labels/TLS, environment variables (confirm storage format at runtime first), standalone databases, backups,
-scheduler/jobs, notifications (with SSRF protections), services/templates, webhooks, terminal/file browser,
-install/upgrade. Frontend project per ADR 0003 starts once the API covers the main workflows.
+scheduler/jobs, notifications (with SSRF protections), services/templates, webhooks, terminal/file browser.
+Frontend project per ADR 0003 starts once the API covers the main workflows.
+
+## Milestone 7: new installation and upgrades
+
+coolify-rs installs on a clean server without upstream Coolify. Starts once the current parity work is merged, and
+finishes before the final differential and screenshot pass.
+
+1. **Schema and first-run data**: `coolify-rs` creates the baseline schema (`compat/baseline/`), fills `migrations`
+   with the 473 upstream rows, and adds what upstream's seeders create (instance settings, the localhost server and
+   its key, default team rows). It does this only on an empty database, and never on one that already has tables.
+2. **`install.sh` and a production Compose file**: the same host preparation as upstream's `scripts/install.sh`:
+   the `/data/coolify` folders, `APP_KEY` and database credentials generated once, the localhost SSH key, then
+   containers started with Docker Compose.
+3. **First user**: the first registered user becomes the owner, within upstream's 10-minute setup window.
+4. **Published image**: users do not build from source. The health check calls the server instead of `--version`.
+5. **Upgrades**: `upgrade.sh`, `UpdateCoolifyJob` and schema changes for later versions, with a backup before each.
+
+Done when a clean install of upstream and of coolify-rs on two fresh VMs produce the same schema, seed rows, folder
+tree and first-run screens (secrets compared by shape, not value), and a server installed by coolify-rs deploys an
+application. A database created by coolify-rs must also be one upstream can adopt at the same version.
 
 ## Engine capabilities by milestone
 
