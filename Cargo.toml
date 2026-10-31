@@ -20,12 +20,14 @@ coolify-remote = { path = "crates/coolify-remote" }
 coolify-jobs = { path = "crates/coolify-jobs" }
 
 anyhow = "1"
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4"
 hmac = "0.12"
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
+p521 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
 aes = "0.8"
 cbc = { version = "0.1", features = ["std"] }
 rand = "0.8"

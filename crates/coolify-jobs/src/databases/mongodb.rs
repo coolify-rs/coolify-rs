@@ -6,8 +6,8 @@ use serde_json::Value;
 
 use super::StartContext;
 use super::common::{
-    CONFIGURATION_DIR, b64, cpuset, database_labels, finish_commands, healthcheck, limits,
-    networks, php_filled, ports, volume_entries,
+    CONFIGURATION_DIR, b64, ca_mount, cpuset, database_labels, finish_commands, healthcheck,
+    limits, networks, php_filled, ports, volume_entries,
 };
 use super::env::{add_coolify_variables, has_key};
 
@@ -17,19 +17,35 @@ fn json_string(v: &str) -> String {
 }
 
 /// `health_check_shell_command`: the shell's ping, each word `escapeshellarg`ed.
-fn health_shell(shell: &str, uuid: &str) -> String {
-    [
-        shell,
+fn health_shell(legacy: bool, uuid: &str, ssl: bool, ssl_mode: Option<&str>) -> String {
+    let mut words: Vec<&str> = vec![
+        if legacy { "mongo" } else { "mongosh" },
         "--quiet",
         "--host",
         uuid,
+    ];
+    if ssl {
+        words.extend([
+            if legacy { "--ssl" } else { "--tls" },
+            if legacy { "--sslCAFile" } else { "--tlsCAFile" },
+            "/etc/mongo/certs/ca.pem",
+        ]);
+        if ssl_mode == Some("verify-full") {
+            words.extend([
+                if legacy {
+                    "--sslPEMKeyFile"
+                } else {
+                    "--tlsCertificateKeyFile"
+                },
+                "/etc/mongo/certs/server.pem",
+            ]);
+        }
+    }
+    words.extend([
         "--eval",
         "quit(db.adminCommand({ ping: 1 }).ok === 1 ? 0 : 1)",
-    ]
-    .iter()
-    .map(|w| quote(w))
-    .collect::<Vec<_>>()
-    .join(" ")
+    ]);
+    words.iter().map(|w| quote(w)).collect::<Vec<_>>().join(" ")
 }
 
 pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
@@ -42,10 +58,11 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         "echo 'Creating directories.'".into(),
         format!("mkdir -p {dir}"),
         "echo 'Directories created successfully.'".into(),
-        // enable_ssl is false (SSL is not ported; the caller refuses it).
-        format!("rm -rf {dir}/ssl"),
     ];
-    let (volume_list, volume_names) = volume_entries(&ctx.volumes);
+    commands.extend(ctx.ssl_commands.iter().cloned());
+    commands.extend(ctx.ensure_commands.iter().cloned());
+    let (mut volume_list, volume_names) = volume_entries(&ctx.volumes);
+    volume_list.extend(ctx.file_mounts.iter().map(|m| PhpValue::from(m.as_str())));
 
     // generate_environment_variables
     let mut user = s("mongo_initdb_root_username");
@@ -95,8 +112,8 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
 
     let test = format!(
         "if command -v mongosh >/dev/null 2>&1; then {}; else {}; fi",
-        health_shell("mongosh", name),
-        health_shell("mongo", name)
+        health_shell(false, name, d.bool("enable_ssl"), d.str("ssl_mode")),
+        health_shell(true, name, d.bool("enable_ssl"), d.str("ssl_mode"))
     );
     let mut service = PhpValue::map([
         ("image", PhpValue::from(s("image"))),
@@ -117,6 +134,7 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
     if let Some(p) = ports(d) {
         service.set("ports", p);
     }
+    ctx.apply_logging(&mut service);
     let mut volumes = PhpValue::list(volume_list);
     if conf.is_some() {
         volumes.push(PhpValue::map([
@@ -154,7 +172,43 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         ("target", PhpValue::from("/docker-entrypoint-initdb.d")),
         ("read_only", PhpValue::Bool(true)),
     ]));
+    if d.bool("enable_ssl") {
+        volumes.push(ca_mount("/etc/mongo/certs/ca.pem"));
+    }
     service.set("volumes", volumes);
+    ctx.apply_docker_options(&mut service);
+    if d.bool("enable_ssl") {
+        let mut parts: Vec<&str> = vec!["mongod"];
+        if conf.is_some() {
+            parts.extend(["--config", "/etc/mongo/mongod.conf"]);
+        }
+        parts.extend(match d.str("ssl_mode") {
+            Some("allow") => vec![
+                "--tlsMode=allowTLS",
+                "--tlsAllowConnectionsWithoutCertificates",
+                "--tlsAllowInvalidHostnames",
+            ],
+            Some("prefer") => vec![
+                "--tlsMode=preferTLS",
+                "--tlsAllowConnectionsWithoutCertificates",
+                "--tlsAllowInvalidHostnames",
+            ],
+            Some("require") => vec![
+                "--tlsMode=requireTLS",
+                "--tlsAllowConnectionsWithoutCertificates",
+                "--tlsAllowInvalidHostnames",
+            ],
+            Some("verify-full") => vec!["--tlsMode=requireTLS", "--tlsAllowInvalidHostnames"],
+            _ => vec![],
+        });
+        parts.extend([
+            "--tlsCAFile",
+            "/etc/mongo/certs/ca.pem",
+            "--tlsCertificateKeyFile",
+            "/etc/mongo/certs/server.pem",
+        ]);
+        service.set("command", PhpValue::strings(parts));
+    }
     if d.raw.get("health_check_enabled").and_then(Value::as_bool) == Some(false) {
         service.remove("healthcheck");
     }
@@ -166,6 +220,13 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         compose.set("volumes", volume_names);
     }
     let compose_yaml = yaml::dump(&compose, 10);
-    finish_commands(&mut commands, d, ctx.server, &compose_yaml, ctx.now, &[]);
+    let extra: Vec<String> = if d.bool("enable_ssl") {
+        vec![format!(
+            "docker compose -f {dir}/docker-compose.yml run --rm --no-deps --user root --entrypoint chown {name} mongodb:mongodb /etc/mongo/certs/server.pem < /dev/null"
+        )]
+    } else {
+        Vec::new()
+    };
+    finish_commands(&mut commands, d, ctx.server, &compose_yaml, ctx.now, &extra);
     (commands, compose_yaml)
 }

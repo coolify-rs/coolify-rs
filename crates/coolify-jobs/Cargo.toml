@@ -15,6 +15,12 @@ coolify-db.workspace = true
 coolify-domain.workspace = true
 coolify-remote.workspace = true
 fancy-regex.workspace = true
+hmac.workspace = true
+p256.workspace = true
+p521.workspace = true
+rand_core.workspace = true
+sha1.workspace = true
+sqlx.workspace = true
 md-5.workspace = true
 p521 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
 rand.workspace = true
@@ -28,7 +34,6 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-sqlx.workspace = true
 rand.workspace = true
 coolify-db = { workspace = true, features = ["testing"] }
 tempfile.workspace = true

@@ -23,9 +23,9 @@ pub(super) fn start_commands(p: &StartContext<'_>) -> (Vec<String>, String) {
         format!("mkdir -p {dir}"),
         format!("mkdir -p {dir}/docker-entrypoint-initdb.d/"),
         "echo 'Directories created successfully.'".into(),
-        // enable_ssl is false (SSL is not ported; the caller refuses it).
-        format!("rm -rf {dir}/ssl"),
     ];
+    commands.extend(p.ssl_commands.iter().cloned());
+    commands.extend(p.ensure_commands.iter().cloned());
 
     // generate_environment_variables
     let mut user = s("postgres_user");
@@ -184,6 +184,7 @@ pub(super) fn start_commands(p: &StartContext<'_>) -> (Vec<String>, String) {
     }
     let mut volumes = PhpValue::list([]);
     let mut volume_names = PhpValue::list([]);
+    p.apply_logging(&mut service);
     for (vname, mount, host) in &p.volumes {
         match host.as_deref().filter(|h| !h.is_empty()) {
             Some(h) => volumes.push(PhpValue::from(format!("{h}:{mount}"))),
@@ -198,6 +199,9 @@ pub(super) fn start_commands(p: &StartContext<'_>) -> (Vec<String>, String) {
                 );
             }
         }
+    }
+    for mount in &p.file_mounts {
+        volumes.push(PhpValue::from(mount.as_str()));
     }
     for script in &init_scripts {
         let base = script.rsplit('/').next().unwrap_or_default();
@@ -224,7 +228,21 @@ pub(super) fn start_commands(p: &StartContext<'_>) -> (Vec<String>, String) {
             "config_file=/etc/postgresql/postgresql.conf".to_owned(),
         ]);
     }
+    if d.bool("enable_ssl") {
+        command.extend(
+            [
+                "-c",
+                "ssl=on",
+                "-c",
+                "ssl_cert_file=/var/lib/postgresql/certs/server.crt",
+                "-c",
+                "ssl_key_file=/var/lib/postgresql/certs/server.key",
+            ]
+            .map(str::to_owned),
+        );
+    }
     service.set("volumes", volumes);
+    p.apply_docker_options(&mut service);
     if command.len() > 1 {
         service.set("command", PhpValue::strings(command));
     }
@@ -265,6 +283,11 @@ pub(super) fn start_commands(p: &StartContext<'_>) -> (Vec<String>, String) {
         "{}docker compose -f {dir}/docker-compose.yml pull",
         server_docker_config_prefix(p.server)
     ));
+    if d.bool("enable_ssl") {
+        commands.push(format!(
+            "docker compose -f {dir}/docker-compose.yml run --rm --no-deps --user root --entrypoint chown {name} postgres:postgres /var/lib/postgresql/certs/server.key /var/lib/postgresql/certs/server.crt < /dev/null"
+        ));
+    }
     commands.push(format!(
         "{} 2>/dev/null || true",
         docker_stop_command(10, name, p.server.docker_version())

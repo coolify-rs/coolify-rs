@@ -44,6 +44,25 @@ pub fn slug(title: &str) -> String {
     out
 }
 
+/// `coolifyHelperImage():getHelperVersion()` (`config/constants.php`).
+pub(crate) fn helper_image(_jobs: &Jobs) -> String {
+    format!("docker.io/coollabsio/coolify-helper:{HELPER_VERSION}")
+}
+
+/// `config('constants.coolify.helper_version')`.
+pub(crate) const HELPER_VERSION: &str = "1.0.19";
+
+/// The bind mount of the CA certificate into a database with SSL.
+pub(crate) fn ca_mount(target: &str) -> coolify_compat::yaml::PhpValue {
+    use coolify_compat::yaml::PhpValue;
+    PhpValue::map([
+        ("type", PhpValue::from("bind")),
+        ("source", PhpValue::from("/data/coolify/ssl/coolify-ca.crt")),
+        ("target", PhpValue::from(target)),
+        ("read_only", PhpValue::Bool(true)),
+    ])
+}
+
 /// `dockerStopCommand($timeout, $containers, $server)`.
 pub(crate) fn docker_stop_command(
     timeout: u32,

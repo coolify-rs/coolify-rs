@@ -19,6 +19,14 @@ pub async fn get(db: &Db, team_id: TeamId) -> DbResult<Option<Record>> {
 }
 
 /// Members in pivot insertion order, rendered like `User::toArray()`.
+/// The team's `name`.
+pub async fn find_name(db: &Db, team_id: TeamId) -> DbResult<Option<String>> {
+    Ok(sqlx::query_scalar("SELECT name FROM teams WHERE id = $1")
+        .bind(team_id)
+        .fetch_optional(db.pool())
+        .await?)
+}
+
 pub async fn members(db: &Db, team_id: TeamId) -> DbResult<Vec<Record>> {
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT row_to_json(u)::text FROM users u JOIN team_user tu ON tu.user_id = u.id \

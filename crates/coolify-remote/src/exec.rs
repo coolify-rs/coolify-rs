@@ -332,6 +332,79 @@ impl Remote {
         self.run(target, commands, opts).await.ok().flatten()
     }
 
+    /// `instant_scp`: writes a local file on the server over the SSH connection.
+    pub async fn copy_file(
+        &self,
+        t: &Target,
+        local: &Path,
+        remote_path: &str,
+    ) -> Result<(), RemoteError> {
+        use base64::Engine as _;
+        use tokio::io::AsyncReadExt as _;
+        let known_hosts = self.check_target(t)?;
+        let _permit = self
+            .permits
+            .acquire()
+            .await
+            .map_err(|_| RemoteError::new("Remote execution is shutting down.", None))?;
+        let key = self.write_key(&t.key)?;
+        let mut child = self
+            .command(t, key.path(), &known_hosts)
+            .spawn()
+            .map_err(|e| RemoteError::new(format!("Failed to start ssh: {e}"), None))?;
+        let Some(mut stdin) = child.stdin.take() else {
+            return Err(RemoteError::new("Failed to start ssh: missing pipes", None));
+        };
+        let mut file = tokio::fs::File::open(local)
+            .await
+            .map_err(|e| RemoteError::new(format!("Failed to read the file: {e}"), None))?;
+        let header = format!(
+            "base64 -d > {} <<'COOLIFY_UPLOAD_EOF'\n",
+            crate::shell::quote(remote_path)
+        );
+        let write = async {
+            stdin.write_all(header.as_bytes()).await?;
+            let mut buf = vec![0u8; 57 * 1024];
+            loop {
+                let mut filled = 0;
+                while filled < buf.len() {
+                    let n = file.read(&mut buf[filled..]).await?;
+                    if n == 0 {
+                        break;
+                    }
+                    filled += n;
+                }
+                if filled == 0 {
+                    break;
+                }
+                let line = base64::engine::general_purpose::STANDARD.encode(&buf[..filled]);
+                stdin.write_all(line.as_bytes()).await?;
+                stdin.write_all(b"\n").await?;
+                if filled < buf.len() {
+                    break;
+                }
+            }
+            stdin.write_all(b"COOLIFY_UPLOAD_EOF\n").await?;
+            drop(stdin);
+            Ok::<(), std::io::Error>(())
+        };
+        let written = write.await;
+        let output = child
+            .wait_with_output()
+            .await
+            .map_err(|e| RemoteError::new(format!("Failed to run ssh: {e}"), None))?;
+        drop(key);
+        written.map_err(|e| RemoteError::new(format!("Failed to send the file: {e}"), None))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(RemoteError::new(
+                sanitize_utf8(&output.stderr),
+                output.status.code(),
+            ))
+        }
+    }
+
     fn check_target(&self, t: &Target) -> Result<PathBuf, RemoteError> {
         if t.force_disabled {
             return Err(RemoteError::new("Server is disabled.", Some(0)));
