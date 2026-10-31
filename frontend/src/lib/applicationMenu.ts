@@ -16,6 +16,24 @@ export function applicationSection(section: string | undefined): string {
   return section;
 }
 
+/** Port of upstream components/backup-sidebar.blade.php for context `application`. */
+export function applicationBackupNavContext(base: string, backup: string, section: string, parent: NavContext): NavContext {
+  const url = `${base}/backups/${backup}`;
+  return {
+    label: 'Application',
+    backTitle: 'Back to the application menu',
+    ariaLabel: 'Backup settings',
+    parent,
+    groups: [
+      [
+        { label: 'General', icon: 'settings', href: url, active: section === 'general' },
+        { label: 'Executions', icon: 'browser-terminal', href: `${url}/executions`, active: section === 'executions' },
+      ],
+      [{ label: 'Danger Zone', icon: 'danger', href: `${url}/danger`, active: section === 'danger' }],
+    ],
+  };
+}
+
 export function applicationNavContext(
   base: string,
   active: string,

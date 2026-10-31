@@ -944,9 +944,19 @@ pub async fn upload_import(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
     Path(uuid): Path<String>,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> ApiResult {
     let d = find(&state, &ctx, &uuid).await?;
+    upload_database_import(state, ctx, d, multipart).await
+}
+
+/// `uploadDatabaseImport`.
+pub(crate) async fn upload_database_import(
+    state: AppState,
+    ctx: AuthCtx,
+    d: DatabaseRow,
+    mut multipart: Multipart,
+) -> ApiResult {
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
@@ -1109,6 +1119,20 @@ pub async fn create_import(
     body: Bytes,
 ) -> ApiResult {
     let d = find(&state, &ctx, &uuid).await?;
+    let status_base = format!("/api/v1/databases/{uuid}/imports");
+    start_database_import(state, ctx, d, status_base, headers, uri, body).await
+}
+
+/// `startDatabaseImport`: `status_base` is the status route without the activity id.
+pub(crate) async fn start_database_import(
+    state: AppState,
+    ctx: AuthCtx,
+    d: DatabaseRow,
+    status_base: String,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> ApiResult {
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
@@ -1270,7 +1294,7 @@ pub async fn create_import(
         }
     };
     tracing::info!(target: "audit", event = "api.database.import_started", team_id = ctx.team_id, database_uuid = %d.uuid, source = %source, activity_id = id, "database import started");
-    let url = format!("/api/v1/databases/{uuid}/imports/{id}");
+    let url = format!("{status_base}/{id}");
     let mut resp = PhpJson(
         StatusCode::ACCEPTED,
         json!({"id": id, "status": status, "message": "Database import queued.", "status_url": url}),
@@ -1293,6 +1317,16 @@ pub async fn show_import(
         return Err(ApiError::RouteNotFound);
     };
     let d = find(&state, &ctx, &uuid).await?;
+    show_database_import(state, ctx, d, activity_id).await
+}
+
+/// `showDatabaseImport`.
+pub(crate) async fn show_database_import(
+    state: AppState,
+    ctx: AuthCtx,
+    d: DatabaseRow,
+    activity_id: i64,
+) -> ApiResult {
     let row = dbs::import_activity(&state.db, activity_id, ctx.team_id, &d.uuid)
         .await?
         .ok_or(ApiError::Message(

@@ -261,7 +261,10 @@ impl Jobs {
                 .await
                 .unwrap_or_default()
             {
-                if let Err(e) = jobs.delete_volume_schedule(&backup, server.as_ref()).await {
+                if let Err(e) = jobs
+                    .delete_volume_schedule(&backup, server.as_ref(), true, true)
+                    .await
+                {
                     tracing::warn!(application = %a.uuid, error = %e, "Remote backup cleanup failed while deleting resource");
                 }
             }

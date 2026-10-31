@@ -25,6 +25,76 @@ use crate::ui_notifications::{toast_error, unauthorized};
 type P = Path<(String, String)>;
 type PI = Path<(String, String, i64)>;
 
+/// `All::rebuildVolumeBackupMeta`: the Backup column of the volume table.
+async fn volume_backup_meta(
+    state: &AppState,
+    res: &Res,
+    available: bool,
+) -> Result<(Option<String>, Map<String, Value>), ApiError> {
+    use coolify_db::volume_backups as vb;
+    let mut meta = Map::new();
+    if !available {
+        return Ok((None, meta));
+    }
+    let db = &state.db;
+    let (Some(project), Some(environment)) = (&res.project_uuid, &res.environment_uuid) else {
+        return Ok((None, meta));
+    };
+    let root = format!("/project/{project}/environment/{environment}");
+    let base = match &res.service_uuid {
+        Some(service) => format!("{root}/service/{service}/storage-backups"),
+        None => format!("{root}/application/{}/backups", res.uuid),
+    };
+    let volumes = parts::persistent_storages(db, &res.morph, res.id).await?;
+    let mut total = 0;
+    let mut schedules = Vec::new();
+    for v in &volumes {
+        let schedule = vb::schedule_of(db, vb::PERSISTENT_MORPH, parts::id_of(v)).await?;
+        total += i64::from(schedule.is_some());
+        schedules.push((v, schedule));
+    }
+    for f in parts::file_storages(db, &res.morph, res.id).await? {
+        if f.get("is_directory").and_then(Value::as_bool) == Some(true)
+            && f.get("is_host_file").and_then(Value::as_bool) != Some(true)
+            && vb::schedule_of(db, vb::FILE_MORPH, parts::id_of(&f))
+                .await?
+                .is_some()
+        {
+            total += 1;
+        }
+    }
+    for (v, schedule) in schedules {
+        let enabled = schedule
+            .as_ref()
+            .and_then(|s| s.get("enabled"))
+            .and_then(Value::as_bool)
+            == Some(true);
+        let url = schedule.as_ref().filter(|_| enabled).map(|s| {
+            if total > 1 {
+                let name = v.get("name").and_then(Value::as_str).unwrap_or_default();
+                format!(
+                    "{base}?search={}",
+                    coolify_jobs::databases::connection::rawurlencode(name)
+                )
+            } else {
+                format!(
+                    "{base}/{}",
+                    s.get("uuid").and_then(Value::as_str).unwrap_or_default()
+                )
+            }
+        });
+        meta.insert(
+            parts::id_of(v).to_string(),
+            json!({
+                "enabled": enabled,
+                "s3": enabled && schedule.as_ref().and_then(|s| s.get("save_s3")).and_then(Value::as_bool) == Some(true),
+                "url": url,
+            }),
+        );
+    }
+    Ok((Some(base), meta))
+}
+
 pub fn routes() -> Router<AppState> {
     let b = "/ui/resources/{kind}/{uuid}/storages";
     Router::new()
@@ -266,7 +336,12 @@ async fn show(
         Class::Application | Class::ServiceApplication | Class::ServiceDatabase
     );
     let name_slug = coolify_jobs::compose_parser::php::slug(&res.name);
+    let (backup_base, volume_backup_meta) =
+        volume_backup_meta(&state, &res, backup_available).await?;
     Ok(ok(json!({
+        "service_uuid": res.service_uuid,
+        "backup_base": backup_base,
+        "volume_backup_meta": volume_backup_meta,
         "can_update": can,
         "is_application": res.is_application(),
         "is_standalone": res.class == Class::Database,

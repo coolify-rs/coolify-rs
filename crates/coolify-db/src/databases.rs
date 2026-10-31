@@ -125,6 +125,206 @@ impl DatabaseRow {
             .and_then(|d| d.get("server_id"))
             .and_then(|v| v.as_i64())
     }
+    /// A `ServiceDatabase` shown through this row, see [`service_database_row`].
+    pub fn is_service(&self) -> bool {
+        self.raw.contains_key(SERVICE_CONTAINER_KEY)
+    }
+    /// `getMorphClass()`.
+    pub fn morph(&self) -> &'static str {
+        if self.is_service() {
+            SERVICE_DATABASE_MORPH
+        } else {
+            self.kind.morph()
+        }
+    }
+    /// The container of the database: its uuid, or `{name}-{service uuid}` in a service.
+    pub fn container(&self) -> &str {
+        self.str(SERVICE_CONTAINER_KEY).unwrap_or(&self.uuid)
+    }
+}
+
+pub const SERVICE_DATABASE_MORPH: &str = r"App\Models\ServiceDatabase";
+const SERVICE_CONTAINER_KEY: &str = "__container";
+
+/// `ServiceDatabase::databaseType()`.
+pub fn service_database_type(image: &str, custom_type: Option<&str>) -> String {
+    if let Some(custom) = custom_type.filter(|c| !c.trim().is_empty()) {
+        return format!("standalone-{custom}");
+    }
+    let image = image.split(':').next().unwrap_or_default();
+    let finished = if image.contains("supabase/postgres") {
+        "supabase/postgres"
+    } else if image.contains("timescale")
+        || image.contains("pgvector")
+        || image.contains("postgres")
+        || image.contains("postgis")
+    {
+        "postgresql"
+    } else {
+        image
+    };
+    format!("standalone-{finished}")
+}
+
+/// `isBackupSolutionAvailable()` of a `ServiceDatabase`.
+pub fn service_backup_available(image: &str, custom_type: Option<&str>) -> bool {
+    let t = service_database_type(image, custom_type);
+    t.contains("mysql")
+        || t.contains("postgres")
+        || t.contains("postgis")
+        || t.contains("mariadb")
+        || t.contains("mongo")
+        || custom_type.is_some_and(|c| !c.trim().is_empty())
+}
+
+/// The kind whose commands a `ServiceDatabase` uses, read from `databaseType()` in the order
+/// `DatabaseBackupJob` and `ImportForm` look at it.
+pub fn service_database_kind(image: &str, custom_type: Option<&str>) -> Option<Kind> {
+    let t = service_database_type(image, custom_type);
+    if t.contains("postgres") {
+        Some(Kind::Postgresql)
+    } else if t.contains("mysql") {
+        Some(Kind::Mysql)
+    } else if t.contains("mariadb") {
+        Some(Kind::Mariadb)
+    } else if t.contains("mongo") {
+        Some(Kind::Mongodb)
+    } else if t.contains("redis") {
+        Some(Kind::Redis)
+    } else if t.contains("keydb") {
+        Some(Kind::Keydb)
+    } else if t.contains("dragonfly") {
+        Some(Kind::Dragonfly)
+    } else if t.contains("clickhouse") {
+        Some(Kind::Clickhouse)
+    } else {
+        None
+    }
+}
+
+/// A `ServiceDatabase` as a [`DatabaseRow`], so the backup and import code of standalone databases
+/// runs for it: `raw` holds the `service_databases` row plus the service's `environment_id`,
+/// the destination holds the service's server, and [`DatabaseRow::container`] names the container.
+async fn service_database_row(
+    db: &Db,
+    where_sql: &str,
+    bind: &str,
+) -> DbResult<Option<DatabaseRow>> {
+    let text: Option<String> = sqlx::query_scalar(&format!(
+        "SELECT json_build_object('d', row_to_json(d), 's', row_to_json(s), 'e', row_to_json(e), 'p', row_to_json(p), 't', row_to_json(t))::text
+         FROM service_databases d
+         JOIN services s ON s.id = d.service_id AND s.deleted_at IS NULL
+         JOIN environments e ON e.id = s.environment_id
+         JOIN projects p ON p.id = e.project_id
+         JOIN teams t ON t.id = p.team_id
+         WHERE d.deleted_at IS NULL AND {where_sql} ORDER BY d.id LIMIT 1"
+    ))
+    .bind(bind)
+    .fetch_optional(db.pool())
+    .await?;
+    let Some(text) = text else {
+        return Ok(None);
+    };
+    let row = decode(&text, "service database")?;
+    let part = |k: &str| -> Record {
+        row.get(k)
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default()
+    };
+    let (mut raw, service, environment, project, team) =
+        (part("d"), part("s"), part("e"), part("p"), part("t"));
+    let text_of = |r: &Record, k: &str| {
+        r.get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let image = text_of(&raw, "image");
+    let custom = raw
+        .get("custom_type")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let Some(kind) = service_database_kind(&image, custom.as_deref()) else {
+        return Ok(None);
+    };
+    let destination_type = text_of(&service, "destination_type");
+    let table = if destination_type.contains("Swarm") {
+        "swarm_dockers"
+    } else {
+        "standalone_dockers"
+    };
+    let destination: Option<String> = sqlx::query_scalar(&format!(
+        "SELECT row_to_json(x)::text FROM {table} x WHERE x.id = $1"
+    ))
+    .bind(
+        service
+            .get("destination_id")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(-1),
+    )
+    .fetch_optional(db.pool())
+    .await?;
+    let mut destination = match destination {
+        Some(t) => decode(&t, "destination")?,
+        None => Record::new(),
+    };
+    // `$service->server`.
+    if let Some(v) = service.get("server_id") {
+        destination.insert("server_id".into(), v.clone());
+    }
+    let id = raw.get("id").and_then(|v| v.as_i64()).unwrap_or_default();
+    let uuid = text_of(&raw, "uuid");
+    let team_id = team.get("id").and_then(|v| v.as_i64()).unwrap_or_default();
+    raw.insert(
+        SERVICE_CONTAINER_KEY.into(),
+        format!("{}-{}", text_of(&raw, "name"), text_of(&service, "uuid")).into(),
+    );
+    raw.insert("__service_uuid".into(), text_of(&service, "uuid").into());
+    raw.insert("__service_name".into(), text_of(&service, "name").into());
+    raw.insert("destination_type".into(), destination_type.into());
+    if let Some(v) = service.get("environment_id") {
+        raw.insert("environment_id".into(), v.clone());
+    }
+    Ok(Some(DatabaseRow {
+        kind,
+        id,
+        uuid,
+        team_id,
+        raw,
+        environment,
+        project,
+        team,
+        destination: Some(destination),
+    }))
+}
+
+/// A `ServiceDatabase` of the team by uuid.
+pub async fn service_database_in_team(
+    db: &Db,
+    team_id: TeamId,
+    uuid: &str,
+) -> DbResult<Option<DatabaseRow>> {
+    Ok(service_database_row(db, "d.uuid = $1", uuid)
+        .await?
+        .filter(|d| d.team_id == team_id))
+}
+
+/// A `ServiceDatabase` by id.
+pub async fn service_database_by_id(db: &Db, id: i64) -> DbResult<Option<DatabaseRow>> {
+    service_database_row(db, "d.id = $1::bigint", &id.to_string()).await
+}
+
+/// [`find_in_team`], then the team's service databases: the backup and import pages serve both.
+pub async fn find_with_service(
+    db: &Db,
+    team_id: TeamId,
+    uuid: &str,
+) -> DbResult<Option<DatabaseRow>> {
+    match find_in_team(db, team_id, uuid).await? {
+        Some(d) => Ok(Some(d)),
+        None => service_database_in_team(db, team_id, uuid).await,
+    }
 }
 
 fn decode(text: &str, what: &str) -> DbResult<Record> {
@@ -678,7 +878,7 @@ pub async fn force_delete(db: &Db, kind: Kind, id: i64, delete_volumes: bool) ->
 /// A start activity (`activity_log` row) as spatie/laravel-activitylog stores it.
 pub async fn insert_activity(
     db: &Db,
-    kind: Kind,
+    morph: &str,
     id: i64,
     properties: &serde_json::Value,
     now: NaiveDateTime,
@@ -688,7 +888,7 @@ pub async fn insert_activity(
         "INSERT INTO activity_log (log_name, description, subject_type, subject_id, properties, event, created_at, updated_at) \
          VALUES ('default', '[]', $1, $2, $3::jsonb, 'inline', $4, $4) RETURNING id",
     )
-    .bind(kind.morph())
+    .bind(morph)
     .bind(id)
     .bind(properties.to_string())
     .bind(now)

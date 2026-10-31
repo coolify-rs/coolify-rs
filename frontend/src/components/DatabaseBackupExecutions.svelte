@@ -1,7 +1,6 @@
 <script lang="ts">
   // Port of upstream livewire/project/database/backup-executions.blade.php
-  // (Project\Database\BackupExecutions). S3 downloads through the instance download storage
-  // (`PreparesBackupDownloads`) are not ported: the icon opens `/download/backup/{id}`.
+  // (Project\Database\BackupExecutions).
   import { untrack } from 'svelte';
   import ConfirmModal from './ConfirmModal.svelte';
   import CopyInput from './CopyInput.svelte';
@@ -12,6 +11,7 @@
   import { backupsUi, type BackupExecution } from '../lib/databaseApi';
   import { diffForHumans, duration, parseTimestamp } from '../lib/format';
   import { notify } from '../lib/toast.svelte';
+  import { downloadBackup } from '../lib/volumeBackupsApi';
 
   let { databaseUuid, backupUuid }: { databaseUuid: string; backupUuid: string } = $props();
 
@@ -20,6 +20,7 @@
   let total = $state(0);
   let skip = $state(0);
   let timezone = $state<string | null>(null);
+  let s3Downloads = $state(false);
   let loaded = $state(false);
   let deleting = $state<BackupExecution | null>(null);
   let cleaning = $state(false);
@@ -29,6 +30,7 @@
     executions = r.executions;
     total = r.total;
     timezone = r.server_timezone;
+    s3Downloads = r.s3_downloads;
     loaded = true;
   }
   $effect(() => {
@@ -191,7 +193,7 @@
                     <button
                       type="button"
                       class="icon-button shrink-0"
-                      onclick={() => window.open(`/download/backup/${e.id}`, '_blank')}
+                      onclick={() => downloadBackup('database', e.id, s3Downloads)}
                       title="Download backup"
                       aria-label="Download backup"
                     >

@@ -55,6 +55,7 @@ pub mod ui_storages;
 pub mod ui_tags;
 pub mod ui_teams;
 pub mod ui_terminal;
+pub mod ui_volume_backups;
 pub mod validation;
 pub mod webhooks;
 

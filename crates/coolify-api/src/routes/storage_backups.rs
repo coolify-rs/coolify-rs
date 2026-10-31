@@ -537,7 +537,10 @@ async fn destroy(
             .map(|r| ServerInfo::from_row(&r)),
         None => None,
     };
-    if let Err(message) = jobs.delete_volume_schedule(&row, server.as_ref()).await {
+    if let Err(message) = jobs
+        .delete_volume_schedule(&row, server.as_ref(), true, true)
+        .await
+    {
         return Ok(answer(StatusCode::CONFLICT, json!({"message": message})));
     }
     tracing::info!(target: "audit", event = "api.volume_backup.schedule_deleted", team_id = ctx.team_id, resource_type = kind.name(), resource_uuid = %uuid, backup_uuid = ?row.get("uuid"));
