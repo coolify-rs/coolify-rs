@@ -87,13 +87,16 @@
   // `wire:init="loadContainers"`; a server page connects when the websocket is ready.
   $effect(() => {
     let cancelled = false;
-    terminalApi.mount(kind, uuid).then((m) => {
-      if (cancelled) return;
-      servers = m.servers;
-      mounted = true;
-      if (kind !== 'server') load();
-      else containersLoaded = true;
-    });
+    terminalApi
+      .mount(kind, uuid)
+      .then((m) => {
+        if (cancelled) return;
+        servers = m.servers;
+        mounted = true;
+        if (kind !== 'server') load();
+        else containersLoaded = true;
+      })
+      .catch((e) => notify.failure(message(e)));
     return () => {
       cancelled = true;
     };

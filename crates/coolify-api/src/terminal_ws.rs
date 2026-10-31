@@ -271,9 +271,12 @@ fn start_tasks(
             if paused_rx.wait_for(|p| !*p).await.is_err() {
                 return;
             }
-            let n = match read.read(&mut buffer).await {
-                Ok(0) | Err(_) => return,
-                Ok(n) => n,
+            let n = tokio::select! {
+                n = read.read(&mut buffer) => match n {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => n,
+                },
+                _ = paused_rx.wait_for(|p| *p) => continue,
             };
             let text = decode(&mut pending, &buffer[..n]);
             if !text.is_empty() && output.send(Event::Output(id, text)).await.is_err() {

@@ -494,6 +494,7 @@ dependencies = [
  "subtle",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "tower",
  "tower-http",
  "tracing",

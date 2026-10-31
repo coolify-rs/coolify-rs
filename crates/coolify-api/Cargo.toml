@@ -40,6 +40,7 @@ pty-process = { version = "0.5", features = ["async"] }
 rsa.workspace = true
 coolify-db = { workspace = true, features = ["testing"] }
 http-body-util.workspace = true
+tokio-tungstenite = "0.29"
 tempfile.workspace = true
 sqlx.workspace = true
 tokio.workspace = true

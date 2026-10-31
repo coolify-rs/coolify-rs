@@ -3,6 +3,12 @@
 
     COOLIFY_RS_BASE=http://127.0.0.1:18086 compat/diff/terminal_fixture.py up     writes the uuids to compat/ui/shots/terminal-fixture.json
     COOLIFY_RS_BASE=http://127.0.0.1:18086 compat/diff/terminal_fixture.py down   deletes exactly those uuids
+    COOLIFY_RS_BASE=... compat/diff/terminal_fixture.py real-up     the VM as a second server reached with real ssh
+    COOLIFY_RS_BASE=... compat/diff/terminal_fixture.py real-down
+
+`real-up` is for a Mac without a route to the VM: a container on the Docker network forwards
+127.0.0.1:2224 to the VM's sshd. Run the instance with COOLIFY_RS_SSH_BINARY=ssh, then
+`node compat/ui/terminal_ui.mjs --real-ssh`.
 
 The uuids are recorded before each deploy starts, so `down` also works after a crash.
 """
@@ -14,12 +20,13 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(__file__))
-from databases_diff import call as raw_call  # noqa: E402
+from databases_diff import call as raw_call, sql  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 FILE = os.path.join(ROOT, "compat/ui/shots/terminal-fixture.json")
 SERVER = "hml20fsj5eles0xfiqidq8j5"
 VM = "coolify-rs-e2e"
+FORWARD = "terminal-stream-ssh-forward"
 COMPOSE = """services:
   web:
     image: nginx:alpine
@@ -107,6 +114,30 @@ def up():
     print(FILE)
 
 
+def real_up():
+    state = json.load(open(FILE))
+    key = sql(f"select k.uuid from private_keys k join servers v on v.private_key_id = k.id where v.uuid = '{SERVER}'")
+    subprocess.run(["docker", "run", "-d", "--name", FORWARD, "-p", "127.0.0.1:2224:2224", "alpine/socat",
+                    "TCP-LISTEN:2224,fork,reuseaddr", f"TCP:{VM}.orb.local:22"], check=True, capture_output=True)
+    state["forward"] = FORWARD
+    save(state)
+    server = must(call("rs", "POST", "/servers", {"name": "terminal-real-ssh", "ip": "127.0.0.1", "port": 2224, "user": "root", "private_key_uuid": key}), "server")
+    state["real_server"] = server["uuid"]
+    save(state)
+    sql("update server_settings set is_reachable = true, is_usable = true, is_terminal_enabled = true "
+        f"where server_id = (select id from servers where uuid = '{state['real_server']}')")
+    print(state["real_server"])
+
+
+def real_down():
+    state = json.load(open(FILE))
+    if "real_server" in state:
+        print("server", call("rs", "DELETE", f"/servers/{state.pop('real_server')}")[0])
+    if state.pop("forward", None):
+        subprocess.run(["docker", "rm", "-f", FORWARD], capture_output=True)
+    save(state)
+
+
 def down():
     state = json.load(open(FILE))
     if "application" in state:
@@ -126,4 +157,4 @@ def down():
 
 
 if __name__ == "__main__":
-    {"up": up, "down": down}[sys.argv[1]]()
+    {"up": up, "down": down, "real-up": real_up, "real-down": real_down}[sys.argv[1]]()

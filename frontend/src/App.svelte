@@ -169,6 +169,8 @@
   });
 
   const params = $derived(router.current.params);
+  // `can.access.terminal` on the terminal page of a resource or server.
+  const isTerminalSection = $derived(params.section === 'terminal' && /-section$|^server/.test(router.current.name));
 </script>
 
 {#if !session.loaded}
@@ -205,7 +207,7 @@
   <ConfirmPassword />
 {:else if router.current.name === 'profile-passkey-confirm'}
   <PasskeyConfirm />
-{:else if (router.current.name === 'team-danger' && !session.isOwner) || ((router.current.name === 'team-audit' || router.current.name === 'terminal') && !session.isAdmin)}
+{:else if (router.current.name === 'team-danger' && !session.isOwner) || ((router.current.name === 'team-audit' || router.current.name === 'terminal' || isTerminalSection) && !session.isAdmin)}
   <ErrorPage code={403} />
 {:else}
   <Shell>
