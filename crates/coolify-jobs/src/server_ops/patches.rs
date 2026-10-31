@@ -2,13 +2,16 @@
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
+use std::time::Duration;
 
+use base64::Engine as _;
 use coolify_db::server_ops as ops;
 use coolify_db::servers::{self, ColumnValue};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
-use super::{Srv, shell_arg};
+use super::proxy::{queue_activity, run_activity};
+use super::{MARKS, Srv, shell_arg};
 use crate::Jobs;
 
 fn re(p: &str) -> Regex {
@@ -714,6 +717,44 @@ pub async fn server_patch_check(jobs: &Jobs, server_id: i64, manual: bool) -> Re
     save_result(&srv, &data).await
 }
 
+/// `ServerPatchCheckJob::runningCacheKey`.
+pub fn running_key(server_uuid: &str) -> String {
+    format!("server-patch-check-running:{server_uuid}")
+}
+
+/// `ServerPatchCheckJob::dispatch`: a job after `delay` that saves its failure and removes the running mark.
+/// `WithoutOverlapping`: a check of a server that is already checked is dropped.
+fn dispatch_patch_check(jobs: &Jobs, server_id: i64, server_uuid: String, delay: Duration) {
+    let jobs = jobs.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(delay).await;
+        let lock = format!("server-patch-check-{server_uuid}");
+        if !MARKS.add(lock.clone(), Duration::from_secs(600)) {
+            return;
+        }
+        if let Err(e) = server_patch_check(&jobs, server_id, true).await {
+            tracing::warn!(server_id, error = %e, "patch check failed");
+            if let Ok(srv) = Srv::load(&jobs, server_id).await {
+                let mut m = Map::new();
+                m.insert("error".into(), json!(e));
+                let _ = save_result(&srv, &m).await;
+            }
+        }
+        MARKS.forget(&lock);
+        MARKS.forget(&running_key(&server_uuid));
+    });
+}
+
+/// `ServerPatchCheckJob::dispatchManual`.
+pub fn dispatch_manual(jobs: &Jobs, server_id: i64, server_uuid: &str) {
+    MARKS.put(
+        running_key(server_uuid),
+        String::new(),
+        Duration::from_secs(15 * 60),
+    );
+    dispatch_patch_check(jobs, server_id, server_uuid.to_string(), Duration::ZERO);
+}
+
 /// `UpdatePackage::commands`.
 pub fn update_commands(pm: Option<&str>, escaped: Option<&str>) -> Option<Vec<String>> {
     let apt = "-y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold";
@@ -752,13 +793,14 @@ pub fn update_commands(pm: Option<&str>, escaped: Option<&str>) -> Option<Vec<St
     })
 }
 
-/// `UpdatePackage::handle`: the error it would return, or runs the update.
+/// `UpdatePackage::handle`: the error it returns, or the id of the activity that runs the update.
+/// `FinishServerPackagesUpdate` follows the activity: the audit entry, then a new check.
 pub async fn update_package(
     srv: &Srv,
     package: Option<&str>,
     package_manager: Option<&str>,
     all: bool,
-) -> Result<(), String> {
+) -> Result<i64, String> {
     if !srv.info.is_functional() {
         return Err("Server is not reachable or not ready.".to_string());
     }
@@ -783,7 +825,152 @@ pub async fn update_package(
     }
     let commands = update_commands(package_manager, escaped.as_deref())
         .ok_or_else(|| "OS not supported".to_string())?;
-    srv.run(&commands, "patch.update").await.map(|_| ())
+    let update_id = coolify_domain::new_public_id();
+    let activity = queue_activity(srv, "patch.update", Some(&update_id)).await?;
+    let (jobs, id, uuid, team_id) = (
+        srv.jobs.clone(),
+        srv.id(),
+        srv.row.uuid.clone(),
+        srv.info.team_id,
+    );
+    let packages = package.filter(|_| !all).map(str::to_string);
+    let manager = package_manager.map(str::to_string);
+    tokio::spawn(async move {
+        let Ok(s) = Srv::load(&jobs, id).await else {
+            return;
+        };
+        let result = run_activity(&s, activity, &commands, "patch.update").await;
+        tracing::info!(
+            target: "audit",
+            event = "ui.server.packages_update_finished",
+            team_id,
+            server_uuid = %uuid,
+            packages = packages.as_deref().unwrap_or("all"),
+            package_manager = manager.as_deref().unwrap_or_default(),
+            activity_id = activity,
+            result = if result.is_ok() { "success" } else { "failed" },
+            "packages update finished"
+        );
+        dispatch_manual(&jobs, id, &uuid);
+    });
+    Ok(activity)
+}
+
+/// `RebootServer::COMMAND`.
+const REBOOT_COMMAND: &str = r#"sh -c 'if command -v systemd-run >/dev/null 2>&1; then systemd-run --on-active=5 --timer-property=AccuracySec=1s systemctl reboot >/dev/null 2>&1; else nohup sh -c "sleep 5; reboot" >/dev/null 2>&1 </dev/null & fi; echo REBOOT_SCHEDULED'"#;
+
+/// `RebootServer::handle`.
+pub async fn reboot_server(srv: &Srv) -> Result<(), String> {
+    if srv.info.transferred {
+        return Err("This server is managed by another Coolify instance.".to_string());
+    }
+    if !srv.info.is_functional() {
+        return Err("Server is not reachable or not ready.".to_string());
+    }
+    let output = srv
+        .run(&[REBOOT_COMMAND.to_string()], "patch.reboot")
+        .await?
+        .unwrap_or_default();
+    if !output.contains("REBOOT_SCHEDULED") {
+        return Err("The reboot could not be started.".to_string());
+    }
+    dispatch_patch_check(
+        &srv.jobs,
+        srv.id(),
+        srv.row.uuid.clone(),
+        Duration::from_secs(5 * 60),
+    );
+    Ok(())
+}
+
+const APT_CONFIG_FILE: &str = "/etc/apt/apt.conf.d/52coolify-unattended-upgrades";
+const APT_TIMER_DROP_IN_DIRECTORY: &str = "/etc/systemd/system/apt-daily-upgrade.timer.d";
+const DNF_CONFIG_FILE: &str = "/etc/dnf/automatic.conf";
+const DNF_TIMER_SELECTION: &str = "t=dnf-automatic.timer; if [ -e /usr/lib/systemd/system/dnf5-automatic.timer ]; then t=dnf5-automatic.timer; fi; ";
+
+/// `ConfigureAutomaticSecurityUpdates::aptConfig`.
+const APT_CONFIG: &str = r#"// Managed by Coolify: install security updates only.
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+#clear Unattended-Upgrade::Allowed-Origins;
+#clear Unattended-Upgrade::Origins-Pattern;
+Unattended-Upgrade::Origins-Pattern {
+    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+    "origin=Debian,codename=${distro_codename},label=Debian-Security";
+    "origin=Ubuntu,archive=${distro_codename}-security";
+    "origin=UbuntuESMApps,archive=${distro_codename}-apps-security";
+    "origin=UbuntuESM,archive=${distro_codename}-infra-security";
+};
+"#;
+
+/// `ConfigureAutomaticSecurityUpdates::TIME_PATTERN`.
+pub fn valid_update_time(time: &str) -> bool {
+    let b = time.as_bytes();
+    // PCRE's `$` also accepts a final newline, which `trim()` already removed.
+    b.len() == 5
+        && b[2] == b':'
+        && matches!(
+            (b[0], b[1]),
+            (b'0' | b'1', b'0'..=b'9') | (b'2', b'0'..=b'3')
+        )
+        && matches!(b[3], b'0'..=b'5')
+        && b[4].is_ascii_digit()
+}
+
+/// `ConfigureAutomaticSecurityUpdates::supportFor`.
+pub fn auto_updates_supported(package_manager: Option<&str>) -> bool {
+    matches!(package_manager, Some("apt" | "dnf"))
+}
+
+/// `ConfigureAutomaticSecurityUpdates::commands`.
+pub fn auto_update_commands(package_manager: &str, enabled: bool, time: &str) -> Vec<String> {
+    let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
+    let drop_in_text =
+        format!("[Timer]\nOnCalendar=\nOnCalendar=*-*-* {time}\nRandomizedDelaySec=0\n");
+    let drop_in = format!("{APT_TIMER_DROP_IN_DIRECTORY}/coolify.conf");
+    match (package_manager, enabled) {
+        ("apt", true) => vec![
+            "sh -c 'command -v unattended-upgrade >/dev/null 2>&1 || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades; }'".to_string(),
+            format!("mkdir -p {APT_TIMER_DROP_IN_DIRECTORY}"),
+            format!("echo '{}' | base64 -d | tee {APT_CONFIG_FILE} > /dev/null", b64(APT_CONFIG)),
+            format!("echo '{}' | base64 -d | tee {drop_in} > /dev/null", b64(&drop_in_text)),
+            format!("chmod 644 {APT_CONFIG_FILE} {drop_in}"),
+            "systemctl daemon-reload".to_string(),
+            "systemctl enable --now apt-daily.timer apt-daily-upgrade.timer".to_string(),
+        ],
+        ("apt", false) => vec![
+            format!("rm -f {APT_CONFIG_FILE} {drop_in}"),
+            "systemctl daemon-reload".to_string(),
+        ],
+        ("dnf", true) => vec![
+            "dnf install -y dnf-automatic".to_string(),
+            format!(
+                "sh -c 'set -e; f={DNF_CONFIG_FILE}; touch $f; sed -i -E \"/^[[:space:]]*(upgrade_type|apply_updates)[[:space:]]*=/d\" $f; grep -q \"^\\[commands\\]\" $f || printf \"\\n[commands]\\n\" >> $f; sed -i -e \"/^\\[commands\\]/a upgrade_type = security\" -e \"/^\\[commands\\]/a apply_updates = yes\" $f; chmod 644 $f'"
+            ),
+            format!(
+                "sh -c 'set -e; {DNF_TIMER_SELECTION}mkdir -p /etc/systemd/system/$t.d; echo {} | base64 -d > /etc/systemd/system/$t.d/coolify.conf; chmod 644 /etc/systemd/system/$t.d/coolify.conf; systemctl daemon-reload; systemctl enable --now $t'",
+                b64(&drop_in_text)
+            ),
+        ],
+        _ => vec![format!(
+            "sh -c 'set -e; {DNF_TIMER_SELECTION}if [ -e /usr/lib/systemd/system/$t ]; then systemctl disable --now $t; fi; rm -f /etc/systemd/system/$t.d/coolify.conf; systemctl daemon-reload'"
+        )],
+    }
+}
+
+/// `ConfigureAutomaticSecurityUpdates::handle`.
+pub async fn configure_auto_updates(
+    srv: &Srv,
+    package_manager: &str,
+    enabled: bool,
+    time: &str,
+) -> Result<(), String> {
+    srv.run(
+        &auto_update_commands(package_manager, enabled, time),
+        "patch.auto_updates",
+    )
+    .await
+    .map(|_| ())
 }
 
 #[cfg(test)]
@@ -827,5 +1014,14 @@ mod tests {
         );
         assert_eq!(risk_for("apt", "linux-image-6"), Some("kernel"));
         assert_eq!(update_commands(Some("pacman"), Some("'x'")), None);
+    }
+
+    #[test]
+    fn maintenance_time() {
+        assert!(valid_update_time("03:00"));
+        assert!(valid_update_time("23:59"));
+        assert!(!valid_update_time("24:00"));
+        assert!(!valid_update_time("3:00"));
+        assert!(!valid_update_time("12:60"));
     }
 }

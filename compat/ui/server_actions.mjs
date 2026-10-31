@@ -160,8 +160,9 @@ async function clickTop(page, text, { within, timeout = 15000 } = {}) {
         return !!top && (n === top || n.contains(top) || top.contains(n));
       }).catch(() => false);
       if (hit) {
-        await el.click({ timeout: 3000 });
-        return;
+        // A Livewire update can replace the element between the check and the click.
+        const clicked = await el.click({ timeout: 3000 }).then(() => true, () => false);
+        if (clicked) return;
       }
     }
     await sleep(250);
@@ -271,7 +272,7 @@ function verdict(name, ok, detail) {
 }
 
 /** One action on both sides, then everything compared. `wait` runs per side until true. */
-async function step(name, fn, { wait, settle = 2500, ignore = [] } = {}) {
+async function step(name, fn, { wait, settle = 2500, ignore = [], waitMs = 120000 } = {}) {
   const section = name.split(':')[0];
   if (only && !only.includes(section)) return;
   for (const side of ['ref', 'rs']) drainCommands(side, server[side].names);
@@ -287,7 +288,7 @@ async function step(name, fn, { wait, settle = 2500, ignore = [] } = {}) {
   }));
   await Promise.all(['ref', 'rs'].map(async (side) => {
     if (!wait) return;
-    const end = Date.now() + 120000;
+    const end = Date.now() + waitMs;
     while (Date.now() < end) {
       if (await wait(side)) return;
       await sleep(3000);
@@ -313,6 +314,19 @@ async function step(name, fn, { wait, settle = 2500, ignore = [] } = {}) {
 
 const proxyOf = (side) => json(`select proxy::text from servers where id=${server[side].id}`) ?? {};
 const proxyIs = (status) => (side) => proxyOf(side).status === status;
+
+// Sections with their own setup outside `step()`: skipped unless asked for by --only.
+const NEW_SECTIONS = ['patches', 'patches-reboot', 'patches-all', 'tunnel', 'runners', 'analytics'];
+const want = (x) => only?.includes(x);
+const settings = (side, col) => sql(`select ${col} from server_settings where server_id=${server[side].id}`);
+/** The saved patch check of one side, without what differs per VM. */
+const patchResult = (side) => normalize(settings(side, 'patch_check_result::text'), server[side].names);
+// The check runs on a queue of the reference, which can be busy: done when the saved time moved.
+const checkedAt = {};
+const markChecked = () => {
+  for (const side of ['ref', 'rs']) checkedAt[side] = settings(side, 'patch_checked_at');
+};
+const patchesDone = (side) => settings(side, 'patch_checked_at') !== checkedAt[side];
 
 // ── Setup ──────────────────────────────────────────────────────────────
 async function createServers() {
@@ -381,7 +395,113 @@ console.log(`${report.filter((l) => l.startsWith('PASS')).length}/${report.lengt
 process.exit(failed ? 1 : 0);
 
 // ── Steps ──────────────────────────────────────────────────────────────
+async function runNewSections() {
+  if (want('patches')) await runPatches();
+  if (want('patches-reboot')) await runPatchesReboot();
+  if (want('patches-all')) await runPatchesAll();
+}
+async function compareActivityLog(name) {
+  const logs = {};
+  for (const side of ['ref', 'rs']) {
+    const text = await pages[side].locator('.activity-monitor-log').last().innerText({ timeout: 5000 }).catch((e) => `no log: ${e}`);
+    logs[side] = normalize(text, server[side].names).split('\n').slice(0, 3).join('\n');
+  }
+  verdict(`${name} log start`, logs.ref === logs.rs, `ref ${logs.ref}\n     rs  ${logs.rs}`);
+}
+async function runPatches() {
+  const P = '/server/{U}/security/patches';
+  const save = async (side, freq, time) => {
+    const page = await open(side, P);
+    await field(page, 'patchCheckFrequency').fill(freq);
+    if (time !== undefined) await field(page, 'autoSecurityUpdatesTime').fill(time);
+    await sleep(600);
+    await page.keyboard.press('Enter');
+    await sleep(1500);
+  };
+  await step('patches: reject a frequency above once per hour', (side) => save(side, '*/5 * * * *'));
+  await step('patches: reject an invalid expression', (side) => save(side, 'nonsense'));
+  await step('patches: save a frequency', (side) => save(side, '0 3 * * 1'));
+  await step('patches: clear the frequency', (side) => save(side, ''));
+  markChecked();
+  await step('patches: check for updates', async (side) => {
+    const page = await open(side, P);
+    await clickTop(page, /^\s*Check for updates\s*$/);
+    await sleep(2000);
+  }, { wait: patchesDone, settle: 3000, waitMs: 400000 });
+  verdict('patches: saved result', patchResult('ref') === patchResult('rs'), `ref ${patchResult('ref').slice(0, 1500)}\n     rs  ${patchResult('rs').slice(0, 1500)}`);
+  verdict('patches: saved error', settings('ref', 'patch_check_error') === settings('rs', 'patch_check_error'), `${settings('ref', 'patch_check_error')} | ${settings('rs', 'patch_check_error')}`);
+  await step('patches: reject an invalid time', async (side) => {
+    const page = await open(side, P);
+    await field(page, 'autoSecurityUpdatesTime').fill('25:99');
+    await sleep(600);
+    await page.keyboard.press('Enter');
+    await sleep(1500);
+  });
+  await step('patches: turn on automatic updates', async (side) => {
+    const page = await open(side, P);
+    await clickTop(page, 'Turn on');
+    await confirm(page, 'Turn on');
+    await sleep(25000);
+  }, { settle: 3000 });
+  const autoFiles = (side) => vm(side, 'sh', '-c', 'cat /etc/apt/apt.conf.d/52coolify-unattended-upgrades /etc/systemd/system/apt-daily-upgrade.timer.d/coolify.conf; systemctl is-enabled apt-daily-upgrade.timer');
+  verdict('patches: automatic updates files', autoFiles('ref') === autoFiles('rs') && autoFiles('rs').includes('Managed by Coolify'), `ref ${autoFiles('ref')}\n     rs ${autoFiles('rs')}`);
+  await step('patches: change the maintenance window while on', (side) => save(side, '', '04:30'), { settle: 4000 });
+  verdict('patches: new window on the VM', autoFiles('ref') === autoFiles('rs') && autoFiles('rs').includes('04:30'), `ref ${autoFiles('ref')}\n     rs ${autoFiles('rs')}`);
+  await step('patches: turn off automatic updates', async (side) => {
+    const page = await open(side, P);
+    await clickTop(page, 'Turn off');
+    await confirm(page, 'Turn off');
+    await sleep(5000);
+  }, { settle: 3000 });
+  verdict('patches: automatic updates files removed', !autoFiles('ref').includes('Managed') && !autoFiles('rs').includes('Managed'), autoFiles('rs'));
+  await step('patches: restore the maintenance window', (side) => save(side, '', '03:00'));
+  await step('patches: update one package', async (side) => {
+    const page = await open(side, P);
+    await page.locator('.data-table-row').filter({ hasText: 'ubuntu-pro-client-l10n' }).getByRole('button', { name: 'Update', exact: true }).click();
+    await sleep(25000);
+  }, { settle: 2000 });
+  await compareActivityLog('patches: update one package');
+  for (const side of ['ref', 'rs']) await pages[side].screenshot({ path: `${out}patches_dialog-${side}.png` });
+  const version = (side) => vm(side, 'dpkg-query', '-W', 'ubuntu-pro-client-l10n');
+  verdict('patches: package updated', version('ref') === version('rs'), `${version('ref')} | ${version('rs')}`);
+  // Stays out of the state comparison: the check that the update starts ends at another moment on each side.
+  await sleep(60000);
+  verdict('patches: result after the update', patchResult('ref') === patchResult('rs'), `ref ${patchResult('ref').slice(0, 600)}\n     rs  ${patchResult('rs').slice(0, 600)}`);
+}
+async function runPatchesReboot() {
+  const P = '/server/{U}/security/patches';
+  for (const side of ['ref', 'rs']) vm(side, 'touch', '/var/run/reboot-required');
+  markChecked();
+  await step('patches-reboot: check shows reboot required', async (side) => {
+    const page = await open(side, P);
+    await clickTop(page, /^\s*Check for updates\s*$/);
+    await sleep(2000);
+  }, { wait: patchesDone, settle: 3000, waitMs: 400000 });
+  verdict('patches-reboot: result', patchResult('ref') === patchResult('rs') && patchResult('rs').includes('"reboot_required":true'), patchResult('rs').slice(0, 500));
+  await step('patches-reboot: reboot', async (side) => {
+    const page = await open(side, P);
+    await page.screenshot({ path: `${out}patches_reboot_ready-${side}.png` });
+    await clickTop(page, 'Reboot server');
+    await confirm(page, 'Reboot server', { typed: server[side].names.SERVER });
+    await sleep(3000);
+  }, { settle: 1000, ignore: ['ps', 'nets', 'files', 'ca', 'settings.', 'server.', 'proxy', 'destinations', 'ssl', 'cleanup', 'images'] });
+}
+async function runPatchesAll() {
+  const P = '/server/{U}/security/patches';
+  await step('patches-all: update all packages', async (side) => {
+    const page = await open(side, P);
+    await clickTop(page, 'Update all packages');
+    await confirm(page, 'Update All Packages', { typed: 'Update All Packages' });
+    await sleep(90000);
+  }, { settle: 2000 });
+  await compareActivityLog('patches-all: update all');
+  for (const side of ['ref', 'rs']) await pages[side].screenshot({ path: `${out}patches_all_dialog-${side}.png` });
+  const list = (side) => vm(side, 'dpkg-query', '-W', '-f', '${Package} ${Version}\n');
+  verdict('patches-all: package versions', list('ref') === list('rs'), 'versions differ');
+}
 async function runAll() {
+  await runNewSections();
+  if (only && only.every((x) => NEW_SECTIONS.includes(x))) return;
   // Proxy.
   await step('proxy: start', async (side) => {
     if (proxyOf(side).status === 'running') return;

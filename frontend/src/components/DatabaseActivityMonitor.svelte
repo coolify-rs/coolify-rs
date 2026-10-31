@@ -18,6 +18,8 @@
           .sort((a, b) => a.order - b.order)
           .map((e) => e.output)
           .join('')
+          // Blade's text goes through the HTML parser, which turns carriage returns into line feeds.
+          .replace(/\r\n?/g, '\n')
       : '',
   );
 
