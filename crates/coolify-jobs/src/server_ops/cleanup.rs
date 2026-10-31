@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::{MARKS, Srv, helper_version, shell_arg};
 use crate::Jobs;
+use crate::notifications::{self, Notification, lookup};
 
 /// `CleanupDocker::REMOTE_COMMANDS_DEADLINE`.
 const REMOTE_COMMANDS_DEADLINE: u64 = 540;
@@ -344,6 +345,17 @@ async fn run_job(srv: &Srv, manual: bool, volumes: bool, networks: bool) -> Resu
         .await;
         return Ok(());
     }
+    // `$this->server->team?->notify(new DockerCleanupSuccess|DockerCleanupFailed(...))`.
+    let notify = |message: String, success: bool| async move {
+        if let Some((team_id, server)) = lookup::server(db, srv.id()).await {
+            let n = if success {
+                Notification::DockerCleanupSuccess { server, message }
+            } else {
+                Notification::DockerCleanupFailed { server, message }
+            };
+            notifications::notify(db, srv.jobs.0.encrypter.as_ref(), team_id, n).await;
+        }
+    };
     let inner = async {
         if !manual {
             let timeout = srv.setting_int("dynamic_timeout").unwrap_or(3600);
@@ -390,18 +402,26 @@ async fn run_job(srv: &Srv, manual: bool, volumes: bool, networks: bool) -> Resu
                 },
             )
             .await;
+            notify(message, true).await;
             return Ok(());
         }
         if before.as_deref().is_none_or(str::is_empty) {
             let log = cleanup_docker(srv, volumes, networks).await?;
             let text = coolify_compat::php_json::encode(&Value::Array(log));
-            write(db, id, CleanupUpdate {
-                status: Some("success"),
-                message: Some("Docker cleanup job executed successfully, but no disk usage could be determined."),
-                cleanup_log: Some(&text),
-                ..CleanupUpdate::default()
-            })
+            let message =
+                "Docker cleanup job executed successfully, but no disk usage could be determined.";
+            write(
+                db,
+                id,
+                CleanupUpdate {
+                    status: Some("success"),
+                    message: Some(message),
+                    cleanup_log: Some(&text),
+                    ..CleanupUpdate::default()
+                },
+            )
             .await;
+            notify(message.to_owned(), true).await;
             return Ok(());
         }
         let threshold = srv.setting_int("docker_cleanup_threshold").unwrap_or(80);
@@ -432,6 +452,7 @@ async fn run_job(srv: &Srv, manual: bool, volumes: bool, networks: bool) -> Resu
                 },
             )
             .await;
+            notify(message, true).await;
         } else {
             let name = srv.str_column("name").unwrap_or_default();
             let message = format!("No cleanup needed for {name}");
@@ -445,6 +466,7 @@ async fn run_job(srv: &Srv, manual: bool, volumes: bool, networks: bool) -> Resu
                 },
             )
             .await;
+            notify(message, true).await;
         }
         Ok(())
     };
@@ -459,6 +481,11 @@ async fn run_job(srv: &Srv, manual: bool, volumes: bool, networks: bool) -> Resu
                 message: Some(&message),
                 ..CleanupUpdate::default()
             },
+        )
+        .await;
+        notify(
+            format!("Docker cleanup job failed with the following error: {message}"),
+            false,
         )
         .await;
     }

@@ -1610,10 +1610,25 @@ impl Run {
             prev.as_deref(),
             Some("finished" | "failed" | "cancelled-by-user")
         ) {
+            // `handleFailedDeployment()`
+            self.send_deployment_notification(false).await;
             self.jobs
                 .queue_next_deployment(self.app.id, self.server.id)
                 .await;
         }
+    }
+
+    /// `sendDeploymentNotification($notificationClass)`.
+    async fn send_deployment_notification(&self, success: bool) {
+        crate::notifications::lookup::notify_deployment(
+            &self.jobs.0.db,
+            self.jobs.0.encrypter.as_ref(),
+            self.app.id,
+            self.queue_id,
+            &self.commit,
+            success,
+        )
+        .await;
     }
 
     /// `post_deployment()`.
@@ -1667,6 +1682,7 @@ impl Run {
                 self.dep
             );
         }
+        self.send_deployment_notification(true).await;
     }
 
     /// `failed($e)`: the failure lines (after `failDeployment()`).

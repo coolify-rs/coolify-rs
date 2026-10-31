@@ -29,8 +29,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   (upstream only disables auto renewal there). Throttling of validations exists only on Cloud upstream.
 - Server jobs differ from upstream as follows: `remote_process` activities have no `callEventOnFinish` queue, the proxy
   file upload goes through the shell instead of scp, maintenance pages are written for "no resource in maintenance"
-  only, the CA certificate's subject key identifier is SHA-256 based, notifications (high disk usage, Traefik outdated,
-  patches, cleanup) are not sent, `PushServerUpdateJob` and `GetContainersStatus` from a Sentinel push are not run (the
+  only, the CA certificate's subject key identifier is SHA-256 based, `PushServerUpdateJob` and `GetContainersStatus` from a Sentinel push are not run (the
   heartbeat is), `RegenerateSslCertJob` after a CA change is not run, marks upstream keeps in Redis are per process. The
   scheduler (`ServerManagerJob`) runs only with `COOLIFY_RS_SERVER_SCHEDULER=1`, because an instance sharing its database
   with upstream must not check servers twice, and evaluates cron expressions in UTC. Compose merge tags (`!reset`,
@@ -44,7 +43,19 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   Secret manager `{{vault.X}}` references stop a start with a message. Upstream stores `config_hash` only when the database
   page is open after a start; coolify-rs stores it after every start. The ClickHouse "current data is not in the data
   volume" check is not ported. `Str::slug` in container labels does not transliterate non-ASCII names.
-  Reachability, backup and TCP proxy failure notifications are not sent.
+- Notifications (`crates/coolify-jobs/src/notifications`): delivery runs on tokio tasks, so queued retries are lost when
+  the process restarts. Not sent yet, because their job is not ported: `RestartLimitReached` for applications, previews
+  and databases, `ContainerRestarted` and the disk usage check of `PushServerUpdateJob`, `BackupMissing` and the
+  `VolumeBackup/*` notifications, tasks of applications and the missed runs of `ScheduledJobDeliveryService`,
+  `ApiTokenExpiringNotification`, `SslExpirationNotification`, `ForceDisabled` and `ForceEnabled` (`ServerLimitCheckJob`,
+  cloud), the `GeneralNotification` of `DeleteResourceJob` and server transfers, the combined result of a deployment to
+  several servers and previews. `StatusChanged` is ported but upstream never sends it. Its mail view reads a variable
+  `toMail` does not pass: tinker renders an empty link, a queue worker would throw. Request headers: reqwest adds
+  `Accept: */*`, which Guzzle does not send. SMTP mail is the same in from, to, subject and body but has other MIME framing
+  (Symfony and lettre differ in `Message-ID`, encoding choice and header folding). `SafeWebhookUrl` at send time uses the
+  system resolver, not `custom_dns_servers`. `mb_strwidth` for the 1000 column limit of a commit message uses a table of
+  wide ranges, not mbstring's. The internal notification of `EmailChannel` does not include the settings JSON. Telegram
+  and Pushover could only be compared on the reference through `Http::fake` (their hosts are fixed there).
 - Deliberate divergence: upstream's `POST` and `PATCH /databases/{uuid}/storages` answers carry the relation the model
   loaded on the way (`resource` or `service`): the whole database with `destination.server`, including the saved proxy
   configuration, also for tokens without `read:sensitive`. coolify-rs leaves this relation out.
@@ -156,7 +167,7 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 | `POST /services/{uuid}/clone` with `clone_volumes: true` | `501` | `VolumeCloneJob` is not ported |
 | `PATCH /services/{uuid}/databases/{database_uuid}` that changes `is_public` | `501` | `StartDatabaseProxy` / `StopDatabaseProxy` are not ported |
 | `POST /services/{uuid}/migrate` in a dev instance | `404`, as upstream outside dev | `MigrateResourceToDestination` only runs in dev upstream |
-| Scheduled tasks on their cron schedule | only `POST .../execute` runs a task | the scheduler is not ported; no notifications |
+| Scheduled tasks on their cron schedule | only `POST .../execute` runs a task | the scheduler is not ported |
 | `PullTemplatesFromCDN`, `get_service_templates(force: true)` | the shipped file, or `COOLIFY_RS_TEMPLATES_DIR` | no scheduler |
-| `CleanupDocker` after a stop, maintenance pages, secret managers (`{{vault.*}}` stops a start), managed DNS cleanup on a changed domain, restart limit notifications, `parseDockerComposeFile` for parsing versions below 3 | not run | their subsystems are not ported |
+| `CleanupDocker` after a stop, maintenance pages, secret managers (`{{vault.*}}` stops a start), managed DNS cleanup on a changed domain, `parseDockerComposeFile` for parsing versions below 3 | not run | their subsystems are not ported |
 | Order of `environment_variables`, `applications`, `databases` | ordered by id | upstream has no `ORDER BY`: Postgres returns heap order, which changes after updates |

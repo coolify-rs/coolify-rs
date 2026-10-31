@@ -1061,5 +1061,23 @@ pub async fn delete_from_provider(jobs: &Jobs, row: &ServerRow) {
     };
     if let Err(e) = result {
         tracing::error!(server_uuid = %row.uuid, error = %e, "failed to delete the server at its provider");
+        // `DeleteServer::deleteFromHetzner`: the other providers only log.
+        if provider == "hetzner"
+            && let (Some(id), Some(team_id)) = (
+                r.get("hetzner_server_id").and_then(Value::as_i64),
+                r.get("team_id").and_then(Value::as_i64),
+            )
+        {
+            crate::notifications::notify(
+                &jobs.0.db,
+                jobs.0.encrypter.as_ref(),
+                team_id,
+                crate::notifications::Notification::HetznerDeletionFailed {
+                    hetzner_server_id: id,
+                    error: coolify_compat::redact::redact_text(&e.to_string(), &[], &[]),
+                },
+            )
+            .await;
+        }
     }
 }

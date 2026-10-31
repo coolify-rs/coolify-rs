@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use super::{Srv, proxy, sentinel, version_compare, versions_data};
 use crate::Jobs;
 use crate::checks as vchecks;
+use crate::notifications::{self, Notification, TraefikServer, lookup};
 
 /// `ServerConnectionCheckJob::UNREACHABLE_THRESHOLD`.
 const UNREACHABLE_THRESHOLD: i64 = 2;
@@ -80,6 +81,8 @@ async fn connection_check(srv: &Srv) -> Result<(), String> {
         .get("unreachable_count")
         .and_then(Value::as_i64)
         .unwrap_or(0);
+    let was_reachable = srv.info.setting_bool("is_reachable") == Some(true);
+    let was_notified = lookup::unreachable_notification_sent(srv.db(), srv.id()).await;
     if !reachable {
         let count = unreachable_count + 1;
         srv.server_update(&[("unreachable_count", ColumnValue::Int(count))])
@@ -92,6 +95,16 @@ async fn connection_check(srv: &Srv) -> Result<(), String> {
             ("is_usable", ColumnValue::Bool(false)),
         ])
         .await?;
+        // `dispatchReachabilityChangedIfNeeded(..., false)`
+        if !was_notified {
+            lookup::server_reachability_changed(
+                srv.db(),
+                srv.jobs.0.encrypter.as_ref(),
+                srv.id(),
+                UNREACHABLE_THRESHOLD,
+            )
+            .await;
+        }
         return Ok(());
     }
     let target = &target;
@@ -143,10 +156,20 @@ async fn connection_check(srv: &Srv) -> Result<(), String> {
         srv.server_update(&[("unreachable_count", ColumnValue::Int(0))])
             .await?;
     }
+    // `dispatchReachabilityChangedIfNeeded(..., true)`
+    if !was_reachable || was_notified {
+        lookup::server_reachability_changed(
+            srv.db(),
+            srv.jobs.0.encrypter.as_ref(),
+            srv.id(),
+            UNREACHABLE_THRESHOLD,
+        )
+        .await;
+    }
     Ok(())
 }
 
-/// `ServerStorageCheckJob::handle`: the disk usage (the notification is not ported).
+/// `ServerStorageCheckJob::handle`.
 pub async fn server_storage_check(jobs: &Jobs, server_id: i64) -> Result<Option<String>, String> {
     let srv = Srv::load(jobs, server_id).await?;
     if !srv.info.is_functional() {
@@ -158,6 +181,38 @@ pub async fn server_storage_check(jobs: &Jobs, server_id: i64) -> Result<Option<
             "server.storage_check",
         )
         .await;
+    let percentage = usage
+        .as_deref()
+        .and_then(|u| u.trim().parse::<i64>().ok())
+        .unwrap_or(0);
+    if percentage == 0 {
+        return Ok(usage);
+    }
+    let threshold = srv
+        .setting_int("server_disk_usage_notification_threshold")
+        .unwrap_or(80);
+    if percentage > threshold {
+        if let Some((team_id, server)) = lookup::server(srv.db(), srv.id()).await {
+            let interval_hours = srv
+                .setting_int("server_disk_usage_notification_interval_hours")
+                .unwrap_or(24);
+            notifications::notify(
+                srv.db(),
+                jobs.0.encrypter.as_ref(),
+                team_id,
+                Notification::HighDiskUsage {
+                    server,
+                    disk_usage: percentage,
+                    threshold,
+                    interval_hours,
+                },
+            )
+            .await;
+        }
+    } else if percentage <= threshold - 5 {
+        // `HighDiskUsage::hasRecovered`: the next spike should alert again.
+        notifications::release_high_disk_usage(srv.db(), srv.id()).await;
+    }
     Ok(usage)
 }
 
@@ -207,8 +262,24 @@ pub async fn server_check(jobs: &Jobs, server_id: i64) -> Result<(), String> {
         let found = find("coolify-proxy").cloned();
         match found {
             None => {
-                if proxy::check_proxy(&mut srv, false).await.unwrap_or(false) {
-                    let _ = proxy::start_proxy(&mut srv, false, false, false).await;
+                if proxy::check_proxy(&mut srv, false).await.unwrap_or(false)
+                    && proxy::start_proxy(&mut srv, false, false, false)
+                        .await
+                        .is_ok()
+                    && let Some((team_id, server)) = lookup::server(srv.db(), srv.id()).await
+                {
+                    notifications::notify(
+                        srv.db(),
+                        jobs.0.encrypter.as_ref(),
+                        team_id,
+                        Notification::ContainerRestarted {
+                            name: "coolify-proxy".to_owned(),
+                            server,
+                            url: None,
+                            throttle: Some(("App\\Models\\Server".to_owned(), server_id)),
+                        },
+                    )
+                    .await;
                 }
             }
             Some(c) => {
@@ -285,10 +356,20 @@ fn newer_branch(versions: &[(String, String)], current: &str) -> Option<(String,
     best.map(|(b, v)| (format!("v{b}"), v.trim_start_matches('v').to_string()))
 }
 
-/// `CheckTraefikVersionForServerJob::handle` (the notification is not ported).
+/// `CheckTraefikVersionForServerJob::handle`.
 pub async fn check_traefik_version(jobs: &Jobs, server_id: i64) -> Result<(), String> {
     let srv = Srv::load(jobs, server_id).await?;
     let db = srv.db();
+    // `$this->previousOutdatedInfo`
+    let previous = srv
+        .row
+        .record
+        .get("traefik_outdated_info")
+        .and_then(|v| match v {
+            Value::String(s) => serde_json::from_str::<Value>(s).ok(),
+            other => Some(other.clone()),
+        })
+        .unwrap_or(Value::Null);
     let clear_info = |value: Option<String>| async move {
         ops::save_json_column(
             db,
@@ -360,7 +441,35 @@ pub async fn check_traefik_version(jobs: &Jobs, server_id: i64) -> Result<(), St
     };
     let newer = newer_branch(&versions, &branch);
     if let Some((target, latest)) = newer {
-        clear_info(Some(store(latest, "minor_upgrade", Some(target)))).await?;
+        clear_info(Some(store(
+            latest.clone(),
+            "minor_upgrade",
+            Some(target.clone()),
+        )))
+        .await?;
+        // `storeOutdatedInfo`: a repeated upgrade does not notify again, patch updates never do.
+        let repeated = previous.get("type").and_then(Value::as_str) == Some("minor_upgrade")
+            && previous.get("upgrade_target").and_then(Value::as_str) == Some(target.as_str());
+        if !repeated && let Some((team_id, server)) = lookup::server(db, server_id).await {
+            notifications::notify(
+                db,
+                jobs.0.encrypter.as_ref(),
+                team_id,
+                Notification::TraefikVersionOutdated {
+                    servers: vec![TraefikServer {
+                        name: server.name,
+                        uuid: server.uuid,
+                        current: Some(current.clone()),
+                        latest: Some(latest),
+                        update_type: Some("minor_upgrade".to_owned()),
+                        upgrade_target: Some(target),
+                        newer_branch_target: None,
+                        newer_branch_latest: None,
+                    }],
+                },
+            )
+            .await;
+        }
     } else if let Some(latest) = latest_for_branch {
         let latest = latest.trim_start_matches('v').to_string();
         if version_compare(&current, &latest) == std::cmp::Ordering::Less {

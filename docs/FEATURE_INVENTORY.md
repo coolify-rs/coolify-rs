@@ -75,7 +75,7 @@ Upstream references are relative to the upstream repository root.
 | Persistent storage, volume backups | `LocalPersistentVolume`, `VolumeBackupJob` | database storages implemented; volume backups not started |
 | Database backups to S3, restore | `DatabaseBackupJob`, `StartDatabaseImport` | implemented for every engine with a backup solution; `database_server_diff.py` |
 | Scheduled tasks, scheduler, Horizon queues | `app/Console/Kernel.php`, 72 jobs | |
-| Notifications (email, Discord, Slack, Telegram, Pushover, webhook) | `app/Notifications/*` | SSRF protections must be ported with them |
+| Sending notifications (email, Discord, Slack, Telegram, Pushover, webhook), delivery failure tracking, transactional mail | `app/Notifications/*`, `TracksDeliveryFailures` | verified: `compat/diff/notifications_diff.py` (subject, mail HTML, request bodies), `compat/diff/notifications_e2e.py` (delivery to mailpit and a local endpoint), `crates/coolify-jobs/tests/notifications_delivery.rs`; triggers not wired are in KNOWN_LIMITATIONS |
 | Terminal and file browser | `docker/coolify-terminal`, `ContainerFilesystemService` | high-risk; security review required |
 | Cloud providers (Hetzner, DigitalOcean, Vultr, Hostinger), cloud-init | controllers + jobs | |
 | MCP server, Sentinel metrics, traffic analytics | `routes/ai.php`, `SentinelController` | |

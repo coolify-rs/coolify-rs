@@ -9,7 +9,7 @@ use coolify_compat::php_json;
 use coolify_db::notification_settings::{self as ns, Channel};
 use coolify_db::records::Record;
 use coolify_db::{Db, instance_settings};
-use lettre::message::{Mailbox, SinglePart, header::ContentType};
+use lettre::message::{Mailbox, header::ContentType};
 use lettre::transport::smtp::AsyncSmtpTransportBuilder;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::client::{Tls, TlsParameters};
@@ -141,6 +141,28 @@ async fn enabled_channels(
     out
 }
 
+/// `$team->getNotificationSettings($channel)` for `Test::via`.
+async fn named_channel(
+    db: &Db,
+    encrypter: Option<&Encrypter>,
+    team_id: i64,
+    channel: &str,
+) -> Vec<(&'static Channel, Settings)> {
+    let Some(ch) = ns::ALL.iter().copied().find(|c| c.name == channel) else {
+        return Vec::new();
+    };
+    match ns::find(db, ch, team_id).await {
+        Ok(Some(row)) => vec![(
+            ch,
+            Settings {
+                row,
+                encrypter: encrypter.cloned(),
+            },
+        )],
+        _ => Vec::new(),
+    }
+}
+
 /// Queues `notification` for a team: a task for each enabled channel (`via()`), awaited here.
 pub async fn deliver_all(
     db: &Db,
@@ -149,7 +171,14 @@ pub async fn deliver_all(
     notification: &Notification,
 ) {
     let ctx = Ctx::load(db).await;
-    let channels = enabled_channels(db, encrypter, team_id, notification.event()).await;
+    let channels = match notification {
+        // `Test::via`: a named channel is used whether it is enabled or not.
+        Notification::Test {
+            channel: Some(channel),
+            ..
+        } => named_channel(db, encrypter, team_id, channel).await,
+        _ => enabled_channels(db, encrypter, team_id, notification.event()).await,
+    };
     let mut tasks = Vec::new();
     for (ch, settings) in channels {
         let (db, encrypter, ctx, notification) = (
@@ -270,7 +299,6 @@ async fn post_json(
         .build()?
         .post(url)
         .header("Content-Type", "application/json")
-        .header("Accept", "*/*")
         .body(php_json::encode(payload))
         .send()
         .await?;
@@ -338,14 +366,21 @@ async fn handle_response(
         "{channel} returned HTTP {status} ({}).",
         client_status_text(status)
     );
+    // A test notification is not tracked; its caller shows the reason.
+    let Some((ch, team)) = track else {
+        return Err(reason);
+    };
     if is_configuration_error {
-        if let Some((ch, team)) = track {
-            tracking::record_failure(db, encrypter, ch, team, &reason).await;
-        }
+        tracking::record_failure(db, encrypter, ch, team, &reason).await;
         return Ok(());
     }
     tracing::warn!(reason = %reason, "{channel} rejected the notification");
     Ok(())
+}
+
+/// `$tries`, or one try for a test notification, which reports its error to the page.
+fn attempts(notification: &Notification, tries: u32) -> u32 {
+    if notification.is_test() { 1 } else { tries }
 }
 
 /// The check at the top of the webhook jobs: `SafeWebhookUrl` and `httpClientOptions`. `None`
@@ -383,6 +418,9 @@ async fn discord(
     notification: &Notification,
 ) -> Result<(), String> {
     let mut message = notification.to_discord(ctx);
+    if !settings.flag("discord_enabled") {
+        return Ok(());
+    }
     let Some(url) = settings
         .secret("discord_webhook_url")?
         .filter(|u| truthy(Some(u)))
@@ -393,7 +431,7 @@ async fn discord(
         message.is_critical = false;
     }
     let track = (!notification.is_test()).then_some((&ns::DISCORD, team_id));
-    with_retries(5, 10, || async {
+    with_retries(attempts(notification, 5), 10, || async {
         let Some(pin) = safe_target(db, "SendMessageToDiscordJob", &url).await else {
             return Ok(());
         };
@@ -454,6 +492,9 @@ async fn slack(
     notification: &Notification,
 ) -> Result<(), String> {
     let message = notification.to_slack(ctx);
+    if !settings.flag("slack_enabled") {
+        return Ok(());
+    }
     let Some(url) = settings
         .secret("slack_webhook_url")?
         .filter(|u| truthy(Some(u)))
@@ -461,7 +502,7 @@ async fn slack(
         return Ok(());
     };
     let track = (!notification.is_test()).then_some((&ns::SLACK, team_id));
-    with_retries(5, 10, || async {
+    with_retries(attempts(notification, 5), 10, || async {
         let Some(pin) = safe_target(db, "SendMessageToSlackJob", &url).await else {
             return Ok(());
         };
@@ -542,7 +583,7 @@ async fn telegram(
         return Ok(());
     }
     let track = (!notification.is_test()).then_some((&ns::TELEGRAM, team_id));
-    with_retries(3, 10, || async {
+    with_retries(attempts(notification, 3), 10, || async {
         let response = telegram_send(ctx, &message, &token, &chat_id, thread_id.as_deref()).await?;
         let description = response.json("description").map(|v| match v {
             Value::String(s) => s,
@@ -573,6 +614,9 @@ async fn pushover(
     notification: &Notification,
 ) -> Result<(), String> {
     let message = notification.to_pushover(ctx);
+    if !settings.flag("pushover_enabled") {
+        return Ok(());
+    }
     let user = settings.secret("pushover_user_key")?;
     let token = settings.secret("pushover_api_token")?;
     let (Some(user), Some(token)) = (
@@ -583,7 +627,7 @@ async fn pushover(
     };
     let track = (!notification.is_test()).then_some((&ns::PUSHOVER, team_id));
     let url = pushover_url();
-    with_retries(5, 10, || async {
+    with_retries(attempts(notification, 5), 10, || async {
         let payload = message.to_payload(ctx, &token, &user);
         let response = request("Pushover", &url, &payload, None).await?;
         let invalid =
@@ -603,12 +647,15 @@ async fn webhook(
     ctx: &Ctx,
     notification: &Notification,
 ) -> Result<(), String> {
+    if !settings.flag("webhook_enabled") {
+        return Ok(());
+    }
     let Some(url) = settings.secret("webhook_url")?.filter(|u| truthy(Some(u))) else {
         return Ok(());
     };
     let payload = notification.to_webhook(ctx);
     let track = (!notification.is_test()).then_some((&ns::WEBHOOK, team_id));
-    with_retries(5, 10, || async {
+    with_retries(attempts(notification, 5), 10, || async {
         let Some(pin) = safe_target(db, "SendWebhookJob", &url).await else {
             return Ok(());
         };
@@ -703,7 +750,9 @@ async fn smtp_send(
         .map_err(&fail)?
         .unwrap_or_default();
 
-    let mailbox: Mailbox = format!("{} <{}>", quote_name(&from.1), from.0)
+    // Symfony leaves `"` in the header unescaped (`Notif "E2E" <a@b.c>`), which mail clients read
+    // as a quoted word: the name they show has no quotes.
+    let mailbox: Mailbox = format!("{} <{}>", quote_name(&from.1.replace('"', "")), from.0)
         .parse()
         .map_err(|e: lettre::address::AddressError| fail(e.to_string()))?;
     let mut message = lettre::Message::builder()
@@ -716,11 +765,8 @@ async fn smtp_send(
         message = message.to(mb);
     }
     let message = message
-        .singlepart(
-            SinglePart::builder()
-                .header(ContentType::TEXT_HTML)
-                .body(mail.html.clone()),
-        )
+        .header(ContentType::TEXT_HTML)
+        .body(mail.html.clone())
         .map_err(|e| fail(e.to_string()))?;
 
     let authed = if username.is_empty() {

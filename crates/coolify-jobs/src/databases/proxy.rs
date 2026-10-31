@@ -173,6 +173,26 @@ impl Jobs {
                 )
                 .await;
                 tracing::warn!(database = %d.uuid, error = %e.message, "TCP proxy disabled");
+                if let Some((team_id, server_ref)) =
+                    crate::notifications::lookup::server(&self.0.db, server.id).await
+                {
+                    let name = d.str("name").unwrap_or_default();
+                    crate::notifications::notify(
+                        &self.0.db,
+                        self.0.encrypter.as_ref(),
+                        team_id,
+                        crate::notifications::Notification::ContainerRestarted {
+                            name: format!(
+                                "TCP Proxy for {name} database has been disabled due to error: {}",
+                                e.message
+                            ),
+                            server: server_ref,
+                            url: None,
+                            throttle: None,
+                        },
+                    )
+                    .await;
+                }
                 return Ok(());
             }
             return Err(e.message);

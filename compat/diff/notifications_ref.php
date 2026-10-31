@@ -357,6 +357,10 @@ function notif_render($n, $details)
     return $out;
 }
 
+if (defined('NOTIF_LIBRARY_ONLY')) {
+    return;
+}
+
 $input = json_decode(file_get_contents('/tmp/notif-cases.json'), true);
 $output = [
     '__ctx' => [

@@ -22,6 +22,7 @@
 //! current task (tests).
 
 mod channels;
+pub mod lookup;
 mod markdown;
 mod messages;
 mod php;

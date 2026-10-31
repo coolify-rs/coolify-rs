@@ -348,7 +348,7 @@ impl Jobs {
     }
 
     /// `HasRestartLimit::trackRestartCount()`: true when this call claimed the restart limit, which
-    /// stops and removes the container (the notification is not ported).
+    /// stops and removes the container and tells the team.
     async fn track_restart_count(&self, s: &ServiceRow, part: &SubRow, observed: i64) -> bool {
         let db = &self.0.db;
         let now = Jobs::now();
@@ -367,6 +367,24 @@ impl Jobs {
         }
         let values = [("restart_limit_reached", ColumnValue::Bool(true))];
         let _ = svc::sub_update(db, part.kind, part.id, &values, now).await;
+        // `$subResource->team()?->notify(new RestartLimitReached($subResource))`
+        if let Some(environment_id) = s.int("environment_id")
+            && let Some((team_id, notification)) =
+                crate::notifications::lookup::service_part_restart_limit(
+                    db,
+                    environment_id,
+                    &part.name,
+                    &part.uuid,
+                    &s.uuid,
+                    part.str("fqdn"),
+                    observed.max(previous),
+                    max,
+                )
+                .await
+        {
+            crate::notifications::notify(db, self.0.encrypter.as_ref(), team_id, notification)
+                .await;
+        }
         let jobs = self.clone();
         let (s, part) = (s.clone(), part.clone());
         tokio::spawn(async move {
