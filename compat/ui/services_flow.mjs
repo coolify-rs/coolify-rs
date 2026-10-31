@@ -201,6 +201,25 @@ const stepsImpl = {
     await visible(p, 'Save changes').dispatchEvent('click');
     await p.waitForTimeout(4000);
   },
+  renameonly: async (p) => {
+    const name = p.locator('input[id="name"], input[wire\\:model="name"]').first();
+    await name.fill('renamed only');
+    await name.press('Enter');
+    await p.waitForTimeout(3000);
+  },
+  filesave: async (p, base) => {
+    await p.goto(base + '/storages');
+    await p.waitForTimeout(2500);
+    await p.getByRole('button', { name: /^Files \(/ }).first().click();
+    await p.waitForTimeout(1500);
+    const area = p.locator('textarea:visible').first();
+    await area.fill('{"address": "0.0.0.0", "port": 81}');
+    await p.waitForTimeout(400);
+    await area.blur();
+    await p.waitForTimeout(600);
+    await p.locator('button:visible', { hasText: 'Save changes' }).first().click({ force: true });
+    await p.waitForTimeout(4000);
+  },
   home: async (p, base) => {
     await p.goto(base);
     await p.waitForTimeout(2500);

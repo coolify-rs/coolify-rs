@@ -239,7 +239,12 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 
 | Upstream | coolify-rs | Why |
 | --- | --- | --- |
-| Livewire pages `Project/Service/*`, `one-click-service-*` in `Project/Resource/Create` | not available | later task |
+| Pages `Project/Service/{Analytics,ImportBackup,DatabaseBackups,BackupExecutions,VolumeBackup/*}` | the page says it is not available | later task |
+| `Project/Shared/*` sections on service pages (variables, tags, danger, logs, volumes and others) | placeholder named after the section | connected when the shared components merge |
+| DNS checks and Cloudflare automation on the service Domains page (`CheckDomainDnsJob`, `checkDomainDns`, `cloudflare-autoconfigure`) | rows stay "Not checked", `domain_dns_statuses` is not written, the buttons say it is not available | they contact external services |
+| `addSuggestedDomain` and `ManagedDnsRecordCleanup` on the Domains page | not ported | they need the DNS checks |
+| Configuration warning on service pages, with the diff of changes | the warning without the diff | no configuration diff yet |
+| `POST /services/{uuid}/databases/{database_uuid}/imports`, `.../uploads`, `GET .../imports/{activity_id}` | not ported | later task |
 | `PUT`/`DELETE /services/{uuid}/storages/{storage_uuid}/backups`, `.../backups/run` | `501` | S3 volume backups are not ported |
 | `POST /services/{uuid}/databases/{database_uuid}/imports`, `.../imports/uploads`, `GET .../imports/{activity_id}` | `501` | database imports are not ported |
 | `POST /services/{uuid}/clone` with `clone_volumes: true` | `501` | `VolumeCloneJob` is not ported |
