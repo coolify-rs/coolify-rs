@@ -552,6 +552,24 @@ async function runTunnel() {
     await clickTop(page, 'Update Cloudflare Tunnel');
     await sleep(3000);
   });
+  // A stub Compose file instead of a tunnel: the update path without Cloudflare.
+  for (const side of ['ref', 'rs']) {
+    vm(side, 'mkdir', '-p', '/data/coolify/cloudflared');
+    execFileSync('orb', ['-m', VM[side], '-u', 'root', 'tee', '/data/coolify/cloudflared/docker-compose.yml'], { input: 'services:\n  noop:\n    image: hello-world\n', stdio: ['pipe', 'ignore', 'ignore'] });
+  }
+  await step('tunnel: update with a stub configuration', async (side) => {
+    const page = await open(side, P);
+    await clickTop(page, 'Update Cloudflare Tunnel');
+    await sleep(25000);
+  }, { settle: 3000 });
+  await compareActivityLog('tunnel: update');
+  await shoot('update_dialog');
+  for (const side of ['ref', 'rs']) {
+    vm(side, 'docker', 'rm', '-f', 'cloudflared-noop-1');
+    vm(side, 'docker', 'network', 'rm', 'cloudflared_default');
+    vm(side, 'docker', 'rmi', 'hello-world');
+    vm(side, 'rm', '-rf', '/data/coolify/cloudflared');
+  }
   await step('tunnel: disable', async (side) => {
     const page = await open(side, P);
     await clickTop(page, 'Disable Cloudflare Tunnel');

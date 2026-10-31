@@ -39,9 +39,13 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Server and destination pages: ported are destinations (index, new, show, resources, danger), Advanced, Private Key, CA
   Certificate, Swarm, server Destinations, Resources (no canvas toggle), Proxy (configuration, dynamic configurations, TLS
   list, logs, start/stop/restart), Sentinel (configuration, logs), Docker Cleanup with executions, Images, Log Drains,
-  Registries (server and `/registries`), Terminal Access and the settings of Traffic Analytics. Not ported yet (the page
-  says "not available"): Metrics/Charts, Cloudflare Tunnel, GitHub Runners, Security Patches, Transfer, the Terminal page. Within the ported pages: deleting TLS
-  certificates and acme.json backups, enabling traffic analytics (`ConfigureTrafficAnalytics`) and the analytics charts, the
+  Registries (server and `/registries`), Terminal Access, Security Patches, Cloudflare Tunnel, GitHub Runners and the settings of Traffic Analytics. Not ported yet (the page
+  says "not available"): Transfer, the Terminal page. Cloudflare Tunnel: the setup and tear down through the Cloudflare API
+  (`CloudflareTunnelService`) and the integration token form answer with an error toast or link to the unported token page; manual mode and the
+  tunnel token path are ported. GitHub Runners: the page, settings, Sysbox install and cancel are ported; a GitHub App that is ready for runners
+  answers with an error toast, because `GithubRunnerApi`, provisioning, reconciling and the `workflow_job` webhook are not ported. Security
+  Patches: the `ServerPatchCheck` notifications are not sent. Within the ported pages: deleting TLS
+  certificates and acme.json backups, enabling traffic analytics (`ConfigureTrafficAnalytics`) and the analytics charts (`livewire:analytics`, and the top-level `/analytics` page), the
   "Proxy Startup Logs" dialog, the Docker cleanup "may be stalled" warning, and the toolbar of the shared log viewer (search,
   filter, copy, download) are missing. Saving a CA certificate checks it against P-521 keys only and does not run
   `RegenerateSslCertJob`.

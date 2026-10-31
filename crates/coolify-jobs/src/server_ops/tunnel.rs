@@ -190,17 +190,19 @@ pub async fn update_cloudflared(srv: &Srv) -> Result<i64, String> {
     Ok(activity)
 }
 
-/// `remote_process(['docker rm -f coolify-cloudflared'], ...)`: not waited for.
+/// `remote_process(['docker rm -f coolify-cloudflared'], $server, false, 10)`: the arguments land in `$type` and
+/// `$type_uuid`, so `RunRemoteProcess` refuses the activity and upstream never runs the command. Same here.
 pub async fn remove_cloudflared(srv: &Srv) -> Result<(), String> {
-    let commands = vec!["docker rm -f coolify-cloudflared".to_string()];
-    let activity = queue_activity(srv, "cloudflared.remove", None).await?;
-    let (jobs, id) = (srv.jobs.clone(), srv.id());
-    tokio::spawn(async move {
-        let Ok(s) = Srv::load(&jobs, id).await else {
-            return;
-        };
-        let _ = run_activity(&s, activity, &commands, "cloudflared.remove").await;
+    let activity = queue_activity(srv, "cloudflared.remove", Some("10")).await?;
+    let merge = serde_json::json!({
+        "type": "",
+        "status": "error",
+        "error": "Incompatible Activity to run a remote command.",
+        "failed_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
     });
+    coolify_db::databases::update_activity(srv.db(), activity, &merge, None, Jobs::now())
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
