@@ -10,8 +10,12 @@ mod compose_pack;
 mod git;
 mod preview;
 mod secrets;
+mod servers_multi;
+
+use servers_multi::multi_server_mark_queued;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -205,9 +209,25 @@ struct Run {
     queue_id: i64,
     dep: String,
     app: ApplicationRow,
+    /// `$this->server`: follows the build server while the image is built.
     server: ServerInfo,
     server_name: String,
-    target: Target,
+    target: Arc<Target>,
+    /// `$this->mainServer`: the server of this deployment's destination.
+    main_server: ServerInfo,
+    main_name: String,
+    main_target: Arc<Target>,
+    /// `$this->build_server`, when `$this->use_build_server` was ever set.
+    build_server: Option<(ServerInfo, String, Arc<Target>)>,
+    use_build_server: bool,
+    /// `$this->destination->network`.
+    network: String,
+    /// `$this->destination->id`.
+    destination_id: i64,
+    /// `$this->is_this_additional_server`.
+    is_additional: bool,
+    only_this_server: bool,
+    parent_deployment_uuid: Option<String>,
     container: String,
     commit: String,
     workdir: String,
@@ -220,7 +240,7 @@ struct Run {
     healthy: bool,
     b: BuildState,
     /// `$hiddenEnvValuesHintAdded`, shared with the output writers.
-    hint_added: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    hint_added: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// `ApplicationDeploymentQueue::HIDDEN_ENV_VALUES_HINT`.
@@ -326,7 +346,7 @@ impl Run {
     async fn init_redaction(&mut self) {
         let (known, locked) = self
             .jobs
-            .log_redaction_secrets(&self.app, self.server.id, self.b.is_preview())
+            .log_redaction_secrets(&self.app, self.main_server.id, self.b.is_preview())
             .await;
         self.known.extend(known);
         self.locked.extend(locked);
@@ -683,13 +703,27 @@ impl Jobs {
             .unwrap_or_default()
             .to_owned();
         let target = match server.target(self).await {
-            Ok(t) => t,
+            Ok(t) => Arc::new(t),
             Err(e) => {
                 tracing::warn!(deployment = %q.uuid, error = %e, "deployment cannot reach its server");
                 let _ = apps::transition_status(&self.0.db, queue_id, "failed", now()).await;
                 return;
             }
         };
+        // `$this->server->destinations()->where('id', $queue->destination_id)->first()`.
+        let destination_network = apps::destination_network(
+            &self.0.db,
+            server_id,
+            q.int("destination_id").unwrap_or_default(),
+        )
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| app.network().to_owned());
+        let is_additional = coolify_db::resource_ops::additional_server_ids(&self.0.db, app.id)
+            .await
+            .unwrap_or_default()
+            .contains(&server_id);
         let base = app
             .str("base_directory")
             .unwrap_or("/")
@@ -734,7 +768,20 @@ impl Jobs {
             workdir: format!("/artifacts/{}{base}", q.uuid),
             cfg: format!("/data/coolify/applications/{}", app.uuid),
             stop_timeout: u32::try_from(grace).unwrap_or(30),
+            network: destination_network,
+            destination_id: q.int("destination_id").unwrap_or_default(),
+            is_additional,
+            only_this_server: q.bool("only_this_server"),
+            parent_deployment_uuid: q
+                .str("parent_deployment_uuid")
+                .filter(|p| !p.is_empty())
+                .map(str::to_owned),
             app,
+            main_server: server.clone(),
+            main_name: server_name.clone(),
+            main_target: target.clone(),
+            build_server: None,
+            use_build_server: false,
             server,
             server_name,
             target,
@@ -744,7 +791,7 @@ impl Jobs {
             generated_compose: None,
             healthy: false,
             b,
-            hint_added: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            hint_added: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         run.init_redaction().await;
         if pull_request_id != 0
@@ -758,6 +805,10 @@ impl Jobs {
         // handle()
         if q.status == "cancelled-by-user" {
             run.info("Deployment was cancelled before starting.").await;
+            return;
+        }
+        if let Err(e) = run.check_multiple_servers().await {
+            run.failed(&e).await;
             return;
         }
         let host = std::env::var("HOSTNAME")
@@ -893,7 +944,7 @@ impl Jobs {
 
 impl Run {
     async fn deploy(&mut self) -> Step {
-        let net = quote(self.app.network());
+        let net = quote(&self.network);
         let containers = self
             .instant(
                 &[&format!(
@@ -924,6 +975,7 @@ impl Run {
         }
         // customRepository()
         self.load_source().await?;
+        self.select_build_server().await?;
         self.detect_buildkit().await;
         self.decide_what_to_do().await
     }
@@ -988,7 +1040,24 @@ impl Run {
 
     /// `detectBuildKitCapabilities()`.
     async fn detect_buildkit(&mut self) {
-        let name = format!("deployment server ({})", self.server_name);
+        // `$serverToCheck`: the helper has not moved to the build server yet.
+        let restore = self.use_build_server && !self.on_build_server();
+        if restore {
+            self.to_build_server();
+        }
+        self.detect_buildkit_here().await;
+        if restore {
+            self.to_main_server();
+        }
+    }
+
+    async fn detect_buildkit_here(&mut self) {
+        let kind = if self.use_build_server {
+            "build server"
+        } else {
+            "deployment server"
+        };
+        let name = format!("{kind} ({})", self.server_name);
         let version = match self
             .instant(&["docker version --format '{{.Server.Version}}'"], true)
             .await
@@ -1175,7 +1244,7 @@ impl Run {
             .unwrap_or_default();
         let env_flags = self.generate_docker_env_flags_for_secrets().await?;
         let buildx = format!("-v {home}/.docker/buildx:/root/.docker/buildx");
-        let net = quote(self.app.network());
+        let net = quote(&self.network);
         let dep = &self.dep;
         // seccompProfileMountFlags(): docker compose runs in this helper and reads the profiles.
         let seccomp = if self.b.is_preview() {
@@ -1183,7 +1252,17 @@ impl Run {
         } else {
             docker_run::seccomp_profile_mount_flags(self.app.str("custom_docker_run_options"))
         };
-        let run_command = if config == "OK" {
+        let run_command = if self.use_build_server {
+            if config == "NOK" {
+                return Err(Fail::new(format!(
+                    "Docker config file (~/.docker/config.json) of the SSH user ({}) not found on the build server ({}). Log in to your registry under Server \u{2192} Docker Registries on the build server. On a non-root server, a login made with \"sudo docker login\" is saved for root and is not used for builds.",
+                    self.server.user, self.server_name
+                )));
+            }
+            format!(
+                "docker run -d --name {dep} {env_flags} --rm -v {home}/.docker/config.json:/root/.docker/config.json:ro {buildx} -v /var/run/docker.sock:/var/run/docker.sock {helper}"
+            )
+        } else if config == "OK" {
             format!(
                 "docker run -d --network {net} --name {dep} {env_flags} --rm -v {home}/.docker/config.json:/root/.docker/config.json:ro {buildx} -v /var/run/docker.sock:/var/run/docker.sock {seccomp} {helper}"
             )
@@ -1254,11 +1333,9 @@ impl Run {
     /// `generate_compose_file()`.
     async fn generate_compose_file(&mut self, image: &str) -> Step {
         self.check_cancelled().await?;
-        let mkdir = in_docker(&self.dep, &format!("mkdir -p {}", self.workdir));
-        let cfg = format!("mkdir -p {}", self.cfg);
-        self.exec(vec![Cmd::new(mkdir), Cmd::new(cfg)]).await?;
+        self.create_workdir().await?;
         let db = self.jobs.0.db.clone();
-        let server_row = servers::find_by_id(&db, self.server.id)
+        let server_row = servers::find_by_id(&db, self.main_server.id)
             .await
             .map_err(|e| Fail::new(e.to_string()))?
             .ok_or_else(|| Fail::new("Server not found."))?;
@@ -1297,6 +1374,18 @@ impl Run {
         if self.b.is_preview() {
             labels = self.generated_labels(&server_row)?;
         }
+        // useDestinationNetworkInCaddyLabels()
+        let primary = format!("caddy_ingress_network={}", self.app.network());
+        labels = labels
+            .into_iter()
+            .map(|l| {
+                if l == primary {
+                    format!("caddy_ingress_network={}", self.network)
+                } else {
+                    l
+                }
+            })
+            .collect();
         // traefikHostRulesWithoutIpv6Brackets
         labels = labels
             .into_iter()
@@ -1365,7 +1454,7 @@ impl Run {
                 format!("{fs_path}:{}", mount_path.unwrap_or_default())
             })
             .collect();
-        let network = self.app.network().to_owned();
+        let network = self.network.clone();
         let options = self.app.str("custom_docker_run_options").map(str::to_owned);
         let mut custom = docker_run::convert_docker_run_to_compose(options.as_deref());
         if self.app.setting_bool("is_gpu_enabled") {
@@ -1407,6 +1496,8 @@ impl Run {
             volumes: &volumes,
             file_volumes: &file_volumes,
             custom,
+            swarm: self.main_server.is_swarm(),
+            preview: self.b.is_preview(),
         });
         self.generated_compose = Some(yaml);
         Ok(())
@@ -1428,7 +1519,7 @@ impl Run {
             environment_id: self.app.environment.get("id").and_then(Value::as_i64),
         };
         let mut variables: Vec<Var> =
-            env::load_for(&self.jobs.0.db, enc, &owner, Some(self.server.id))
+            env::load_for(&self.jobs.0.db, enc, &owner, Some(self.main_server.id))
                 .await
                 .map_err(Fail::new)?;
         if self.b.is_preview() {
@@ -1447,7 +1538,7 @@ impl Run {
             .get("name")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let ip = self.server.ip.clone();
+        let ip = self.main_server.ip.clone();
         let (envs, warning) = compose::runtime_env(
             &self.app,
             &variables,
@@ -1481,15 +1572,24 @@ impl Run {
         );
         self.exec(vec![Cmd::new(write_work).skip_command_log()])
             .await?;
-        let c = &self.cfg;
-        self.exec(vec![
-            Cmd::new(format!("rm -f {c}/{ENV_FILE}")).hidden(),
-            Cmd::new(format!(
-                "echo '{b64}' | base64 -d | tee {c}/{ENV_FILE} > /dev/null"
-            ))
-            .skip_command_log(),
-        ])
-        .await
+        let c = self.cfg.clone();
+        let build = self.on_build_server();
+        if build {
+            self.to_main_server();
+        }
+        let written = self
+            .exec(vec![
+                Cmd::new(format!("rm -f {c}/{ENV_FILE}")).hidden(),
+                Cmd::new(format!(
+                    "echo '{b64}' | base64 -d | tee {c}/{ENV_FILE} > /dev/null"
+                ))
+                .skip_command_log(),
+            ])
+            .await;
+        if build {
+            self.to_build_server();
+        }
+        written
     }
 
     /// `rolling_update()`.
@@ -1509,6 +1609,24 @@ impl Run {
                 .hidden(),
             ])
             .await?;
+            if self.server.is_swarm() {
+                self.info("Rolling update started.").await;
+                let u = self.app.uuid.clone();
+                self.exec(vec![Cmd::new(in_docker(
+                    &dep,
+                    &format!(
+                        "docker stack deploy --detach=true --with-registry-auth -c {w}{} {u}",
+                        self.b.compose_location
+                    ),
+                ))])
+                .await?;
+                self.info("Rolling update completed.").await;
+                return Ok(());
+            }
+            if self.use_build_server {
+                self.write_deployment_configurations().await?;
+                self.to_main_server();
+            }
             let options = self
                 .app
                 .str("custom_docker_run_options")
@@ -1588,7 +1706,7 @@ impl Run {
         let (files, owner) = self.file_storages().await?;
         let lines = self
             .jobs
-            .ensure_content_files_on_server(&owner, &files, self.server.id)
+            .ensure_content_files_on_server(&owner, &files, self.main_server.id)
             .await
             .map_err(Fail::new)?;
         for (line, kind) in lines {
@@ -1600,7 +1718,7 @@ impl Run {
     /// `start_by_compose_file()`.
     async fn start_by_compose_file(&mut self) -> Step {
         self.write_missing_content_files().await?;
-        let net = quote(self.app.network());
+        let net = quote(&self.network);
         let c = self.cfg.clone();
         let started = async {
             self.exec(vec![
@@ -1630,6 +1748,16 @@ impl Run {
                         &format!(
                             "{vars} docker compose --project-name {u} --project-directory {w} up --build -d"
                         ),
+                    ))
+                    .hidden(),
+                ])
+                .await?;
+            } else if self.use_build_server {
+                let loc = self.b.compose_location.clone();
+                let prefix = servers_multi::docker_config_prefix(&self.server);
+                self.exec(vec![
+                    Cmd::new(format!(
+                        "{prefix}{vars} docker compose --project-name {u} --project-directory {c} -f {c}{loc} up --pull always --build -d"
                     ))
                     .hidden(),
                 ])
@@ -1666,6 +1794,10 @@ impl Run {
 
     /// `health_check()`.
     async fn health_check(&mut self) -> Step {
+        if self.server.is_swarm() {
+            // Implement healthcheck for swarm
+            return Ok(());
+        }
         let enabled = self
             .app
             .raw
@@ -1912,9 +2044,13 @@ impl Run {
             Some("finished" | "failed" | "cancelled-by-user")
         ) {
             // `handleFailedDeployment()`
-            self.send_deployment_notification(false).await;
+            if let Some(parent) = self.parent_deployment_uuid.clone() {
+                self.send_multi_server_notification(&parent).await;
+            } else {
+                self.send_deployment_notification(false).await;
+            }
             self.jobs
-                .queue_next_deployment(self.app.id, self.server.id)
+                .queue_next_deployment(self.app.id, self.main_server.id)
                 .await;
         }
     }
@@ -1956,7 +2092,7 @@ impl Run {
         ) {
             self.handle_successful_deployment().await;
             self.jobs
-                .queue_next_deployment(self.app.id, self.server.id)
+                .queue_next_deployment(self.app.id, self.main_server.id)
                 .await;
         }
     }
@@ -2000,7 +2136,22 @@ impl Run {
                 self.dep
             );
         }
-        self.send_deployment_notification(true).await;
+        if let Some(parent) = self.parent_deployment_uuid.clone() {
+            self.send_multi_server_notification(&parent).await;
+            return;
+        }
+        let queued = if self.only_this_server {
+            0
+        } else {
+            self.deploy_to_additional_destinations().await
+        };
+        if queued == 0 {
+            self.send_deployment_notification(true).await;
+            return;
+        }
+        multi_server_mark_queued(&self.dep);
+        let dep = self.dep.clone();
+        self.send_multi_server_notification(&dep).await;
     }
 
     /// `failed($e)`: the failure lines (after `failDeployment()`).
@@ -2069,6 +2220,9 @@ impl Run {
     async fn write_deployment_configurations(&mut self) -> Step {
         let finished = now();
         if self.app.setting_bool("is_preserve_repository_enabled") {
+            if self.use_build_server {
+                self.to_main_server();
+            }
             let (c, dep, w) = (self.cfg.clone(), self.dep.clone(), self.workdir.clone());
             self.exec(vec![
                 Cmd::new(format!("mkdir -p {c}")),
@@ -2081,12 +2235,18 @@ impl Run {
                 .filter(|f| !f.is_host_file && !f.is_based_on_git && !f.is_directory)
             {
                 self.jobs
-                    .save_storage_on(&owner, file, self.server.id)
+                    .save_storage_on(&owner, file, self.main_server.id)
                     .await
                     .map_err(Fail::new)?;
             }
+            if self.use_build_server {
+                self.to_build_server();
+            }
         }
         if let Some(yaml) = self.generated_compose.clone() {
+            if self.use_build_server {
+                self.to_main_server();
+            }
             let name = sanitize_string(self.app.str("name").unwrap_or_default());
             let readme = format!(
                 "Resource name: {name}\nLatest Deployment Date: {}",
@@ -2110,6 +2270,9 @@ impl Run {
                 Cmd::new(format!("echo '{readme}' | tee {c}/README.md > /dev/null")),
             ])
             .await?;
+            if self.use_build_server {
+                self.to_build_server();
+            }
         }
         Ok(())
     }
@@ -2154,7 +2317,13 @@ impl Run {
         )
         .await;
         // Log but don't fail: configuration writing errors shouldn't prevent status updates.
-        if let Err(Fail::Error { message, .. }) = self.write_deployment_configurations().await {
+        let written = if self.use_build_server {
+            self.to_build_server();
+            Ok(())
+        } else {
+            self.write_deployment_configurations().await
+        };
+        if let Err(Fail::Error { message, .. }) = written {
             self.log(
                 &format!("Warning: Failed to write deployment configurations: {message}"),
                 "stderr",

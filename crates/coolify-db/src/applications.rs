@@ -6,6 +6,7 @@ use chrono::NaiveDateTime;
 use coolify_domain::{TeamId, new_public_id};
 use serde_json::Value;
 
+use crate::application_ops::SWARM_DOCKER_MORPH;
 use crate::databases::STANDALONE_DOCKER_MORPH;
 use crate::records::{ENVIRONMENT, PROJECT, Record, STANDALONE_DOCKER, TEAM, parse_row};
 use crate::servers::{ColumnValue, bind_all, set_clause};
@@ -84,7 +85,8 @@ fn select(filter: &str) -> String {
     format!(
         "SELECT row_to_json(a)::text, (SELECT row_to_json(s)::text FROM application_settings s WHERE s.application_id = a.id ORDER BY s.id LIMIT 1), \
          row_to_json(e)::text, row_to_json(p)::text, row_to_json(t)::text, \
-         (SELECT row_to_json(sd)::text FROM standalone_dockers sd WHERE a.destination_type = '{STANDALONE_DOCKER_MORPH}' AND sd.id = a.destination_id) \
+         COALESCE((SELECT row_to_json(sd)::text FROM standalone_dockers sd WHERE a.destination_type = '{STANDALONE_DOCKER_MORPH}' AND sd.id = a.destination_id), \
+         (SELECT row_to_json(sw)::text FROM swarm_dockers sw WHERE a.destination_type = '{SWARM_DOCKER_MORPH}' AND sw.id = a.destination_id)) \
          FROM applications a JOIN environments e ON e.id = a.environment_id JOIN projects p ON p.id = e.project_id \
          JOIN teams t ON t.id = p.team_id WHERE a.deleted_at IS NULL AND {filter}"
     )
@@ -169,8 +171,11 @@ pub async fn list_for_environment(db: &Db, environment_id: i64) -> DbResult<Vec<
 /// `Server::applications()`: applications on the server's standalone Docker destinations.
 pub async fn list_for_server(db: &Db, server_id: i64) -> DbResult<Vec<ApplicationRow>> {
     let rows: Vec<Joined> = sqlx::query_as(&select(&format!(
-        "a.destination_type = '{STANDALONE_DOCKER_MORPH}' AND a.destination_id IN \
-         (SELECT id FROM standalone_dockers WHERE server_id = $1) ORDER BY a.id"
+        "((a.destination_type = '{STANDALONE_DOCKER_MORPH}' AND a.destination_id IN \
+         (SELECT id FROM standalone_dockers WHERE server_id = $1)) \
+         OR (a.destination_type = '{SWARM_DOCKER_MORPH}' AND a.destination_id IN \
+         (SELECT id FROM swarm_dockers WHERE server_id = $1)) \
+         OR a.id IN (SELECT application_id FROM additional_destinations WHERE server_id = $1)) ORDER BY a.id"
     )))
     .bind(server_id)
     .fetch_all(db.pool())
@@ -203,6 +208,8 @@ pub struct NewApplication {
     pub uuid: String,
     pub environment_id: i64,
     pub destination_id: i64,
+    /// `destination_type`: the morph class of `destination_id`.
+    pub destination_type: &'static str,
     pub columns: Vec<(&'static str, ColumnValue)>,
     pub settings: Vec<(&'static str, ColumnValue)>,
 }
@@ -253,7 +260,7 @@ pub async fn create(db: &Db, n: NewApplication, now: NaiveDateTime) -> DbResult<
         sqlx::query(&sql)
             .bind(n.environment_id)
             .bind(n.destination_id)
-            .bind(STANDALONE_DOCKER_MORPH)
+            .bind(n.destination_type)
             .bind(now),
         &cols,
     )
@@ -663,6 +670,91 @@ pub struct NewDeployment {
     pub commit_message: Option<String>,
     pub docker_registry_image_tag: Option<String>,
     pub build_server_id: Option<i64>,
+    pub parent_deployment_uuid: Option<String>,
+}
+
+/// `$server->destinations()->where('id', $id)->first()->network`.
+pub async fn destination_network(
+    db: &Db,
+    server_id: i64,
+    destination_id: i64,
+) -> DbResult<Option<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT network FROM standalone_dockers WHERE server_id = $1 AND id = $2 \
+         UNION ALL SELECT network FROM swarm_dockers WHERE server_id = $1 AND id = $2 LIMIT 1",
+    )
+    .bind(server_id)
+    .bind(destination_id)
+    .fetch_optional(db.pool())
+    .await?)
+}
+
+/// `additional_servers()->updateExistingPivot($server->id, ['status' => $status])`.
+pub async fn set_additional_status(
+    db: &Db,
+    application_id: i64,
+    server_id: i64,
+    status: &str,
+    now: NaiveDateTime,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query(
+        "UPDATE additional_destinations SET status = $3, updated_at = $4 WHERE application_id = $1 AND server_id = $2 AND status IS DISTINCT FROM $3",
+    )
+    .bind(application_id)
+    .bind(server_id)
+    .bind(status)
+    .bind(now)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
+/// `$this->additional_servers->pluck('pivot.status')`.
+pub async fn additional_statuses(db: &Db, application_id: i64) -> DbResult<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT status FROM additional_destinations WHERE application_id = $1 ORDER BY id",
+    )
+    .bind(application_id)
+    .fetch_all(db.pool())
+    .await?)
+}
+
+/// `Server::buildServers($teamId)`: id of each usable build server of the team.
+pub async fn build_server_ids(db: &Db, team_id: i64, except: i64) -> DbResult<Vec<i64>> {
+    Ok(sqlx::query_scalar(
+        "SELECT s.id FROM servers s JOIN server_settings st ON st.server_id = s.id \
+         WHERE s.team_id = $1 AND s.id <> $2 AND s.deleted_at IS NULL AND st.is_reachable AND st.is_usable \
+         AND NOT st.is_swarm_worker AND NOT st.force_disabled \
+         AND COALESCE(st.server_role, CASE WHEN st.is_build_server THEN 'build' ELSE 'all' END) = 'build' \
+         AND NOT EXISTS (SELECT 1 FROM github_runner_configs g WHERE g.server_id = s.id AND g.is_enabled)",
+    )
+    .bind(team_id)
+    .bind(except)
+    .fetch_all(db.pool())
+    .await?)
+}
+
+/// `$team->is_build_server_fallback_enabled`.
+pub async fn build_server_fallback_enabled(db: &Db, team_id: i64) -> DbResult<bool> {
+    Ok(sqlx::query_scalar::<_, Option<bool>>(
+        "SELECT is_build_server_fallback_enabled FROM teams WHERE id = $1",
+    )
+    .bind(team_id)
+    .fetch_optional(db.pool())
+    .await?
+    .flatten()
+    .unwrap_or(false))
+}
+
+/// `parent_deployment_uuid` children: `(deployment_uuid, status)`.
+pub async fn child_deployments(db: &Db, parent: &str) -> DbResult<Vec<(String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT deployment_uuid, status FROM application_deployment_queues WHERE parent_deployment_uuid = $1 ORDER BY id",
+    )
+    .bind(parent)
+    .fetch_all(db.pool())
+    .await?)
 }
 
 /// `ApplicationDeploymentQueue::create(...)`; `id` of the new row.
@@ -671,8 +763,8 @@ pub async fn insert_deployment(db: &Db, n: &NewDeployment, now: NaiveDateTime) -
     Ok(sqlx::query_scalar(
         "INSERT INTO application_deployment_queues (application_id, deployment_uuid, pull_request_id, force_rebuild, commit, status, \
          is_webhook, created_at, updated_at, restart_only, git_type, server_id, application_name, server_name, deployment_url, \
-         destination_id, only_this_server, rollback, commit_message, is_api, build_server_id, docker_registry_image_tag) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) RETURNING id",
+         destination_id, only_this_server, rollback, commit_message, is_api, build_server_id, docker_registry_image_tag, parent_deployment_uuid) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING id",
     )
     .bind(n.application_id.to_string())
     .bind(&n.deployment_uuid)
@@ -695,6 +787,7 @@ pub async fn insert_deployment(db: &Db, n: &NewDeployment, now: NaiveDateTime) -
     .bind(n.is_api)
     .bind(n.build_server_id.map(|v| v as i32))
     .bind(&n.docker_registry_image_tag)
+    .bind(&n.parent_deployment_uuid)
     .fetch_one(db.pool())
     .await?)
 }

@@ -405,6 +405,84 @@ pub struct ComposeInput<'a> {
     /// `convertDockerRunToCompose($application->custom_docker_run_options)`, without the `--gpus`
     /// devices when the GPU settings apply.
     pub custom: PhpValue,
+    /// `$this->mainServer->isSwarm()`.
+    pub swarm: bool,
+    /// `$this->pull_request_id !== 0`.
+    pub preview: bool,
+}
+
+/// The Swarm part of `generate_compose_file()`.
+fn swarm_service(a: &ApplicationRow, c: &ComposeInput<'_>, service: &mut PhpValue) {
+    for key in [
+        "container_name",
+        "expose",
+        "restart",
+        "mem_limit",
+        "memswap_limit",
+        "mem_swappiness",
+        "mem_reservation",
+        "cpus",
+        "cpuset",
+        "cpu_shares",
+    ] {
+        service.remove(key);
+    }
+    let s = |k: &str| PhpValue::from(a.str(k).unwrap_or_default());
+    let limits = || PhpValue::map([("cpus", s("limits_cpus")), ("memory", s("limits_memory"))]);
+    let mut deploy = PhpValue::map([
+        ("mode", PhpValue::from("replicated")),
+        (
+            "replicas",
+            PhpValue::Int(a.int("swarm_replicas").unwrap_or(1)),
+        ),
+        (
+            "update_config",
+            PhpValue::map([("order", PhpValue::from("start-first"))]),
+        ),
+        (
+            "rollback_config",
+            PhpValue::map([("order", PhpValue::from("start-first"))]),
+        ),
+        ("labels", PhpValue::strings(c.labels.clone())),
+        (
+            "resources",
+            PhpValue::map([("limits", limits()), ("reservations", limits())]),
+        ),
+    ]);
+    // `Yaml::parse(base64_decode(...))` merged over the deploy section.
+    if let Some(constraints) = a
+        .str("swarm_placement_constraints")
+        .filter(|t| !t.is_empty())
+        .and_then(|t| base64::engine::general_purpose::STANDARD.decode(t).ok())
+        .and_then(|t| String::from_utf8(t).ok())
+        .and_then(|t| coolify_compat::yaml_parse::parse(&t, 50).ok())
+        && let PhpValue::Array(items) = constraints
+    {
+        for (k, v) in items {
+            if let coolify_compat::yaml::Key::Str(k) = k {
+                deploy.set(&k, v);
+            }
+        }
+    }
+    if a.setting_bool("is_swarm_only_worker_nodes") {
+        let worker = PhpValue::from("node.role == worker");
+        if deploy.get_mut("placement").is_none() {
+            deploy.set("placement", PhpValue::list([]));
+        }
+        if let Some(placement) = deploy.get_mut("placement") {
+            if placement.get_mut("constraints").is_none() {
+                placement.set("constraints", PhpValue::list([]));
+            }
+            if let Some(PhpValue::Array(list)) = placement.get_mut("constraints") {
+                let next = i64::try_from(list.len()).unwrap_or_default();
+                list.push((coolify_compat::yaml::Key::Int(next), worker));
+            }
+        }
+    }
+    if c.preview {
+        deploy.set("replicas", PhpValue::Int(1));
+    }
+    service.set("deploy", deploy);
 }
 
 /// `generate_compose_file()` → `Yaml::dump($docker_compose, 10)`.
@@ -485,21 +563,31 @@ pub fn compose(c: &ComposeInput<'_>) -> String {
     if let Some(Value::String(cpuset)) = a.raw.get("limits_cpuset") {
         service.set("cpuset", PhpValue::from(cpuset.as_str()));
     }
-    service.set("labels", PhpValue::strings(c.labels.clone()));
+    if c.swarm {
+        swarm_service(a, c, &mut service);
+    } else {
+        service.set("labels", PhpValue::strings(c.labels.clone()));
+    }
     if a.setting_bool("is_gpu_enabled") {
-        service.set(
-            "deploy",
-            PhpValue::map([(
-                "resources",
+        let devices = PhpValue::list([super::docker_run::gpu_device_reservation(&a.settings)]);
+        // `$docker_compose['services'][...]['deploy']['resources']['reservations']['devices']`.
+        let reservations = c
+            .swarm
+            .then(|| service.get_mut("deploy"))
+            .flatten()
+            .and_then(|d| d.get_mut("resources"))
+            .and_then(|r| r.get_mut("reservations"));
+        if let Some(reservations) = reservations {
+            reservations.set("devices", devices);
+        } else {
+            service.set(
+                "deploy",
                 PhpValue::map([(
-                    "reservations",
-                    PhpValue::map([(
-                        "devices",
-                        PhpValue::list([super::docker_run::gpu_device_reservation(&a.settings)]),
-                    )]),
+                    "resources",
+                    PhpValue::map([("reservations", PhpValue::map([("devices", devices)]))]),
                 )]),
-            )]),
-        );
+            );
+        }
     }
     if let Some(p) = a.str("ports_mappings").filter(|p| !p.is_empty()) {
         service.set("ports", PhpValue::strings(p.split(',').map(str::to_owned)));

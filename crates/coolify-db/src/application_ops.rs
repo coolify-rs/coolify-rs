@@ -330,6 +330,31 @@ pub async fn destination_by_morph(
         .await?)
 }
 
+/// `$server->destinations()`: the standalone Docker networks, then the Swarm ones:
+/// `(id, uuid, morph class)`.
+pub async fn all_destinations(
+    db: &Db,
+    server_id: i64,
+) -> DbResult<Vec<(i64, String, &'static str)>> {
+    let mut out: Vec<(i64, String, &'static str)> = Vec::new();
+    for (table, morph) in [
+        (
+            "standalone_dockers",
+            crate::databases::STANDALONE_DOCKER_MORPH,
+        ),
+        ("swarm_dockers", SWARM_DOCKER_MORPH),
+    ] {
+        let rows: Vec<(i64, String)> = sqlx::query_as(&format!(
+            "SELECT id, uuid::text FROM {table} WHERE server_id = $1 ORDER BY id"
+        ))
+        .bind(server_id)
+        .fetch_all(db.pool())
+        .await?;
+        out.extend(rows.into_iter().map(|(id, uuid)| (id, uuid, morph)));
+    }
+    Ok(out)
+}
+
 /// `$application->additional_networks`, with the pivot's `server_id`.
 pub async fn additional_networks(db: &Db, application_id: i64) -> DbResult<Vec<DestinationRow>> {
     Ok(sqlx::query_as(

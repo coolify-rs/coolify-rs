@@ -811,6 +811,7 @@ struct CreateContext {
     server_settings: Map<String, Value>,
     environment_id: i64,
     destination_id: i64,
+    destination_type: &'static str,
     /// `$tagNames`.
     tag_names: Vec<String>,
     /// `$applicationSettings`.
@@ -973,10 +974,7 @@ async fn create_prologue(
         );
         return Err(ApiError::Validation(m));
     }
-    if coolify_db::databases::has_swarm_destinations(&state.db, server.id).await? {
-        return Err(ApiError::NotPorted);
-    }
-    let destinations = coolify_db::databases::destinations(&state.db, server.id).await?;
+    let destinations = coolify_db::application_ops::all_destinations(&state.db, server.id).await?;
     if destinations.is_empty() {
         return Err(ApiError::Message(
             StatusCode::BAD_REQUEST,
@@ -989,13 +987,13 @@ async fn create_prologue(
             "Server has multiple destinations and you do not set destination_uuid.",
         ));
     }
-    let mut destination_id = destinations[0].0;
+    let (mut destination_id, mut destination_type) = (destinations[0].0, destinations[0].2);
     if destinations.len() > 1 {
         let wanted = input.str("destination_uuid").unwrap_or_default();
-        destination_id = destinations
+        (destination_id, destination_type) = destinations
             .iter()
-            .find(|(_, u)| u == wanted)
-            .map(|(id, _)| *id)
+            .find(|(_, u, _)| u == wanted)
+            .map(|(id, _, morph)| (*id, *morph))
             .ok_or_else(|| {
                 let mut m = Map::new();
                 m.insert(
@@ -1018,6 +1016,7 @@ async fn create_prologue(
         server_settings,
         environment_id: env.id,
         destination_id,
+        destination_type,
         tag_names,
         settings,
     })
@@ -1248,6 +1247,7 @@ async fn finish_create(
             uuid: uuid.clone(),
             environment_id: cx.environment_id,
             destination_id: cx.destination_id,
+            destination_type: cx.destination_type,
             columns,
             settings,
         },
@@ -1934,13 +1934,12 @@ pub(super) fn random_str(n: usize) -> String {
 }
 
 /// What a start, restart, stop or delete of this application needs that coolify-rs lacks.
-pub(super) async fn deployable(state: &AppState, a: &ApplicationRow) -> Result<(), ApiError> {
+pub(super) async fn deployable(_state: &AppState, a: &ApplicationRow) -> Result<(), ApiError> {
     // Every build pack of the deploy job.
     let unsupported = !matches!(
         a.str("build_pack"),
         Some("dockerimage" | "dockerfile" | "static" | "nixpacks" | "railpack" | "dockercompose")
-    ) || a.destination.is_none()
-        || !apps::unported_parts(&state.db, a.id).await?.is_empty();
+    ) || a.destination.is_none();
     if unsupported {
         Err(ApiError::NotPorted)
     } else {
