@@ -17,6 +17,7 @@ pub mod routes;
 pub mod rules;
 pub mod safe_url;
 pub mod serialize;
+pub mod server_transfer;
 pub mod session;
 pub mod state;
 pub mod ui;

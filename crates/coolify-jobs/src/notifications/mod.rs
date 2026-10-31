@@ -362,3 +362,14 @@ pub fn render(
 pub fn render_mail(ctx: &Ctx, mail: &Mail) -> MailMessage {
     mail.render(ctx)
 }
+
+/// `$team->notify(new GeneralNotification($message, success: $success))`.
+pub fn spawn_team_general(
+    db: &coolify_db::Db,
+    encrypter: Option<&coolify_compat::Encrypter>,
+    team_id: i64,
+    message: String,
+    success: bool,
+) {
+    channels::spawn_general(db, encrypter, team_id, messages::general(message, success));
+}
