@@ -412,6 +412,7 @@ dependencies = [
  "coolify-domain",
  "coolify-jobs",
  "coolify-remote",
+ "hmac",
  "http-body-util",
  "md-5",
  "rand 0.8.8",

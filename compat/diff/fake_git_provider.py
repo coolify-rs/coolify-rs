@@ -151,6 +151,9 @@ class Handler(BaseHTTPRequestHandler):
                 segs = path[len(prefix):].split("/", 1)
                 if len(segs) == 2:
                     return self.git("/" + segs[1], query)
+        # GitHub App clones drop the path of html_url (and its port).
+        if path.startswith("/o/"):
+            return self.git("/" + path[len("/o/"):], query)
         if path == "/__log":
             with LOCK:
                 return self.send(200, LOG)
@@ -287,4 +290,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     REPO_DIR = args.repo_dir
     ensure_repo()
+    # Port 80 too when it is free: upstream's GitHub App clone URL has no port.
+    try:
+        threading.Thread(target=ThreadingHTTPServer(("0.0.0.0", 80), Handler).serve_forever, daemon=True).start()
+    except OSError:
+        pass
     ThreadingHTTPServer(("0.0.0.0", args.port), Handler).serve_forever()
