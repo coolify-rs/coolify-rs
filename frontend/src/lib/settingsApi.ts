@@ -54,6 +54,7 @@ export const settingsUi = {
   updatesAction: (action: string, values: Values = {}) => post('updates', action, values),
   upgradeState: () => request<UpgradeState>('GET', '/ui/settings/upgrade'),
   upgrade: () => request<ActionResult>('POST', '/ui/settings/upgrade', {}),
+  upgradeStatus: () => request<{ status: string; step?: number; message?: string }>('GET', '/ui/settings/upgrade/status'),
   email: () => request<ActionResult & { test_email: string }>('GET', '/ui/settings/email'),
   emailAction: (action: string, values: Values) => post('email', action, values),
   backup: () => request<BackupPayload>('GET', '/ui/settings/backup'),

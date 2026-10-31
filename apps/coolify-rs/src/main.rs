@@ -451,6 +451,12 @@ async fn run() -> Result<()> {
             }
             let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
             if let (Some(seeded), Some(jobs)) = (seeded, &state.jobs) {
+                let lookup = state.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = coolify_api::ui_settings::get_public_ips(&lookup).await {
+                        tracing::warn!(error = ?e, "could not save the public IPs");
+                    }
+                });
                 coolify_jobs::first_run::spawn_after_start(jobs, seeded);
                 coolify_jobs::updates::spawn_schedule(jobs, state.version.to_string());
             }

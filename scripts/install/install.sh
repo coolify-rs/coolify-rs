@@ -6,6 +6,7 @@
 ## COOLIFY_RS_CDN - Where install.sh, upgrade.sh, the Compose files and versions.json are published (required on the first run)
 ## COOLIFY_RS_IMAGE - Image name without registry and tag (default: coolify-rs/coolify-rs)
 ## COOLIFY_RS_PULL - Set to "false" when the coolify-rs image is already on this server and must not be pulled
+## COOLIFY_RS_IMAGE_FILE - Load the coolify-rs image from this file (docker save) instead of pulling it
 ## ROOT_USERNAME - Predefined root username
 ## ROOT_USER_EMAIL - Predefined root user email
 ## ROOT_USER_PASSWORD - Predefined root user password
@@ -1071,6 +1072,12 @@ log "SSH key check completed"
 step_done "$SSH_KEY_DETAIL"
 
 step_start "Pulling images" "coolify · postgres · redis · helper"
+# An image from a file instead of a registry, for a server that cannot or should not pull it.
+if [ -n "${COOLIFY_RS_IMAGE_FILE:-}" ]; then
+    docker load -i "$COOLIFY_RS_IMAGE_FILE"
+    COOLIFY_RS_PULL=false
+    set_env_var "COOLIFY_RS_PULL" "false"
+fi
 # fd 3 is closed so the detached container restart in upgrade.sh does not hold the terminal open
 if [[ $- == *x* ]]; then
     bash -x /data/coolify/source/upgrade.sh "${LATEST_VERSION:-latest}" "${LATEST_HELPER_VERSION:-latest}" "${REGISTRY_URL:-docker.io}" "true" 3>&-

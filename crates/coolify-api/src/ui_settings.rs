@@ -618,6 +618,26 @@ async fn detect_public_ips() -> Vec<(&'static str, String)> {
     detected
 }
 
+/// `get_public_ips()` at startup: looks up only what is blank.
+pub async fn get_public_ips(state: &AppState) -> Result<(), ApiError> {
+    let row = settings::row(&state.db).await?;
+    let blank = |k: &str| row.get(k).and_then(Value::as_str).is_none_or(str::is_empty);
+    if !blank("public_ipv4") && !blank("public_ipv6") {
+        return Ok(());
+    }
+    for (column, ip) in detect_public_ips().await {
+        if blank(column) {
+            settings::update(
+                &state.db,
+                &[(column, ColumnValue::Text(Some(ip)))],
+                state.now(),
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
 async fn general_action(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,

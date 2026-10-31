@@ -201,10 +201,17 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Deployments: additional servers, build servers and registry pushes are not ported or not compared with the reference (`git_deploy_diff.py` runs one server without a registry). `current_process_id` stays empty, and commands that upstream feeds on stdin carry their input inside the script. Jobs run in the coolify-rs process: a restart drops a running deployment.
 - No proxy management, backups, scheduler, notifications or webhooks yet. SSH runs without
   connection multiplexing (one connection per command).
-- coolify-rs cannot bootstrap a new installation: it requires a database created by upstream Coolify at the baseline
-  (`main` @ b5823c7, 473 migrations); it runs no upstream DDL. A 4.5.0 database is served read-only until upstream
-  is upgraded.
-  New installations are planned as Milestone 7 of IMPLEMENTATION_ROADMAP.md.
+- New installations (`scripts/install`, `coolify-rs boot`) use the baseline schema; a 4.5.0 database is served read-only
+  until upstream is upgraded. No image or publishing address exists yet, so `COOLIFY_RS_CDN` has no default and the
+  image name `coolify-rs/coolify-rs` is a placeholder. A clean install differs from upstream's in what
+  `compat/diff/install_diff.py` lists as explained: no key files or mux sockets on disk (ADR 0009), ports 6001 and 6002
+  are not published, no `applications`, `databases`, `services` or `backups` mounts.
+- `app:init` at startup: `cleanup:redis`, `cleanup:names`, `cleanup:stucked-resources`, `replaceSlashInEnvironmentName`,
+  `restoreCoolifyDbBackup`, `updateUserEmails` and `cleanupUnusedNetworkFromCoolifyProxy` are not run. The alive signal to
+  upstream's telemetry address is not ported on purpose.
+- `RootUserSeeder`: the password is not checked against the breach list, because the server sends nothing to a third party
+  while it starts.
+- `upgrade-postgres.sh` is upstream's script unchanged and was not run.
 
 ## Keys, notifications, tags, shared variables and S3 pages
 
@@ -362,8 +369,6 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
 
 | Area | Upstream | coolify-rs | Why |
 |---|---|---|---|
-| `Upgrade::upgrade` | runs `UpdateCoolify` | the badge, the full button and the confirmation show; "Upgrade now" answers that upgrading from the UI is not available. No progress view | upstream's action replaces the container with its own image, which is not what a coolify-rs instance runs |
-| `is_auto_update_enabled` | the scheduler installs updates | stored only | same; no scheduler |
 | `Settings\Index::buildHelperImage`, the Development helper section | `isDev()` only | not ported | no dev mode |
 | Check now, Detect, Help without mail settings | `cdn.coollabs.io`, `ifconfig.io`, `app.coolify.io` | the same hosts; `COOLIFY_RS_VERSIONS_URL`, `COOLIFY_RS_IFCONFIG_URL` and `COOLIFY_RS_FEEDBACK_URL` replace them in tests. `CheckTraefikVersionJob` is not dispatched by Check now. Only verified against local fakes | no test may reach them |
 | File download storage on S3 (`FileDownloadStorageService`) | checks the bucket and adds a lifecycle rule | a storage other than the stored one is refused with upstream's "not available" message | not ported |

@@ -111,7 +111,7 @@ Upstream references are relative to the upstream repository root.
 | Cloud providers (Hetzner, DigitalOcean, Vultr, Hostinger), cloud-init | controllers + jobs | |
 | MCP server, Sentinel metrics, traffic analytics | `routes/ai.php`, `SentinelController` | |
 | Traffic analytics charts (server page and `/analytics`) | `Livewire\Analytics`, `SentinelTrafficClient`, `TrafficAnalyticsAggregator`, `TrafficResource` | `crates/coolify-api/src/ui_server_analytics.rs`, `frontend/src/components/analytics/`, compared by `compat/ui/analytics_compare.mjs` |
-| Install / upgrade scripts, self-update | `scripts/install.sh`, `upgrade.sh`, `UpdateCoolifyJob` | planned, Milestone 7 of IMPLEMENTATION_ROADMAP.md |
+| Install / upgrade scripts, self-update | `scripts/install.sh`, `upgrade.sh`, `ProductionSeeder`, `UpdateCoolify`, `UpdateCoolifyJob`, `CheckForUpdatesJob`, `Upgrade` | ported (`scripts/install`, `coolify-rs boot`, `crates/coolify-jobs/src/first_run.rs`, `updates.rs`), compared on two fresh VMs (`compat/diff/install_diff.py`, `compat/ui/install_firstrun.mjs`) |
 | Billing (Stripe, cloud only) | `app/Http/Controllers/Webhook/Stripe.php` | out of scope (self-hosted focus) |
 
 ## 4. Migration engine features
