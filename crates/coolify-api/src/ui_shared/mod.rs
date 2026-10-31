@@ -5,8 +5,11 @@
 
 pub mod advanced;
 pub mod config;
+pub mod destination;
 pub mod envs;
+pub mod files;
 pub mod logs;
+pub mod maintenance;
 pub mod operations;
 pub mod secret_manager;
 pub mod storages;
@@ -29,6 +32,9 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .merge(envs::routes())
         .merge(advanced::routes())
         .merge(logs::routes())
+        .merge(destination::routes())
+        .merge(files::routes())
+        .merge(maintenance::routes())
         .merge(operations::routes())
         .merge(config::routes())
         .merge(secret_manager::routes())

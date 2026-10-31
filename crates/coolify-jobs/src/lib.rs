@@ -9,6 +9,7 @@ pub mod checks;
 pub mod cloud;
 pub mod compose_parser;
 pub mod databases;
+pub mod file_browser;
 pub mod git_http;
 pub mod gitea;
 pub mod github;

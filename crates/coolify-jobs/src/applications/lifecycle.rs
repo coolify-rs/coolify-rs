@@ -13,7 +13,7 @@ use crate::server::ServerInfo;
 
 impl Jobs {
     /// The application's containers on its server (`getCurrentApplicationContainerStatus`).
-    async fn application_containers(
+    pub async fn application_containers(
         &self,
         target: &coolify_remote::Target,
         uuid: &str,
@@ -141,6 +141,22 @@ impl Jobs {
         None
     }
 
+    /// `StopApplicationOneServer::run`: the error message when something failed.
+    pub async fn stop_application_on(&self, a: &ApplicationRow, server_id: i64) -> Option<String> {
+        let db = &self.0.db;
+        let row = servers::find_by_id(db, server_id).await.ok().flatten()?;
+        let server = ServerInfo::from_row(&row);
+        if !server.is_functional() {
+            return Some("Server is not functional".to_owned());
+        }
+        let t = match server.target(self).await {
+            Ok(t) => t,
+            Err(e) => return Some(e),
+        };
+        let errors = self.stop_containers_on(a, &server, &t, false, true).await;
+        (!errors.is_empty()).then(|| errors.join(" "))
+    }
+
     /// The loop over `getCurrentApplicationContainerStatus()` of `StopApplication`.
     async fn stop_containers_on(
         &self,
@@ -249,8 +265,25 @@ impl Jobs {
                     tracing::warn!(application = %a.uuid, error = %e, "Remote backup cleanup failed while deleting resource");
                 }
             }
+            // `$resource->maintenanceServers()` before the rows go.
+            let maintenance_servers = if a.bool("is_maintenance_enabled") {
+                let mut ids: Vec<i64> = a.server_id().into_iter().collect();
+                ids.extend(
+                    ops::additional_server_ids(&db, a.id)
+                        .await
+                        .unwrap_or_default(),
+                );
+                ids
+            } else {
+                Vec::new()
+            };
             if let Err(e) = apps::force_delete(&db, a.id, Utc::now().naive_utc()).await {
                 tracing::warn!(application = %a.uuid, error = %e, "application rows could not be deleted");
+            }
+            if let Err(e) =
+                crate::server_ops::proxy::sync_maintenance_pages(&jobs, &maintenance_servers).await
+            {
+                tracing::warn!(application = %a.uuid, error = %e, "Maintenance page cleanup failed while deleting resource.");
             }
         });
     }

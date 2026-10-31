@@ -333,6 +333,167 @@ pub async fn create_environment(
     .await?)
 }
 
+/// `Server::maintenanceResources()`: what `setupMaintenancePages` writes.
+#[derive(Debug, Clone)]
+pub struct MaintenanceResource {
+    pub uuid: String,
+    pub page: Option<String>,
+    /// `maintenanceDomains()`: `(url, force_https)`.
+    pub domains: Vec<(String, bool)>,
+}
+
+fn domains_of_list(fqdn: Option<&str>, force: bool) -> Vec<(String, bool)> {
+    fqdn.unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(|d| (d.to_owned(), force))
+        .collect()
+}
+
+/// Applications and services of the server with maintenance mode on.
+pub async fn maintenance_resources(db: &Db, server_id: i64) -> DbResult<Vec<MaintenanceResource>> {
+    type AppRow = (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+        Option<bool>,
+    );
+    let rows: Vec<AppRow> = sqlx::query_as(
+        "SELECT a.uuid, a.maintenance_page, a.fqdn, a.docker_compose_domains, a.build_pack, st.is_force_https_enabled \
+         FROM applications a LEFT JOIN application_settings st ON st.application_id = a.id \
+         WHERE a.deleted_at IS NULL AND a.is_maintenance_enabled = true AND ( \
+           (a.destination_type = 'App\\Models\\StandaloneDocker' AND a.destination_id IN (SELECT id FROM standalone_dockers WHERE server_id = $1)) \
+           OR (a.destination_type = 'App\\Models\\SwarmDocker' AND a.destination_id IN (SELECT id FROM swarm_dockers WHERE server_id = $1)) \
+           OR a.id IN (SELECT application_id FROM additional_destinations WHERE server_id = $1)) ORDER BY a.id",
+    )
+    .bind(server_id)
+    .fetch_all(db.pool())
+    .await?;
+    let mut out = Vec::new();
+    for (uuid, page, fqdn, compose, build_pack, force) in rows {
+        let force = force.unwrap_or(false);
+        let domains = if build_pack == "dockercompose" {
+            let parsed: serde_json::Value = compose
+                .as_deref()
+                .and_then(|c| serde_json::from_str(c).ok())
+                .unwrap_or(serde_json::Value::Null);
+            let mut list = Vec::new();
+            if let Some(services) = parsed.as_object() {
+                for service in services.values() {
+                    list.extend(domains_of_list(
+                        service.get("domain").and_then(serde_json::Value::as_str),
+                        force,
+                    ));
+                }
+            }
+            list
+        } else {
+            domains_of_list(fqdn.as_deref(), force)
+        };
+        out.push(MaintenanceResource {
+            uuid,
+            page,
+            domains,
+        });
+    }
+    let services: Vec<(i64, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, uuid, maintenance_page FROM services WHERE deleted_at IS NULL AND is_maintenance_enabled = true AND server_id = $1 ORDER BY id",
+    )
+    .bind(server_id)
+    .fetch_all(db.pool())
+    .await?;
+    for (id, uuid, page) in services {
+        let subs: Vec<(Option<String>, bool)> = sqlx::query_as(
+            "SELECT fqdn, is_force_https_enabled FROM service_applications WHERE service_id = $1 ORDER BY id",
+        )
+        .bind(id)
+        .fetch_all(db.pool())
+        .await?;
+        out.push(MaintenanceResource {
+            uuid,
+            page,
+            domains: subs
+                .iter()
+                .flat_map(|(f, force)| domains_of_list(f.as_deref(), *force))
+                .collect(),
+        });
+    }
+    Ok(out)
+}
+
+/// `$resource->fill(['is_maintenance_enabled' => ..., 'maintenance_page' => ...])->save()`.
+pub async fn set_maintenance(
+    db: &Db,
+    table: &str,
+    id: i64,
+    enabled: Option<bool>,
+    page: Option<Option<&str>>,
+    now: NaiveDateTime,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    if let Some(enabled) = enabled {
+        sqlx::query(&format!(
+            "UPDATE {table} SET is_maintenance_enabled = $2, updated_at = $3 WHERE id = $1 AND is_maintenance_enabled <> $2"
+        ))
+        .bind(id)
+        .bind(enabled)
+        .bind(now)
+        .execute(db.pool())
+        .await?;
+    }
+    if let Some(page) = page {
+        sqlx::query(&format!(
+            "UPDATE {table} SET maintenance_page = $2, updated_at = $3 WHERE id = $1 AND maintenance_page IS DISTINCT FROM $2"
+        ))
+        .bind(id)
+        .bind(page)
+        .bind(now)
+        .execute(db.pool())
+        .await?;
+    }
+    Ok(())
+}
+
+/// The primary destination of a resource: `(id, uuid, name, network, server id, server uuid, server name)`.
+pub async fn destination_info(
+    db: &Db,
+    table: &str,
+    id: i64,
+) -> DbResult<Option<(i64, String, String, String, i64, String, String)>> {
+    Ok(sqlx::query_as(&format!(
+        "SELECT d.id, d.uuid, d.name, d.network, s.id, s.uuid, s.name FROM {table} r \
+         JOIN (SELECT id, uuid, name, network, server_id, 'App\\Models\\StandaloneDocker' AS morph FROM standalone_dockers \
+               UNION ALL SELECT id, uuid, name, network, server_id, 'App\\Models\\SwarmDocker' FROM swarm_dockers) d \
+           ON d.morph = r.destination_type AND d.id = r.destination_id \
+         JOIN servers s ON s.id = d.server_id WHERE r.id = $1"
+    ))
+    .bind(id)
+    .fetch_optional(db.pool())
+    .await?)
+}
+
+/// One row of `$networks`: `(id, name, server id, server name)`.
+pub async fn team_standalone_networks(
+    db: &Db,
+    team_id: i64,
+) -> DbResult<Vec<(i64, String, i64, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT d.id, d.name, s.id, s.name FROM servers s \
+         JOIN server_settings st ON st.server_id = s.id \
+         JOIN standalone_dockers d ON d.server_id = s.id \
+         WHERE s.team_id = $1 AND s.deleted_at IS NULL AND st.is_reachable = true AND st.is_usable = true \
+           AND st.is_swarm_worker = false AND st.force_disabled = false \
+           AND COALESCE(st.server_role, CASE WHEN st.is_build_server THEN 'build' ELSE 'server' END) <> 'build' \
+         ORDER BY s.name, d.id",
+    )
+    .bind(team_id)
+    .fetch_all(db.pool())
+    .await?)
+}
+
 // ---------------------------------------------------------------------------
 // clone_application()
 
@@ -666,4 +827,15 @@ pub async fn clone_application(
 
     tx.commit().await?;
     Ok((new_id, new_previews, new_volumes))
+}
+
+/// `StandaloneDocker::query()->where('server_id', $serverId)->findOrFail($id)`.
+pub async fn standalone_on_server(db: &Db, network_id: i64, server_id: i64) -> DbResult<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM standalone_dockers WHERE id = $1 AND server_id = $2)",
+    )
+    .bind(network_id)
+    .bind(server_id)
+    .fetch_one(db.pool())
+    .await?)
 }

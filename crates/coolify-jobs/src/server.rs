@@ -110,7 +110,7 @@ impl ServerInfo {
     }
 
     /// `PrivateKey::where('team_id', $server->team_id)->findOrFail($server->private_key_id)`, decrypted.
-    pub(crate) async fn target(&self, jobs: &Jobs) -> Result<Target, String> {
+    pub async fn target(&self, jobs: &Jobs) -> Result<Target, String> {
         let key_id = self.private_key_id.unwrap_or_default();
         let key = private_keys::find_by_id(&jobs.0.db, self.team_id, key_id)
             .await

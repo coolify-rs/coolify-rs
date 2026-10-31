@@ -5,6 +5,7 @@
 use base64::Engine as _;
 use coolify_compat::yaml::{self, PhpValue};
 use coolify_db::destinations;
+use coolify_db::resource_ops::{self, MaintenanceResource};
 use coolify_db::server_ops as ops;
 use coolify_db::servers::ColumnValue;
 use coolify_remote::{RunOptions, Stream};
@@ -211,7 +212,7 @@ async fn connect_proxy_to_networks(srv: &Srv) -> Result<Vec<String>, String> {
     .collect())
 }
 
-/// `Server::caddyBaseCaddyfile()` without maintenance resources (maintenance mode is not ported).
+/// `Server::caddyBaseCaddyfile()` before the proxy runs; `setupMaintenancePages` adds the blocks.
 fn caddy_base_caddyfile() -> String {
     "import /dynamic/*.caddy\n".to_string()
 }
@@ -644,7 +645,11 @@ async fn setup_proxy_error_page_container(srv: &Srv) -> Result<(), String> {
         return Ok(());
     }
     let container = PROXY_ERROR_PAGE_CONTAINER;
-    if !uses_proxy_error_page(srv) {
+    let in_maintenance = !resource_ops::maintenance_resources(&srv.jobs.0.db, srv.row.id)
+        .await
+        .map_err(|e| e.to_string())?
+        .is_empty();
+    if !uses_proxy_error_page(srv) && !in_maintenance {
         srv.run(
             &[format!("docker rm -f {container} >/dev/null 2>&1 || true")],
             "proxy.error_page",
@@ -674,38 +679,276 @@ async fn setup_proxy_error_page_container(srv: &Srv) -> Result<(), String> {
     Ok(())
 }
 
-/// `Server::setupMaintenancePages` for a server without resources in maintenance mode.
+/// `view('proxy.maintenance-page')->render()`.
+const DEFAULT_MAINTENANCE_PAGE: &str = include_str!("maintenance-page.html");
+
+/// `maintenanceRoutes()` of one resource.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaintenanceRoute {
+    pub scheme: String,
+    pub host: String,
+    pub path: String,
+    pub force_https: bool,
+}
+
+/// `Url::fromString($url)` for what `maintenanceRoutes()` reads, and its checks: `None` skips it.
+fn maintenance_route(url: &str, force_https: bool) -> Option<MaintenanceRoute> {
+    let url = url.trim();
+    let (scheme, rest) = url.split_once("://")?;
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let rest = rest.split(['?', '#']).next().unwrap_or_default();
+    let (authority, path) = match rest.find('/') {
+        Some(i) => rest.split_at(i),
+        None => (rest, ""),
+    };
+    let authority = authority.rsplit('@').next().unwrap_or_default();
+    let host = authority.split(':').next().unwrap_or_default();
+    let path = if path.is_empty() { "/" } else { path };
+    let host_ok = !host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        && host
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric())
+        && host
+            .chars()
+            .last()
+            .is_some_and(|c| c.is_ascii_alphanumeric());
+    let path_ok = path.starts_with('/')
+        && path
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._~%-".contains(c));
+    (host_ok && path_ok).then(|| MaintenanceRoute {
+        scheme: scheme.to_owned(),
+        host: host.to_owned(),
+        path: path.to_owned(),
+        force_https,
+    })
+}
+
+/// `maintenanceRoutes()`: valid and unique.
+fn maintenance_routes(domains: &[(String, bool)]) -> Vec<MaintenanceRoute> {
+    let mut routes: Vec<MaintenanceRoute> = Vec::new();
+    for (url, force) in domains {
+        if let Some(r) = maintenance_route(url, *force)
+            && !routes
+                .iter()
+                .any(|o| o.scheme == r.scheme && o.host == r.host && o.path == r.path)
+        {
+            routes.push(r);
+        }
+    }
+    routes
+}
+
+/// `Server::maintenanceTraefikConfiguration`.
+fn maintenance_traefik_configuration(resources: &[MaintenanceResource]) -> Option<String> {
+    let mut routers: Vec<(String, PhpValue)> = Vec::new();
+    let mut middlewares: Vec<(String, PhpValue)> = Vec::new();
+    for resource in resources {
+        let routes = maintenance_routes(&resource.domains);
+        if routes.is_empty() {
+            continue;
+        }
+        let middleware = format!("coolify-maintenance-{}", resource.uuid);
+        middlewares.push((
+            middleware.clone(),
+            PhpValue::map([(
+                "errors",
+                PhpValue::map([
+                    ("status", PhpValue::strings(["503"])),
+                    ("service", PhpValue::Str("coolify-maintenance-pages".into())),
+                    (
+                        "query",
+                        PhpValue::Str(format!("/maintenance-{}.html", resource.uuid)),
+                    ),
+                ]),
+            )]),
+        ));
+        for (index, route) in routes.iter().enumerate() {
+            let rule = format!("Host(`{}`) && PathPrefix(`{}`)", route.host, route.path);
+            let priority = i64::try_from(rule.len()).unwrap_or(0) + 1;
+            let router = |entry: &str, tls: bool| {
+                let mut fields = vec![
+                    ("entryPoints", PhpValue::strings([entry])),
+                    ("rule", PhpValue::Str(rule.clone())),
+                    ("service", PhpValue::Str("coolify-maintenance-noop".into())),
+                    (
+                        "middlewares",
+                        PhpValue::strings(["coolify-maintenance-headers", middleware.as_str()]),
+                    ),
+                    ("priority", PhpValue::Int(priority)),
+                ];
+                if tls {
+                    fields.push((
+                        "tls",
+                        PhpValue::map([("certResolver", PhpValue::Str("letsencrypt".into()))]),
+                    ));
+                }
+                PhpValue::map(fields)
+            };
+            routers.push((
+                format!("coolify-maintenance-{}-{index}-http", resource.uuid),
+                router("http", false),
+            ));
+            if route.scheme == "https" {
+                routers.push((
+                    format!("coolify-maintenance-{}-{index}-https", resource.uuid),
+                    router("https", true),
+                ));
+            }
+        }
+    }
+    if routers.is_empty() {
+        return None;
+    }
+    middlewares.push((
+        "coolify-maintenance-headers".to_owned(),
+        PhpValue::map([(
+            "headers",
+            PhpValue::map([(
+                "customResponseHeaders",
+                PhpValue::map([("Retry-After", PhpValue::Str("300".into()))]),
+            )]),
+        )]),
+    ));
+    let services = PhpValue::map([
+        (
+            "coolify-maintenance-noop",
+            PhpValue::map([(
+                "loadBalancer",
+                PhpValue::map([("servers", PhpValue::Array(Vec::new()))]),
+            )]),
+        ),
+        (
+            "coolify-maintenance-pages",
+            PhpValue::map([(
+                "loadBalancer",
+                PhpValue::map([(
+                    "servers",
+                    PhpValue::list([PhpValue::map([(
+                        "url",
+                        PhpValue::Str(format!("http://{PROXY_ERROR_PAGE_CONTAINER}:80")),
+                    )])]),
+                )]),
+            )]),
+        ),
+    ]);
+    let http = PhpValue::map([
+        ("routers", PhpValue::map(routers)),
+        ("middlewares", PhpValue::map(middlewares)),
+        ("services", services),
+    ]);
+    Some(format!(
+        "# This file is generated by Coolify, do not edit it manually.\n\n{}",
+        yaml::dump_with_indent(&PhpValue::map([("http", http)]), 12, 2)
+    ))
+}
+
+/// `Server::caddyBaseCaddyfile`.
+fn maintenance_caddyfile(resources: &[MaintenanceResource]) -> String {
+    let mut sites: Vec<(String, Vec<String>)> = Vec::new();
+    for resource in resources {
+        for (index, route) in maintenance_routes(&resource.domains).iter().enumerate() {
+            // `caddySiteAddress()`.
+            let address = if route.scheme == "https" && !route.force_https {
+                format!("http://{0}, https://{0}", route.host)
+            } else {
+                format!("{}://{}", route.scheme, route.host)
+            };
+            let matcher = format!("@coolify-maintenance-{}-{index}", resource.uuid);
+            let block = [
+                format!("\t{matcher} path {}*", route.path),
+                format!("\thandle {matcher} {{"),
+                format!("\t\treverse_proxy {PROXY_ERROR_PAGE_CONTAINER}:80 {{"),
+                format!("\t\t\trewrite /maintenance-{}.html", resource.uuid),
+                "\t\t\theader_down Retry-After 300".to_owned(),
+                "\t\t\thandle_response {".to_owned(),
+                "\t\t\t\tcopy_response 503".to_owned(),
+                "\t\t\t}".to_owned(),
+                "\t\t}".to_owned(),
+                "\t}".to_owned(),
+            ]
+            .join("\n");
+            match sites.iter_mut().find(|(a, _)| *a == address) {
+                Some((_, blocks)) => blocks.push(block),
+                None => sites.push((address, vec![block])),
+            }
+        }
+    }
+    let mut caddyfile = "import /dynamic/*.caddy".to_owned();
+    for (address, blocks) in sites {
+        caddyfile.push_str(&format!("\n\n{address} {{\n{}\n}}", blocks.join("\n")));
+    }
+    caddyfile.push('\n');
+    caddyfile
+}
+
+/// `Server::setupMaintenancePages`.
 pub async fn setup_maintenance_pages(srv: &Srv) -> Result<(), String> {
     let proxy_type = srv.proxy_type();
     if srv.info.is_swarm() || !matches!(proxy_type, Some("TRAEFIK" | "CADDY")) {
         return Ok(());
     }
+    let resources = resource_ops::maintenance_resources(&srv.jobs.0.db, srv.row.id)
+        .await
+        .map_err(|e| e.to_string())?;
     let path = format!("{BASE_CONFIG_DIR}/proxy/error-pages");
+    let keep: String = resources
+        .iter()
+        .map(|r| format!("! -name 'maintenance-{}.html' ", r.uuid))
+        .collect();
     srv.run(
         &[
             format!("mkdir -p {path}"),
-            format!("find {path} -maxdepth 1 -name 'maintenance-*.html' -delete"),
+            format!("find {path} -maxdepth 1 -name 'maintenance-*.html' {keep}-delete"),
         ],
         "proxy.maintenance",
     )
     .await?;
     setup_proxy_error_page_container(srv).await?;
+    for r in &resources {
+        let html = r
+            .page
+            .as_deref()
+            .filter(|p| !p.trim().is_empty())
+            .unwrap_or(DEFAULT_MAINTENANCE_PAGE);
+        upload_proxy_file(srv, &format!("{path}/maintenance-{}.html", r.uuid), html).await?;
+    }
     let dynamic = format!("{}/dynamic", srv.proxy_path());
     srv.run(&[format!("mkdir -p {dynamic}")], "proxy.maintenance")
         .await?;
     if proxy_type == Some("TRAEFIK") {
-        srv.run(
-            &[format!("rm -f {dynamic}/coolify-maintenance.yaml")],
-            "proxy.maintenance",
-        )
-        .await?;
+        let file = format!("{dynamic}/coolify-maintenance.yaml");
+        match maintenance_traefik_configuration(&resources) {
+            None => {
+                srv.run(&[format!("rm -f {file}")], "proxy.maintenance")
+                    .await?;
+            }
+            Some(configuration) => upload_proxy_file(srv, &file, &configuration).await?,
+        }
     } else {
         upload_proxy_file(
             srv,
             &format!("{dynamic}/Caddyfile"),
-            &caddy_base_caddyfile(),
+            &maintenance_caddyfile(&resources),
         )
         .await?;
+    }
+    Ok(())
+}
+
+/// `syncMaintenancePage($servers)`: every functional server of the resource.
+pub async fn sync_maintenance_pages(jobs: &Jobs, server_ids: &[i64]) -> Result<(), String> {
+    for id in server_ids {
+        let srv = Srv::load(jobs, *id).await?;
+        if srv.info.is_functional() {
+            setup_maintenance_pages(&srv).await?;
+        }
     }
     Ok(())
 }
