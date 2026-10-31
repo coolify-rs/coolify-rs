@@ -61,6 +61,8 @@ Report only what you verified. Say plainly what failed, what you skipped and wha
 - Delete everything you create on the reference, the database and the VM. Never touch data you did not create.
 - Comments cite what they port (`/// \`serviceParser()\``). Match the surrounding code; reuse existing helpers.
 - Never commit secrets. Fixtures use a test `app.key`.
+- Never change the password of alice, bob or carol: upstream's `DeletesUserSessions` then revokes all their API tokens
+  for everyone. If `tokens.json` answers 401, `scripts/reference-seed.sh` adds fresh tokens and does not revoke any.
 - Frontend API clients for a new area go in a new `frontend/src/lib/<area>Api.ts`, not `api.ts`.
 - Keep edits to shared files small (`routes/mod.rs`, `ui.rs`, `router.svelte.ts`, `App.svelte`, `api.ts`, docs); other
   branches change them too. Put new code in new modules.
