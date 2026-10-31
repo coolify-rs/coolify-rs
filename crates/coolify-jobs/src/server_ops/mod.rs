@@ -198,6 +198,22 @@ impl Srv {
             .await
     }
 
+    /// One attempt with a time limit: a failure is an error, as in `SentinelTrafficClient::runRemote`.
+    pub async fn run_once(
+        &self,
+        commands: &[String],
+        op: &'static str,
+        timeout: Duration,
+    ) -> Result<Option<String>, String> {
+        let t = self.target().await?;
+        let refs: Vec<&str> = commands.iter().map(String::as_str).collect();
+        self.jobs
+            .remote()
+            .run(&t, &refs, RunOptions::op(op).attempts(1).timeout(timeout))
+            .await
+            .map_err(|e| e.message)
+    }
+
     pub async fn run_timeout(
         &self,
         commands: &[String],

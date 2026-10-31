@@ -9,6 +9,7 @@ export interface Match {
 const routes: { name: string; pattern: string }[] = [
   { name: 'login', pattern: '/login' },
   { name: 'dashboard', pattern: '/' },
+  { name: 'analytics', pattern: '/analytics' },
   { name: 'projects', pattern: '/projects' },
   { name: 'project', pattern: '/project/:uuid' },
   { name: 'project-edit', pattern: '/project/:uuid/edit' },

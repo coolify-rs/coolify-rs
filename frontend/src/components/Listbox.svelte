@@ -9,6 +9,8 @@
     label: string;
     description?: string;
     disabled?: boolean;
+    /** Non-selectable group header. */
+    header?: boolean;
   }
 
   let {
@@ -61,7 +63,7 @@
   const visible = $derived.by(() => {
     const q = query.toLowerCase().trim();
     if (!searchable || q === '') return options;
-    return options.filter((o) => [o.label, String(o.value), o.description].some((t) => String(t ?? '').toLowerCase().includes(q)));
+    return options.filter((o) => !o.header && [o.label, String(o.value), o.description].some((t) => String(t ?? '').toLowerCase().includes(q)));
   });
   function focusSearch(node: HTMLInputElement) {
     queueMicrotask(() => node.focus());
@@ -106,7 +108,7 @@
   }
 
   function choose(o: Option) {
-    if (o.disabled) return;
+    if (o.header || o.disabled) return;
     if (multiple) {
       values = isSelected(o) ? values.filter((v) => String(v) !== String(o.value)) : [...values, o.value];
       onchange?.(o.value);
@@ -192,6 +194,9 @@
         {/if}
         {#each visible as o (String(o.value))}
           <div>
+            {#if o.header}
+              <div class="mt-1 border-t border-neutral-100 px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wide text-neutral-400 uppercase dark:border-white/[0.06] dark:text-fg-faint">{o.label}</div>
+            {:else}
             <button
               type="button"
               class="listbox-option {o.disabled ? 'listbox-option-disabled' : ''}"
@@ -215,6 +220,7 @@
                 </svg>
               {/if}
             </button>
+            {/if}
           </div>
         {/each}
         {#if customOption}

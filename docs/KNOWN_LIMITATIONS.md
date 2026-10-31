@@ -45,10 +45,12 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   tunnel token path are ported. GitHub Runners: the page, settings, Sysbox install and cancel are ported; a GitHub App that is ready for runners
   answers with an error toast, because `GithubRunnerApi`, provisioning, reconciling and the `workflow_job` webhook are not ported. Security
   Patches: the `ServerPatchCheck` notifications are not sent. Within the ported pages: deleting TLS
-  certificates and acme.json backups, enabling traffic analytics (`ConfigureTrafficAnalytics`) and the analytics charts (`livewire:analytics`, and the top-level `/analytics` page), the
+  certificates and acme.json backups, the
   "Proxy Startup Logs" dialog, the Docker cleanup "may be stalled" warning, and the toolbar of the shared log viewer (search,
   filter, copy, download) are missing. Saving a CA certificate checks it against P-521 keys only and does not run
-  `RegenerateSslCertJob`.
+  `RegenerateSslCertJob`. Traffic analytics: the charts of the server page and of `/analytics` are ported (Traefik verified, the Caddy proxy not run);
+  the dashboard widget (`Dashboard\TrafficAnalytics`) and the application and service analytics pages (`ResourceTrafficAnalytics`), where the "Top applications" rows link, are not. After a filter change, rows of a list with equal values can
+  stand in another order than on the reference, which keeps the previous DOM order for ties; a fresh load has the same order.
 - Validation jobs run inside the coolify-rs process: a restart drops a running validation (upstream's queue keeps it).
 - Databases (all 9 engines; API, proxy, SSL, backups, imports; the pages for them are a later task): the API routes of
   `/databases/{uuid}/storages/{storage_uuid}/backups` (volume backups, `VolumeBackupJob`) are not ported (501).

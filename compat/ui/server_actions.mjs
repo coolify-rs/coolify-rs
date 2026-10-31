@@ -316,7 +316,7 @@ const proxyOf = (side) => json(`select proxy::text from servers where id=${serve
 const proxyIs = (status) => (side) => proxyOf(side).status === status;
 
 // Sections with their own setup outside `step()`: skipped unless asked for by --only.
-const NEW_SECTIONS = ['patches', 'patches-reboot', 'patches-all', 'tunnel', 'runners', 'analytics'];
+const NEW_SECTIONS = ['patches', 'patches-reboot', 'patches-all', 'tunnel', 'runners', 'analytics', 'analytics-off'];
 const want = (x) => only?.includes(x);
 const settings = (side, col) => sql(`select ${col} from server_settings where server_id=${server[side].id}`);
 /** The saved patch check of one side, without what differs per VM. */
@@ -401,6 +401,49 @@ async function runNewSections() {
   if (want('patches-all')) await runPatchesAll();
   if (want('tunnel')) await runTunnel();
   if (want('runners')) await runRunners();
+  if (want('analytics')) await runAnalytics(true);
+  if (want('analytics-off')) await runAnalytics(false);
+}
+// `ConfigureTrafficAnalytics` on both sides: the toggle, then the proxy compose file (in `vmState`),
+// containers, Sentinel env and mounts. Traffic is generated between the two sections.
+async function runAnalytics(enable) {
+  const P = '/server/{U}/analytics';
+  const title = `${enable ? 'Enable' : 'Disable'} traffic analytics`;
+  const section = enable ? 'analytics' : 'analytics-off';
+  const sentinel = (side) => {
+    const raw = vm(side, 'docker', 'inspect', 'coolify-sentinel', '--format', '{{json .Config.Env}} {{json .Mounts}} {{.State.Status}}');
+    const [env, mounts, status] = raw.trim().split(' ');
+    const names = server[side].names;
+    return {
+      env: JSON.parse(env || '[]').filter((e) => !/^TOKEN=/.test(e)).map((e) => normalize(e, names)).sort(),
+      mounts: JSON.parse(mounts || '[]').map((m) => `${normalize(m.Source, names)}:${m.Destination}:${m.RW}`).sort(),
+      status,
+    };
+  };
+  const has = (side) => {
+    const on = settings(side, 'is_traffic_analytics_enabled') === 't';
+    const compose = vm(side, 'cat', '/data/coolify/proxy/docker-compose.yml');
+    const ps = vm(side, 'docker', 'ps', '--format', '{{.Names}}');
+    return on === enable
+      && compose.includes('--accesslog') === enable
+      && ps.includes('coolify-sentinel')
+      && ps.includes('coolify-proxy')
+      && sentinel(side).status === 'running'
+      && proxyOf(side).status === 'running';
+  };
+  await step(`${section}: ${title}`, async (side) => {
+    const page = await open(side, P);
+    await clickTop(page, title);
+    await confirm(page, title);
+  }, { wait: has, settle: 15000, waitMs: 300000 });
+  const env = { ref: sentinel('ref'), rs: sentinel('rs') };
+  fs.writeFileSync(`${out}${section}_sentinel.json`, JSON.stringify(env, null, 1));
+  verdict(`${section}: sentinel env and mounts`, JSON.stringify(env.ref) === JSON.stringify(env.rs), diff(env.ref, env.rs).join('\n     '));
+  for (const side of ['ref', 'rs']) {
+    const page = await open(side, P);
+    await sleep(3000);
+    await page.screenshot({ path: `${out}${section}-${side}.png`, fullPage: true });
+  }
 }
 async function compareActivityLog(name) {
   const logs = {};

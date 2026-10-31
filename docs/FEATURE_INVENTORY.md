@@ -79,6 +79,7 @@ Upstream references are relative to the upstream repository root.
 | Terminal and file browser | `docker/coolify-terminal`, `ContainerFilesystemService` | high-risk; security review required |
 | Cloud providers (Hetzner, DigitalOcean, Vultr, Hostinger), cloud-init | controllers + jobs, `Server\New\By*`, `Server\CloudProviderToken\Show` | API and jobs verified against a fake (`servers_diff.py cloud`); UI forms and Cloud Token page compared with upstream's Livewire components under `Http::fake` (`compat/ui/cloud_ui.mjs`: validation messages, provider requests, server rows); Security pages for tokens and scripts not ported |
 | MCP server, Sentinel metrics, traffic analytics | `routes/ai.php`, `SentinelController` | |
+| Traffic analytics charts (server page and `/analytics`) | `Livewire\Analytics`, `SentinelTrafficClient`, `TrafficAnalyticsAggregator`, `TrafficResource` | `crates/coolify-api/src/ui_server_analytics.rs`, `frontend/src/components/analytics/`, compared by `compat/ui/analytics_compare.mjs` |
 | Install / upgrade scripts, self-update | `scripts/install.sh`, `upgrade.sh`, `UpdateCoolifyJob` | |
 | Billing (Stripe, cloud only) | `app/Http/Controllers/Webhook/Stripe.php` | out of scope (self-hosted focus) |
 
