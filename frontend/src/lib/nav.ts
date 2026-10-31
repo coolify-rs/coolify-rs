@@ -44,7 +44,7 @@ export const navSections: [string, NavItem[]][] = [
           { label: 'Metrics', icon: 'graph', href: '/metrics', active: ['metrics'] },
         ],
       },
-      { label: 'Terminal', icon: 'browser-terminal', href: '/terminal', active: ['terminal*'], visible: (c) => c.isAdmin },
+      { label: 'Terminal', icon: 'browser-terminal', href: '/terminal', active: ['terminal*'], visible: (c) => c.isAdmin, ported: true },
     ],
   ],
   [

@@ -55,6 +55,7 @@ const routes: { name: string; pattern: string }[] = [
   { name: 'appearance', pattern: '/profile/appearance' },
   { name: 'notification-email', pattern: '/notifications/email' },
   { name: 'notification-channel', pattern: '/notifications/:channel' },
+  { name: 'terminal', pattern: '/terminal' },
   { name: 'tags', pattern: '/tags' },
   { name: 'tags', pattern: '/tags/:tagName' },
   { name: 'shared-overview', pattern: '/shared-variables' },

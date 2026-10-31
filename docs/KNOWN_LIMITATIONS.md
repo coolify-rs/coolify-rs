@@ -158,7 +158,6 @@ change, password, two-factor enrollment and recovery codes, passkey management, 
   pages (server, application and database deletion) still ask for the password within upstream's three hours.
 - What's New reads `{COOLIFY_RS_DATA_DIR}/changelogs/*.json`. `PullChangelog` is not ported, because it fetches them
   from upstream's CDN, so a new install shows no updates. Unread counts are not cached.
-- The user menu's Feedback entry is not ported: `Livewire\Help` sends to upstream's support address or Cloud API.
 - A new user is sent to `/onboarding` as upstream does, but the wizard is not ported: the page offers "Skip setup".
 - `Password::defaults()` in coolify-rs has no `uncompromised()` rule: it would send a hash prefix of the password to
   Have I Been Pwned. Upstream in production refuses a password found there; coolify-rs accepts it.
@@ -239,3 +238,26 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 | `PullTemplatesFromCDN`, `get_service_templates(force: true)` | the shipped file, or `COOLIFY_RS_TEMPLATES_DIR` | no scheduler |
 | `CleanupDocker` after a stop, maintenance pages, secret managers (`{{vault.*}}` stops a start), managed DNS cleanup on a changed domain, `parseDockerComposeFile` for parsing versions below 3 | not run | their subsystems are not ported |
 | Order of `environment_variables`, `applications`, `databases` | ordered by id | upstream has no `ORDER BY`: Postgres returns heap order, which changes after updates |
+
+## Instance settings, layout, onboarding and terminal
+
+| Area | Upstream | coolify-rs | Why |
+|---|---|---|---|
+| `Upgrade::upgrade` | runs `UpdateCoolify` | the badge, the full button and the confirmation show; "Upgrade now" answers that upgrading from the UI is not available. No progress view | upstream's action replaces the container with its own image, which is not what a coolify-rs instance runs |
+| `is_auto_update_enabled` | the scheduler installs updates | stored only | same; no scheduler |
+| `Settings\Index::buildHelperImage`, the Development helper section | `isDev()` only | not ported | no dev mode |
+| Check now, Detect, Help without mail settings | `cdn.coollabs.io`, `ifconfig.io`, `app.coolify.io` | the same hosts; `COOLIFY_RS_VERSIONS_URL`, `COOLIFY_RS_IFCONFIG_URL` and `COOLIFY_RS_FEEDBACK_URL` replace them in tests. `CheckTraefikVersionJob` is not dispatched by Check now. Only verified against local fakes | no test may reach them |
+| File download storage on S3 (`FileDownloadStorageService`) | checks the bucket and adds a lifecycle rule | a storage other than the stored one is refused with upstream's "not available" message | not ported |
+| `settingsSearchItems` in the palette's "This page" scope | sidebar pages and sections | sections only | |
+| Instance backup page beyond "Localhost is not ready" | | built from the Blade views and not compared: localhost is not reachable in the test setup, so the reference never shows these states. Selecting storages uses checkboxes instead of the multiple listbox. Executions are listed without Delete, Download, Clean failed and Clean deleted | |
+| A failing `setupDynamicProxyConfiguration` with a missing private key | `ModelNotFoundException` becomes a 404 dialog over the page | a toast with the same message | only seen with this test setup's localhost |
+| Global search cache | 300 seconds, cleared by `ClearsGlobalSearchCache` | no cache: read on each opening | same visible results |
+| "new storage" and "new private key" in the palette | open the create modal in place | go to the page and open its modal | the modals live on those pages |
+| "new github" and "new canvas" in the palette | modal, deploy canvas | go to `/sources` and `/deploy-canvas`, which are not ported | |
+| Real-time warning popup | shown when Echo cannot connect | never: coolify-rs has no Echo connection to fail | |
+| Onboarding cloud provider cards | modals of `Server\New\By*` | links to `/servers/new` | those components are not ported |
+| Onboarding validation | `validate-and-install`, which installs prerequisites and Docker when missing | checks through the existing validation dialog, then the proxy start. A server without Docker stops with upstream's message | the dialog has no install progress |
+| `api.auth.unauthenticated` deduplication | per source, reason, server and email through the cache | per source, in memory | only API requests reach it, with one reason |
+| Audit events of the wizard | `Auditable` on every model | written for the key, server, shared variables, project, environment and team; only one `ui.server.updated` (`proxy`) of upstream's three, and the `changes` hold the name only | |
+| Terminal shell | `Project\Shared\Terminal`, xterm.js and a node-pty websocket service | the page lists targets; a selected target shows that no session is available | a shell needs the websocket service, its token flow (`TerminalSessionService`) and security review |
+| `Server\Security\TerminalAccess` | toggle at `/server/{uuid}/security/terminal-access` | not ported | |

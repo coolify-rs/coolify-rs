@@ -83,7 +83,12 @@ Upstream references are relative to the upstream repository root.
 | Database backups to S3, restore | `DatabaseBackupJob`, `StartDatabaseImport` | implemented for every engine with a backup solution; `database_server_diff.py` |
 | Scheduled tasks, scheduler, Horizon queues | `app/Console/Kernel.php`, 72 jobs | |
 | Sending notifications (email, Discord, Slack, Telegram, Pushover, webhook), delivery failure tracking, transactional mail | `app/Notifications/*`, `TracksDeliveryFailures` | verified: `compat/diff/notifications_diff.py` (subject, mail HTML, request bodies), `compat/diff/notifications_e2e.py` (delivery to mailpit and a local endpoint), `crates/coolify-jobs/tests/notifications_delivery.rs`; triggers not wired are in KNOWN_LIMITATIONS |
-| Terminal and file browser | `docker/coolify-terminal`, `ContainerFilesystemService` | high-risk; security review required |
+| Terminal page | `Terminal\Index`, `can.access.terminal` | target list, filter and gate compared on both sides (`compat/ui/flow_terminal.mjs`); the shell is not ported (KNOWN_LIMITATIONS) |
+| File browser, terminal shell | `docker/coolify-terminal`, `ContainerFilesystemService` | high-risk; security review required |
+| Instance settings | `Settings\Index`, `Advanced`, `Updates`, `SettingsEmail`, `SettingsBackup` | rows, toasts and audit events compared on both sides (`compat/ui/flow_settings.mjs`, `flow_mail.mjs`); see KNOWN_LIMITATIONS |
+| Layout | `GlobalSearch`, `DeploymentsIndicator`, `Dashboard\ActiveDeployments`, `LayoutPopups`, `Upgrade` | results of the same queries and the screens compared (`compat/ui/flow_layout.mjs`) |
+| Onboarding | `Boarding\Index` | remote path through the SSH test host compared on both sides (`compat/ui/flow_onboarding.mjs`) |
+| Support form | `Help` | validation on both sides, SMTP path through mailpit on both, Cloud API path against a local fake on coolify-rs (`compat/ui/flow_mail.mjs`) |
 | Cloud providers (Hetzner, DigitalOcean, Vultr, Hostinger), cloud-init | controllers + jobs | UI: cloud tokens and cloud-init scripts verified on both UIs (`compat/ui/flow_security.mjs`) up to the calls to the providers |
 | UI: notifications (email, Discord, Slack, Telegram, Pushover, webhook) | `Livewire/Notifications/*` | verified on both UIs (`compat/ui/flow_notifications.mjs`): toasts, rows, audit events, member and instance admin states |
 | UI: tags, deploy by tag | `Livewire/Tags/Show`, `DeployController::by_tags` | verified on both UIs (`compat/ui/flow_tags.mjs`, `compat/diff/tags_deploy_diff.py`) except a deployment started from a tag; the canvas is not ported |

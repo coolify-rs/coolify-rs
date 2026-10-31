@@ -226,7 +226,6 @@
     if (item.resourceType) {
       selectedType = type;
       selecting = true;
-      searchQuery = '';
       selectedServer = null;
       selectedDestination = null;
       selectedProject = null;
@@ -325,6 +324,11 @@
     cancelSelection();
   }
 
+  $effect(() => {
+    window.addEventListener('open-global-search', openModal);
+    return () => window.removeEventListener('open-global-search', openModal);
+  });
+
   function onKeydown(e: KeyboardEvent) {
     const target = e.target as HTMLElement;
     if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes(target.tagName)) {
@@ -353,6 +357,7 @@
         } else closeModal();
       } else {
         searchQuery = '';
+        if (selecting) cancelSelection();
         setTimeout(() => input?.focus(), 100);
       }
     } else if (e.key === 'ArrowDown') {
@@ -410,7 +415,7 @@
   };
 </script>
 
-<svelte:window onopen-global-search={openModal} onkeydown={onKeydown} />
+<svelte:window onkeydown={onKeydown} />
 
 <div bind:this={root}>
   <div class="fixed inset-0 z-99 flex items-start justify-center px-4 pt-[12vh] {modalOpen ? 'pointer-events-auto' : 'pointer-events-none'}">

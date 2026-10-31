@@ -35,6 +35,7 @@ pub mod ui_shared_variables;
 pub mod ui_storages;
 pub mod ui_tags;
 pub mod ui_teams;
+pub mod ui_terminal;
 pub mod validation;
 
 pub use routes::router;

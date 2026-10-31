@@ -59,6 +59,7 @@
   import SettingsEmail from './pages/SettingsEmail.svelte';
   import SettingsBackup from './pages/SettingsBackup.svelte';
   import Onboarding from './pages/Onboarding.svelte';
+  import Terminal from './pages/Terminal.svelte';
   import Unported from './pages/Unported.svelte';
   import { router } from './lib/router.svelte';
   import { session } from './lib/session.svelte';
@@ -190,7 +191,7 @@
   <ConfirmPassword />
 {:else if router.current.name === 'profile-passkey-confirm'}
   <PasskeyConfirm />
-{:else if (router.current.name === 'team-danger' && !session.isOwner) || (router.current.name === 'team-audit' && !session.isAdmin)}
+{:else if (router.current.name === 'team-danger' && !session.isOwner) || ((router.current.name === 'team-audit' || router.current.name === 'terminal') && !session.isAdmin)}
   <ErrorPage code={403} />
 {:else}
   <Shell>
@@ -266,6 +267,8 @@
       {#key params.uuid}<CloudInitScript uuid={params.uuid} />{/key}
     {:else if router.current.name === 'integration-tokens'}
       <IntegrationTokens />
+    {:else if router.current.name === 'terminal'}
+      <Terminal />
     {:else if router.current.name === 'settings-general'}
       <SettingsGeneral />
     {:else if router.current.name === 'settings-advanced'}
