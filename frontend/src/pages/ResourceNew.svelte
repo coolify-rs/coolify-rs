@@ -6,6 +6,10 @@
   // templates are not loaded, and the deploy canvas is left out (ADR 0008).
   import NewDockerImage from '../components/NewDockerImage.svelte';
   import NewPublicRepository from '../components/NewPublicRepository.svelte';
+  import NewPrivateRepository from '../components/NewPrivateRepository.svelte';
+  import NewDeployKeyRepository from '../components/NewDeployKeyRepository.svelte';
+  import NewSimpleDockerfile from '../components/NewSimpleDockerfile.svelte';
+  import NewDockerCompose from '../components/NewDockerCompose.svelte';
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
   import Callout from '../components/Callout.svelte';
@@ -184,7 +188,7 @@
   // Database types coolify-rs can create (SQLite is not ported).
   const portedDatabases = ['postgresql', 'mysql', 'mariadb', 'redis', 'keydb', 'dragonfly', 'mongodb', 'clickhouse'];
   // Application types coolify-rs can create.
-  const portedApplications = ['docker-image', 'public'];
+  const portedApplications = ['docker-image', 'public', 'private-gh-app', 'private-gitlab-app', 'private-gitea-app', 'private-deploy-key', 'dockerfile', 'docker-compose-empty'];
   // `Create::mount()`: `?type=…&destination=…` renders that type's form.
   const formType = $derived(router.query('type'));
   const formDestination = $derived(router.query('destination') ?? '');
@@ -377,6 +381,30 @@
 {:else if project && formType === 'public' && formDestination}
   <div>
     <NewPublicRepository project={uuid} {env} destination={formDestination} />
+  </div>
+{:else if project && formType === 'private-gh-app' && formDestination}
+  <div>
+    <NewPrivateRepository provider="github" project={uuid} {env} destination={formDestination} />
+  </div>
+{:else if project && formType === 'private-gitlab-app' && formDestination}
+  <div>
+    <NewPrivateRepository provider="gitlab" project={uuid} {env} destination={formDestination} />
+  </div>
+{:else if project && formType === 'private-gitea-app' && formDestination}
+  <div>
+    <NewPrivateRepository provider="gitea" project={uuid} {env} destination={formDestination} />
+  </div>
+{:else if project && formType === 'private-deploy-key' && formDestination}
+  <div>
+    <NewDeployKeyRepository project={uuid} {env} destination={formDestination} />
+  </div>
+{:else if project && formType === 'dockerfile' && formDestination}
+  <div>
+    <NewSimpleDockerfile project={uuid} {env} destination={formDestination} />
+  </div>
+{:else if project && formType === 'docker-compose-empty' && formDestination}
+  <div>
+    <NewDockerCompose project={uuid} {env} destination={formDestination} />
   </div>
 {:else if project}
   <div>

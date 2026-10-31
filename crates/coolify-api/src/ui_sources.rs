@@ -288,7 +288,17 @@ async fn applications_of(
     p: Provider,
     id: i64,
 ) -> Result<Value, ApiError> {
-    let rows: Vec<(String, String, Option<String>, Option<String>, String, String, String, String)> = sqlx::query_as(
+    type Row = (
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+        String,
+        String,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
         "SELECT a.uuid, a.name, a.git_repository, a.git_branch, e.name, e.uuid, pr.name, pr.uuid \
          FROM applications a JOIN environments e ON e.id = a.environment_id JOIN projects pr ON pr.id = e.project_id \
          WHERE a.source_type = $1 AND a.source_id = $2 AND a.deleted_at IS NULL AND pr.team_id = $3",
@@ -587,7 +597,7 @@ fn kebab(name: &str) -> String {
 }
 
 /// `getInstallationPath($source)`, with the state it stores.
-fn installation_path(row: &Record) -> String {
+pub(crate) fn installation_path(row: &Record) -> String {
     let html = str_of(row, "html_url").unwrap_or_default();
     let name = coolify_jobs::gitea::raw_url_encode(&kebab(str_of(row, "name").unwrap_or_default()));
     let organization = coolify_jobs::github::normalize_organization(str_of(row, "organization"));

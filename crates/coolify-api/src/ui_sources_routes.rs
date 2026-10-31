@@ -4,10 +4,31 @@ use axum::Router;
 use axum::routing::{get, post};
 
 use crate::state::AppState;
+use crate::ui_applications::private_git as private;
 use crate::ui_sources as s;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/ui/private-repository/keys", get(private::keys))
+        .route(
+            "/ui/private-repository/{provider}/sources",
+            get(private::sources),
+        )
+        .route(
+            "/ui/private-repository/{provider}/repositories",
+            post(private::repositories),
+        )
+        .route(
+            "/ui/private-repository/{provider}/branches",
+            post(private::branches),
+        )
+        .route(
+            "/ui/private-repository/{provider}/scan",
+            post(private::scan),
+        )
+        .route("/ui/private-repository/{provider}", post(private::create))
+        .route("/ui/new/dockerfile", post(private::create_dockerfile))
+        .route("/ui/new/docker-compose", post(private::create_compose))
         .route("/ui/sources", get(s::index))
         .route("/ui/sources/github", post(s::create_github))
         .route("/ui/sources/gitlab", post(s::create_gitlab))

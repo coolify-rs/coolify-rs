@@ -101,12 +101,12 @@ fn normalize_repository_url(url: &str) -> String {
     url
 }
 
-fn repository_rule(url: &str, attribute: &str) -> Option<String> {
+pub(super) fn repository_rule(url: &str, attribute: &str) -> Option<String> {
     git_urls::valid_git_repository_url(&Value::String(url.to_owned()))
         .map(|m| m.replace(":attribute", attribute))
 }
 
-fn branch_rule(branch: &str, attribute: &str) -> Option<String> {
+pub(super) fn branch_rule(branch: &str, attribute: &str) -> Option<String> {
     git_urls::valid_git_branch(&Value::String(branch.to_owned()))
         .map(|m| m.replace(":attribute", attribute))
 }
@@ -127,7 +127,7 @@ fn base_directory_after(original: &str, tried: &str) -> String {
 }
 
 /// The destination of `?destination=` in the current team and its server.
-async fn destination(
+pub(super) async fn destination(
     state: &AppState,
     ctx: &AuthCtx,
     uuid: &str,
@@ -136,7 +136,7 @@ async fn destination(
 }
 
 /// `applyDetectionResult()`'s input, as the page applies it.
-fn detection_json(d: &Detection, failed: bool) -> Value {
+pub(super) fn detection_json(d: &Detection, failed: bool) -> Value {
     let ports: Map<String, Value> = d
         .dockerfile_ports
         .iter()
@@ -433,7 +433,7 @@ pub async fn scan(
 }
 
 /// `ValidationPatterns::FILE_PATH_PATTERN`.
-static FILE_PATH: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+pub(super) static FILE_PATH: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"^/[a-zA-Z0-9._\-/~@+]+$").unwrap_or_else(|_| unreachable!())
 });
 /// The shared-variable reference `EnvironmentVariable::isSharedReference()` looks for.
@@ -479,7 +479,7 @@ pub(super) fn compose_location_value(v: Option<&str>) -> String {
 }
 
 /// A Laravel `ValidationException` that `handleError()` shows as a toast.
-fn invalid(errors: Vec<(&str, String)>) -> ApiResult {
+pub(super) fn invalid(errors: Vec<(&str, String)>) -> ApiResult {
     let mut e = Map::new();
     for (k, msg) in errors {
         if let Value::Array(list) = e.entry(k.to_owned()).or_insert_with(|| json!([])) {
@@ -494,7 +494,7 @@ fn invalid(errors: Vec<(&str, String)>) -> ApiResult {
 }
 
 /// `handleError()` of a plain exception: the message as an error toast.
-fn failure(message: String) -> ApiResult {
+pub(super) fn failure(message: String) -> ApiResult {
     Ok(PhpJson(
         StatusCode::UNPROCESSABLE_ENTITY,
         json!({"message": message}),
@@ -773,7 +773,7 @@ pub async fn create(
 /// `importDetectedEnvironmentVariables()`: `EnvironmentVariable::create()` per valid key in one
 /// transaction, each with the preview copy the model's `created` hook adds (from the in-memory
 /// model, so with its default flags) and the version it writes.
-async fn import_variables(
+pub(super) async fn import_variables(
     state: &AppState,
     application_id: i64,
     variables: &[(String, Option<String>)],

@@ -1,6 +1,5 @@
 //! The Git Source page of an application: `Project\Application\Source` (repository, branch,
-//! commit, the deploy key and the Git provider App). GitLab and Gitea Apps are listed like
-//! upstream lists them, but switching to one is not ported.
+//! commit, the deploy key and the Git provider App).
 
 use axum::Extension;
 use axum::extract::{Path, State};
@@ -174,18 +173,12 @@ fn links(a: &ApplicationRow, source: Option<(&str, &Value)>) -> (Option<String>,
     }
 }
 
-/// `getInstallationPath($source)` for a private GitHub App on github.com, without the
-/// setup `state` (installing a GitHub App is not ported).
+/// `getInstallationPath($source)`.
 fn installation_path(row: &Value) -> String {
-    let html = row
-        .get("html_url")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let name = git_urls::kebab(str_of(row, "name").unwrap_or_default());
-    format!(
-        "{}/apps/{name}/installations/new",
-        html.trim_end_matches('/')
-    )
+    match row {
+        Value::Object(map) => crate::ui_sources::installation_path(map),
+        _ => String::new(),
+    }
 }
 
 /// `Source::mount()`: the form values, the deploy key, the current source and the others.
@@ -308,7 +301,7 @@ pub async fn update(
 }
 
 /// `Source::setPrivateKey()` (`private_key_id`) and `Source::changeSource()` (`source_id` +
-/// `source_type`; GitHub Apps only).
+/// `source_type`).
 pub async fn change(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -349,12 +342,14 @@ pub async fn change(
     if ![GITHUB, GITLAB, GITEA].contains(&morph) {
         return Err(ApiError::Message(StatusCode::NOT_FOUND, "Not Found"));
     }
-    if morph != GITHUB {
-        return Err(ApiError::NotPorted);
-    }
-    let row: Option<Value> = sqlx::query_scalar(
-        "SELECT row_to_json(s) FROM github_apps s WHERE (team_id = $1 OR is_system_wide = true) AND id = $2",
-    )
+    let table = match morph {
+        GITHUB => "github_apps",
+        GITLAB => "gitlab_apps",
+        _ => "gitea_apps",
+    };
+    let row: Option<Value> = sqlx::query_scalar(&format!(
+        "SELECT row_to_json(s) FROM {table} s WHERE (team_id = $1 OR is_system_wide = true) AND id = $2"
+    ))
     .bind(ctx.team_id)
     .bind(id)
     .fetch_optional(state.db.pool())
@@ -368,25 +363,67 @@ pub async fn change(
         a.id,
         &[
             ("source_id", ColumnValue::Int(id)),
-            ("source_type", ColumnValue::Text(Some(GITHUB.into()))),
+            ("source_type", ColumnValue::Text(Some(morph.to_owned()))),
         ],
         now,
     )
     .await?;
-    // githubApi($source, "repos/{$customRepository}")['data']['id']
     let record = match row {
         Value::Object(o) => o,
         _ => serde_json::Map::new(),
     };
     let repository = a.str("git_repository").unwrap_or_default().to_owned();
-    let project_id = async {
-        let token = coolify_jobs::github::installation_token(
-            &state.db,
-            state.encrypter.as_ref(),
-            Some(&record),
-        )
-        .await?;
-        coolify_jobs::github::repository_id(&state.db, &record, &token, &repository).await
+    let enc = state.encrypter.as_ref();
+    let connected = |r: &serde_json::Map<String, Value>| {
+        let filled = |k: &str| {
+            r.get(k)
+                .and_then(Value::as_str)
+                .is_some_and(|v| !v.is_empty())
+        };
+        filled("access_token") && filled("refresh_token")
+    };
+    let project_id: Result<Option<i64>, String> = async {
+        match morph {
+            GITHUB => {
+                // githubApi($source, "repos/{$customRepository}")['data']['id']
+                let token =
+                    coolify_jobs::github::installation_token(&state.db, enc, Some(&record)).await?;
+                coolify_jobs::github::repository_id(&state.db, &record, &token, &repository).await
+            }
+            GITLAB if connected(&record) => {
+                let enc = enc.ok_or("No application encryption key has been specified.")?;
+                let encoded = coolify_jobs::gitea::raw_url_encode(&repository);
+                let (project, _) = coolify_jobs::gitlab::api(
+                    &state.db,
+                    enc,
+                    &record,
+                    coolify_jobs::git_http::Method::GET,
+                    &format!("/projects/{encoded}"),
+                    None,
+                )
+                .await?;
+                Ok(project.get("id").and_then(Value::as_i64))
+            }
+            GITEA if connected(&record) => {
+                let enc = enc.ok_or("No application encryption key has been specified.")?;
+                let path = repository
+                    .splitn(2, '/')
+                    .map(coolify_jobs::gitea::raw_url_encode)
+                    .collect::<Vec<_>>()
+                    .join("/");
+                let (project, _) = coolify_jobs::gitea::api(
+                    &state.db,
+                    enc,
+                    &record,
+                    coolify_jobs::git_http::Method::GET,
+                    &format!("/repos/{path}"),
+                    None,
+                )
+                .await?;
+                Ok(project.get("id").and_then(Value::as_i64))
+            }
+            _ => Ok(None),
+        }
     }
     .await;
     match project_id {

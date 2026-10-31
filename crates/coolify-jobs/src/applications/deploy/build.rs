@@ -209,9 +209,7 @@ impl Run {
         if bp == "dockerimage" {
             self.deploy_docker_image().await?;
         } else if self.app.str("dockerfile").is_some_and(|d| !d.is_empty()) {
-            return Err(Fail::new(
-                "Deployments of an inline Dockerfile are not supported by coolify-rs yet.",
-            ));
+            self.deploy_simple_dockerfile().await?;
         } else {
             match bp.as_str() {
                 "dockerfile" => self.deploy_dockerfile().await?,
@@ -274,6 +272,36 @@ impl Run {
             }
         }
         self.cleanup_git().await?;
+        let image = self.b.production_image.clone();
+        self.generate_compose_file(&image).await?;
+        self.save_buildtime_environment_variables().await?;
+        self.generate_build_env_variables().await?;
+        self.add_build_env_variables_to_dockerfile().await?;
+        self.build_image().await?;
+        self.save_runtime_environment().await?;
+        self.push_to_docker_registry().await?;
+        self.rolling_update().await
+    }
+
+    /// `deploy_simple_dockerfile()`.
+    async fn deploy_simple_dockerfile(&mut self) -> Step {
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD
+            .encode(self.app.str("dockerfile").unwrap_or_default());
+        self.info(&format!(
+            "Starting deployment of {} to {}.",
+            self.app.str("name").unwrap_or_default(),
+            self.server_name
+        ))
+        .await;
+        self.prepare_builder_image().await?;
+        let target = format!("{}{}", self.workdir, self.b.dockerfile_location);
+        self.exec(vec![Cmd::new(in_docker(
+            &self.dep,
+            &format!("echo '{encoded}' | base64 -d | tee {target} > /dev/null"),
+        ))])
+        .await?;
+        self.generate_image_names();
         let image = self.b.production_image.clone();
         self.generate_compose_file(&image).await?;
         self.save_buildtime_environment_variables().await?;
@@ -1240,6 +1268,11 @@ impl Run {
             .str("docker_registry_image_name")
             .filter(|n| !n.is_empty())
             .map_or_else(|| self.app.uuid.clone(), str::to_owned);
+        if self.app.str("dockerfile").is_some_and(|d| !d.is_empty()) {
+            self.b.build_image = format!("{name}:build");
+            self.b.production_image = format!("{name}:latest");
+            return;
+        }
         self.b.build_image = format!("{name}:{tag}-build");
         self.b.production_image = format!("{name}:{tag}");
     }

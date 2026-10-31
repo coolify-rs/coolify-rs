@@ -22,6 +22,7 @@ use crate::state::AppState;
 use crate::validation::{Field, Messages, Rule, patterns, validate};
 
 mod general;
+pub mod private_git;
 pub mod public_git;
 pub mod source;
 
