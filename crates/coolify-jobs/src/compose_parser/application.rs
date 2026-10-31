@@ -105,6 +105,7 @@ pub struct Run<'a> {
     /// `$resource->environment_variables` once loaded (the relation is cached until `data_forget`).
     env_cache: Option<Vec<EnvRow>>,
     warnings: Vec<String>,
+    jobs: Jobs,
 }
 
 impl std::fmt::Debug for Run<'_> {
@@ -194,6 +195,7 @@ impl<'a> Run<'a> {
             },
             env_cache: None,
             warnings: Vec::new(),
+            jobs: jobs.clone(),
         })
     }
 
@@ -1081,7 +1083,7 @@ pub(crate) async fn application_parser(
                                 .map_err(Run::db_err)?;
                             }
                             None => {
-                                store::file_volume_insert(
+                                let id = store::file_volume_insert(
                                     run.db,
                                     MORPH,
                                     run.app.id,
@@ -1093,6 +1095,8 @@ pub(crate) async fn application_parser(
                                 )
                                 .await
                                 .map_err(Run::db_err)?;
+                                // `LocalFileVolume::created`: ServerStorageSaveJob.
+                                run.jobs.spawn_created_application_file(run.app.id, id);
                             }
                         }
                     } else {

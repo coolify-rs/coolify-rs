@@ -683,6 +683,7 @@ impl Run {
 
     /// `start_docker_compose_services()` (no custom start command, no preserved repository).
     async fn start_compose_services(&mut self) -> Step {
+        self.write_missing_content_files().await?;
         let workdir = self.cfg.clone();
         if self.app.setting_bool("is_raw_compose_deployment_enabled") {
             // write_deployment_configurations() runs first, then compose starts from the server.

@@ -61,6 +61,8 @@ done"#;
 
 /// `LocalFileVolume::MAX_CONTENT_SIZE`.
 const MAX_CONTENT_SIZE: u64 = 5_242_880;
+/// `LocalFileVolume::BINARY_PLACEHOLDER`.
+const BINARY_PLACEHOLDER: &str = "[binary file]";
 /// `LocalFileVolume::TOO_LARGE_PLACEHOLDER`.
 const TOO_LARGE_PLACEHOLDER: &str = "[file too large to display]";
 
@@ -345,6 +347,7 @@ pub struct FileStorage {
     pub content: Option<String>,
     pub is_directory: bool,
     pub is_host_file: bool,
+    pub is_based_on_git: bool,
     pub chmod: Option<String>,
     pub chown: Option<String>,
 }
@@ -356,6 +359,59 @@ impl std::fmt::Debug for FileStorage {
             .field("fs_path", &self.fs_path)
             .finish_non_exhaustive()
     }
+}
+
+impl FileStorage {
+    /// A `local_file_volumes` row, with `content` decrypted.
+    pub fn from_record(
+        r: &coolify_db::records::Record,
+        enc: &coolify_compat::Encrypter,
+    ) -> Result<Self, String> {
+        use serde_json::Value;
+        let text = |k: &str| r.get(k).and_then(Value::as_str).map(str::to_owned);
+        let flag = |k: &str| r.get(k).and_then(Value::as_bool).unwrap_or(false);
+        Ok(Self {
+            id: r.get("id").and_then(Value::as_i64).unwrap_or_default(),
+            fs_path: text("fs_path").unwrap_or_default(),
+            mount_path: text("mount_path"),
+            content: text("content")
+                .map(|c| enc.decrypt_string(&c).map_err(|e| e.to_string()))
+                .transpose()?,
+            is_directory: flag("is_directory"),
+            is_host_file: flag("is_host_file"),
+            is_based_on_git: flag("is_based_on_git"),
+            chmod: text("chmod"),
+            chown: text("chown"),
+        })
+    }
+
+    /// `hasContentToWrite()`.
+    pub fn has_content_to_write(&self) -> bool {
+        let content = self.content.as_deref().unwrap_or_default();
+        !self.is_directory
+            && !self.is_host_file
+            && !self.is_based_on_git
+            && content != BINARY_PLACEHOLDER
+            && content != TOO_LARGE_PLACEHOLDER
+            && !content.is_empty()
+    }
+}
+
+/// `contentPathOnServer()`.
+pub fn content_path_on_server(owner: &StorageOwner, file: &FileStorage) -> Result<String, String> {
+    if is_admin_controlled_compose_mount(owner, file) {
+        return Ok(resolved_fs_path(&file.fs_path, &owner.workdir));
+    }
+    host_path_and_resource_directory(owner, file).map(|(path, _)| path)
+}
+
+/// `EnsureContentFilesOnServer::plainText()`.
+fn plain_text(message: &str) -> String {
+    let stripped = coolify_domain::naming::strip_tags(Some(&message.replace("<br>", " ")));
+    stripped
+        .split_ascii_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `isAdminControlledComposeMount()`: raw Compose bind mounts keep the host path the administrator wrote.
@@ -552,6 +608,96 @@ impl Jobs {
             .unwrap_or_else(|| "unknown".to_owned())
     }
 
+    /// `LocalFileVolume::remoteFileStates($paths, $server)`.
+    async fn remote_file_states(
+        &self,
+        target: &coolify_remote::Target,
+        paths: &[&str],
+    ) -> Vec<String> {
+        let command = sh_command(REMOTE_FILE_STATE_SCRIPT, paths);
+        let output = self
+            .remote()
+            .run_quiet(target, &[&command], RunOptions::op("storage"))
+            .await
+            .unwrap_or_default();
+        let mut states = vec!["unknown".to_owned(); paths.len()];
+        for line in output.lines() {
+            let Some((index, state)) = line.trim().split_once(':') else {
+                continue;
+            };
+            if let Ok(index) = index.parse::<usize>()
+                && index >= 1
+                && index <= paths.len()
+                && !state.is_empty()
+                && state.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+            {
+                state.clone_into(&mut states[index - 1]);
+            }
+        }
+        states
+    }
+
+    /// `EnsureContentFilesOnServer::handle()`: writes each missing content file before
+    /// `docker compose up`. The log lines come back in order, with their type.
+    pub async fn ensure_content_files_on_server(
+        &self,
+        owner: &StorageOwner,
+        files: &[FileStorage],
+        server_id: i64,
+    ) -> Result<Vec<(String, &'static str)>, String> {
+        let mut log: Vec<(String, &'static str)> = Vec::new();
+        let mut candidates: Vec<(&FileStorage, String)> = Vec::new();
+        for file in files.iter().filter(|f| f.has_content_to_write()) {
+            match content_path_on_server(owner, file) {
+                Ok(path) => candidates.push((file, path)),
+                Err(e) => log.push((format!("Warning: {}", plain_text(&e)), "stderr")),
+            }
+        }
+        if candidates.is_empty() {
+            return Ok(log);
+        }
+        let (_, target) = self.storage_server(server_id).await?;
+        let paths: Vec<&str> = candidates.iter().map(|(_, p)| p.as_str()).collect();
+        let states = self.remote_file_states(&target, &paths).await;
+        let mut to_write: Vec<(&FileStorage, &str)> = Vec::new();
+        for ((file, path), state) in candidates.iter().zip(&states) {
+            let mount = file.mount_path.as_deref().unwrap_or_default();
+            match state.as_str() {
+                "missing" | "empty-directory" => to_write.push((file, path)),
+                "file" => {}
+                "directory" => log.push((format!("Warning: A directory that is not empty is at {path} on the server. Coolify did not write the configuration file for {mount}. Remove the directory on the server, then start the resource again."), "stderr")),
+                "other" => log.push((format!("Warning: A symbolic link or a special file is at {path} on the server. Coolify did not write the configuration file for {mount}."), "stderr")),
+                _ => log.push((format!("Warning: Coolify cannot check the configuration file {path} on the server."), "stderr")),
+            }
+        }
+        if to_write.is_empty() {
+            return Ok(log);
+        }
+        log.push((
+            if to_write.len() == 1 {
+                "Writing 1 missing configuration file.".to_owned()
+            } else {
+                format!("Writing {} missing configuration files.", to_write.len())
+            },
+            "stdout",
+        ));
+        for (file, path) in to_write {
+            if file.is_host_file {
+                continue;
+            }
+            if let Err(e) = self.save_storage_on(owner, file, server_id).await {
+                log.push((
+                    format!(
+                        "Warning: Coolify cannot write the configuration file {path}: {}",
+                        plain_text(&e)
+                    ),
+                    "stderr",
+                ));
+            }
+        }
+        Ok(log)
+    }
+
     /// `remoteFileExceedsLimit` and `readRemoteFileContent` for a file marked as a directory.
     async fn read_for_mismatch(&self, target: &coolify_remote::Target, escaped: &str) -> String {
         let size = self
@@ -736,6 +882,49 @@ impl Jobs {
         tokio::spawn(async move {
             if let Err(e) = jobs.save_storage_on_server(&owner, &file).await {
                 tracing::warn!(storage = file.id, error = %e, "ServerStorageSaveJob failed");
+            }
+        });
+    }
+
+    /// `LocalFileVolume::created` for a row of an application: `ServerStorageSaveJob`, unless the
+    /// mount is outside the resource directory.
+    pub fn spawn_created_application_file(&self, application_id: i64, id: i64) {
+        let jobs = self.clone();
+        tokio::spawn(async move {
+            let result = async {
+                let db = &jobs.0.db;
+                let app = coolify_db::applications::find_by_id(db, application_id)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .ok_or("application not found")?;
+                let rows = db_storages::list(
+                    db,
+                    StorageKind::File,
+                    coolify_db::applications::MORPH,
+                    application_id,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+                let row = rows
+                    .iter()
+                    .find(|r| r.get("id").and_then(serde_json::Value::as_i64) == Some(id))
+                    .ok_or("storage not found")?;
+                let enc = jobs.0.encrypter.clone().ok_or("no encryption key")?;
+                let file = FileStorage::from_record(row, &enc)?;
+                let owner = StorageOwner::for_application(db, &app)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if file.is_host_file
+                    || is_outside_resource_directory(&file.fs_path, &owner.base_directories)
+                {
+                    return Ok(());
+                }
+                jobs.save_storage_on_server(&owner, &file).await
+            }
+            .await;
+            if let Err(e) = result {
+                let e: String = e;
+                tracing::warn!(storage = id, error = %e, "ServerStorageSaveJob failed");
             }
         });
     }

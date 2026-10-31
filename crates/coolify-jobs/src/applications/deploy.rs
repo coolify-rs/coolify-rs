@@ -29,6 +29,7 @@ use super::snapshot;
 use crate::Jobs;
 use crate::databases::env::{self, Owner, Var};
 use crate::server::ServerInfo;
+use crate::storages::{FileStorage, StorageOwner};
 
 /// `ExecuteRemoteCommand::$batch_counter`: one per `execute_remote_command` call, never reset.
 static BATCH: AtomicU64 = AtomicU64::new(0);
@@ -1236,6 +1237,15 @@ impl Run {
         let volumes = apps::persistent_volumes(&db, self.app.id)
             .await
             .map_err(|e| Fail::new(e.to_string()))?;
+        // `$persistent_file_volumes`: every file storage is mounted.
+        let file_volumes: Vec<String> = apps::file_volume_rows(&db, self.app.id)
+            .await
+            .map_err(|e| Fail::new(e.to_string()))?
+            .into_iter()
+            .map(|(_, fs_path, mount_path, _)| {
+                format!("{fs_path}:{}", mount_path.unwrap_or_default())
+            })
+            .collect();
         let network = self.app.network().to_owned();
         let options = self.app.str("custom_docker_run_options").map(str::to_owned);
         let mut custom = docker_run::convert_docker_run_to_compose(options.as_deref());
@@ -1276,7 +1286,7 @@ impl Run {
             network: &network,
             labels,
             volumes: &volumes,
-            file_volumes: &[],
+            file_volumes: &file_volumes,
             custom,
         });
         self.generated_compose = Some(yaml);
@@ -1436,8 +1446,48 @@ impl Run {
         }
     }
 
+    /// `write_missing_content_files()`.
+    pub(super) async fn write_missing_content_files(&mut self) -> Step {
+        if self.app.setting_bool("is_preserve_repository_enabled") {
+            return Ok(());
+        }
+        let db = self.jobs.0.db.clone();
+        let enc = self
+            .jobs
+            .0
+            .encrypter
+            .clone()
+            .ok_or_else(|| Fail::new("No application encryption key has been specified."))?;
+        let rows = coolify_db::storages::list(
+            &db,
+            coolify_db::storages::StorageKind::File,
+            apps::MORPH,
+            self.app.id,
+        )
+        .await
+        .map_err(|e| Fail::new(e.to_string()))?;
+        let files = rows
+            .iter()
+            .map(|r| FileStorage::from_record(r, &enc))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Fail::new)?;
+        let owner = StorageOwner::for_application(&db, &self.app)
+            .await
+            .map_err(|e| Fail::new(e.to_string()))?;
+        let lines = self
+            .jobs
+            .ensure_content_files_on_server(&owner, &files, self.server.id)
+            .await
+            .map_err(Fail::new)?;
+        for (line, kind) in lines {
+            self.log(&line, kind, false).await;
+        }
+        Ok(())
+    }
+
     /// `start_by_compose_file()`.
     async fn start_by_compose_file(&mut self) -> Step {
+        self.write_missing_content_files().await?;
         let net = quote(self.app.network());
         let c = self.cfg.clone();
         let started = async {

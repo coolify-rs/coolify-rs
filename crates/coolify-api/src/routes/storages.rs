@@ -120,6 +120,7 @@ pub fn file_storage(state: &AppState, r: &Record) -> Result<FileStorage, ApiErro
         content: decrypted_content(state, r)?,
         is_directory: flag(r, "is_directory"),
         is_host_file: flag(r, "is_host_file"),
+        is_based_on_git: flag(r, "is_based_on_git"),
         chmod: str_of(r, "chmod").map(str::to_owned),
         chown: str_of(r, "chown").map(str::to_owned),
     })
