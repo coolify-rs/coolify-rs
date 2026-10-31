@@ -61,7 +61,6 @@ use_single_tar_member() { [ "$(find "$work" -type f | wc -l | tr -d ' ')" = 1 ] 
 if is_gzip; then
   gunzip -t "$backup" || fail 'The gzip backup is corrupt or incomplete. Nothing was changed.'
 fi
-
 "#;
 
 const MYSQL_SYSTEM_DATABASE_FILTER: &str = r#"function database(line) {
@@ -172,7 +171,7 @@ fi"#
 }
 
 fn mysql_script(binary: &str, prefix: &str, dump_all: bool, restore_users: bool) -> String {
-    let mut preflight = "if is_tar; then\n  extract_tar\n  use_single_tar_member || fail 'A tar backup must contain exactly one SQL dump. Nothing was changed.'\nfi\nis_text || fail 'Unsupported backup format. Use an SQL dump. Nothing was changed.'\n\n".to_owned();
+    let mut preflight = "if is_tar; then\n  extract_tar\n  use_single_tar_member || fail 'A tar backup must contain exactly one SQL dump. Nothing was changed.'\nfi\nis_text || fail 'Unsupported backup format. Use an SQL dump. Nothing was changed.'\n".to_owned();
     if !dump_all {
         return format!(
             "{preflight}if [ \"$(stream | grep -c '^USE `')\" -gt 1 ]; then\n  fail 'This backup contains more than one database. Select \"Backup contains all databases\" to restore it. Nothing was changed.'\nfi\nstream | {binary} -u ${prefix}_USER -p${prefix}_PASSWORD ${prefix}_DATABASE"

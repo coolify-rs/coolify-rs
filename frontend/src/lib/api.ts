@@ -26,6 +26,8 @@ export function setCsrf(token: string): void {
   csrfToken = token;
 }
 
+export const csrf = (): string => csrfToken;
+
 /** Called when any request finds the session gone. */
 let onUnauthenticated: () => void = () => {};
 export function setUnauthenticatedHandler(fn: () => void): void {
@@ -400,6 +402,9 @@ export interface DatabaseFormExtras {
   redis_version_6?: boolean;
   shared_redis_username?: boolean;
   shared_redis_password?: boolean;
+  /** `$certificateValidUntil` (`d.m.Y H:i:s`) and how close it is. */
+  certificate_valid_until?: string;
+  certificate_state?: 'valid' | 'soon' | 'expired';
 }
 
 export interface DestinationServer {

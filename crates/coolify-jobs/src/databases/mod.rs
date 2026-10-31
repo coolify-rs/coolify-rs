@@ -36,11 +36,14 @@ pub mod s3;
 mod sqlite;
 pub mod ssl;
 pub mod storage;
+mod ui_ops;
 pub mod variables;
+pub mod volume_backup;
 
 pub(crate) use common::docker_stop_command;
 pub use common::slug;
 use common::{CONFIGURATION_DIR, hrtime, now};
+pub use ui_ops::{ServerFileStream, configuration_dir};
 
 /// Everything a `Start*` action reads, resolved: the database, its decrypted
 /// `encrypted` columns and runtime variables, the server and the destination.
@@ -156,7 +159,7 @@ impl Jobs {
             .remove(uuid);
     }
 
-    async fn server_for(&self, d: &DatabaseRow) -> Result<ServerInfo, String> {
+    pub async fn server_for(&self, d: &DatabaseRow) -> Result<ServerInfo, String> {
         let server_id = d.server_id().ok_or("Database destination not found.")?;
         let row = servers::find_by_id(&self.0.db, server_id)
             .await

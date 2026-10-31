@@ -236,6 +236,23 @@ pub async fn state(
             )
         };
     }
+    // `HasDatabaseStatusInfo::refresh`: `$certificateValidUntil`.
+    if !matches!(d.kind, Kind::Clickhouse | Kind::Sqlite)
+        && let Some(cert) =
+            coolify_db::database_parts::resource_certificate(&state.db, d.kind.morph(), d.id)
+                .await?
+    {
+        let now = state.now();
+        form["certificate_valid_until"] =
+            json!(cert.valid_until.format("%d.%m.%Y %H:%M:%S").to_string());
+        form["certificate_state"] = json!(if now > cert.valid_until {
+            "expired"
+        } else if now + chrono::Duration::days(30) > cert.valid_until {
+            "soon"
+        } else {
+            "valid"
+        });
+    }
     if d.kind == Kind::Redis {
         form["redis_version_6"] =
             json!(redis_version_at_least_6(d.str("image").unwrap_or_default()));
@@ -384,6 +401,26 @@ const GENERAL_MESSAGES: Messages = &[
         "The is log drain enabled field must be true or false.",
     ),
 ];
+
+/// `StandaloneSqlite::DATABASES_PATTERN`.
+static SQLITE_DATABASES: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]*(,[A-Za-z0-9][A-Za-z0-9._-]*)*\n?\z")
+        .unwrap_or_else(|_| unreachable!())
+});
+
+/// `Sqlite\General::rules()` for `sqliteDatabases`, with its `messages()`.
+fn sqlite_databases_error(value: Option<&Value>) -> Option<&'static str> {
+    match value.and_then(Value::as_str) {
+        None | Some("") => Some("The Database Files field is required."),
+        Some(v) if v.chars().count() > 255 => {
+            Some("The sqlite databases field must not be greater than 255 characters.")
+        }
+        Some(v) if !SQLITE_DATABASES.is_match(v) => Some(
+            "The Database Files must be comma-separated file names containing only letters, numbers, dots, dashes and underscores.",
+        ),
+        _ => None,
+    }
+}
 
 /// How a credential or configuration field of a General form is validated.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -653,6 +690,18 @@ pub async fn update(
     {
         map.insert("mongo_conf".into(), Value::Null);
     }
+    // `Sqlite\General::submit`: the file names are trimmed, then `DATABASES_PATTERN` applies.
+    if kind == Kind::Sqlite
+        && let Some(Value::String(list)) = map.get("sqlite_databases")
+    {
+        let joined = list
+            .split(',')
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .collect::<Vec<_>>()
+            .join(",");
+        map.insert("sqlite_databases".into(), Value::String(joined));
+    }
     let creds = crate::routes::databases::credentials(&state, &d).await?;
     let started = d.str("started_at").is_some();
     // The values the model holds now (the `!==` of the conditional patterns).
@@ -701,7 +750,10 @@ pub async fn update(
             fields.push(field);
         }
     }
-    let image_rules = if matches!(kind, Kind::Keydb | Kind::Dragonfly | Kind::Clickhouse) {
+    let image_rules = if matches!(
+        kind,
+        Kind::Keydb | Kind::Dragonfly | Kind::Clickhouse | Kind::Sqlite
+    ) {
         vec![Rule::Required, Rule::String]
     } else {
         vec![Rule::Required]
@@ -741,14 +793,13 @@ pub async fn update(
     let input = Input(map.clone());
     let keys: Vec<&str> = map.keys().map(String::as_str).collect();
     validate(&input, &fields, general_messages(kind), &keys)?;
-    // Making the database public (TCP proxy) and log drains are not ported.
-    let flag = |k: &str| map.get(k).is_some_and(crate::serialize::php_truthy);
-    if (flag("is_public") && !d.bool("is_public"))
-        || (flag("is_log_drain_enabled") && !d.bool("is_log_drain_enabled"))
+    if kind == Kind::Sqlite
+        && let Some(message) = sqlite_databases_error(map.get("sqlite_databases"))
     {
-        return Err(ApiError::NotPorted);
+        let mut errors = Map::new();
+        errors.insert("sqlite_databases".into(), json!([message]));
+        return Err(ApiError::Validation(errors));
     }
-
     let text = |k: &str| match map.get(k) {
         Some(Value::String(s)) => Some(s.clone()),
         Some(Value::Null) | None => None,
@@ -766,6 +817,9 @@ pub async fn update(
         }
     }
     let mut columns: Vec<&'static str> = Vec::new();
+    if kind == Kind::Sqlite {
+        columns.push("sqlite_databases");
+    }
     for f in kind_fields(kind) {
         if kind == Kind::Redis && f.check != Check::Conf {
             continue;
@@ -906,17 +960,21 @@ pub async fn delete(
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
-    if !d.kind.ported() || d.bool("is_public") {
-        return Err(ApiError::NotPorted);
-    }
-    let unported = dbs::unported_parts(&state.db, d.kind, d.id).await?;
-    if unported.iter().any(|p| {
-        matches!(
-            *p,
-            "file storages" | "SSL certificates" | "scheduled backups"
-        )
-    }) {
-        return Err(ApiError::NotPorted);
+    // `Shared\Danger::delete` refuses a SQLite database that applications still mount.
+    if d.kind == Kind::Sqlite {
+        let names =
+            coolify_db::database_parts::sqlite_connected_applications(&state.db, d.id).await?;
+        if !names.is_empty() {
+            let message = format!(
+                "This database volume is mounted by {}. Remove those mounts before deleting the database.",
+                names.join(", ")
+            );
+            return Ok(crate::response::PhpJson(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({"message": message}),
+            )
+            .into_response());
+        }
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let flag = |k: &str| input.get(k).and_then(Value::as_bool).unwrap_or(true);

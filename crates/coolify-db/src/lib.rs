@@ -17,6 +17,7 @@ pub mod auth_pages;
 pub mod cloud;
 pub mod compose;
 pub mod dashboard;
+pub mod database_pages;
 pub mod database_parts;
 pub mod database_specs;
 pub mod databases;
@@ -46,6 +47,7 @@ pub mod testing;
 pub mod traffic;
 pub mod ui_servers;
 pub mod users;
+pub mod volume_backups;
 
 use std::time::Duration;
 

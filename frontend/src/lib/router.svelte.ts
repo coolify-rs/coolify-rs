@@ -39,6 +39,8 @@ const routes: { name: string; pattern: string }[] = [
   { name: 'application-deployment', pattern: '/project/:uuid/environment/:env/application/:app/deployment/:dep' },
   { name: 'application-section', pattern: '/project/:uuid/environment/:env/application/:app/:section' },
   { name: 'database', pattern: '/project/:uuid/environment/:env/database/:db' },
+  { name: 'database-backup', pattern: '/project/:uuid/environment/:env/database/:db/backups/:backup' },
+  { name: 'database-backup', pattern: '/project/:uuid/environment/:env/database/:db/backups/:backup/:backupSection' },
   { name: 'database-section', pattern: '/project/:uuid/environment/:env/database/:db/:section' },
   { name: 'service', pattern: '/project/:uuid/environment/:env/service/:service' },
   { name: 'service-section', pattern: '/project/:uuid/environment/:env/service/:service/:section' },

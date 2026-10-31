@@ -27,7 +27,7 @@ export const CONFIGURATION_SECTIONS = [
 export function databaseNavContext(
   base: string,
   active: string,
-  opts: { canUpdate: boolean; canAccessTerminal: boolean; backups: boolean; initScripts: boolean },
+  opts: { canUpdate: boolean; canAccessTerminal: boolean; backups: boolean; initScripts: boolean; sqlite?: boolean },
 ): NavContext {
   const item = (label: string, section: string, icon: string, extra: Partial<Entry> = {}): Entry => ({
     label,
@@ -41,7 +41,7 @@ export function databaseNavContext(
     'General': item('General', 'general', 'settings', {
       children: [
         { id: 'database-details-section', label: 'Database details' },
-        { id: 'access-section', label: 'Access' },
+        ...(opts.sqlite ? [] : [{ id: 'access-section', label: 'Access' }]),
         { id: 'container-section', label: 'Container' },
         ...(opts.initScripts ? [{ id: 'initialization-scripts-section', label: 'Initialization scripts' }] : []),
       ],
@@ -79,6 +79,24 @@ export function databaseNavContext(
     )
     .filter((g) => g.length > 0);
   return { label: 'Dashboard', backTitle: 'Back to the main menu', ariaLabel: 'Database settings', groups };
+}
+
+/** Port of upstream components/backup-sidebar.blade.php (context `database`): the database menu is one Back away. */
+export function backupNavContext(base: string, backup: string, section: string, parent: NavContext): NavContext {
+  const url = `${base}/backups/${backup}`;
+  return {
+    label: 'Database',
+    backTitle: 'Back to the database menu',
+    ariaLabel: 'Backup settings',
+    parent,
+    groups: [
+      [
+        { label: 'General', icon: 'settings', href: url, active: section === 'general' },
+        { label: 'Executions', icon: 'browser-terminal', href: `${url}/executions`, active: section === 'executions' },
+      ],
+      [{ label: 'Danger Zone', icon: 'danger', href: `${url}/danger`, active: section === 'danger' }],
+    ],
+  };
 }
 
 /** Menu key for a URL section (`/database/{uuid}/{section}`); backups pages share one entry. */

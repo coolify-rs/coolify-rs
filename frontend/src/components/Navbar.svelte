@@ -23,7 +23,7 @@
   // The submenu of the current page opens on every navigation, as upstream's re-rendered navbar does.
   let submenu = $state('');
   let navSwap = $state('');
-  // -1: main menu or a submenu; 0: the page's resource menu (starts open).
+  // -1: main menu or a submenu; 0: the page's resource menu (starts open); 1: its parent menu.
   let navLevel = $state(-1);
   $effect.pre(() => {
     submenu = activeSubmenu;
@@ -32,7 +32,8 @@
   $effect.pre(() => {
     navLevel = page.navContext ? 0 : -1;
   });
-  const showContext = $derived(!!page.navContext && navLevel === 0);
+  const shownContext = $derived(navLevel === 0 ? page.navContext : navLevel === 1 ? (page.navContext?.parent ?? null) : null);
+  const showContext = $derived(!!shownContext);
 
   const collapsed = $derived(layout.collapsed);
   const centerWhenCollapsed = $derived(collapsed ? 'lg:justify-center lg:px-0' : '');
@@ -103,15 +104,15 @@
   </div>
 
   <ul role="list" class="sidebar-menu -mx-1 flex min-h-0 flex-1 flex-col gap-y-0.5 overflow-y-auto px-1 pb-2">
-    {#if showContext && page.navContext}
-      {@const ctx = page.navContext}
+    {#if showContext && shownContext}
+      {@const ctx = shownContext}
       <li class="contents">
         <ul role="list" class="flex flex-col gap-y-0.5 {navSwap && 'nav-swap-' + navSwap}">
           <li class="mb-1">
             <button
               type="button"
               onclick={() => {
-                navLevel = -1;
+                navLevel = navLevel === 0 && ctx.parent ? 1 : -1;
                 navSwap = 'back';
               }}
               title={ctx.backTitle}

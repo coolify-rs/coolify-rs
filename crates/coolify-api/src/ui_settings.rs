@@ -1969,7 +1969,10 @@ async fn database_zero(state: &AppState) -> Result<Option<Record>, ApiError> {
 }
 
 /// `selectedS3Storages`.
-async fn selected_storages(state: &AppState, backup_id: i64) -> Result<Vec<i64>, ApiError> {
+pub(crate) async fn selected_storages(
+    state: &AppState,
+    backup_id: i64,
+) -> Result<Vec<i64>, ApiError> {
     sqlx::query_scalar(
         "SELECT s3_storage_id FROM scheduled_database_backup_s3_storage WHERE scheduled_database_backup_id = $1 ORDER BY s3_storage_id",
     )
@@ -1980,14 +1983,16 @@ async fn selected_storages(state: &AppState, backup_id: i64) -> Result<Vec<i64>,
 }
 
 /// `availableS3StorageIds`.
-async fn available_storages(
+pub(crate) async fn available_storages(
     state: &AppState,
+    team_id: i64,
     selected: &[i64],
 ) -> Result<Vec<(i64, String, bool)>, ApiError> {
     sqlx::query_as(
-        "SELECT id, name, is_usable FROM s3_storages WHERE team_id = 0 AND (is_usable = true OR id = ANY($1)) ORDER BY name",
+        "SELECT id, name, is_usable FROM s3_storages WHERE team_id = $2 AND (is_usable = true OR id = ANY($1)) ORDER BY name",
     )
     .bind(selected)
+    .bind(team_id)
     .fetch_all(state.db.pool())
     .await
     .map_err(|_| ApiError::Internal)
@@ -2017,7 +2022,7 @@ async fn backup_payload(state: &AppState, row: &Record) -> Result<Value, ApiErro
     if let Some(b) = &backup {
         let id = b.get("id").and_then(Value::as_i64).unwrap_or(0);
         let selected = selected_storages(state, id).await?;
-        let available = available_storages(state, &selected).await?;
+        let available = available_storages(state, 0, &selected).await?;
         let mut form = Map::new();
         for k in BACKUP_EDIT_FIELDS {
             form.insert((*k).to_owned(), b.get(*k).cloned().unwrap_or(Value::Null));
@@ -2213,16 +2218,18 @@ fn backup_rules(v: &Map<String, Value>) -> Vec<String> {
 }
 
 /// `BackupEdit::syncData(true)`, `customValidate`, `syncS3Storages` and the audit event.
-async fn save_backup(
+pub(crate) async fn save_backup(
     state: &AppState,
     ctx: &AuthCtx,
     meta: &Meta,
     b: &Record,
     v: &Map<String, Value>,
+    team_id: i64,
+    database: Option<(&str, &str)>,
 ) -> Result<Result<(), String>, ApiError> {
     let id = b.get("id").and_then(Value::as_i64).unwrap_or(0);
     let selected_now = selected_storages(state, id).await?;
-    let available = available_storages(state, &selected_now).await?;
+    let available = available_storages(state, team_id, &selected_now).await?;
     let wanted: Vec<i64> = {
         let mut out: Vec<i64> = Vec::new();
         for raw in v
@@ -2330,35 +2337,36 @@ async fn save_backup(
     sorted.sort_unstable();
     if selected_now != sorted {
         changed.push("s3_storages".to_owned());
-        sqlx::query("DELETE FROM scheduled_database_backup_s3_storage WHERE scheduled_database_backup_id = $1")
-            .bind(id)
-            .execute(state.db.pool())
-            .await
-            .map_err(|_| ApiError::Internal)?;
-        for s in &sorted {
-            sqlx::query(
-                "INSERT INTO scheduled_database_backup_s3_storage (scheduled_database_backup_id, s3_storage_id, created_at, updated_at) VALUES ($1, $2, $3, $3)",
-            )
-            .bind(id)
-            .bind(s)
-            .bind(state.now())
-            .execute(state.db.pool())
-            .await
-            .map_err(|_| ApiError::Internal)?;
-        }
+        coolify_db::database_parts::sync_backup_storages(
+            &state.db,
+            id,
+            b.get("s3_storage_id").and_then(Value::as_i64),
+            &sorted,
+            state.now(),
+        )
+        .await?;
     }
     if !changed.is_empty() {
-        let d = database_zero(state).await?.unwrap_or_default();
+        let (uuid, name) = match database {
+            Some((u, n)) => (json!(u), json!(n)),
+            None => {
+                let d = database_zero(state).await?.unwrap_or_default();
+                (
+                    d.get("uuid").cloned().unwrap_or(Value::Null),
+                    d.get("name").cloned().unwrap_or(Value::Null),
+                )
+            }
+        };
         let actor = crate::audit::actor(state, ctx, meta).await;
         crate::audit::log_as(
             state,
-            Some(0),
+            Some(team_id),
             &actor,
             "ui.database.backup_schedule_updated",
             json!({
-                "team_id": 0,
-                "database_uuid": d.get("uuid"),
-                "database_name": d.get("name"),
+                "team_id": team_id,
+                "database_uuid": uuid,
+                "database_name": name,
                 "backup_uuid": b.get("uuid"),
                 "changed_fields": changed,
             }),
@@ -2529,7 +2537,7 @@ async fn backup_action(
             if body.action == "toggleS3" {
                 let id = b.get("id").and_then(Value::as_i64).unwrap_or(0);
                 let selected_now = selected_storages(&state, id).await?;
-                let available = available_storages(&state, &selected_now).await?;
+                let available = available_storages(&state, 0, &selected_now).await?;
                 let on = boolean(&v, "save_s3");
                 let picked = v
                     .get("s3_storage_ids")
@@ -2550,7 +2558,7 @@ async fn backup_action(
                 let keep = !on && boolean(&v, "disable_local_backup");
                 v.insert("disable_local_backup".into(), json!(keep));
             }
-            match save_backup(&state, &ctx, &meta, &b, &v).await? {
+            match save_backup(&state, &ctx, &meta, &b, &v, 0, None).await? {
                 Ok(()) => message = Some("Backup updated successfully.".to_owned()),
                 Err(m) => return Ok(server_error(m)),
             }

@@ -441,6 +441,7 @@ dependencies = [
  "coolify-domain",
  "coolify-jobs",
  "coolify-remote",
+ "futures-util",
  "hmac",
  "http-body-util",
  "image",

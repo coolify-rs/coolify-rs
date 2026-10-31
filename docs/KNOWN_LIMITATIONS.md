@@ -52,8 +52,21 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   the dashboard widget (`Dashboard\TrafficAnalytics`) and the application and service analytics pages (`ResourceTrafficAnalytics`), where the "Top applications" rows link, are not. After a filter change, rows of a list with equal values can
   stand in another order than on the reference, which keeps the previous DOM order for ties; a fresh load has the same order.
 - Validation jobs run inside the coolify-rs process: a restart drops a running validation (upstream's queue keeps it).
-- Databases (all 9 engines; API, proxy, SSL, backups, imports; the pages for them are a later task): the API routes of
-  `/databases/{uuid}/storages/{storage_uuid}/backups` (volume backups, `VolumeBackupJob`) are not ported (501).
+- Databases (all 9 engines; API, proxy, SSL, backups, imports and the `Project/Database/*` pages): sections that only
+  render `Project/Shared/*` are placeholders until the shared branch is merged. Starting a ClickHouse database with an
+  unnamed data volume is not blocked (the page warns as upstream does). `Project/Service/*` database backup and import
+  pages and `/storage-backups*` are not part of this area.
+- Storage backups (`PUT`, `DELETE`, `POST .../run` on `/{applications,databases,services}/{uuid}/storages/{storage_uuid}/backups`):
+  `VolumeBackupJob` runs for a manual run. The scheduler does not start it yet, the `VolumeBackup/*` notifications are
+  not sent, and recovery runs once instead of `VolumeBackupRecoveryJob` retrying. A run that finds another run of the
+  same schedule in progress is dropped using the executions table, not a cache lock.
+- `/download/backup/{id}` and `/download/volume-backup/{id}` read over `cat` on the ssh connection instead of SFTP. Through
+  the `scripts/ssh-via-orb.sh` wrapper `orb` truncates large output (about 4 to 5 MB) with exit code 0, so large downloads
+  were not verified; small ones were byte-identical. The S3 download storage of `PreparesBackupDownloads` is not ported:
+  the download icon always opens the route.
+- `S3 endpoint is not allowed` messages link to the relative `/settings/advanced`; upstream writes the absolute URL.
+- S3 uploads and restores could not run against the local MinIO in the page comparison: both sides refuse a private
+  endpoint unless `webhook_allowed_internal_hosts` names it, and that setting stayed unchanged. The refusal itself matches.
   `PATCH /databases/{uuid}/envs/bulk` applies `key`, `value`, `is_literal`, `is_multiline`, `is_shown_once` and `comment`;
   upstream's mass assignment also takes other fillable columns of an item, including `resourceable_*`.
   Secret manager `{{vault.X}}` references stop a start with a message. Upstream stores `config_hash` only when the database
@@ -246,6 +259,7 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 | Configuration warning on service pages, with the diff of changes | the warning without the diff | no configuration diff yet |
 | `POST /services/{uuid}/databases/{database_uuid}/imports`, `.../uploads`, `GET .../imports/{activity_id}` | not ported | later task |
 | `PUT`/`DELETE /services/{uuid}/storages/{storage_uuid}/backups`, `.../backups/run` | `501` | S3 volume backups are not ported |
+| Livewire pages `Project/Service/*`, `one-click-service-*` in `Project/Resource/Create` | not available | later task |
 | `POST /services/{uuid}/databases/{database_uuid}/imports`, `.../imports/uploads`, `GET .../imports/{activity_id}` | `501` | database imports are not ported |
 | `POST /services/{uuid}/clone` with `clone_volumes: true` | `501` | `VolumeCloneJob` is not ported |
 | `PATCH /services/{uuid}/databases/{database_uuid}` that changes `is_public` | `501` | `StartDatabaseProxy` / `StopDatabaseProxy` are not ported |
