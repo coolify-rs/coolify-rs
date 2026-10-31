@@ -5,6 +5,7 @@
   // (Project/Database/Backup/Execution) for the backup pages. The `Project/Shared/*`
   // sections render a plain placeholder until the shared components are connected.
   import Empty from '../components/Empty.svelte';
+  import Forbidden from '../components/Forbidden.svelte';
   import DatabaseHeading from '../components/DatabaseHeading.svelte';
   import DatabaseGeneral from '../components/DatabaseGeneral.svelte';
   import DatabaseDanger from '../components/DatabaseDanger.svelte';
@@ -151,6 +152,9 @@
   <div class="application-settings-form w-full">
     <Empty title="Database not found" description="It may have been deleted, or it belongs to another team." iconName="database" size="lg" />
   </div>
+{:else if record && dbState && active === 'import-backup' && !canUpdate}
+  <!-- `->middleware('can.update.resource')` of the import-backup route -->
+  <Forbidden />
 {:else if record && dbState}
   <div>
     <DatabaseHeading {record} {dbState} healthcheckUrl="{base}/healthcheck" {resources} onrefresh={() => refresh().catch(() => {})} />
@@ -175,7 +179,7 @@
             {#if currentBackupSection === 'executions'}
               <DatabaseBackupExecutions databaseUuid={db} backupUuid={backup} />
             {:else if backupEdit}
-              <DatabaseBackupEdit {record} backupUuid={backup} section={currentBackupSection} {base} edit={backupEdit} onchanged={(e) => (backupEdit = e)} />
+              <DatabaseBackupEdit {record} backupUuid={backup} section={currentBackupSection} {base} edit={backupEdit} {canUpdate} onchanged={(e) => (backupEdit = e)} />
             {/if}
           {:else if active === 'backups'}
             <DatabaseBackups {record} {base} {canUpdate} />

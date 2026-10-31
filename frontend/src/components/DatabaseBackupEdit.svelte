@@ -21,6 +21,7 @@
     section,
     base,
     edit,
+    canUpdate,
     onchanged,
   }: {
     record: DatabaseRecord;
@@ -28,6 +29,7 @@
     section: string;
     base: string;
     edit: BackupEdit;
+    canUpdate: boolean;
     onchanged: (e: BackupEdit) => void;
   } = $props();
 
@@ -210,6 +212,7 @@
               type="number"
               min="0"
               max="365"
+              disabled={!canUpdate}
               helper="Notify through backup failure channels after this many days without an execution. Use 0 to disable."
               required
               bind:value={form.missing_backup_notification_days}

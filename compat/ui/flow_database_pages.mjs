@@ -627,17 +627,14 @@ try {
       const uuid = await createDb('sqlite', `pages-sqlite-${h.label}`);
       const out = {};
       const app = await api('POST', '/applications/dockerimage', { project_uuid: PROJECT, environment_uuid: ENV, server_uuid: SERVER, docker_registry_image_name: 'nginx', docker_registry_image_tag: 'alpine', ports_exposes: '80', name: `pages-app-${h.label}`, instant_deploy: false });
-      const compose = await api('POST', '/applications/dockercompose', { project_uuid: PROJECT, environment_uuid: ENV, server_uuid: SERVER, name: `pages-compose-${h.label}`, instant_deploy: false, docker_compose_raw: Buffer.from('services:\n  web:\n    image: nginx:alpine\n').toString('base64') });
+      const compose = await api('POST', '/applications/dockerimage', { project_uuid: PROJECT, environment_uuid: ENV, server_uuid: SERVER, docker_registry_image_name: 'nginx', docker_registry_image_tag: 'alpine', ports_exposes: '80', name: `pages-compose-${h.label}`, instant_deploy: false });
+      // A Compose application without a repository: only its row matters for the snippet.
+      psql(`update applications set build_pack = 'dockercompose', docker_compose_raw = 'services:\n  web:\n    image: nginx:alpine\n' where uuid = '${compose.json.uuid}'`);
       try {
         const norm = (t) => t.replaceAll(uuid, 'DB').replaceAll(app.json.uuid, 'APP').replace(/-(ref|rs)\b/g, '-SIDE');
         await h.go(`${URL_BASE}/${uuid}`);
         await h.shot('dbf-sqlite-connect');
-        const pick = async (name) => {
-          await h.page.locator('#applicationUuid, button:visible', { hasText: /Select an application|pages-/ }).first().click();
-          await h.page.waitForTimeout(250);
-          await h.page.locator('.listbox-option:visible', { hasText: name }).first().click();
-          await h.page.waitForTimeout(250);
-        };
+        const pick = (name) => h.listbox('Application', name);
         await pick(`pages-compose-${h.label}`);
         await h.field('Mount path').fill('bad path');
         await h.button('Mount volume').click();
