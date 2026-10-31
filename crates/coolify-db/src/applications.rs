@@ -178,22 +178,13 @@ pub async fn list_for_server(db: &Db, server_id: i64) -> DbResult<Vec<Applicatio
     rows.iter().map(to_row).collect()
 }
 
-/// Whether the application has pieces coolify-rs cannot deploy yet (additional
-/// servers, previews).
+/// Whether the application has pieces coolify-rs cannot deploy yet (additional servers).
 pub async fn unported_parts(db: &Db, id: i64) -> DbResult<Vec<&'static str>> {
     let mut parts = Vec::new();
-    for (sql, label) in [
-        (
-            "SELECT EXISTS (SELECT 1 FROM additional_destinations WHERE application_id = $1)",
-            "additional servers",
-        ),
-        (
-            // The job builds the previews of every other build pack.
-            "SELECT EXISTS (SELECT 1 FROM application_previews p JOIN applications a ON a.id = p.application_id \
-             WHERE p.application_id = $1 AND p.deleted_at IS NULL AND a.build_pack = 'dockercompose')",
-            "previews",
-        ),
-    ] {
+    for (sql, label) in [(
+        "SELECT EXISTS (SELECT 1 FROM additional_destinations WHERE application_id = $1)",
+        "additional servers",
+    )] {
         let found: bool = sqlx::query_scalar(sql)
             .bind(id)
             .fetch_one(db.pool())

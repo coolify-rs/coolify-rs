@@ -672,10 +672,6 @@ impl Jobs {
         };
         let server_id = q.int("server_id").unwrap_or_default();
         let pull_request_id = q.int("pull_request_id").unwrap_or(0);
-        if pull_request_id != 0 && app.str("build_pack") == Some("dockercompose") {
-            self.refuse_preview_deployment(&q, app.id, server_id).await;
-            return;
-        }
         let Ok(Some(server_row)) = servers::find_by_id(&self.0.db, server_id).await else {
             return;
         };
@@ -819,30 +815,6 @@ fn hostname() -> Option<String> {
 }
 
 impl Jobs {
-    /// The preview branch of the Compose parser is not ported, and running the row as if it were
-    /// production would replace the production containers: the row fails with a line that says so.
-    async fn refuse_preview_deployment(
-        &self,
-        q: &apps::Deployment,
-        application_id: i64,
-        server_id: i64,
-    ) {
-        let entry = apps::LogEntry {
-            command: None,
-            output: "Preview deployments of Docker Compose applications are not ported to coolify-rs yet. Nothing was deployed."
-                .into(),
-            kind: "stderr",
-            timestamp: chrono::Utc::now()
-                .format("%Y-%m-%dT%H:%M:%S%.6fZ")
-                .to_string(),
-            hidden: false,
-            batch: 1,
-        };
-        let _ = apps::append_log(&self.0.db, q.id, &[entry], now()).await;
-        let _ = apps::transition_status(&self.0.db, q.id, "failed", now()).await;
-        self.queue_next_deployment(application_id, server_id).await;
-    }
-
     /// `EnvironmentVariable::logRedactionSecretsFor($application, includePreview: ...)`:
     /// the known and the locked values, without remote secrets (not ported).
     pub(crate) async fn log_redaction_secrets(

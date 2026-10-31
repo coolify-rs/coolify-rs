@@ -177,11 +177,22 @@ impl Run {
             self.b.compose_build_command = Some(with_project_directory(command, &self.workdir));
         }
         let name = self.app.str("name").unwrap_or_default().to_owned();
-        self.info(&format!(
-            "Starting deployment of {name} to {}.",
-            self.server_name
-        ))
-        .await;
+        if self.b.is_preview() {
+            self.info(&format!(
+                "Starting pull request (#{}) deployment of {}:{} to {}.",
+                self.b.pull_request_id,
+                self.b.repository,
+                self.branch_name(),
+                self.server_name
+            ))
+            .await;
+        } else {
+            self.info(&format!(
+                "Starting deployment of {name} to {}.",
+                self.server_name
+            ))
+            .await;
+        }
         self.prepare_builder_image().await?;
         self.check_git_if_build_needed().await?;
         self.clone_repository().await?;
@@ -224,10 +235,14 @@ impl Run {
             }
             (raw, None)
         } else {
-            let mut parsed =
-                compose_parser::application_parser(&self.jobs, self.app.id, 0, Some(&self.commit))
-                    .await
-                    .map_err(Fail::new)?;
+            let mut parsed = compose_parser::application_parser(
+                &self.jobs,
+                self.app.id,
+                self.b.pull_request_id,
+                Some(&self.commit),
+            )
+            .await
+            .map_err(Fail::new)?;
             for w in parsed.warnings.clone() {
                 self.log(&format!("Warning: {w}"), "stderr", false).await;
             }
@@ -280,7 +295,11 @@ impl Run {
         self.pull_compose_images().await?;
         self.stop_running_container(true).await?;
         self.info("Starting new application.").await;
-        let network = self.app.uuid.clone();
+        let network = if self.b.is_preview() {
+            format!("{}-{}", self.app.uuid, self.b.pull_request_id)
+        } else {
+            self.app.uuid.clone()
+        };
         self.exec(vec![
             Cmd::new(format!(
                 "docker network inspect '{network}' >/dev/null 2>&1 || docker network create --attachable '{network}' >/dev/null || true"
@@ -427,6 +446,7 @@ impl Run {
             return Ok(false);
         };
         if self.b.force_rebuild
+            || self.b.is_preview()
             || self.b.compose_build_command.is_some()
             || self.commit.trim().is_empty()
             || self.commit == "HEAD"
@@ -704,7 +724,12 @@ impl Run {
     /// The Docker Compose part of `generate_runtime_environment_variables()`.
     async fn compose_runtime_env(&mut self) -> Result<ComposeEnv, Fail> {
         let mut lines = Vec::new();
-        let domains = compose_parser::php_json_array(self.app.str("docker_compose_domains"));
+        let preview_domains = self.preview_compose_domains();
+        let domains = compose_parser::php_json_array(if self.b.is_preview() {
+            preview_domains.as_deref()
+        } else {
+            self.app.str("docker_compose_domains")
+        });
         for (service, entry) in &domains {
             let Some(domain) = compose_parser::domain_entry_string(entry).filter(|d| !d.is_empty())
             else {
@@ -719,17 +744,22 @@ impl Run {
             lines.push(format!("SERVICE_URL_{key}={url}"));
             lines.push(format!("SERVICE_FQDN_{key}={}", parts.host));
         }
-        let compose_text = if self.app.setting_bool("is_raw_compose_deployment_enabled") {
-            self.app.str("docker_compose_raw")
-        } else {
-            self.app.str("docker_compose")
-        }
-        .unwrap_or_default()
-        .to_owned();
+        let compose_text =
+            if self.b.is_preview() || self.app.setting_bool("is_raw_compose_deployment_enabled") {
+                self.app.str("docker_compose_raw")
+            } else {
+                self.app.str("docker_compose")
+            }
+            .unwrap_or_default()
+            .to_owned();
         for name in compose_parser::service_names(&compose_text) {
             lines.push(format!(
-                "SERVICE_NAME_{}={name}",
-                name.replace(['-', '.'], "_").to_uppercase()
+                "SERVICE_NAME_{}={}",
+                name.replace(['-', '.'], "_").to_uppercase(),
+                compose_parser::volumes::add_preview_deployment_suffix(
+                    &name,
+                    self.b.pull_request_id
+                )
             ));
         }
         // Generated SERVICE_* variables and blank variables Compose unsets stay out of the file.

@@ -218,6 +218,28 @@ pub fn preview_fqdn_compose(
     pull_request_id: i64,
     overrides: &BTreeMap<String, i64>,
 ) -> PreviewDomains {
+    preview_fqdn_compose_keeping(
+        application_domains,
+        preview_domains,
+        compose_names,
+        template,
+        pull_request_id,
+        overrides,
+        None,
+    )
+}
+
+/// `generate_preview_fqdn_compose($keepExistingDomains)`: `keep` holds the preview's
+/// `domain_port_overrides` when the preview keeps its domains.
+pub fn preview_fqdn_compose_keeping(
+    application_domains: Option<&str>,
+    preview_domains: Option<&str>,
+    compose_names: &[String],
+    template: &str,
+    pull_request_id: i64,
+    overrides: &BTreeMap<String, i64>,
+    keep: Option<&BTreeMap<String, i64>>,
+) -> PreviewDomains {
     let app_domains = php::json_array(application_domains);
     let own_domains = php::json_array(preview_domains);
     let domain_keys: Vec<String> = app_domains
@@ -265,9 +287,20 @@ pub fn preview_fqdn_compose(
             names.push(name);
         }
     }
+    let own_domains = compose_domains::rekey_compose_domains_to_service_names(&own_domains, &known);
     let mut result: php::Arr = Vec::new();
     let mut ports: BTreeMap<String, i64> = BTreeMap::new();
     for name in &names {
+        if let Some(existing) = keep {
+            let current = compose_domains::get_compose_service_domain_string(&own_domains, name);
+            let (fqdn, kept) = domains::normalize_port_overrides(current.as_deref(), existing);
+            if let Some(fqdn) = fqdn.filter(|f| !f.trim().is_empty()) {
+                result =
+                    compose_domains::put_compose_service_domain(&result, name, Some(&fqdn), &names);
+                ports.extend(kept.unwrap_or_default());
+                continue;
+            }
+        }
         let domain = compose_domains::get_compose_service_domain_string(&app_domains, name)
             .filter(|d| !d.is_empty() && d != "0");
         let Some(domain) = domain else {

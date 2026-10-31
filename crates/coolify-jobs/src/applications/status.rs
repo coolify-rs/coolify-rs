@@ -175,6 +175,8 @@ impl Jobs {
         let mut statuses: BTreeMap<i64, Vec<(String, i64)>> = BTreeMap::new();
         let mut found: Vec<i64> = Vec::new();
         let mut found_previews: Vec<i64> = Vec::new();
+        // $previewContainerRestartCounts: the preview row and the highest count of its containers.
+        let mut preview_restarts: BTreeMap<i64, (i64, i64)> = BTreeMap::new();
         for c in &containers {
             let Some(labels) = c.pointer("/Config/Labels").and_then(Value::as_object) else {
                 continue;
@@ -221,6 +223,13 @@ impl Jobs {
                         .and_then(Value::as_i64)
                         .unwrap_or_default();
                     found_previews.push(id);
+                    let observed = c.get("RestartCount").and_then(Value::as_i64).unwrap_or(0);
+                    let stored = preview
+                        .get("restart_count")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0);
+                    let entry = preview_restarts.entry(id).or_insert((stored, 0));
+                    entry.1 = entry.1.max(observed);
                     let status = container_status(c);
                     let values =
                         if preview.get("status").and_then(Value::as_str) == Some(status.as_str()) {
@@ -256,6 +265,22 @@ impl Jobs {
                     .entry(a.id)
                     .or_default()
                     .push((container_status(c), restarts));
+            }
+        }
+        // trackPreviewRestartCounts(); the restart limit of a preview is not ported.
+        for (id, (stored, observed)) in preview_restarts {
+            if observed > stored {
+                let _ = coolify_db::application_ops::update_preview(
+                    db,
+                    id,
+                    &[
+                        ("restart_count", ColumnValue::Int(observed)),
+                        ("last_restart_at", ColumnValue::Time(now)),
+                        ("last_restart_type", ColumnValue::Text(Some("crash".into()))),
+                    ],
+                    now,
+                )
+                .await;
             }
         }
         // $notRunningApplicationPreviews

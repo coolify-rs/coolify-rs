@@ -89,6 +89,45 @@ impl Run {
             .get("id")
             .and_then(Value::as_i64)
             .unwrap_or_default();
+        if self.app.str("build_pack") == Some("dockercompose") {
+            // generate_preview_fqdn_compose(keepExistingDomains: true)
+            let raw = self.app.str("docker_compose_raw").unwrap_or_default();
+            let names = ops::compose_service_names(raw);
+            let existing = stored_overrides(preview.get("domain_port_overrides"));
+            let generated = ops::preview_fqdn_compose_keeping(
+                self.app.str("docker_compose_domains"),
+                preview
+                    .get("docker_compose_domains")
+                    .and_then(Value::as_str),
+                &names,
+                self.app.str("preview_url_template").unwrap_or_default(),
+                pull_request_id,
+                &stored_overrides(self.app.raw.get("domain_port_overrides")),
+                Some(&existing),
+            );
+            application_ops::update_preview(
+                &db,
+                id,
+                &[
+                    ("fqdn", ColumnValue::Text(generated.fqdn)),
+                    (
+                        "domain_port_overrides",
+                        ColumnValue::Text(generated.overrides),
+                    ),
+                    (
+                        "docker_compose_domains",
+                        ColumnValue::Text(generated.compose),
+                    ),
+                ],
+                now(),
+            )
+            .await
+            .map_err(|e| Fail::new(e.to_string()))?;
+            self.b.preview = application_ops::preview(&db, self.app.id, pull_request_id)
+                .await
+                .map_err(|e| Fail::new(e.to_string()))?;
+            return Ok(());
+        }
         let fqdn = preview
             .get("fqdn")
             .and_then(Value::as_str)
@@ -147,6 +186,16 @@ impl Run {
         }
     }
 
+    /// `$this->preview->docker_compose_domains`.
+    pub(super) fn preview_compose_domains(&self) -> Option<String> {
+        self.b
+            .preview
+            .as_ref()
+            .and_then(|p| p.get("docker_compose_domains"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    }
+
     /// `deployedPreviewVariables()` for a preview (without the variables that hold the production
     /// value when pull requests of forks can deploy), else the production variables.
     pub(super) async fn deployed_variables(&mut self) -> Result<Vec<Var>, Fail> {
@@ -167,8 +216,11 @@ impl Run {
             .collect())
     }
 
-    /// `deploy_pull_request()` for the build packs that build an image.
+    /// `deploy_pull_request()`.
     pub(super) async fn deploy_pull_request(&mut self) -> Step {
+        if self.build_pack() == "dockercompose" {
+            return self.deploy_docker_compose().await;
+        }
         if self.build_pack() == "dockerfile"
             && let Some(loc) = self
                 .app

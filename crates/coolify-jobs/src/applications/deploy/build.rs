@@ -1395,7 +1395,9 @@ impl Run {
         }
         let compose = self.build_pack() == "dockercompose";
         if compose {
-            let text = if self.app.setting_bool("is_raw_compose_deployment_enabled") {
+            let text = if self.b.is_preview()
+                || self.app.setting_bool("is_raw_compose_deployment_enabled")
+            {
                 self.app.str("docker_compose_raw")
             } else {
                 self.app.str("docker_compose")
@@ -1408,12 +1410,20 @@ impl Run {
                         "SERVICE_NAME_{}",
                         name.replace(['-', '.'], "_").to_uppercase()
                     ),
-                    Some(git::bash_env_value(Some(&name))),
+                    Some(git::bash_env_value(Some(
+                        &crate::compose_parser::volumes::add_preview_deployment_suffix(
+                            &name,
+                            self.b.pull_request_id,
+                        ),
+                    ))),
                 );
             }
-            for (service, entry) in
-                crate::compose_parser::php_json_array(self.app.str("docker_compose_domains"))
-            {
+            let preview_domains = self.preview_compose_domains();
+            for (service, entry) in crate::compose_parser::php_json_array(if self.b.is_preview() {
+                preview_domains.as_deref()
+            } else {
+                self.app.str("docker_compose_domains")
+            }) {
                 let Some(domain) =
                     crate::compose_parser::domain_entry_string(&entry).filter(|d| !d.is_empty())
                 else {
