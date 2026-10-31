@@ -1337,8 +1337,13 @@ async fn finish_create(
             return Ok(ok(json!({"message": result.message()})).into_response());
         }
     }
-    // Without instant deploy, upstream dispatches `LoadComposeFile` for dockercompose
-    // (clone, read and parse the compose file); not ported (docs/KNOWN_LIMITATIONS.md).
+    // `LoadComposeFile::dispatch($application)`: clone, read and parse the compose file.
+    if !cx.instant
+        && build_pack == "dockercompose"
+        && let Some(jobs) = state.jobs.as_ref()
+    {
+        jobs.spawn_load_compose_file(id);
+    }
     tracing::info!(target: "audit", event = "api.application.created", team_id = ctx.team_id, application_uuid = %uuid, application_type, build_pack = %build_pack, instant_deploy = cx.instant, "application created");
     let fresh = apps::find_by_id(&state.db, id)
         .await?

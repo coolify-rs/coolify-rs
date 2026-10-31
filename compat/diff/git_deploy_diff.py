@@ -81,6 +81,30 @@ CASES = {
     "secrets-inline": dict(dockerfile=INLINE_SECRET_DOCKERFILE, ports_exposes="80"),
     "secrets-nixpacks": dict(build_pack="nixpacks", base_directory="/javascript/runtimes/nodejs", ports_exposes="3000"),
     "secrets-compose": dict(build_pack="dockercompose", base_directory="/internal/compose", docker_compose_location="/docker-compose.yaml"),
+    # Preserved repository: `docker cp` of the clone into the configuration directory.
+    "preserve": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
+    "preserve-compose": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests",
+                             docker_compose_location="/docker-compose-local-volumes.yaml"),
+    # Custom Compose commands, with and without the flags upstream injects.
+    "custom-commands": dict(build_pack="dockercompose", base_directory="/internal/compose", docker_compose_location="/docker-compose.yaml",
+                            docker_compose_custom_build_command="docker compose --project-name {name} build --pull",
+                            docker_compose_custom_start_command="docker compose --project-name {name} up -d"),
+    "custom-flags": dict(build_pack="dockercompose", base_directory="/internal/compose", docker_compose_location="/docker-compose.yaml",
+                         docker_compose_custom_build_command="docker compose --project-name {name} -f internal/compose/docker-compose.yaml --env-file=/artifacts/build-time.env --project-directory internal/compose build",
+                         docker_compose_custom_start_command="docker compose --project-name {name} --project-directory internal/compose up -d --remove-orphans"),
+    "custom-preserve": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests", docker_compose_location="/docker-compose-simple.yaml",
+                            docker_compose_custom_start_command="docker compose --project-name {name} up -d"),
+    "custom-raw": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests", docker_compose_location="/docker-compose-simple.yaml",
+                       docker_compose_custom_start_command="docker compose --project-name {name} up -d"),
+    "raw": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests", docker_compose_location="/docker-compose-simple.yaml"),
+    "custom-secrets": dict(build_pack="dockercompose", base_directory="/internal/compose", docker_compose_location="/docker-compose.yaml",
+                           docker_compose_custom_build_command="docker compose --project-name {name} build"),
+    "custom-build-fail": dict(build_pack="dockercompose", base_directory="/internal/compose", docker_compose_location="/docker-compose.yaml",
+                              docker_compose_custom_build_command="docker compose nosuchcommand"),
+    "custom-start-fail": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests", docker_compose_location="/docker-compose-simple.yaml",
+                              docker_compose_custom_start_command="docker compose nosuchcommand"),
+    # Stored past the API's validation: the job refuses it.
+    "custom-unsafe": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests", docker_compose_location="/docker-compose-simple.yaml"),
 }
 
 
@@ -118,31 +142,43 @@ STORAGE_BODIES = [{"type": "file", "mount_path": "/etc/diff/app.conf", "content"
                   {"type": "file", "mount_path": "/etc/diff/data", "is_directory": True, "fs_path": "etc/diff/data"},
                   {"type": "file", "mount_path": "/etc/diff/empty.conf"}]
 STORAGES = {"file-storage": (STORAGE_BODIES, "rm -f {file}"),
+            "preserve": (STORAGE_BODIES, "true"),
             "file-storage-blocked": (STORAGE_BODIES, "rm -f {file} && mkdir -p {file} && touch {file}/x"),
             "file-storage-empty-dir": (STORAGE_BODIES, "rm -f {file} && mkdir -p {file}")}
 # Each side creates the application through its own API.
-OWN_CREATE = ("compose-files", "inline", "inline-instant")
+OWN_CREATE = ("compose-files", "inline", "inline-instant", "preserve-compose")
 # Queued by the create request, so the first deployment needs no call.
 INSTANT = ("inline-instant",)
 # How many deployments a case runs, when it is not two.
 DEPLOYS = {"rollback": 3}
 # Each side deletes the application through its own API, and the result is compared.
-OWN_DELETE = ("file-storage", "compose-files")
+OWN_DELETE = ("file-storage", "compose-files", "preserve", "preserve-compose")
 # SQL on the created row before the first deployment; {u} is its uuid.
 SETTING = "UPDATE application_settings SET {col} = true WHERE application_id = (SELECT id FROM applications WHERE uuid = '{u}')"
 BUILD_SECRETS = SETTING.replace("{col}", "use_build_secrets")
+PRESERVE = SETTING.replace("{col}", "is_preserve_repository_enabled")
 PREPARE_SQL = {"basic-auth-generated": "UPDATE applications SET custom_labels = NULL WHERE uuid = '{u}'",
-               "secrets": BUILD_SECRETS, "secrets-inline": BUILD_SECRETS, "secrets-nixpacks": BUILD_SECRETS, "secrets-compose": BUILD_SECRETS}
+               "secrets": BUILD_SECRETS, "secrets-inline": BUILD_SECRETS, "secrets-nixpacks": BUILD_SECRETS, "secrets-compose": BUILD_SECRETS,
+               "custom-secrets": BUILD_SECRETS, "preserve": PRESERVE, "preserve-compose": PRESERVE, "custom-preserve": PRESERVE,
+               "custom-raw": SETTING.replace("{col}", "is_raw_compose_deployment_enabled"),
+               "raw": SETTING.replace("{col}", "is_raw_compose_deployment_enabled"),
+               "custom-unsafe": "UPDATE applications SET docker_compose_custom_start_command = 'echo $(id)' WHERE uuid = '{u}'"}
 # POST /applications/{uuid}/envs through the reference, for both rows.
 SECRET_ENV = [{"key": "DIFF_SECRET", "value": "hunter2-secret", "is_buildtime": True, "is_runtime": True},
               {"key": "DIFF_MULTI", "value": "line one\nline two", "is_multiline": True, "is_buildtime": True, "is_runtime": False}]
 ENVS = {"secrets": SECRET_ENV, "secrets-inline": SECRET_ENV, "secrets-nixpacks": SECRET_ENV[:1], "secrets-compose": SECRET_ENV[:1]}
 # Cases that also compare the hidden log: build.sh and the steps BuildKit prints, which show the rewritten Dockerfile.
-HIDDEN_CASES = {"secrets", "secrets-inline", "secrets-nixpacks", "secrets-compose"}
+HIDDEN_CASES = {"secrets", "secrets-inline", "secrets-nixpacks", "secrets-compose", "custom-commands", "custom-flags", "custom-secrets"}
 # A file in the running image: what the build saw.
 IMAGE_FILES = {"secrets": "/usr/share/nginx/html/env.html", "secrets-inline": "/usr/share/nginx/html/env.html"}
 # The status each deployment of a case ends with, when it is not `finished`.
-EXPECTED_STATUS = {("pre-fail", 2): "failed", ("pre-missing", 2): "failed", ("pre-unnamed", 2): "failed"}
+EXPECTED_STATUS = {("pre-fail", 2): "failed", ("pre-missing", 2): "failed", ("pre-unnamed", 2): "failed",
+                   ("custom-build-fail", 1): "failed", ("custom-build-fail", 2): "failed", ("custom-start-fail", 1): "failed",
+                   ("custom-start-fail", 2): "failed", ("custom-unsafe", 1): "failed", ("custom-unsafe", 2): "failed",
+                   # `cd` in the helper, then a Compose file path that only exists on the server.
+                   ("custom-raw", 1): "failed", ("custom-raw", 2): "failed"}
+# Every deployment fails, so nothing runs and no file is written.
+NOTHING_RUNS = ("custom-build-fail", "custom-start-fail", "custom-unsafe", "custom-raw")
 # Cases that wait for the status pollers: the columns they compare do not depend on the other cases.
 STATUS_CASES = ("dockerfile", "static", "nixpacks", "railpack", "deploykey")
 SECCOMP_PROFILE = '{"defaultAction":"SCMP_ACT_ALLOW"}'
@@ -212,7 +248,7 @@ def main():
                 prefix = subnet.rsplit(".", 1)[0]
                 ips = {"ref": f"{prefix}.201", "rs": f"{prefix}.202"}
             for side in ("ref", "rs"):
-                spec = {k: v.replace("{seccomp}", seccomp).replace("{ip}", ips.get(side, "")) if isinstance(v, str) else v for k, v in template.items()}
+                spec = {k: v.replace("{seccomp}", seccomp).replace("{ip}", ips.get(side, "")).replace("{name}", f"{case}-{side}") if isinstance(v, str) else v for k, v in template.items()}
                 if "dockerfile" in spec:
                     body = dict(server_uuid=a.server, project_uuid=project, environment_name="production", name=f"{case}-{side}",
                                 **{"instant_deploy": False, **spec})
@@ -244,8 +280,8 @@ def main():
             if case in PREPARE_SQL:
                 for u in (ur, us):
                     sql(PREPARE_SQL[case].replace("{u}", u))
-            if case in ENVS and spec.get("build_pack") == "dockercompose":
-                # The job that stored the file still creates the SERVICE_* rows; the order of the rows is compared.
+            if (case in ENVS or case in PREPARE_SQL) and spec.get("build_pack") == "dockercompose":
+                # The job that stored the file still creates the SERVICE_* and storage rows; their order is compared.
                 time.sleep(15)
             for body in ENVS.get(case, []):
                 for u in (ur, us):
@@ -383,7 +419,7 @@ def main():
                 # `fileStorages()->get()` has no ORDER BY: upstream's mount order is the heap order of a table
                 # other writers share, and two runs of the reference differ.
                 fr, fs = sorted_mounts(fr), sorted_mounts(fs)
-            record(f"[{case}] docker-compose.yaml identical", fr == fs and fr != "",
+            record(f"[{case}] docker-compose.yaml identical", fr == fs and (fr != "" or case in NOTHING_RUNS),
                    "\n".join(difflib.unified_diff(fr.splitlines(), fs.splitlines(), lineterm="")))
             envs = []
             for u in (ur, us):
@@ -400,7 +436,7 @@ def main():
                         return x
                     per.append((norm(name, [(u, "U")]), state, norm(vm(f"docker inspect --format '{HOST_CONFIG}' {name}"), [(u, "U")]), sorted(secret(norm(x, [(u, "U"), (f"{case}-ref", "NAME"), (f"{case}-rs", "NAME")])) for x in env)))
                 envs.append(per)
-            record(f"[{case}] containers, states and environment identical", envs[0] == envs[1] and envs[0] != [],
+            record(f"[{case}] containers, states and environment identical", envs[0] == envs[1] and (envs[0] != [] or case in NOTHING_RUNS),
                    "\n".join(difflib.unified_diff([repr(x) for x in envs[0]], [repr(x) for x in envs[1]], lineterm="")))
             def tree(u):
                 listing = vm(f"cd /data/coolify/applications/{u} && find . -printf '%y %m %U %p\\n' | sort")
@@ -411,7 +447,7 @@ def main():
                 record(f"[{case}] configuration directories identical", tr == ts and tr != "", "\n".join(difflib.unified_diff(tr.splitlines(), ts.splitlines(), lineterm="")))
                 rows = []
                 for u in (ur, us):
-                    rows.append(sql(f"SELECT coalesce(json_agg(json_build_object('fs', replace(fs_path, '{u}', 'U'), 'mount', mount_path, 'dir', is_directory, 'host', is_host_file, 'git', is_based_on_git, 'chmod', chmod, 'chown', chown, 'content', content IS NOT NULL) ORDER BY mount_path)::text, '') FROM local_file_volumes WHERE resource_type = 'App\\Models\\Application' AND resource_id = (SELECT id FROM applications WHERE uuid='{u}')"))
+                    rows.append(sql(f"SELECT coalesce(json_agg(json_build_object('fs', replace(fs_path, '{u}', 'U'), 'mount', mount_path, 'dir', is_directory, 'host', is_host_file, 'git', is_based_on_git, 'chmod', chmod, 'chown', chown, 'content', content IS NOT NULL AND NOT is_based_on_git) ORDER BY mount_path)::text, '') FROM local_file_volumes WHERE resource_type = 'App\\Models\\Application' AND resource_id = (SELECT id FROM applications WHERE uuid='{u}')"))
                 record(f"[{case}] local_file_volumes rows alike", rows[0] == rows[1], rows)
             if case in STORAGES:
                 inside = []

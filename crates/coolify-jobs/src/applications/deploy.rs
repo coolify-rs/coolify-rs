@@ -179,6 +179,10 @@ struct BuildState {
     compose_env: Option<compose::ComposeEnv>,
     compose_fingerprint: Option<String>,
     compose_build_env: Option<Vec<String>>,
+    /// `$this->docker_compose_custom_start_command`.
+    compose_start_command: Option<String>,
+    /// `$this->docker_compose_custom_build_command`.
+    compose_build_command: Option<String>,
 }
 
 impl BuildState {
@@ -1506,29 +1510,7 @@ impl Run {
         if self.app.setting_bool("is_preserve_repository_enabled") {
             return Ok(());
         }
-        let db = self.jobs.0.db.clone();
-        let enc = self
-            .jobs
-            .0
-            .encrypter
-            .clone()
-            .ok_or_else(|| Fail::new("No application encryption key has been specified."))?;
-        let rows = coolify_db::storages::list(
-            &db,
-            coolify_db::storages::StorageKind::File,
-            apps::MORPH,
-            self.app.id,
-        )
-        .await
-        .map_err(|e| Fail::new(e.to_string()))?;
-        let files = rows
-            .iter()
-            .map(|r| FileStorage::from_record(r, &enc))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(Fail::new)?;
-        let owner = StorageOwner::for_application(&db, &self.app)
-            .await
-            .map_err(|e| Fail::new(e.to_string()))?;
+        let (files, owner) = self.file_storages().await?;
         let lines = self
             .jobs
             .ensure_content_files_on_server(&owner, &files, self.server.id)
@@ -1976,10 +1958,28 @@ impl Run {
         }
     }
 
-    /// `write_deployment_configurations()`: the generated compose file and README in the
-    /// configuration directory on the server.
-    async fn write_deployment_configurations(&mut self) {
+    /// `write_deployment_configurations()`: the repository when it is preserved, then the
+    /// generated compose file and README in the configuration directory on the server.
+    async fn write_deployment_configurations(&mut self) -> Step {
         let finished = now();
+        if self.app.setting_bool("is_preserve_repository_enabled") {
+            let (c, dep, w) = (self.cfg.clone(), self.dep.clone(), self.workdir.clone());
+            self.exec(vec![
+                Cmd::new(format!("mkdir -p {c}")),
+                Cmd::new(format!("docker cp {dep}:{w}/. {c}")),
+            ])
+            .await?;
+            let (files, owner) = self.file_storages().await?;
+            for file in files
+                .iter()
+                .filter(|f| !f.is_host_file && !f.is_based_on_git && !f.is_directory)
+            {
+                self.jobs
+                    .save_storage_on(&owner, file, self.server.id)
+                    .await
+                    .map_err(Fail::new)?;
+            }
+        }
         if let Some(yaml) = self.generated_compose.clone() {
             let name = sanitize_string(self.app.str("name").unwrap_or_default());
             let readme = format!(
@@ -1987,23 +1987,43 @@ impl Run {
                 finished.format("%Y-%m-%d %H:%M:%S")
             );
             let c = self.cfg.clone();
-            let written = self
-                .exec(vec![
-                    Cmd::new(format!("mkdir -p {c}")),
-                    Cmd::new(format!("rm -f {c}/docker-compose.yaml {c}/README.md")).hidden(),
-                    Cmd::new(format!("tee {c}/docker-compose.yaml > /dev/null")).input(yaml),
-                    Cmd::new(format!("echo '{readme}' | tee {c}/README.md > /dev/null")),
-                ])
-                .await;
-            if let Err(Fail::Error { message, .. }) = written {
-                self.log(
-                    &format!("Warning: Failed to write deployment configurations: {message}"),
-                    "stderr",
-                    false,
-                )
-                .await;
-            }
+            self.exec(vec![
+                Cmd::new(format!("mkdir -p {c}")),
+                Cmd::new(format!("rm -f {c}/docker-compose.yaml {c}/README.md")).hidden(),
+                Cmd::new(format!("tee {c}/docker-compose.yaml > /dev/null")).input(yaml),
+                Cmd::new(format!("echo '{readme}' | tee {c}/README.md > /dev/null")),
+            ])
+            .await?;
         }
+        Ok(())
+    }
+
+    /// `$this->application->fileStorages` and the owner the storage helpers take.
+    pub(super) async fn file_storages(&self) -> Result<(Vec<FileStorage>, StorageOwner), Fail> {
+        let db = self.jobs.0.db.clone();
+        let enc = self
+            .jobs
+            .0
+            .encrypter
+            .clone()
+            .ok_or_else(|| Fail::new("No application encryption key has been specified."))?;
+        let rows = coolify_db::storages::list(
+            &db,
+            coolify_db::storages::StorageKind::File,
+            apps::MORPH,
+            self.app.id,
+        )
+        .await
+        .map_err(|e| Fail::new(e.to_string()))?;
+        let files = rows
+            .iter()
+            .map(|r| FileStorage::from_record(r, &enc))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Fail::new)?;
+        let owner = StorageOwner::for_application(&db, &self.app)
+            .await
+            .map_err(|e| Fail::new(e.to_string()))?;
+        Ok((files, owner))
     }
 
     /// The `finally` block of `handle()`.
@@ -2017,7 +2037,15 @@ impl Run {
             finished,
         )
         .await;
-        self.write_deployment_configurations().await;
+        // Log but don't fail: configuration writing errors shouldn't prevent status updates.
+        if let Err(Fail::Error { message, .. }) = self.write_deployment_configurations().await {
+            self.log(
+                &format!("Warning: Failed to write deployment configurations: {message}"),
+                "stderr",
+                false,
+            )
+            .await;
+        }
         let dep = self.dep.clone();
         self.info(&format!("Gracefully shutting down build container: {dep}"))
             .await;

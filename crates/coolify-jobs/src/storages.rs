@@ -748,7 +748,7 @@ impl Jobs {
 
     /// `saveStorageOnServer($server)`.
     #[allow(clippy::too_many_lines)]
-    async fn save_storage_on(
+    pub(crate) async fn save_storage_on(
         &self,
         owner: &StorageOwner,
         file: &FileStorage,
@@ -930,7 +930,7 @@ impl Jobs {
     }
 
     /// `deleteStorageOnServer($server)`.
-    async fn delete_storage_on(
+    pub(crate) async fn delete_storage_on(
         &self,
         owner: &StorageOwner,
         file: &FileStorage,

@@ -224,6 +224,22 @@ impl Jobs {
             < concurrent
     }
 
+    /// `LoadComposeFile::dispatch($application)`.
+    pub fn spawn_load_compose_file(&self, application_id: i64) {
+        let jobs = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                crate::compose_parser::load_compose_file(&jobs, application_id, false).await
+            {
+                tracing::warn!(
+                    application_id,
+                    error = e.message(),
+                    "LoadComposeFile failed"
+                );
+            }
+        });
+    }
+
     /// `ApplicationDeploymentJob::dispatch(...)`: runs on the deployment workers.
     fn dispatch_deployment(&self, queue_id: i64) {
         let jobs = self.clone();
