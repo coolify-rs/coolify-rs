@@ -20,7 +20,7 @@ coolify-remote = { path = "crates/coolify-remote" }
 coolify-jobs = { path = "crates/coolify-jobs" }
 
 anyhow = "1"
-axum = { version = "0.8", features = ["multipart"] }
+axum = { version = "0.8", features = ["multipart", "ws"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 chrono-tz = { version = "0.10", default-features = false, features = ["std"] }

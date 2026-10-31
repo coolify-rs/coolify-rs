@@ -4,6 +4,7 @@
 //! no local shell, a cleared environment, ephemeral key files, pinned host
 //! keys, deadlines and output caps.
 
+use std::ffi::OsString;
 use std::fmt;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -94,6 +95,15 @@ impl fmt::Debug for PrivateKey {
 }
 
 /// A remote file being read: dropping it ends the ssh process and removes the key file.
+#[allow(missing_debug_implementations)]
+pub struct TtyInvocation {
+    pub program: PathBuf,
+    pub args: Vec<OsString>,
+    pub envs: Vec<(OsString, OsString)>,
+    /// Removed from disk when dropped.
+    pub key: Box<dyn std::any::Any + Send>,
+}
+
 pub struct RemoteRead {
     pub stdout: tokio::process::ChildStdout,
     _child: tokio::process::Child,
@@ -470,10 +480,6 @@ impl Remote {
     }
 
     fn command(&self, t: &Target, key_path: &Path, known_hosts: &Path) -> Command {
-        let connect_timeout = t
-            .connection_timeout
-            .filter(|v| *v > 0)
-            .unwrap_or(DEFAULT_CONNECT_TIMEOUT);
         let mut cmd = Command::new(&self.cfg.ssh_binary);
         cmd.env_clear()
             .env(
@@ -481,12 +487,35 @@ impl Remote {
                 std::env::var_os("PATH").unwrap_or_else(|| "/usr/local/bin:/usr/bin:/bin".into()),
             )
             .env("HOME", self.ssh_dir().join("home"))
-            .arg("-F")
-            .arg("/dev/null")
-            .arg("-i")
-            .arg(key_path);
+            .args(self.ssh_args(t, key_path, known_hosts, "no", REMOTE_SHELL))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        cmd
+    }
+
+    fn ssh_args(
+        &self,
+        t: &Target,
+        key_path: &Path,
+        known_hosts: &Path,
+        request_tty: &str,
+        remote_command: &str,
+    ) -> Vec<OsString> {
+        let connect_timeout = t
+            .connection_timeout
+            .filter(|v| *v > 0)
+            .unwrap_or(DEFAULT_CONNECT_TIMEOUT);
+        let mut args: Vec<OsString> = vec![
+            "-F".into(),
+            "/dev/null".into(),
+            "-i".into(),
+            key_path.into(),
+        ];
         let mut opt = |o: String| {
-            cmd.arg("-o").arg(o);
+            args.push("-o".into());
+            args.push(o.into());
         };
         match self.cfg.host_keys {
             HostKeyPolicy::Pin => {
@@ -511,28 +540,50 @@ impl Remote {
             "PermitLocalCommand=no",
             "ControlMaster=no",
             "ControlPath=none",
-            "RequestTTY=no",
-            "LogLevel=ERROR",
         ] {
             opt(o.into());
         }
+        opt(format!("RequestTTY={request_tty}"));
+        opt("LogLevel=ERROR".into());
         opt(format!("ConnectTimeout={connect_timeout}"));
         opt(format!("ServerAliveInterval={SERVER_ALIVE_INTERVAL}"));
         if t.cloudflare_tunnel {
             opt("ProxyCommand=cloudflared access ssh --hostname %h".into());
         }
-        cmd.arg("-l")
-            .arg(&t.user)
-            .arg("-p")
-            .arg(t.port.to_string())
-            .arg("--")
-            .arg(&t.host)
-            .arg(REMOTE_SHELL)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        cmd
+        args.extend([
+            "-l".into(),
+            (&t.user).into(),
+            "-p".into(),
+            t.port.to_string().into(),
+            "--".into(),
+            (&t.host).into(),
+            remote_command.into(),
+        ]);
+        args
+    }
+
+    /// The `ssh` process `terminal-server.js` spawns in a PTY: one remote command with
+    /// `RequestTTY=yes`, standard input left to the terminal. The key file lives as long as the
+    /// returned value.
+    pub fn tty_invocation(
+        &self,
+        t: &Target,
+        remote_command: &str,
+    ) -> Result<TtyInvocation, RemoteError> {
+        let known_hosts = self.check_target(t)?;
+        let key = self.write_key(&t.key)?;
+        let args = self.ssh_args(t, key.path(), &known_hosts, "yes", remote_command);
+        Ok(TtyInvocation {
+            program: self.cfg.ssh_binary.clone(),
+            args,
+            // `getTerminalProcessEnv()`, with the HOME every ssh process here gets.
+            envs: ["PATH", "TUNNEL_SERVICE_TOKEN_ID", "TUNNEL_SERVICE_TOKEN_SECRET"]
+                .into_iter()
+                .filter_map(|name| std::env::var_os(name).map(|v| (OsString::from(name), v)))
+                .chain([(OsString::from("HOME"), self.ssh_dir().join("home").into())])
+                .collect(),
+            key: Box::new(key),
+        })
     }
 
     /// Streams a file from the server. `streamBackupFromServer` reads over SFTP; this reads with

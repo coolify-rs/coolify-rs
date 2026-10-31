@@ -16,6 +16,7 @@
   import ServiceBackups from '../components/ServiceBackups.svelte';
   import ServiceImportBackup from '../components/ServiceImportBackup.svelte';
   import ServiceSharedPlaceholder from '../components/ServiceSharedPlaceholder.svelte';
+  import ExecuteContainerCommand from '../components/shared/ExecuteContainerCommand.svelte';
   import ResourceOperations from '../components/shared/ResourceOperations.svelte';
   import Maintenance from '../components/shared/Maintenance.svelte';
   import FileBrowser from '../components/shared/FileBrowser.svelte';
@@ -238,7 +239,7 @@
           {:else if section === 'logs'}
             <div class="runtime-logs-column min-w-0"><RuntimeLogs kind="service" uuid={service} /></div>
           {:else if section === 'terminal'}
-            <ServiceSharedPlaceholder section="Project/Shared/ExecuteContainerCommand" />
+            <ExecuteContainerCommand kind="service" uuid={service} />
           {:else if section === 'files'}
             <FileBrowser kind="service" uuid={service} />
           {:else}
