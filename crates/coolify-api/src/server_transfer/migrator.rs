@@ -114,14 +114,13 @@ fn normalize_token(token: &str) -> Result<String, String> {
 
 /// `targetRequest`.
 fn client(url: &str, timeout: Duration) -> Result<reqwest::Client, String> {
-    let mut b = reqwest::Client::builder().timeout(timeout);
-    // A local target answers directly; a public one is checked by SafeWebhookUrl and not followed.
-    if is_local_development_target(url) {
-        b = b.redirect(reqwest::redirect::Policy::none());
-    } else {
-        b = b.redirect(reqwest::redirect::Policy::none());
-    }
-    b.build().map_err(|e| e.to_string())
+    // A redirect could send the token elsewhere: `SafeWebhookUrl::httpClientOptions`.
+    let _ = url;
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| e.to_string())
 }
 
 /// `writeMigration` on the locked row.

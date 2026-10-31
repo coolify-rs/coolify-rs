@@ -402,7 +402,7 @@ fn get_or_null(v: &Value, key: &str) -> Value {
 }
 
 fn bool_of(v: &Value, key: &str, default: bool) -> Value {
-    json!(dg(v, key).map_or(default, |x| crate::serialize::php_truthy(x)))
+    json!(dg(v, key).map_or(default, crate::serialize::php_truthy))
 }
 
 /// `(int)` with a default.

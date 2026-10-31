@@ -124,7 +124,9 @@ pub async fn claim(jobs: &Jobs, server_id: i64, instance_url: &str) -> Result<Va
     if !transfer.is_object() {
         *transfer = Value::Object(Map::new());
     }
-    let t = transfer.as_object_mut().expect("object");
+    let Some(t) = transfer.as_object_mut() else {
+        return Err("The server metadata is not valid.".to_owned());
+    };
     t.insert("status".into(), json!("claimed"));
     t.insert("claimed_at".into(), claim["claimed_at"].clone());
     t.insert("claim".into(), claim.clone());
@@ -295,7 +297,9 @@ pub async fn mark_transferred(
     if !transfer.is_object() {
         *transfer = Value::Object(Map::new());
     }
-    let t = transfer.as_object_mut().expect("object");
+    let Some(t) = transfer.as_object_mut() else {
+        return Err("The server metadata is not valid.".to_owned());
+    };
     t.insert("status".into(), json!("transferred"));
     t.insert(
         "export_id".into(),
@@ -330,11 +334,9 @@ pub async fn mark_transferred(
     .map_err(db_error)?;
 
     let parked = park_dns(&mut tx, server_id).await?;
-    metadata
-        .get_mut("transfer")
-        .and_then(Value::as_object_mut)
-        .expect("object")
-        .insert("parked_dns_record_ids".into(), json!(parked));
+    if let Some(t) = metadata.get_mut("transfer").and_then(Value::as_object_mut) {
+        t.insert("parked_dns_record_ids".into(), json!(parked));
+    }
     write_metadata(&mut tx, server_id, &metadata).await?;
     tx.commit().await.map_err(db_error)?;
 
@@ -392,13 +394,10 @@ pub async fn release_if_claimed_elsewhere(
 ) -> Result<bool, String> {
     let server_id = srv.id();
     let metadata = srv.row.record.get("server_metadata").cloned();
-    let transfer = metadata.as_ref().and_then(|m| m.get("transfer"));
-    if server_id == 0
-        || transfer
-            .and_then(|t| t.get("status"))
-            .and_then(Value::as_str)
-            != Some("claimed")
-    {
+    let Some(transfer) = metadata.as_ref().and_then(|m| m.get("transfer")) else {
+        return Ok(false);
+    };
+    if server_id == 0 || transfer.get("status").and_then(Value::as_str) != Some("claimed") {
         return Ok(false);
     }
     let Ok(marker) = serde_json::from_str::<Value>(marker_json.unwrap_or_default().trim()) else {
@@ -411,7 +410,6 @@ pub async fn release_if_claimed_elsewhere(
     else {
         return Ok(false);
     };
-    let transfer = transfer.expect("checked above");
     let own_claim = transfer.get("claim");
     if Some(marker_claim_id)
         == own_claim

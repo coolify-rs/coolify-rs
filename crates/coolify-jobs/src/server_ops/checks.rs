@@ -80,7 +80,7 @@ async fn connection_check(srv: &Srv) -> Result<(), String> {
     if reachable
         && crate::server_transfer::release_if_claimed_elsewhere(
             &srv.jobs,
-            &srv,
+            srv,
             owner_marker.as_deref(),
         )
         .await?

@@ -528,7 +528,7 @@ impl<'a> Exporter<'a> {
             .await?;
         Ok(json!(rows.iter().map(|t| json!({
             "uuid": t["uuid"], "name": t["name"], "command": t["command"], "frequency": t["frequency"],
-            "container": t["container"], "timeout": t["timeout"], "enabled": t.get("enabled").is_none_or(|v| crate::serialize::php_truthy(v)),
+            "container": t["container"], "timeout": t["timeout"], "enabled": t.get("enabled").is_none_or(crate::serialize::php_truthy),
         })).collect::<Vec<_>>()))
     }
 

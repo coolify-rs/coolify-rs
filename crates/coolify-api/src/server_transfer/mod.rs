@@ -1,5 +1,8 @@
 //! `App\Services\ServerTransfer`: moves a server and its records to another instance.
 
+// Only fixed regexes and values checked just before.
+#![allow(clippy::expect_used)]
+
 pub mod bundle;
 pub mod checklist;
 pub mod exporter;

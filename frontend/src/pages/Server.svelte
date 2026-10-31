@@ -314,23 +314,7 @@
               <Reicon name={facts?.functional ? 'refresh' : 'alert-circle'} class="size-3.5" />
               {facts?.functional ? 'Revalidate connection' : 'Validate connection'}
             </button>
-            {#if facts?.transferred && !facts.is_coolify_host}
-              <button type="button" class="button" {...{ iserror: "" }} disabled={!canEdit} onclick={() => (takingBack = true)}>
-                <Reicon name="alert-triangle" class="size-3.5" />
-                Enable management
-              </button>
-            {/if}
           {/snippet}
-          {#if facts?.transferred}
-            <Callout type="danger" title="Transferred to another instance" class="mb-4">
-              This server was transferred to
-              <strong>{facts.transfer_target_url || 'another Coolify instance'}</strong>,
-              which manages it now. Use that instance. To undo the transfer, use
-              <a href={`/server/${uuid}/transfer`} use:link class="underline">Transfer back</a>. Keep this archive until you are sure: it is the
-              copy that an undo uses.
-            </Callout>
-          {/if}
-          <ServerTransferFinish {uuid} />
           <div class="flex items-start gap-3">
             <div class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-neutral-600 dark:bg-white/[0.06] dark:text-fg-dim">
               <Reicon name="servers" class="size-4.5" />
@@ -384,17 +368,35 @@
             {/if}
           {/snippet}
           {#snippet actions()}
-            <button
-              type="button"
-              class="button"
-              {...facts?.functional ? {} : { ishighlighted: '' }}
-              disabled={!canEdit}
-              onclick={validate}
-            >
-              <Reicon name={facts?.functional ? 'refresh' : 'alert-circle'} class="size-3.5" />
-              {facts?.functional ? 'Revalidate connection' : 'Validate connection'}
-            </button>
+            {#if !facts?.transferred}
+              <button
+                type="button"
+                class="button"
+                {...facts?.functional ? {} : { ishighlighted: '' }}
+                disabled={!canEdit}
+                onclick={validate}
+              >
+                <Reicon name={facts?.functional ? 'refresh' : 'alert-circle'} class="size-3.5" />
+                {facts?.functional ? 'Revalidate connection' : 'Validate connection'}
+              </button>
+            {/if}
+            {#if facts?.transferred && !facts.is_coolify_host}
+              <button type="button" class="button button-error" disabled={!canEdit} onclick={() => (takingBack = true)}>
+                <Reicon name="alert-triangle" class="size-3.5" />
+                Enable management
+              </button>
+            {/if}
           {/snippet}
+          {#if facts?.transferred}
+            <Callout type="danger" title="Transferred to another instance" class="mb-4">
+              This server was transferred to
+              <strong>{facts.transfer_target_url || 'another Coolify instance'}</strong>,
+              which manages it now. Use that instance. To undo the transfer, use
+              <a href={`/server/${uuid}/transfer`} use:link class="underline">Transfer back</a>. Keep this archive until you are sure: it is the
+              copy that an undo uses.
+            </Callout>
+          {/if}
+          <ServerTransferFinish {uuid} />
 
           <div class="grid gap-4 sm:grid-cols-2">
             <FormInput id="name" label="Name" required disabled={!canEdit} bind:value={form.name} error={err('name')} />
