@@ -341,7 +341,7 @@ fn cron_field_extra(field: &str, min: i64, max: i64, names: &[&str], special: &s
 }
 
 /// `validateDatabasesBackupInput`.
-fn validate_databases_input(input: &str) -> Result<(), String> {
+pub(crate) fn validate_databases_input(input: &str) -> Result<(), String> {
     use coolify_jobs::compose_parser::validate::validate_shell_safe_path as safe;
     for entry in input.split('|') {
         let entry = entry.trim();

@@ -11,6 +11,7 @@
     children,
     footer,
     isLarge = false,
+    focusFirstField = true,
   }: {
     title: string;
     subtitle?: string;
@@ -18,11 +19,13 @@
     children: Snippet;
     footer?: Snippet;
     isLarge?: boolean;
+    /** Upstream does not focus a field in modals opened through `wireOpen`. */
+    focusFirstField?: boolean;
   } = $props();
 
   // Focus the first field when the dialog opens.
   function focusFirst(node: HTMLElement) {
-    queueMicrotask(() => node.querySelector<HTMLElement>('input, textarea, select')?.focus());
+    if (focusFirstField) queueMicrotask(() => node.querySelector<HTMLElement>('input, textarea, select')?.focus());
   }
 </script>
 

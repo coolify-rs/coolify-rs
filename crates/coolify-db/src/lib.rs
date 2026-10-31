@@ -11,7 +11,9 @@
 //! for byte.
 
 pub mod applications;
+pub mod audit;
 pub mod auth;
+pub mod auth_pages;
 pub mod cloud;
 pub mod compose;
 pub mod dashboard;
@@ -23,13 +25,20 @@ pub mod environment_variables;
 pub mod git_sources;
 pub mod github_runners;
 pub mod instance;
+pub mod instance_settings;
+pub mod integration_tokens;
+pub mod notification_settings;
 pub mod private_keys;
+pub mod profile;
 pub mod projects;
 pub mod records;
 pub mod schema;
 pub mod server_ops;
 pub mod servers;
 pub mod services;
+pub mod shared_variables;
+pub mod tag_pages;
+pub mod team_pages;
 pub mod teams;
 #[cfg(feature = "testing")]
 pub mod testing;

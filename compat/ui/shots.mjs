@@ -39,7 +39,12 @@ for (const t of targets) {
     await page.goto(base + (label === 'ref' ? t.refPath : t.rsPath));
     await page.waitForTimeout(Number(opt('wait', 2500)));
     // Upstream's first-run notification popup is not part of the page.
-    await page.locator('button:has-text("Accept And Close"), button:has-text("Accept and Close")').first().click({ timeout: 500 }).catch(() => {});
+    if (!flag('popups')) {
+      for (let i = 0; i < 2; i++) {
+        await page.locator('button:has-text("Accept And Close"), button:has-text("Accept and Close"), button:has-text("Maybe next time")').first().click({ timeout: 500 }).catch(() => {});
+        await page.waitForTimeout(200);
+      }
+    }
     const file = `${out}${t.name}-${label}.png`;
     await page.screenshot({ path: file, fullPage: flag('full') });
     console.log(file);

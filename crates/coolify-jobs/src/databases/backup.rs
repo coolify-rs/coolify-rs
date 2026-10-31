@@ -30,6 +30,13 @@ static RUNNING: LazyLock<Mutex<HashSet<i64>>> = LazyLock::new(|| Mutex::new(Hash
 /// `StandaloneSqlite::DATA_DIRECTORY`.
 const SQLITE_DATA_DIRECTORY: &str = "/var/lib/sqlite";
 
+/// How one database of a backup job ended, for its notification.
+enum BackupOutcome {
+    Success,
+    Failed(String),
+    S3Warning(String),
+}
+
 /// `pipeToFileKeepingExitStatus`.
 fn pipe_to_file(source: &str, sink: &str, escaped_file: &str) -> String {
     format!(
@@ -359,10 +366,19 @@ impl Jobs {
                 "{prefix}{}",
                 new_public_id().chars().take(8).collect::<String>()
             );
-            last_success = self
+            last_success = match self
                 .backup_one(&run, &name, &uuid, &credentials, &storages)
                 .await
-                .unwrap_or(false);
+            {
+                Ok(done) => done,
+                Err(e) => {
+                    // `failed()`: the job ended with an exception.
+                    let output = run.redact(&e);
+                    self.notify_backup(&run, &name, BackupOutcome::Failed(output))
+                        .await;
+                    false
+                }
+            };
         }
         if last_success && let Err(e) = self.remove_old_backups(&backup, &database, &server).await {
             tracing::warn!(backup = backup_id, error = %e, "database backup retention cleanup failed");
@@ -487,6 +503,7 @@ impl Jobs {
                 if let Some(reason) = exit_code_reason(code) {
                     failure = format!("{reason}\n\n{failure}");
                 }
+                let notify_failure = failure.clone();
                 parts::update_execution(
                     db,
                     execution,
@@ -502,6 +519,8 @@ impl Jobs {
                 )
                 .await
                 .map_err(|e| e.to_string())?;
+                self.notify_backup(run, &database_name, BackupOutcome::Failed(notify_failure))
+                    .await;
                 return Ok(false);
             }
         };
@@ -558,7 +577,45 @@ impl Jobs {
         )
         .await
         .map_err(|e| e.to_string())?;
+        let outcome = match s3_error {
+            Some(e) => BackupOutcome::S3Warning(e),
+            None => BackupOutcome::Success,
+        };
+        self.notify_backup(run, &database_name, outcome).await;
         Ok(true)
+    }
+
+    /// `$this->team->notify(new BackupSuccess|BackupSuccessWithS3Warning|BackupFailed(...))`.
+    async fn notify_backup(&self, run: &Run<'_>, database_name: &str, outcome: BackupOutcome) {
+        use crate::notifications::{Notification, lookup, notify};
+        let db = &self.0.db;
+        let Some(team_id) = run.backup.get("team_id").and_then(Value::as_i64) else {
+            return;
+        };
+        let d = run.database;
+        let backup = lookup::database_backup(
+            db,
+            d.str("name").unwrap_or_default(),
+            &d.uuid,
+            d.int("environment_id"),
+            Some(database_name),
+            parts::str_of(run.backup, "frequency").unwrap_or_default(),
+        )
+        .await;
+        let notification = match outcome {
+            BackupOutcome::Success => Notification::BackupSuccess(backup),
+            BackupOutcome::Failed(output) => Notification::BackupFailed { backup, output },
+            BackupOutcome::S3Warning(s3_error) => Notification::BackupSuccessWithS3Warning {
+                backup,
+                s3_error,
+                s3_uuid: lookup::s3_uuid(
+                    db,
+                    run.backup.get("s3_storage_id").and_then(Value::as_i64),
+                )
+                .await,
+            },
+        };
+        notify(db, self.0.encrypter.as_ref(), team_id, notification).await;
     }
 
     /// `backup_standalone_*`: the output of the commands, or the error text with the exit code.

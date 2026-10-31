@@ -10,6 +10,7 @@
     actionLabel = 'View all',
     titleAction,
     actions,
+    class: cls = '',
   }: {
     title: string;
     subtitle?: string;
@@ -17,6 +18,7 @@
     actionLabel?: string;
     titleAction?: Snippet;
     actions?: Snippet;
+    class?: string;
   } = $props();
 </script>
 
@@ -30,7 +32,7 @@
   </a>
 {/snippet}
 
-<div class="mb-3 min-w-0">
+<div class="mb-3 min-w-0 {cls}">
   <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
     <div class="flex min-w-0 items-baseline gap-2">
       <div class="flex min-w-0 items-center gap-1">

@@ -4,6 +4,7 @@
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
   import Modal from '../components/Modal.svelte';
+  import { router } from '../lib/router.svelte';
   import FormInput from '../components/FormInput.svelte';
   import FormTextarea from '../components/FormTextarea.svelte';
   import ConfirmModal from '../components/ConfirmModal.svelte';
@@ -23,7 +24,8 @@
   let editingKey = $state<(PrivateKey & { private_key?: string }) | null>(null);
 
   // Add manually.
-  let adding = $state(false);
+  // GlobalSearch's `open-create-modal-private-key` arrives as `?create=1`.
+  let adding = $state(router.query('create') === '1');
   let newName = $state('');
   let newDescription = $state('');
   let newValue = $state('');

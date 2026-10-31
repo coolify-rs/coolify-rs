@@ -696,7 +696,7 @@ async fn save_result(srv: &Srv, data: &Map<String, Value>) -> Result<(), String>
     .map_err(|e| e.to_string())
 }
 
-/// `ServerPatchCheckJob::handle` (notifications are not ported).
+/// `ServerPatchCheckJob::handle`.
 pub async fn server_patch_check(jobs: &Jobs, server_id: i64, manual: bool) -> Result<(), String> {
     let srv = Srv::load(jobs, server_id).await?;
     if srv.info.transferred {
@@ -713,8 +713,41 @@ pub async fn server_patch_check(jobs: &Jobs, server_id: i64, manual: bool) -> Re
         }
         return Ok(());
     }
+    let previous_error = srv
+        .info
+        .settings
+        .get("patch_check_error")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let data = check_updates(&srv).await;
-    save_result(&srv, &data).await
+    save_result(&srv, &data).await?;
+    let notify = if data.get("error").is_some_and(|e| !e.is_null()) {
+        // Only when the state changes from ok to error, not on every check of a broken server.
+        previous_error.is_none_or(|e| e.trim().is_empty())
+    } else {
+        !manual
+            && data
+                .get("total_updates")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                > 0
+    };
+    if notify
+        && let Some((team_id, server)) =
+            crate::notifications::lookup::server(srv.db(), server_id).await
+    {
+        crate::notifications::notify(
+            srv.db(),
+            jobs.0.encrypter.as_ref(),
+            team_id,
+            crate::notifications::Notification::ServerPatchCheck {
+                server,
+                patch_data: Value::Object(data),
+            },
+        )
+        .await;
+    }
+    Ok(())
 }
 
 /// `ServerPatchCheckJob::runningCacheKey`.

@@ -68,6 +68,8 @@ fn ported_routes_match_upstream_inventory() {
             .iter()
             .map(String::as_str)
             .filter(|m| !m.starts_with("App\\Http\\Middleware\\ApiAbility:"))
+            // Named throttles are applied by their handlers (`rules::throttle`).
+            .filter(|m| !m.starts_with("Illuminate\\Routing\\Middleware\\ThrottleRequests:"))
             .collect();
         if base != group {
             problems.push(format!(

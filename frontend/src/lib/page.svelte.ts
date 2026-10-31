@@ -58,12 +58,24 @@ export interface ServerTopbar {
   servers: { uuid: string; name: string; functional: boolean }[];
 }
 
+/** `<x-breadcrumb-switcher>` after the section name (a tag, an S3 storage). */
+export interface ResourceSwitcher {
+  title: string;
+  label: string;
+  items: SwitcherItem[];
+  /** The storage's status pill. */
+  usable?: boolean;
+}
+
 class PageState {
   switchers = $state<Switcher[]>([]);
+  resourceSwitcher = $state<ResourceSwitcher | null>(null);
   navContext = $state<NavContext | null>(null);
   server = $state<ServerTopbar | null>(null);
   /** The source switcher's status badge (`$sourceConnected`); `null` outside source pages. */
   sourceConnected = $state<boolean | null>(null);
+  /** Sub-items of the current page under its entry in the main sidebar (`#main-nav-active-children`). */
+  navChildren = $state<import('svelte').Snippet | null>(null);
 }
 
 export const page = new PageState();

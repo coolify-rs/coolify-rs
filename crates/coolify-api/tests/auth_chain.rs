@@ -201,7 +201,7 @@ async fn unknown_and_unported_routes() {
         .await
         .assert(404, nf);
     let r = h
-        .get("/api/v1/notifications/webhook", "acme_owner_root")
+        .get("/api/v1/servers/import/check", "acme_owner_root")
         .await;
     assert_eq!(r.status, 501);
     h.finish().await;

@@ -10,6 +10,13 @@ pub fn verify(password: &str, hash: &str) -> bool {
     bcrypt::verify(password, hash).unwrap_or(false)
 }
 
+/// `Hash::make`: bcrypt with Laravel's default cost and the `$2y$` prefix.
+pub fn hash(password: &str) -> Option<String> {
+    bcrypt::hash_with_result(password, 10)
+        .ok()
+        .map(|h| h.format_for_version(bcrypt::Version::TwoY))
+}
+
 /// Spends the same time as a real verification and always returns false.
 pub fn verify_dummy(password: &str) -> bool {
     let _ = bcrypt::verify(password, DUMMY_HASH);

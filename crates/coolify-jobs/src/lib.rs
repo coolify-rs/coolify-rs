@@ -13,6 +13,7 @@ pub mod git_http;
 pub mod gitea;
 pub mod github;
 pub mod gitlab;
+pub mod notifications;
 pub mod server;
 pub mod server_ops;
 pub mod services;
@@ -74,6 +75,7 @@ impl Jobs {
 
     /// Sets the instance version (`COOLIFY_VERSION`) once at startup.
     pub fn set_version(&self, version: String) {
+        notifications::set_version(&version);
         let _ = self.0.version.set(version);
     }
 

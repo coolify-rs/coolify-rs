@@ -112,13 +112,15 @@ pub struct MemberRow {
     pub email: String,
     pub role: String,
     pub two_factor: bool,
+    pub avatar_path: Option<String>,
+    pub updated_at: Option<NaiveDateTime>,
 }
 
 /// `currentTeam()->members` with the pivot role (no ORDER BY, like Eloquent).
 pub async fn member_rows(db: &Db, team_id: TeamId) -> DbResult<Vec<MemberRow>> {
     Ok(sqlx::query_as(
         "SELECT u.id, u.name, u.email, COALESCE(tu.role, 'member') AS role, \
-                (u.two_factor_confirmed_at IS NOT NULL) AS two_factor \
+                (u.two_factor_confirmed_at IS NOT NULL) AS two_factor, u.avatar_path, u.updated_at \
          FROM users u JOIN team_user tu ON tu.user_id = u.id WHERE tu.team_id = $1",
     )
     .bind(team_id)

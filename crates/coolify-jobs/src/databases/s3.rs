@@ -404,6 +404,44 @@ pub async fn endpoint_error(
     None
 }
 
+/// `SafeWebhookUrl::httpClientOptions` without the DNS servers of the instance: the host, its
+/// validated addresses (none for an IP host) and the port, for pinning the request.
+pub async fn safe_url_pin(
+    url: &str,
+    policy: &UrlPolicy,
+) -> Result<(String, Vec<IpAddr>, u16), String> {
+    let parsed = parse_url(url).ok_or("Webhook URL is invalid.")?;
+    if parsed.host.ends_with('.') {
+        return Err("Webhook URL host must not end with a trailing dot.".to_owned());
+    }
+    if parsed.scheme != "http" && parsed.scheme != "https" {
+        return Err("Webhook URL scheme is unsafe.".to_owned());
+    }
+    let host = parsed.host.to_lowercase();
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(&host)
+        .to_owned();
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if !policy.allowed_ip(ip, &host) {
+            return Err("Webhook URL resolved to an unsafe IP address.".to_owned());
+        }
+        return Ok((host, Vec::new(), parsed.port));
+    }
+    let ips = resolve(&host, parsed.port).await;
+    if ips.is_empty() {
+        return Err("Webhook URL host could not be resolved.".to_owned());
+    }
+    if ips.iter().any(|ip| !policy.allowed_ip(*ip, &host)) {
+        return Err("Webhook URL resolved to an unsafe IP address.".to_owned());
+    }
+    if blocked_hostname(&host) && !policy.allowed_host(&host) {
+        return Err("Webhook URL host is unsafe.".to_owned());
+    }
+    Ok((host, ips, parsed.port))
+}
+
 /// `SafeWebhookUrl::minioClientResolveOptions`: `host:port=ip`, IPv4 first; none for an IP host.
 pub async fn minio_resolve_options(url: &str) -> Vec<String> {
     let Some(parsed) = parse_url(url) else {
@@ -566,9 +604,18 @@ impl S3Target {
         if status.is_success() {
             Ok(())
         } else {
+            // Flysystem's `UnableToListContents` around the AWS SDK's exception message.
+            let code = tag(&body, "Code").unwrap_or_default();
+            let message = tag(&body, "Message").unwrap_or_default();
+            let kind = if status.is_server_error() {
+                "server"
+            } else {
+                "client"
+            };
             Err(format!(
-                "Unable to list contents for '', shallow listing, reason: {}",
-                s3_error(status.as_u16(), &body)
+                "Unable to list contents for '', shallow listing Reason: Error executing \"ListObjectsV2\" on \"{}/{}/?list-type=2&prefix=&delimiter=%2F\"; AWS HTTP error: {code} ({kind}): {message}",
+                self.endpoint.trim_end_matches('/'),
+                self.bucket
             ))
         }
     }
@@ -597,16 +644,6 @@ impl S3Target {
             }
         }
         Ok(())
-    }
-}
-
-fn s3_error(status: u16, body: &str) -> String {
-    let code = tag(body, "Code").unwrap_or_default();
-    let message = tag(body, "Message").unwrap_or_default();
-    if code.is_empty() && message.is_empty() {
-        format!("AWS HTTP error: {status}")
-    } else {
-        format!("{code}: {message} (AWS HTTP error: {status})")
     }
 }
 
@@ -662,6 +699,14 @@ fn friendly(message: String) -> String {
 impl Jobs {
     /// `S3Storage::testConnection(shouldSave: true)`: stores `is_usable`.
     pub async fn test_s3_connection(&self, row: &Record) -> Result<(), String> {
+        let id = parts::id_of(row);
+        let result = self.check_s3_connection(row).await;
+        let _ = parts::s3_set_usable(&self.0.db, id, result.is_ok(), Jobs::now()).await;
+        result
+    }
+
+    /// `S3Storage::testConnection()` on a model that is not saved.
+    pub async fn check_s3_connection(&self, row: &Record) -> Result<(), String> {
         let enc = self
             .0
             .encrypter
@@ -670,8 +715,6 @@ impl Jobs {
         let policy = UrlPolicy::load(&self.0.db).await;
         let endpoint = parts::str_of(row, "endpoint").unwrap_or_default();
         let bucket = parts::str_of(row, "bucket").unwrap_or_default();
-        let id = parts::id_of(row);
-        let now = Jobs::now();
         let mut result: Result<(), String> = Ok(());
         if endpoint.is_empty() {
             result = Err("S3 endpoint is not allowed: The endpoint field is required.".to_owned());
@@ -688,7 +731,6 @@ impl Jobs {
                 Err(e) => Err(e),
             };
         }
-        let _ = parts::s3_set_usable(&self.0.db, id, result.is_ok(), now).await;
         result
     }
 }

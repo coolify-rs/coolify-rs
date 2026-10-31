@@ -1,6 +1,8 @@
 <script lang="ts">
   // Port of upstream components/top-user-menu.blade.php.
   import Reicon from './Reicon.svelte';
+  import HelpForm from './HelpForm.svelte';
+  import WhatsNew from './WhatsNew.svelte';
   import { link, router } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
   import { sessionApi } from '../lib/api';
@@ -49,6 +51,7 @@
   function onWindowClick(e: MouseEvent) {
     if (open && root && !root.contains(e.target as Node)) open = false;
   }
+  let helpOpen = $state(false);
 </script>
 
 <svelte:window
@@ -68,11 +71,15 @@
       .filter(Boolean)
       .join(' ')}
   >
-    <span
-      class="flex size-5 shrink-0 items-center justify-center rounded-full bg-neutral-200 text-[11px] font-semibold text-neutral-700 dark:bg-white/[0.1] dark:text-fg"
-    >
-      {userInitial}
-    </span>
+    {#if session.info?.user.avatar_url}
+      <img src={session.info.user.avatar_url} alt={userName} class="size-5 shrink-0 rounded-full object-cover" />
+    {:else}
+      <span
+        class="flex size-5 shrink-0 items-center justify-center rounded-full bg-neutral-200 text-[11px] font-semibold text-neutral-700 dark:bg-white/[0.1] dark:text-fg"
+      >
+        {userInitial}
+      </span>
+    {/if}
     {#if sidebar}
       <span class="min-w-0 flex-1 truncate text-left text-xs font-medium {collapsed ? 'hidden' : ''}">{userName}</span>
     {/if}
@@ -86,7 +93,7 @@
     </svg>
   </button>
 
-  {#if open}
+  <div class:hidden={!open}>
     <div
       style:max-height={panelMaxHeight}
       style:position={sidebar ? 'fixed' : undefined}
@@ -122,10 +129,30 @@
 
       <div class="my-1 h-px bg-neutral-200 dark:bg-white/[0.07]"></div>
 
+      <WhatsNew onopen={() => (open = false)} />
       <a href="https://coolify.io/docs" target="_blank" rel="noopener noreferrer" class="listbox-option">
         <span class="flex items-center gap-2">
           <Reicon name="documentation" class="size-4 opacity-80" />
           Documentation
+        </span>
+      </a>
+      <button
+        type="button"
+        class="listbox-option w-full cursor-pointer text-left"
+        onclick={() => {
+          open = false;
+          helpOpen = true;
+        }}
+      >
+        <span class="flex items-center gap-2">
+          <Reicon name="feedback" class="size-4 opacity-80" />
+          Feedback
+        </span>
+      </button>
+      <a href="https://coolify.io/sponsorships" target="_blank" rel="noopener noreferrer" class="listbox-option">
+        <span class="flex items-center gap-2">
+          <Reicon name="sponsor" class="size-4 text-pink-500" />
+          Sponsor us
         </span>
       </a>
 
@@ -138,5 +165,9 @@
         </span>
       </button>
     </div>
-  {/if}
+  </div>
 </div>
+
+{#if helpOpen}
+  <HelpForm onclose={() => (helpOpen = false)} />
+{/if}

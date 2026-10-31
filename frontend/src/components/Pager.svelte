@@ -13,6 +13,7 @@
     options = [10, 25, 50, 100],
     separator = '-',
     sizeSelect = true,
+    shownSize,
     class: cls = '',
   }: {
     total: number;
@@ -23,6 +24,8 @@
     /** components/table-pagination.blade.php uses an en dash. */
     separator?: string;
     sizeSelect?: boolean;
+    /** What the select shows until it is used (`page-size-select` starts at its own default). */
+    shownSize?: number;
     class?: string;
   } = $props();
 
@@ -31,6 +34,8 @@
   const rangeEnd = $derived(Math.min(page * pageSize, total));
 
   let customizing = $state(false);
+  let picked = $state(false);
+  const displayed = $derived(!picked && shownSize !== undefined ? shownSize : pageSize);
   let custom = $state<number | ''>('');
 
   function apply(value: number | '' | null) {
@@ -41,6 +46,7 @@
     if (Number(value) > 100) notify.info('Maximum is 100 rows per page.');
     const size = Math.min(100, Math.max(1, Number(value) || 1));
     pageSize = size;
+    picked = true;
     custom = size;
     customizing = false;
     page = 1;
@@ -89,7 +95,7 @@
               aria-expanded={open}
               class="flex h-7! items-center gap-1 whitespace-nowrap rounded-md border border-neutral-200 pr-1.5 pl-2 text-[11px]! leading-none! tabular-nums text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-black disabled:pointer-events-none disabled:opacity-35 dark:border-white/[0.08] dark:text-fg-dim dark:hover:bg-white/[0.06] dark:hover:text-fg"
             >
-              <span>{pageSize}</span>
+              <span>{displayed}</span>
               <span class="text-neutral-400 dark:text-fg-faint">/ page</span>
               <Reicon name="chevron-down" class="size-3.5 shrink-0 text-neutral-400 dark:text-fg-faint" />
             </button>
@@ -100,14 +106,14 @@
                 type="button"
                 class="listbox-option"
                 role="option"
-                aria-selected={pageSize === option}
+                aria-selected={displayed === option}
                 onclick={() => {
                   close();
                   apply(option);
                 }}
               >
                 <span>{option}</span>
-                {#if pageSize === option}<Reicon name="check" class="size-3.5" />{/if}
+                {#if displayed === option}<Reicon name="check" class="size-3.5" />{/if}
               </button>
             {/each}
             <button

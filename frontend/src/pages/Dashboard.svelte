@@ -3,6 +3,7 @@
   // coolify-rs has no deployments or traffic analytics to show beside them).
   import Reicon from '../components/Reicon.svelte';
   import SectionHeading from '../components/SectionHeading.svelte';
+  import ActiveDeployments from '../components/ActiveDeployments.svelte';
   import ViewToggle from '../components/ViewToggle.svelte';
   import Empty from '../components/Empty.svelte';
   import NewProjectModal from '../components/NewProjectModal.svelte';
@@ -62,7 +63,10 @@
 
 <div class="application-settings-form w-full">
   <div class="flex min-w-0 flex-col gap-8">
-    <div class="grid min-w-0 gap-8">
+    <div class="grid min-w-0 gap-8 xl:items-start xl:has-[.dashboard-activity_section]:grid-cols-[minmax(0,1fr)_22rem] 2xl:has-[.dashboard-activity_section]:grid-cols-[minmax(0,1fr)_26rem]">
+      <div class="dashboard-activity hidden min-w-0 has-[section]:flex flex-col gap-8 xl:order-last">
+        <ActiveDeployments />
+      </div>
       <div class="flex min-w-0 flex-col gap-8">
         <section class="@container mb-0! min-w-0">
           <SectionHeading title="Projects" href={data && data.projects.length > limit ? '/projects' : null}>

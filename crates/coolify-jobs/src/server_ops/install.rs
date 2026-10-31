@@ -72,7 +72,7 @@ async fn validate_os(srv: &Srv) -> Result<Option<String>, String> {
     Ok(checks::supported_os_from_os_release(release.as_deref()).map(str::to_string))
 }
 
-async fn missing_prerequisites(srv: &Srv) -> Vec<&'static str> {
+pub async fn missing_prerequisites(srv: &Srv) -> Vec<&'static str> {
     let mut missing = Vec::new();
     for cmd in ["git", "curl", "jq"] {
         let found = srv

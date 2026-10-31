@@ -104,6 +104,39 @@ async fn ip_check(state: &AppState, client: IpAddr) -> Result<(), ApiError> {
     }
 }
 
+/// `Handler::unauthenticated` for `api/*`: `auditLog('api.auth.unauthenticated', ...)`, recorded once
+/// per source and reason in the window of `auditFailureDeduplicationWindow` (300 seconds).
+async fn audit_unauthenticated(state: &AppState, client: IpAddr, headers: &HeaderMap) {
+    if crate::rules::throttle(
+        &format!("audit-failure-dedup:api.auth.unauthenticated:{client}"),
+        1,
+        std::time::Duration::from_secs(300),
+    )
+    .is_some()
+    {
+        return;
+    }
+    let meta = crate::audit::Meta {
+        ip: Some(client.to_string()),
+        user_agent: Some(
+            headers
+                .get(axum::http::header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.chars().take(200).collect::<String>())
+                .unwrap_or_default(),
+        ),
+    };
+    crate::audit::log_system(
+        state,
+        None,
+        "api.auth.unauthenticated",
+        serde_json::json!({"reason": "Unauthenticated.", "guards": ["sanctum"]}),
+        "warning",
+        &meta,
+    )
+    .await;
+}
+
 /// Main group guard.
 pub async fn main_guard(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     let headers = req.headers().clone();
@@ -124,9 +157,16 @@ pub async fn main_guard(State(state): State<AppState>, mut req: Request, next: N
         Ok(ctx) => {
             tracing::Span::current().record("team_id", ctx.team_id);
             req.extensions_mut().insert(ctx);
+            req.extensions_mut().insert(state);
+            req.extensions_mut().insert(ClientAddr(client));
             next.run(req).await
         }
-        Err(e) => e.into_response(),
+        Err(e) => {
+            if matches!(e, ApiError::Unauthenticated) {
+                audit_unauthenticated(&state, client, &headers).await;
+            }
+            e.into_response()
+        }
     }
 }
 
@@ -152,7 +192,12 @@ pub async fn disable_guard(
     }
 }
 
-/// `api.ability:<list>`; several entries in `all_of` model stacked middlewares.
+/// The request's address, for what runs after the guard.
+#[derive(Debug, Clone, Copy)]
+struct ClientAddr(IpAddr);
+
+/// `api.ability:<list>`; several entries in `all_of` model stacked middlewares. A refusal writes
+/// `api.auth.ability_denied` (`ApiAbility::handle`).
 pub async fn require_abilities(
     all_of: &'static [&'static [Ability]],
     req: Request,
@@ -163,6 +208,34 @@ pub async fn require_abilities(
     };
     for any_of in all_of {
         if let AbilityCheck::Missing(missing) = check_any(&ctx.abilities, any_of) {
+            if let Some(state) = req.extensions().get::<AppState>() {
+                let meta = crate::audit::Meta {
+                    ip: req
+                        .extensions()
+                        .get::<ClientAddr>()
+                        .map(|c| c.0.to_string()),
+                    user_agent: Some(
+                        req.headers()
+                            .get(axum::http::header::USER_AGENT)
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.chars().take(200).collect::<String>())
+                            .unwrap_or_default(),
+                    ),
+                };
+                crate::audit::log(
+                    state,
+                    ctx,
+                    &meta,
+                    "api.auth.ability_denied",
+                    serde_json::json!({
+                        "required_abilities": missing.iter().map(|a| a.as_str()).collect::<Vec<_>>(),
+                        "token_id": ctx.token_id,
+                        "reason": "Invalid ability provided.",
+                    }),
+                    "warning",
+                )
+                .await;
+            }
             return ApiError::MissingAbilities(missing.iter().map(|a| a.as_str()).collect())
                 .into_response();
         }

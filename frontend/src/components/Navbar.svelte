@@ -222,6 +222,11 @@
                   <span class="menu-item-label {hideWhenCollapsed}">{child.label}</span>
                 </a>
               </li>
+              {#if leafActive(child) && page.navChildren}
+                <li id="main-nav-active-children" class="empty:hidden ml-5 border-l border-neutral-200 pl-2 dark:border-white/[0.08] {hideWhenCollapsed}">
+                  {@render page.navChildren()}
+                </li>
+              {/if}
             {/each}
           </ul>
         </li>

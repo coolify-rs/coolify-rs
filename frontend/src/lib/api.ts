@@ -71,8 +71,7 @@ export const api = {
 
 export const sessionApi = {
   current: () => request<SessionInfo>('GET', '/ui/session'),
-  login: (body: { email: string; password: string; code?: string }) =>
-    request<SessionInfo | { two_factor: true }>('POST', '/ui/session', body),
+  login: (body: { email: string; password: string }) => request<SessionInfo | { two_factor: true }>('POST', '/ui/session', body),
   logout: () => request<{ message: string }>('DELETE', '/ui/session'),
   switchTeam: (teamId: number) => request<SessionInfo>('POST', '/ui/session/team', { team_id: teamId }),
 };
@@ -82,12 +81,15 @@ export const sessionApi = {
 export type Role = 'owner' | 'admin' | 'member';
 
 export interface SessionInfo {
-  user: { id: number; name: string; email: string; two_factor_enabled: boolean };
-  teams: { id: number; name: string; role: Role }[];
+  user: { id: number; name: string; email: string; two_factor_enabled: boolean; avatar_url: string | null };
+  force_password_reset: boolean;
+  show_boarding: boolean;
+  teams: { id: number; name: string; role: Role; avatar_url: string | null }[];
   current_team: {
     id: number;
     name: string;
     role: Role;
+    avatar_url: string | null;
     two_factor_required: boolean;
     two_factor_blocked: boolean;
   } | null;
@@ -207,8 +209,9 @@ export interface TeamPageData {
     is_mcp_server_enabled: boolean;
     is_build_server_fallback_enabled: boolean;
     is_two_factor_required: boolean;
+    avatar_url: string | null;
   };
-  members: { id: number; name: string; email: string; role: Role; two_factor: boolean | null }[];
+  members: { id: number; name: string; email: string; role: Role; two_factor: boolean | null; avatar_url: string | null }[];
   me: number;
   my_role: Role;
   can_update: boolean;
@@ -217,7 +220,7 @@ export interface TeamPageData {
 
 export const teamUi = {
   get: () => request<TeamPageData>('GET', '/ui/team'),
-  update: (body: Omit<TeamPageData['team'], 'id'>) => request<{ message: string }>('PATCH', '/ui/team', body),
+  update: (body: Omit<TeamPageData['team'], 'id' | 'avatar_url'>) => request<{ message: string }>('PATCH', '/ui/team', body),
   setRole: (id: number, role: Role) => request<{ message: string }>('POST', `/ui/team/members/${id}/role`, { role }),
   remove: (id: number) => request<{ message: string }>('DELETE', `/ui/team/members/${id}`),
 };

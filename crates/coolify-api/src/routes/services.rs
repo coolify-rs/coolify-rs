@@ -1234,7 +1234,30 @@ pub async fn delete(
     Ok(ok(json!({"message": "Service deletion request queued."})).into_response())
 }
 
-/// `POST /services/{uuid}/start` (`action_deploy`).
+/// The `Service` branch of `DeployController::deploy_resource`.
+pub(crate) async fn deploy_service(
+    state: &AppState,
+    ctx: &AuthCtx,
+    meta: &crate::audit::Meta,
+    id: i64,
+    uuid: &str,
+    name: &str,
+) -> Result<String, ApiError> {
+    jobs_of(state)?.spawn_service_start(id, false, false);
+    crate::audit::log(
+        state,
+        ctx,
+        meta,
+        "api.service.deployed",
+        json!({"service_uuid": uuid, "service_name": name}),
+        "info",
+    )
+    .await;
+    Ok(format!(
+        "Service {name} started. It could take a while, be patient."
+    ))
+}
+
 pub async fn start(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,

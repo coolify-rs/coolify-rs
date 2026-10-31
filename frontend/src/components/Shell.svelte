@@ -9,6 +9,9 @@
   import TeamSwitcher from './TeamSwitcher.svelte';
   import UserMenu from './UserMenu.svelte';
   import ServerTopbar from './ServerTopbar.svelte';
+  import UpgradeBadge from './UpgradeBadge.svelte';
+  import LayoutPopups from './LayoutPopups.svelte';
+  import GlobalSearch from './GlobalSearch.svelte';
   import { page } from '../lib/page.svelte';
   import { layout } from '../lib/layout.svelte';
   import { link, router } from '../lib/router.svelte';
@@ -39,6 +42,8 @@
 
 <svelte:window onscroll={markScrolled} onkeydown={(e) => e.key === 'Escape' && (layout.mobileOpen = false)} />
 
+<LayoutPopups />
+<GlobalSearch />
 <div class="app-shell dark:text-inherit text-black" style="--sidebar-w: {collapsed ? 'var(--sidebar-collapsed-w)' : '14rem'}">
   <!-- Desktop top bar -->
   <header class="app-topbar hidden lg:flex fixed top-0 inset-x-0 z-50 h-12 items-center bg-white/95 dark:bg-panel/95 backdrop-blur">
@@ -62,6 +67,9 @@
           >
         {/if}
       </div>
+      {#if session.isInstanceAdmin && !collapsed}
+        <div class="ml-auto shrink-0"><UpgradeBadge /></div>
+      {/if}
     </div>
     <div class="flex h-full items-center gap-0.5 min-w-0 flex-1 border-b border-black/[0.06] pl-3 pr-4 dark:border-white/[0.04]">
       <div class="relative flex min-w-0 flex-1 items-center">
@@ -72,7 +80,7 @@
       </div>
       <!-- Resource pages teleport into these (layouts/app.blade.php). -->
       <div id="configuration-warning-hud-slot" class="relative shrink-0"></div>
-      <DeploymentsIndicator />
+      <DeploymentsIndicator variant="topbar" />
       <div id="resource-action-hud-slot" class="hidden shrink-0 items-center xl:flex"></div>
     </div>
   </header>
@@ -153,6 +161,8 @@
     </div>
     <div class="flex shrink-0 items-center gap-1">
       <div id="configuration-warning-hud-slot-mobile" class="relative shrink-0"></div>
+      <DeploymentsIndicator variant="mobile" />
+      {#if session.isInstanceAdmin}<UpgradeBadge />{/if}
       <UserMenu />
       <button
         type="button"

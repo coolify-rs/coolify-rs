@@ -933,7 +933,7 @@ impl Jobs {
         });
     }
 
-    /// `ScheduledTaskJob::dispatch($task)` for a task of a service, without its notifications.
+    /// `ScheduledTaskJob::dispatch($task)` for a task of a service.
     pub fn spawn_scheduled_task(&self, s: ServiceRow, task: coolify_db::records::Record) {
         let jobs = self.clone();
         tokio::spawn(async move {
@@ -964,6 +964,27 @@ impl Jobs {
             Jobs::now(),
         )
         .await;
+        // `new TaskSuccess($task, $output)`; `new TaskFailed(...)` from `failed()`: coolify-rs does
+        // not retry the job, so every failure is the final one. `Team::find($task->team_id)`.
+        let text = |k: &str| task.get(k).and_then(Value::as_str).unwrap_or_default();
+        if let Some(team_id) = task.get("team_id").and_then(Value::as_i64) {
+            use crate::notifications::{Notification, lookup, notify};
+            let t = lookup::service_task(
+                db,
+                text("name"),
+                text("uuid"),
+                &message,
+                &s.uuid,
+                s.int("environment_id"),
+            )
+            .await;
+            let n = if status == "success" {
+                Notification::TaskSuccess(t)
+            } else {
+                Notification::TaskFailed(t)
+            };
+            notify(db, self.0.encrypter.as_ref(), team_id, n).await;
+        }
     }
 
     async fn execute_task(

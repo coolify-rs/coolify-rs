@@ -8,12 +8,14 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   yet."}`; `scripts/parity.py --missing` lists them.
 - Not every upstream API operation is implemented (`scripts/parity.py`). Others answer `501 {"message":"This endpoint is not
   implemented in coolify-rs yet."}`.
-- The web UI covers the dashboard, projects, environments, private keys, team settings, members and appearance.
-  Not available yet: registration and the root setup window, password reset and forced password change, 2FA
-  enrollment and recovery codes, passkeys, OAuth/SSO, team creation and invitations, instance settings, API token
-  management, and every page for servers, resources, storages, notifications and tags (they open a "not
+- The web UI covers the dashboard, projects, environments, private keys, API, cloud and integration tokens, cloud-init scripts,
+  notifications, tags, shared variables, S3 storage, teams, members, invitations, profile, 2FA enrollment, passkey
+  management and appearance, every sign-in screen (registration and the root setup window, password reset, forced
+  password change, email verification, the two-factor challenge and requirement, passkey sign-in, OAuth/SSO and
+  `/settings/oauth`), instance settings, onboarding, servers, destinations, registries and sources.
+  Not available yet: the sections of applications, databases and services that have no page (they open a "not
   available in coolify-rs yet" page).
-- Within the ported pages: no canvas views, global search, project icons, team avatars or custom color themes;
+- Within the ported pages: no canvas views, global search, project icons or custom color themes;
   applications and services in an environment are counted, not listed; the dashboard's server status does not include
   the Traefik-outdated and Sentinel checks; table/grid choices are remembered per browser, not per user.
 - Browser sessions live in memory: a restart signs everyone out. Session limits: 10,000 sessions, 7-day idle
@@ -29,8 +31,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   (upstream only disables auto renewal there). Throttling of validations exists only on Cloud upstream.
 - Server jobs differ from upstream as follows: `remote_process` activities have no `callEventOnFinish` queue, the proxy
   file upload goes through the shell instead of scp, maintenance pages are written for "no resource in maintenance"
-  only, the CA certificate's subject key identifier is SHA-256 based, notifications (high disk usage, Traefik outdated,
-  patches, cleanup) are not sent, `PushServerUpdateJob` and `GetContainersStatus` from a Sentinel push are not run (the
+  only, the CA certificate's subject key identifier is SHA-256 based, `PushServerUpdateJob` and `GetContainersStatus` from a Sentinel push are not run (the
   heartbeat is), `RegenerateSslCertJob` after a CA change is not run, marks upstream keeps in Redis are per process. The
   scheduler (`ServerManagerJob`) runs only with `COOLIFY_RS_SERVER_SCHEDULER=1`, because an instance sharing its database
   with upstream must not check servers twice, and evaluates cron expressions in UTC. Compose merge tags (`!reset`,
@@ -58,7 +59,19 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   Secret manager `{{vault.X}}` references stop a start with a message. Upstream stores `config_hash` only when the database
   page is open after a start; coolify-rs stores it after every start. The ClickHouse "current data is not in the data
   volume" check is not ported. `Str::slug` in container labels does not transliterate non-ASCII names.
-  Reachability, backup and TCP proxy failure notifications are not sent.
+- Notifications (`crates/coolify-jobs/src/notifications`): delivery runs on tokio tasks, so queued retries are lost when
+  the process restarts. Not sent yet, because their job is not ported: `RestartLimitReached` for applications, previews
+  and databases, `ContainerRestarted` and the disk usage check of `PushServerUpdateJob`, `BackupMissing` and the
+  `VolumeBackup/*` notifications, tasks of applications and the missed runs of `ScheduledJobDeliveryService`,
+  `ApiTokenExpiringNotification`, `SslExpirationNotification`, `ForceDisabled` and `ForceEnabled` (`ServerLimitCheckJob`,
+  cloud), the `GeneralNotification` of `DeleteResourceJob` and server transfers, the combined result of a deployment to
+  several servers and previews. `StatusChanged` is ported but upstream never sends it. Its mail view reads a variable
+  `toMail` does not pass: tinker renders an empty link, a queue worker would throw. Request headers: reqwest adds
+  `Accept: */*`, which Guzzle does not send. SMTP mail is the same in from, to, subject and body but has other MIME framing
+  (Symfony and lettre differ in `Message-ID`, encoding choice and header folding). `SafeWebhookUrl` at send time uses the
+  system resolver, not `custom_dns_servers`. `mb_strwidth` for the 1000 column limit of a commit message uses a table of
+  wide ranges, not mbstring's. The internal notification of `EmailChannel` does not include the settings JSON. Telegram
+  and Pushover could only be compared on the reference through `Http::fake` (their hosts are fixed there).
 - Deliberate divergence: upstream's `POST` and `PATCH /databases/{uuid}/storages` answers carry the relation the model
   loaded on the way (`resource` or `service`): the whole database with `destination.server`, including the saved proxy
   configuration, also for tokens without `read:sensitive`. coolify-rs leaves this relation out.
@@ -112,6 +125,70 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - coolify-rs cannot bootstrap a new installation: it requires a database created by upstream Coolify at the baseline
   (`main` @ b5823c7, 473 migrations); it runs no upstream DDL. A 4.5.0 database is served read-only until upstream
   is upgraded.
+
+## Keys, notifications, tags, shared variables and S3 pages
+
+- Integration tokens for Cloudflare: `IntegrationTokenValidator` for Cloudflare and `CloudflareDnsProvider::syncZones` are not
+  ported. Creating such a token shows the provider's validation error, and "Refresh zones" shows an error. Stored Cloudflare
+  tokens can be listed, renamed and deleted.
+- Cloud token "Validate" and "Validate and add" call the real provider APIs, as upstream. They were only exercised up to the
+  form validation, since nothing may go to an external service during tests.
+- Send-test on Pushover and Telegram calls the real services, as upstream, so the comparison flows leave them out. The Telegram
+  path shares `notify_test` with `compat/diff/notifications_e2e.py`.
+- A failing SMTP send in the test email: only "connection refused" uses Symfony's message. Other transport errors (DNS, TLS,
+  authentication) show lettre's text.
+- S3 connection failures do not send `emails.s3-connection-error`, and `unusable_email_sent` is only reset, not set.
+- `Canvas` links (tags, shared variables) lead to the not-available page, as the canvas pages are not ported. Their toggles
+  are shown, and `prefersCanvasView` is not honoured.
+- Upstream glitches reproduced on purpose: the Issued tokens list hides tokens created since the page load (Alpine list), and
+  the new-tag modal shows no validation error (`wire:ignore`). Not reproduced: the variable count of the shared variables table
+  lags one request behind after an add, and rows of the S3 resources table without `wire:key` show stale data after a move.
+- Pages behind `viewAny` (cloud tokens, cloud-init scripts, integration tokens) stay empty for a member instead of upstream's
+  403 page.
+- `SharedVariables` overview: `{{scope.KEY}}` matching decrypts every resource variable of the team on each visit, as upstream.
+
+## Team and profile pages
+
+Ported and compared with the reference (`compat/ui/flow_teams.mjs`, `flow_teams2.mjs`, `flow_profile.mjs`,
+`flow_whatsnew.mjs`): new team, danger zone, member actions, invitations by link and email and their acceptance
+(`/invitations/{uuid}`, `/auth/link`), team and profile avatars, audit log, instance users, `/profile` with email
+change, password, two-factor enrollment and recovery codes, passkey management, account deletion, `/select-team`,
+`/user/confirm-password` and the user menu's What's New.
+
+- A valid new password is not checked against Have I Been Pwned: upstream's `uncompromised()` rule asks an external
+  service. The other production rules apply. A successful password change could only be tried on coolify-rs for the
+  same reason, so it is compared with the PHP and not with reference rows.
+- Avatars are stored on the local disk (`{COOLIFY_RS_DATA_DIR}/images`). Upstream's `avatar_storage_type = s3` is not
+  used for writing, and a row with an S3 avatar answers 404 in coolify-rs. A file stored by upstream's container is not
+  visible to coolify-rs unless the disks are shared.
+- Deleting a user through `/team/admin` is refused with a message when a team only that user belongs to still owns
+  servers or projects. Upstream force-deletes them; their deletion hooks are not all ported.
+- Deleting a team or account removes keys, tags, shared variables, S3 storages and sources with their rows, but writes
+  no audit events for those rows and does not remove a key's file (upstream's model events do).
+- A password confirmation is remembered per session and skips the password step only on the pages listed above. Older
+  pages (server, application and database deletion) still ask for the password within upstream's three hours.
+- What's New reads `{COOLIFY_RS_DATA_DIR}/changelogs/*.json`. `PullChangelog` is not ported, because it fetches them
+  from upstream's CDN, so a new install shows no updates. Unread counts are not cached.
+- A new user is sent to `/onboarding` as upstream does, but the wizard is not ported: the page offers "Skip setup".
+- `Password::defaults()` in coolify-rs has no `uncompromised()` rule: it would send a hash prefix of the password to
+  Have I Been Pwned. Upstream in production refuses a password found there; coolify-rs accepts it.
+- Sign-in state before login (the two-factor challenge's `login.id`, OAuth state, passkey challenge, flash messages)
+  lives in memory under its own cookie, like the sessions: a restart ends a challenge in progress. Rate limits are also
+  per process.
+- "Remember me" is not offered by upstream's forms and is not implemented, so `remember_token` is only rotated.
+- OIDC reads the discovery document and the JWKS on every sign-in; upstream caches them for an hour and six hours.
+- OIDC requires HTTPS issuers, as upstream does, so the local fake provider could not be used for it: the id_token
+  checks have unit tests and the provider has not done a full round trip. GitHub, Google, GitLab, Azure, Discord,
+  Bitbucket, Infomaniak, Clerk and Zitadel were compared up to the redirect to the provider, without contacting them;
+  only Authentik did the full round trip (against a local fake). Their user mappings come from the provider classes and
+  have unit tests only.
+- A resend of a reset link within a minute answers upstream's plain text page as an error in the form, and the 400 of
+  `forgot_password` when mail is off cannot be reached from the page in either. A failed `/auth/oidc/redirect`
+  (discovery failed) answers a bare 500 rather than the styled error page.
+- `auth.oauth.callback_failed` names exception classes from a short list; other failures name the closest one.
+- Email verification is only enforced on Coolify Cloud upstream, so it is not enforced here; `/verify` and the signed
+  link work for any signed-in user.
+- The subscription checks of `DecideWhatToDoWithUser` only apply to Coolify Cloud and are not ported.
 
 ## API divergences (implemented routes)
 
@@ -168,9 +245,9 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 | `POST /services/{uuid}/clone` with `clone_volumes: true` | `501` | `VolumeCloneJob` is not ported |
 | `PATCH /services/{uuid}/databases/{database_uuid}` that changes `is_public` | `501` | `StartDatabaseProxy` / `StopDatabaseProxy` are not ported |
 | `POST /services/{uuid}/migrate` in a dev instance | `404`, as upstream outside dev | `MigrateResourceToDestination` only runs in dev upstream |
-| Scheduled tasks on their cron schedule | only `POST .../execute` runs a task | the scheduler is not ported; no notifications |
+| Scheduled tasks on their cron schedule | only `POST .../execute` runs a task | the scheduler is not ported |
 | `PullTemplatesFromCDN`, `get_service_templates(force: true)` | the shipped file, or `COOLIFY_RS_TEMPLATES_DIR` | no scheduler |
-| `CleanupDocker` after a stop, maintenance pages, secret managers (`{{vault.*}}` stops a start), managed DNS cleanup on a changed domain, restart limit notifications, `parseDockerComposeFile` for parsing versions below 3 | not run | their subsystems are not ported |
+| `CleanupDocker` after a stop, maintenance pages, secret managers (`{{vault.*}}` stops a start), managed DNS cleanup on a changed domain, `parseDockerComposeFile` for parsing versions below 3 | not run | their subsystems are not ported |
 | Order of `environment_variables`, `applications`, `databases` | ordered by id | upstream has no `ORDER BY`: Postgres returns heap order, which changes after updates |
 
 ## Git sources and webhooks
@@ -196,3 +273,26 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
 - New Docker Compose services are created through the `POST /services` code; the service page they open is another
   area.
 - The CSP allows forms to post to any http(s) host, because the manifest flow posts to the GitHub (Enterprise) site.
+
+## Instance settings, layout, onboarding and terminal
+
+| Area | Upstream | coolify-rs | Why |
+|---|---|---|---|
+| `Upgrade::upgrade` | runs `UpdateCoolify` | the badge, the full button and the confirmation show; "Upgrade now" answers that upgrading from the UI is not available. No progress view | upstream's action replaces the container with its own image, which is not what a coolify-rs instance runs |
+| `is_auto_update_enabled` | the scheduler installs updates | stored only | same; no scheduler |
+| `Settings\Index::buildHelperImage`, the Development helper section | `isDev()` only | not ported | no dev mode |
+| Check now, Detect, Help without mail settings | `cdn.coollabs.io`, `ifconfig.io`, `app.coolify.io` | the same hosts; `COOLIFY_RS_VERSIONS_URL`, `COOLIFY_RS_IFCONFIG_URL` and `COOLIFY_RS_FEEDBACK_URL` replace them in tests. `CheckTraefikVersionJob` is not dispatched by Check now. Only verified against local fakes | no test may reach them |
+| File download storage on S3 (`FileDownloadStorageService`) | checks the bucket and adds a lifecycle rule | a storage other than the stored one is refused with upstream's "not available" message | not ported |
+| `settingsSearchItems` in the palette's "This page" scope | sidebar pages and sections | sections only | |
+| Instance backup page beyond "Localhost is not ready" | | built from the Blade views and not compared: localhost is not reachable in the test setup, so the reference never shows these states. Selecting storages uses checkboxes instead of the multiple listbox. Executions are listed without Delete, Download, Clean failed and Clean deleted | |
+| A failing `setupDynamicProxyConfiguration` with a missing private key | `ModelNotFoundException` becomes a 404 dialog over the page | a toast with the same message | only seen with this test setup's localhost |
+| Global search cache | 300 seconds, cleared by `ClearsGlobalSearchCache` | no cache: read on each opening | same visible results |
+| "new storage" and "new private key" in the palette | open the create modal in place | go to the page and open its modal | the modals live on those pages |
+| "new github" and "new canvas" in the palette | modal, deploy canvas | go to `/sources` and `/deploy-canvas`, which are not ported | |
+| Real-time warning popup | shown when Echo cannot connect | never: coolify-rs has no Echo connection to fail | |
+| Onboarding cloud provider cards | modals of `Server\New\By*` | links to `/servers/new` | those components are not ported |
+| Onboarding validation | `validate-and-install`, which installs prerequisites and Docker when missing | checks through the existing validation dialog, then the proxy start. A server without Docker stops with upstream's message | the dialog has no install progress |
+| `api.auth.unauthenticated` deduplication | per source, reason, server and email through the cache | per source, in memory | only API requests reach it, with one reason |
+| Audit events of the wizard | `Auditable` on every model | written for the key, server, shared variables, project, environment and team; only one `ui.server.updated` (`proxy`) of upstream's three, and the `changes` hold the name only | |
+| Terminal shell | `Project\Shared\Terminal`, xterm.js and a node-pty websocket service | the page lists targets; a selected target shows that no session is available | a shell needs the websocket service, its token flow (`TerminalSessionService`) and security review |
+| `Server\Security\TerminalAccess` | toggle at `/server/{uuid}/security/terminal-access` | not ported | |
