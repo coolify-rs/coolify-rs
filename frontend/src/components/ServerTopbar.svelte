@@ -1,10 +1,10 @@
 <script lang="ts">
   // Port of the `#server-topbar-context` part of upstream
   // livewire/server/navbar.blade.php (server switcher) with
-  // components/server/status-summary.blade.php (status chip). Sentinel status
-  // and Traefik update checks are not part of coolify-rs yet.
+  // components/server/status-summary.blade.php (status chip).
   import Reicon from './Reicon.svelte';
-  import { link } from '../lib/router.svelte';
+  import { link, router } from '../lib/router.svelte';
+  import { post, failure } from '../lib/serverApi';
   import ServerProxyActions from './ServerProxyActions.svelte';
   import type { ServerTopbar } from '../lib/page.svelte';
 
@@ -16,15 +16,36 @@
   let switcher: HTMLSpanElement | undefined = $state();
   let status: HTMLDivElement | undefined = $state();
 
-  const proxyNeedsAttention = $derived(server.proxySet && server.proxyStatus !== 'running');
-  const summary = $derived<[string, 'success' | 'warning' | 'error']>(
-    !server.functional ? ['Unavailable', 'error'] : proxyNeedsAttention ? ['Attention required', 'warning'] : ['Ready', 'success'],
-  );
-  const dot = { success: 'bg-success', warning: 'bg-warning', error: 'bg-error' };
   const headline = (s: string | null) =>
     (s || 'unknown')
       .replace(/[_-]+/g, ' ')
       .replace(/\b\w/g, (c) => c.toUpperCase());
+  const proxyConfigurationPending = $derived(server.proxySet && server.proxyPending);
+  const traefikUpdateAvailable = $derived(server.proxySet && server.traefikOutdated);
+  const proxyUpdateAvailable = $derived(proxyConfigurationPending || traefikUpdateAvailable);
+  const proxyNeedsAttention = $derived(server.proxySet && (server.proxyStatus !== 'running' || proxyUpdateAvailable));
+  const proxyStatusLabel = $derived(proxyConfigurationPending ? 'Restart required' : traefikUpdateAvailable ? 'Update available' : headline(server.proxyStatus));
+  // `$showSentinelStatus` in upstream livewire/server/navbar.blade.php.
+  const showSentinelStatus = $derived(server.sentinelEnabled);
+  const sentinelNeedsAttention = $derived(showSentinelStatus && server.sentinelStatus === 'out_of_sync');
+  const sentinelStatusLabel = $derived(server.sentinelStatus === 'waiting' ? 'Waiting for first report' : server.sentinelStatus === 'in_sync' ? 'In sync' : 'Out of sync');
+  const summary = $derived<[string, 'success' | 'warning' | 'error']>(
+    !server.functional ? ['Unavailable', 'error'] : proxyNeedsAttention || sentinelNeedsAttention ? ['Attention required', 'warning'] : ['Ready', 'success'],
+  );
+  const dot = { success: 'bg-success', warning: 'bg-warning', error: 'bg-error' };
+  let refreshing = $state(false);
+  /** `checkProxyStatus()`. */
+  async function refreshStatus() {
+    refreshing = true;
+    try {
+      await post(`/server-page/${encodeURIComponent(server.uuid)}/proxy/action/status`);
+      router.go(router.path + router.search, true);
+    } catch (e) {
+      failure(e);
+    } finally {
+      refreshing = false;
+    }
+  }
   const transitional = $derived(['starting', 'restarting', 'stopping'].includes(server.proxyStatus ?? ''));
   const filtered = $derived(server.servers.filter((s) => s.name.toLowerCase().includes(search.toLowerCase())));
 </script>
@@ -93,6 +114,18 @@
       <div class="listbox-panel top-8! right-auto! left-0! z-[90]! w-64! min-w-64!" role="menu">
         <div class="flex items-center gap-1 px-3 py-2 text-[11px] font-medium text-neutral-400 dark:text-fg-faint">
           <span>System status</span>
+          {#if server.proxySet}
+            <button
+              type="button"
+              onclick={refreshStatus}
+              disabled={refreshing}
+              aria-label="Refresh status"
+              title="Refresh status"
+              class="inline-flex size-5 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-neutral-700 disabled:cursor-wait dark:text-fg-faint dark:hover:bg-white/10 dark:hover:text-fg"
+            >
+              <Reicon name="refresh" class="size-3 {refreshing ? 'animate-spin' : ''}" />
+            </button>
+          {/if}
         </div>
         <div class="listbox-option cursor-default! gap-2.5!">
           <span class="size-1.5 shrink-0 rounded-full {server.functional ? 'bg-success' : 'bg-error'}"></span>
@@ -102,14 +135,27 @@
         {#if server.proxySet}
           <a href="/server/{server.uuid}/proxy" use:link class="listbox-option gap-2.5!" onclick={() => (statusOpen = false)} role="menuitem">
             <span
-              class="size-1.5 shrink-0 rounded-full {server.proxyStatus === 'running'
+              class="size-1.5 shrink-0 rounded-full {server.proxyStatus === 'running' && !proxyUpdateAvailable
                 ? 'bg-success'
-                : transitional
+                : proxyUpdateAvailable || transitional
                   ? 'bg-warning'
                   : 'bg-error'}"
             ></span>
             <span class="flex-1">Proxy</span>
-            <span>{headline(server.proxyStatus)}</span>
+            <span>{proxyStatusLabel}</span>
+          </a>
+        {/if}
+        {#if showSentinelStatus}
+          <a href="/server/{server.uuid}/sentinel" use:link class="listbox-option gap-2.5!" onclick={() => (statusOpen = false)} role="menuitem">
+            <span
+              class="size-1.5 shrink-0 rounded-full {server.sentinelStatus === 'in_sync'
+                ? 'bg-success'
+                : server.sentinelStatus === 'waiting'
+                  ? 'bg-neutral-400 dark:bg-fg-faint'
+                  : 'bg-warning'}"
+            ></span>
+            <span class="flex-1">Sentinel</span>
+            <span>{sentinelStatusLabel}</span>
           </a>
         {/if}
       </div>

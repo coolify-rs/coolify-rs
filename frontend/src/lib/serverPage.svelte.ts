@@ -16,6 +16,11 @@ export async function loadServerContext(uuid: string, active: string, sub?: stri
     functional: facts.functional,
     proxySet: facts.proxy_set,
     proxyStatus: facts.proxy_status,
+    proxyPending: facts.proxy_pending,
+    traefikOutdated: facts.traefik_outdated,
+    sentinelStatus: facts.sentinel_status,
+    sentinelEnabled: facts.sentinel_enabled,
+    isCoolifyHost: facts.is_coolify_host,
     servers: list.servers.map((s) => ({ uuid: s.uuid, name: s.name, functional: s.functional })),
   };
   return { facts, list };

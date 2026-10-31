@@ -129,6 +129,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .merge(crate::ui_server_destinations::routes())
         .merge(crate::ui_server_general::routes())
         .merge(crate::ui_server_ops::routes())
+        .merge(crate::ui_server_metrics::routes())
         .merge(crate::ui_server_proxy::routes())
         .route_layer(from_fn_with_state(state, crate::session::ui_guard))
 }
@@ -503,6 +504,11 @@ fn server_facts(s: &coolify_db::servers::ServerRow) -> Value {
     } else {
         ("Validation required", "error")
     };
+    let info = coolify_jobs::server::ServerInfo::from_row(s);
+    let sentinel_enabled = !info.is_build_server()
+        && !info.is_swarm()
+        && info.setting_bool("force_disabled") != Some(true)
+        && !info.transferred;
     let ip = s.record.get("ip").and_then(Value::as_str).unwrap_or("");
     let cloud = [
         "hetzner_server_id",
@@ -528,6 +534,10 @@ fn server_facts(s: &coolify_db::servers::ServerRow) -> Value {
         "proxy_set": proxy_set,
         "proxy_type": (!proxy_type.is_empty()).then_some(proxy_type),
         "outdated_warning": outdated_or_out_of_sync(Some(s), proxy_set),
+        "proxy_pending": crate::ui_server_proxy::pending(s),
+        "traefik_outdated": coolify_jobs::server_ops::checks::has_current_traefik_outdated_info(s),
+        "sentinel_status": coolify_jobs::server_ops::checks::sentinel_status(s),
+        "sentinel_enabled": sentinel_enabled,
         "proxy_status": proxy_status,
         "cloud": cloud,
     })

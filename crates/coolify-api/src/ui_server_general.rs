@@ -41,6 +41,9 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route(&p("advanced"), get(advanced).post(save_advanced))
         .route(&p("swarm"), get(swarm).post(save_swarm))
+        .route("/ui/deployments-indicator", get(deployments_indicator))
+        .route(&p("details"), get(details).post(refresh_details))
+        .route(&p("check-localhost"), post(check_localhost))
         .route(&p("private-key"), get(keys))
         .route(&p("private-key/use"), post(use_key))
         .route(&p("private-key/generate"), post(generate_key))
@@ -436,6 +439,89 @@ async fn check_connection(
     }
 }
 
+/// `Livewire\\DeploymentsIndicator`.
+async fn deployments_indicator(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+) -> ApiResult {
+    let deployments = coolify_db::ui_servers::active_deployments(&state.db, ctx.team_id).await?;
+    Ok(ok(json!({"deployments": deployments})).into_response())
+}
+
+// ── General ─────────────────────────────────────────────────────────────
+
+/// What `livewire.server.partials.server-details` reads.
+async fn details(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    let s = find_server(&state, &ctx, &uuid).await?;
+    let raw = s.record.get("server_metadata");
+    let metadata = match raw {
+        Some(Value::String(t)) => serde_json::from_str(t).unwrap_or(Value::Null),
+        Some(v) => v.clone(),
+        None => Value::Null,
+    };
+    Ok(ok(json!({
+        "metadata": metadata,
+        "docker_version": s.settings.as_ref().and_then(|t| t.get("docker_version")),
+        "compose_version": s.settings.as_ref().and_then(|t| t.get("compose_version")),
+    }))
+    .into_response())
+}
+
+/// `Server\Show::refreshServerMetadata`.
+async fn refresh_details(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    let s = find_server(&state, &ctx, &uuid).await?;
+    if !ctx.is_team_admin() {
+        return toast_error("This action is unauthorized.");
+    }
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    if !ServerInfo::from_row(&s).is_functional() {
+        return toast_error("Validate the server connection before fetching details.");
+    }
+    match install::gather_server_metadata(jobs, s.id).await {
+        Ok(true) => Ok(ok(json!({"message": "Server details refreshed."})).into_response()),
+        _ => toast_error(
+            "Could not collect server details. Check the application logs for the remote command error.",
+        ),
+    }
+}
+
+/// `Server\Show::checkLocalhostConnection`.
+async fn check_localhost(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    let s = find_server(&state, &ctx, &uuid).await?;
+    if !ctx.is_team_admin() {
+        return toast_error("This action is unauthorized.");
+    }
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    let srv = Srv::from_row(jobs, s.clone());
+    match install::validate_connection(&srv).await {
+        Ok((true, _)) => {
+            srv.settings_update(&[
+                ("is_reachable", coolify_db::servers::ColumnValue::Bool(true)),
+                ("is_usable", coolify_db::servers::ColumnValue::Bool(true)),
+            ])
+            .await
+            .map_err(|_| ApiError::Internal)?;
+            let _ = install::gather_server_metadata(jobs, s.id).await;
+            Ok(ok(json!({"message": "Server is reachable."})).into_response())
+        }
+        _ => toast_error(
+            "Server is not reachable.<br><br>Please validate your configuration and connection.",
+        ),
+    }
+}
+
 // ── CA certificate ──────────────────────────────────────────────────────
 
 /// `CaCertificate\Show::loadCaCertificate`.
@@ -478,7 +564,8 @@ async fn save_ca(
         return toast_error("Certificate content cannot be empty.");
     }
     let Some(cleaned) = certificate::export_certificate(content) else {
-        return toast_error("Invalid certificate format.");
+        // PHP's warning, turned into an exception by Laravel, comes before upstream's own "Invalid certificate format.".
+        return toast_error("openssl_x509_read(): X.509 Certificate cannot be retrieved");
     };
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     if let Some(row) = coolify_db::ui_servers::ca_certificate_row(&state.db, s.id).await? {

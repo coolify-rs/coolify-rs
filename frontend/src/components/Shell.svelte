@@ -1,4 +1,5 @@
 <script lang="ts">
+  import DeploymentsIndicator from './DeploymentsIndicator.svelte';
   // Port of upstream layouts/app.blade.php: desktop top bar and sidebar,
   // mobile top bar with a slide-over sidebar, and the main column. The brand
   // cell carries the coolify-rs wordmark and logo.
@@ -71,6 +72,7 @@
       </div>
       <!-- Resource pages teleport into these (layouts/app.blade.php). -->
       <div id="configuration-warning-hud-slot" class="relative shrink-0"></div>
+      <DeploymentsIndicator />
       <div id="resource-action-hud-slot" class="hidden shrink-0 items-center xl:flex"></div>
     </div>
   </header>

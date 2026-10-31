@@ -3,6 +3,7 @@
   import Reicon from '../components/Reicon.svelte';
   import ConfirmModal from '../components/ConfirmModal.svelte';
   import Empty from '../components/Empty.svelte';
+  import SkeletonTable from '../components/SkeletonTable.svelte';
   import Pager from '../components/Pager.svelte';
   import ServerFrame from '../components/ServerFrame.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
@@ -87,7 +88,10 @@
           </div>
         </div>
         {#if !loaded}
-          <div role="status"><span class="sr-only">Reading images from the Docker daemon</span></div>
+          <div role="status">
+            <span class="sr-only">Reading images from the Docker daemon</span>
+            <SkeletonTable flush rows={6} />
+          </div>
         {:else if visible.length === 0}
           <div class="p-6">
             <Empty size="sm" title={q ? 'No matching images' : 'No images found'} description={q ? 'Try another repository, tag or ID, or clear the search.' : 'Images pulled or built on this server will appear here.'} iconName="layers" />

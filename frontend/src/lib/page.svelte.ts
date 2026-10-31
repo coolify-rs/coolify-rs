@@ -50,6 +50,11 @@ export interface ServerTopbar {
   functional: boolean;
   proxySet: boolean;
   proxyStatus: string | null;
+  proxyPending: boolean;
+  traefikOutdated: boolean;
+  sentinelStatus: 'waiting' | 'in_sync' | 'out_of_sync';
+  sentinelEnabled: boolean;
+  isCoolifyHost: boolean;
   servers: { uuid: string; name: string; functional: boolean }[];
 }
 

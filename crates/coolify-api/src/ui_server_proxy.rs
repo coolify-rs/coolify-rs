@@ -12,9 +12,8 @@ use base64::Engine as _;
 use coolify_db::servers::{self, ColumnValue as C, ServerRow};
 use coolify_jobs::server::ServerInfo;
 use coolify_jobs::server_ops::proxy as proxy_ops;
-use coolify_jobs::server_ops::{Srv, proxy_config, shell_arg};
+use coolify_jobs::server_ops::{Srv, acme, proxy_config, shell_arg};
 use serde_json::{Map, Value, json};
-use sha2::Digest as _;
 use std::collections::HashMap;
 
 use crate::auth::AuthCtx;
@@ -41,9 +40,16 @@ pub fn routes() -> Router<AppState> {
         .route(&p("proxy/reset-error-page"), post(reset_error_page))
         .route(&p("proxy/reset-configuration"), post(reset_configuration))
         .route(&p("proxy/action/{action}"), post(action))
+        .route(&p("proxy/activity"), get(activity))
         .route(&p("proxy/dynamic"), get(dynamic).post(save_dynamic))
         .route(&p("proxy/dynamic/delete"), post(delete_dynamic))
         .route(&p("proxy/certificates"), get(certificates))
+        .route(&p("proxy/certificates/delete"), post(delete_certificate))
+        .route(
+            &p("proxy/certificates/backups/restore"),
+            post(restore_backup),
+        )
+        .route(&p("proxy/certificates/backups/delete"), post(delete_backup))
         .route(&p("logs/{container}"), get(logs))
 }
 
@@ -55,7 +61,7 @@ fn proxy_str<'a>(s: &'a ServerRow, k: &str) -> Option<&'a str> {
 }
 
 /// `$server->hasPendingProxyConfiguration()`.
-fn pending(s: &ServerRow) -> bool {
+pub(crate) fn pending(s: &ServerRow) -> bool {
     if proxy_str(s, "status") != Some("running") {
         return false;
     }
@@ -559,6 +565,7 @@ async fn action(
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let mut srv = Srv::from_row(jobs, s.clone());
+    let activity_after = coolify_db::server_ops::max_activity_id(&state.db).await?;
     match action.as_str() {
         "restart" => {
             jobs.spawn_restart_proxy(s.id);
@@ -591,7 +598,25 @@ async fn action(
         }
         _ => return toast_error("Unknown proxy action."),
     }
-    Ok(ok(json!({})).into_response())
+    Ok(ok(json!({"activity_after": activity_after})).into_response())
+}
+
+/// What `livewire:activity-monitor` shows in the "Proxy Startup Logs" dialog.
+async fn activity(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> ApiResult {
+    let s = find_server(&state, &ctx, &uuid).await?;
+    let after = query.get("after").and_then(|a| a.parse().ok()).unwrap_or(0);
+    let activity = coolify_db::server_ops::latest_proxy_activity(&state.db, &s.uuid, after)
+        .await?
+        .map(|(id, props, description)| {
+            let entries: Value = serde_json::from_str(&description).unwrap_or(Value::Array(vec![]));
+            json!({"id": id, "status": props.get("status").cloned().unwrap_or(Value::Null), "entries": entries})
+        });
+    Ok(ok(json!({"activity": activity, "proxy_status": proxy_str(&s, "status")})).into_response())
 }
 
 // ── Dynamic configurations ──────────────────────────────────────────────
@@ -864,77 +889,174 @@ async fn certificates(
 ) -> ApiResult {
     let s = find_server(&state, &ctx, &uuid).await?;
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
-    let path = shell_arg(&format!(
-        "{}/acme.json",
-        Srv::from_row(jobs, s.clone())
-            .proxy_path()
-            .trim_end_matches('/')
-    ));
-    const LIMIT: usize = 10 * 1024 * 1024;
-    let script = format!(
-        "if [ ! -f {path} ]; then exit 0; elif [ \"$(wc -c < {path})\" -gt {LIMIT} ]; then echo '__COOLIFY_ACME_FILE_TOO_LARGE__'; else head -c {} {path} | base64 | tr -d '\\n'; fi",
-        LIMIT + 1
-    );
-    let out = jobs
-        .instant_remote(
-            &s,
-            &[format!("sh -c {}", shell_arg(&script))],
-            false,
-            "server.proxy.certificates",
-        )
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let out = out.trim();
-    if out == "__COOLIFY_ACME_FILE_TOO_LARGE__" {
-        return toast_error("The Traefik ACME file exceeds the 10 MiB size limit.");
-    }
-    let mut list = Vec::new();
-    if !out.is_empty() {
-        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(out) else {
-            return toast_error("The Traefik ACME file could not be read safely.");
-        };
-        let data: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-        if let Some(resolvers) = data.as_object() {
-            for (resolver, resolver_data) in resolvers {
-                let certs = resolver_data
-                    .get("Certificates")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                for c in certs {
-                    let Some(main) = c.pointer("/domain/main").and_then(Value::as_str) else {
-                        continue;
-                    };
-                    let sans: Vec<&str> = c
-                        .pointer("/domain/sans")
-                        .and_then(Value::as_array)
-                        .map(|a| a.iter().filter_map(Value::as_str).collect())
-                        .unwrap_or_default();
-                    let id = format!(
-                        "{:x}",
-                        sha2::Sha256::digest(format!("{resolver}|{main}").as_bytes())
-                    );
-                    list.push(json!({
-                        "id": id,
-                        "resolver": resolver,
-                        "main_domain": main,
-                        "sans": sans,
-                        "store": c.get("Store").and_then(Value::as_str),
-                        "expires_at": c.get("certificate").and_then(Value::as_str)
-                            .and_then(coolify_jobs::server_ops::certificate::acme_expiration),
-                    }));
-                }
-            }
+    let srv = Srv::from_row(jobs, s);
+    let list = match acme::list_certificates(&srv).await {
+        Ok(list) => list,
+        Err(e) => return toast_error(e),
+    };
+    // `loadTraefikAcmeBackups`: only for who can manage the proxy.
+    let backups = if ctx.is_team_admin() {
+        match acme::list_backups(&srv).await {
+            Ok(b) => b,
+            Err(e) => return toast_error(e),
         }
+    } else {
+        Vec::new()
+    };
+    Ok(
+        ok(json!({"certificates": list, "backups": backups, "keep": acme::KEEP_BACKUPS}))
+            .into_response(),
+    )
+}
+
+/// `Proxy\Certificates::deleteTraefikCertificate`.
+async fn delete_certificate(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+    Json(body): Json<Map<String, Value>>,
+) -> ApiResult {
+    let s = find_server(&state, &ctx, &uuid).await?;
+    if !ctx.is_team_admin() {
+        return toast_error("This action is unauthorized.");
     }
-    Ok(ok(json!({"certificates": list})).into_response())
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    let mut srv = Srv::from_row(jobs, s);
+    let id = body.get("id").and_then(Value::as_str).unwrap_or_default();
+    match acme::delete_certificate(&mut srv, id).await {
+        Ok(_) => Ok(ok(json!({"message": "TLS certificate deleted. Restart Traefik to remove it from the running proxy."})).into_response()),
+        Err(e) => toast_error(e),
+    }
+}
+
+/// `Proxy\Certificates::restoreTraefikAcmeBackup`.
+async fn restore_backup(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+    Json(body): Json<Map<String, Value>>,
+) -> ApiResult {
+    let s = find_server(&state, &ctx, &uuid).await?;
+    if !ctx.is_team_admin() {
+        return toast_error("This action is unauthorized.");
+    }
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    let id = s.id;
+    let mut srv = Srv::from_row(jobs, s);
+    let name = body.get("name").and_then(Value::as_str).unwrap_or_default();
+    if let Err(e) = acme::restore_backup(&mut srv, name).await {
+        return toast_error(e);
+    }
+    if body.get("restart").is_some_and(php_truthy) {
+        jobs.spawn_restart_proxy(id);
+        return Ok(ok(json!({"message": "acme.json restored. The proxy is restarting to load the restored certificates."})).into_response());
+    }
+    Ok(ok(json!({"message": "acme.json restored. Restart the proxy to load the restored certificates."})).into_response())
+}
+
+/// `Proxy\Certificates::deleteTraefikAcmeBackup`.
+async fn delete_backup(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+    Json(body): Json<Map<String, Value>>,
+) -> ApiResult {
+    let s = find_server(&state, &ctx, &uuid).await?;
+    if !ctx.is_team_admin() {
+        return toast_error("This action is unauthorized.");
+    }
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    let srv = Srv::from_row(jobs, s);
+    let name = body.get("name").and_then(Value::as_str).unwrap_or_default();
+    match acme::delete_backup(&srv, name).await {
+        Ok(()) => Ok(ok(json!({"message": "acme.json backup deleted."})).into_response()),
+        Err(e) => toast_error(e),
+    }
 }
 
 // ── Logs ────────────────────────────────────────────────────────────────
 
-/// `Project\Shared\GetLogs::getLogs` for the proxy and Sentinel containers.
+/// `GetLogs::MAX_DISPLAY_SIZE_BYTES`.
+const MAX_DISPLAY_SIZE_BYTES: usize = 5 * 1024 * 1024;
+/// `GetLogs::MAX_DOWNLOAD_SIZE_BYTES`.
+const MAX_DOWNLOAD_SIZE_BYTES: usize = 50 * 1024 * 1024;
+
+/// `GetLogs::DOCKER_TIMESTAMP_PATTERN`.
+fn is_docker_timestamp(since: &str) -> bool {
+    let b = since.as_bytes();
+    let digits =
+        |r: std::ops::Range<usize>| b.get(r).is_some_and(|d| d.iter().all(u8::is_ascii_digit));
+    if b.len() < 20
+        || !digits(0..4)
+        || b[4] != b'-'
+        || !digits(5..7)
+        || b[7] != b'-'
+        || !digits(8..10)
+        || b[10] != b'T'
+        || !digits(11..13)
+        || b[13] != b':'
+        || !digits(14..16)
+        || b[16] != b':'
+        || !digits(17..19)
+        || b[b.len() - 1] != b'Z'
+    {
+        return false;
+    }
+    let fraction = &since[19..since.len() - 1];
+    fraction.is_empty()
+        || (fraction.starts_with('.')
+            && (2..=10).contains(&fraction.len())
+            && fraction[1..].bytes().all(|d| d.is_ascii_digit()))
+}
+
+/// `GetLogs::resolveLogTail`.
+fn log_tail(lines: Option<i64>) -> String {
+    match lines {
+        Some(-1) => "all".to_string(),
+        None | Some(i64::MIN..=0) => "1000".to_string(),
+        Some(n) => n.min(50000).to_string(),
+    }
+}
+
+/// `removeAnsiColors`.
+fn remove_ansi_colors(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            let mut body = String::new();
+            let mut terminated = false;
+            for n in chars.by_ref() {
+                if n == 'm' {
+                    terminated = true;
+                    break;
+                }
+                if n.is_ascii_digit() || n == ';' {
+                    body.push(n);
+                } else {
+                    out.push('\u{1b}');
+                    out.push('[');
+                    out.push_str(&body);
+                    out.push(n);
+                    terminated = true;
+                    body.clear();
+                    break;
+                }
+            }
+            if !terminated {
+                out.push('\u{1b}');
+                out.push('[');
+                out.push_str(&body);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// `GetLogs::getLogs`, `copyLogs` and `downloadAllLogs` for the proxy and Sentinel containers.
 async fn logs(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -945,23 +1067,50 @@ async fn logs(
     if !["coolify-proxy", "coolify-sentinel"].contains(&container.as_str()) {
         return toast_error("Unknown container.");
     }
-    let lines: i64 = query
-        .get("lines")
-        .and_then(|l| l.parse().ok())
-        .unwrap_or(100)
-        .clamp(1, 50000);
-    let timestamps = if query.get("timestamps").is_some_and(|t| t == "1") {
-        " --timestamps"
+    let mode = query.get("mode").map_or("get", String::as_str);
+    let lines = query.get("lines").and_then(|l| l.parse::<i64>().ok());
+    let timestamps = query.get("timestamps").is_none_or(|t| t == "1");
+    let tail = log_tail(lines);
+    let (options, max, limit, timestamped) = match mode {
+        "copy" => (
+            format!("-n {tail}{}", if timestamps { " -t" } else { "" }),
+            MAX_DISPLAY_SIZE_BYTES,
+            "5MB",
+            timestamps,
+        ),
+        "all" => (
+            if timestamps {
+                "-t".to_string()
+            } else {
+                String::new()
+            },
+            MAX_DOWNLOAD_SIZE_BYTES,
+            "50MB",
+            timestamps,
+        ),
+        _ => match query.get("since").filter(|v| is_docker_timestamp(v)) {
+            Some(since) => (
+                format!("--since {since} -t"),
+                MAX_DISPLAY_SIZE_BYTES,
+                "5MB",
+                true,
+            ),
+            None => (format!("-n {tail} -t"), MAX_DISPLAY_SIZE_BYTES, "5MB", true),
+        },
+    };
+    let options = if options.is_empty() {
+        String::new()
     } else {
-        ""
+        format!("{options} ")
     };
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    // `boundedLogCommand`: one byte over the limit means the output was cut.
     let out = jobs
         .instant_remote(
             &s,
             &[format!(
-                "docker logs -n {lines}{timestamps} {} 2>&1",
-                shell_arg(&container)
+                "(docker logs {options}{container}) 2>&1 | head -c {}",
+                max + 1
             )],
             false,
             "server.logs",
@@ -970,5 +1119,32 @@ async fn logs(
         .ok()
         .flatten()
         .unwrap_or_default();
-    Ok(ok(json!({"logs": out})).into_response())
+    let truncated = out.len() > max;
+    let cut = if truncated {
+        let mut end = max;
+        while !out.is_char_boundary(end) {
+            end -= 1;
+        }
+        &out[..end]
+    } else {
+        out.as_str()
+    };
+    let cleaned = remove_ansi_colors(cut);
+    let cleaned = cleaned.trim_end_matches('\n');
+    // `runLogCommand`: Docker writes stdout and stderr separately, so sort timestamped lines back into order.
+    let mut text = if timestamped {
+        let mut rows: Vec<&str> = cleaned.split('\n').collect();
+        rows.sort_by_key(|l| l.split(' ').next().unwrap_or_default());
+        rows.join("\n")
+    } else {
+        cleaned.to_string()
+    };
+    if truncated {
+        text.push_str(&format!("\n\n[... Output truncated at {limit} limit ...]"));
+    }
+    if mode != "get" {
+        // `sanitizeLogsForExport`: a server-level container has no resource secrets to add.
+        text = coolify_compat::redact::redact_text(&text, &[], &[]);
+    }
+    Ok(ok(json!({"logs": text})).into_response())
 }

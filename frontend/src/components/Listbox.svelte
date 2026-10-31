@@ -1,6 +1,6 @@
 <script lang="ts" generics="V extends string | boolean">
-  // Port of upstream components/forms/listbox.blade.php (single select): a
-  // trigger button and a fixed-position option panel.
+  // Port of upstream components/forms/listbox.blade.php: a trigger button and a
+  // fixed-position option panel. With `multiple`, `values` holds the selection.
   import Helper from './Helper.svelte';
   import Reicon from './Reicon.svelte';
 
@@ -25,6 +25,8 @@
     searchPlaceholder = 'Search…',
     searchEmptyText = 'No matching options',
     allowCustom = false,
+    multiple = false,
+    values = $bindable([]),
     error,
     onchange,
   }: {
@@ -33,7 +35,9 @@
     helper?: string;
     required?: boolean;
     options: Option[];
-    value: V;
+    value?: V;
+    multiple?: boolean;
+    values?: V[];
     disabled?: boolean;
     placeholder?: string;
     emptyText?: string;
@@ -67,9 +71,15 @@
     if (!allowCustom || q === '' || options.some((o) => String(o.value) === q)) return null;
     return { value: q as V, label: q };
   });
-  const current = $derived(
-    options.find((o) => String(o.value) === String(value))?.label ?? (allowCustom && value ? String(value) : placeholder),
-  );
+  const isSelected = (o: Option) => (multiple ? values.some((v) => String(v) === String(o.value)) : String(o.value) === String(value));
+  const current = $derived.by(() => {
+    if (multiple) {
+      const labels = options.filter((o) => isSelected(o)).map((o) => o.label);
+      if (labels.length === 0) return placeholder;
+      return labels.length <= 2 ? labels.join(', ') : `${labels.length} selected`;
+    }
+    return options.find((o) => String(o.value) === String(value))?.label ?? (allowCustom && value ? String(value) : placeholder);
+  });
 
   function position() {
     if (!trigger || !panel) return;
@@ -97,6 +107,11 @@
 
   function choose(o: Option) {
     if (o.disabled) return;
+    if (multiple) {
+      values = isSelected(o) ? values.filter((v) => String(v) !== String(o.value)) : [...values, o.value];
+      onchange?.(o.value);
+      return;
+    }
     open = false;
     if (String(o.value) === String(value)) return;
     value = o.value;
@@ -145,6 +160,7 @@
         class="listbox-panel{searchable ? ' searchable-listbox-panel' : ''}"
         style="position: fixed; z-index: 9999; visibility: {positioned ? 'visible' : 'hidden'}; {panelStyle}"
         role="listbox"
+        aria-multiselectable={multiple ? 'true' : undefined}
       >
         {#if searchable}
           <div class="searchable-listbox-search">
@@ -180,7 +196,7 @@
               type="button"
               class="listbox-option {o.disabled ? 'listbox-option-disabled' : ''}"
               role="option"
-              aria-selected={String(o.value) === String(value)}
+              aria-selected={isSelected(o)}
               onclick={() => choose(o)}
             >
               <span class="flex min-w-0 items-center gap-2 text-left">
@@ -193,7 +209,7 @@
                   {/if}
                 </span>
               </span>
-              {#if String(o.value) === String(value)}
+              {#if isSelected(o)}
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="ml-auto size-3.5 shrink-0">
                   <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" />
                 </svg>

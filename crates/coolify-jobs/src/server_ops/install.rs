@@ -329,17 +329,17 @@ async fn docker_version(srv: &Srv) -> Result<(bool, Option<String>), String> {
 }
 
 /// `Server::gatherServerMetadata`.
-pub async fn gather_server_metadata(jobs: &Jobs, server_id: i64) -> Result<(), String> {
+pub async fn gather_server_metadata(jobs: &Jobs, server_id: i64) -> Result<bool, String> {
     let srv = Srv::load(jobs, server_id).await?;
     if !srv.info.is_functional() {
-        return Ok(());
+        return Ok(false);
     }
     let command = r#"echo "---PRETTY_NAME---" && grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '"' && echo "---ARCH---" && uname -m && echo "---KERNEL---" && uname -r && echo "---CPUS---" && nproc && echo "---MEMORY---" && free -b | awk '/Mem:/{print $2}' && echo "---UPTIME_SINCE---" && uptime -s && echo "---DOCKER---" && (docker version --format '{{.Server.Version}}' 2>/dev/null || true) && echo "---COMPOSE---" && (docker compose version --short 2>/dev/null || true) && echo "---GPUS---" && (nvidia-smi --query-gpu=index,uuid,memory.total,name --format=csv,noheader,nounits 2>/dev/null || true) && echo "---NVIDIA_TOOLKIT---" && (command -v nvidia-container-runtime-hook nvidia-ctk 2>/dev/null || true)"#;
     let Some(output) = srv
         .run_quiet(&[command.to_string()], "server.metadata")
         .await
     else {
-        return Ok(());
+        return Ok(false);
     };
     let mut sections: Map<String, Value> = Map::new();
     let mut lines: std::collections::HashMap<String, Vec<String>> = Default::default();
@@ -440,7 +440,7 @@ pub async fn gather_server_metadata(jobs: &Jobs, server_id: i64) -> Result<(), S
         ])
         .await?;
     }
-    Ok(())
+    Ok(true)
 }
 
 /// `ValidateAndInstallServerJob::handle`; retries follow after 30 seconds, as the queued job.

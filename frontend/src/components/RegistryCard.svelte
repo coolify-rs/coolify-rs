@@ -192,6 +192,7 @@
 {#if deleting}
   <ConfirmModal
     title="Delete the login for {deleting}?"
+    literalStep2
     actions={[`Runs docker logout on ${server.name} and removes the saved credentials.`, 'The server can no longer pull private images from this registry.', 'Deployments that need this registry fail until you log in again.']}
     confirmWithText={false}
     onconfirm={logout}

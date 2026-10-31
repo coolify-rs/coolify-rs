@@ -9,6 +9,7 @@
   import ServerFrame from '../components/ServerFrame.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
   import UnsavedBar from '../components/UnsavedBar.svelte';
+  import ConfirmModal from '../components/ConfirmModal.svelte';
   import { ApiError } from '../lib/api';
   import { get, post, failure } from '../lib/serverApi';
   import { session } from '../lib/session.svelte';
@@ -54,6 +55,21 @@
     form = { ...f };
     saved = { ...f };
   }
+  let toggling = $state(false);
+  let confirmDisable = $state(false);
+  /** `toggleTrafficAnalytics`. */
+  async function toggle() {
+    toggling = true;
+    try {
+      const r = await post<{ message: string }>(`${url}/toggle`);
+      notify.success(r.message);
+      await load();
+    } catch (e) {
+      failure(e);
+    } finally {
+      toggling = false;
+    }
+  }
   async function save() {
     if (!form) return;
     saving = true;
@@ -87,6 +103,13 @@
               <UnsavedBar {dirty} {saving} onsave={save} onreset={() => ((form = { ...saved! }), (error = null))} />
             {/if}
             <SettingsSection id="server-traffic-analytics-settings-section" title="Traffic analytics" description="Control proxy traffic collection, retention, and visitor geolocation for this server.">
+              {#snippet actions()}
+                {#if enabled}
+                  <div class="flex items-center gap-3">
+                    <button type="button" class="button" disabled={!canEdit} onclick={() => (confirmDisable = true)}>Disable traffic analytics</button>
+                  </div>
+                {/if}
+              {/snippet}
               {#if enabled}
                 {#if caddyNote}
                   <Callout type="info" title="Redeploy to start logging">{caddyNote}</Callout>
@@ -105,7 +128,7 @@
                 <Empty size="sm" title="Traffic analytics is disabled" description={reason ?? 'Enable traffic analytics to collect proxy access logs and geolocate visitor traffic.'} iconName="dashboard">
                   {#snippet contents()}
                     <div class="flex items-center gap-3">
-                      <button type="button" class="button" disabled title={reason ?? undefined}>Enable traffic analytics</button>
+                      <button type="button" class="button" {...{ ishighlighted: '' }} disabled={!canEdit || !!reason || toggling} title={reason ?? undefined} onclick={toggle}>Enable traffic analytics</button>
                     </div>
                   {/snippet}
                 </Empty>
@@ -117,3 +140,15 @@
     </div>
   {/snippet}
 </ServerFrame>
+
+{#if confirmDisable}
+  <ConfirmModal
+    title="Disable traffic analytics?"
+    actions={['Disabling traffic analytics will restart Sentinel and the proxy. Your applications will experience a brief interruption.']}
+    warningMessage="Application traffic may be interrupted while Sentinel and the proxy restart."
+    confirmWithText={false}
+    step2ButtonText="Disable traffic analytics"
+    onconfirm={toggle}
+    onclose={() => (confirmDisable = false)}
+  />
+{/if}

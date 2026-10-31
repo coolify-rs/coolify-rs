@@ -703,7 +703,33 @@ pub fn extract_custom_proxy_commands(proxy_type: Option<&str>, existing: &str) -
 }
 
 /// `traefikAccessLogCommands(true)`.
-fn traefik_access_log_commands() -> Vec<String> {
+/// The `traefik-logrotate` service of `applyTrafficAnalyticsToProxyConfigArray`.
+pub(crate) fn traefik_logrotate_service(proxy_path: &str) -> PhpValue {
+    PhpValue::map([
+        (
+            "container_name",
+            PhpValue::Str(TRAEFIK_LOGROTATE_CONTAINER.into()),
+        ),
+        ("image", PhpValue::Str("alpine:3.24".into())),
+        ("restart", PhpValue::Str("unless-stopped".into())),
+        ("network_mode", PhpValue::Str("none".into())),
+        (
+            "volumes",
+            PhpValue::strings([format!("{proxy_path}:/traefik")]),
+        ),
+        ("labels", PhpValue::strings(["coolify.managed=true"])),
+        (
+            "entrypoint",
+            PhpValue::strings([
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                ROTATION_SCRIPT.replace('$', "$$"),
+            ]),
+        ),
+    ])
+}
+
+pub(crate) fn traefik_access_log_commands() -> Vec<String> {
     [
         "--accesslog=true",
         "--accesslog.filepath=/traefik/access.log",
@@ -906,28 +932,7 @@ pub async fn generate_default_proxy_configuration(
             if enabled && !swarm {
                 services.push((
                     "traefik-logrotate".to_string(),
-                    PhpValue::map([
-                        (
-                            "container_name",
-                            PhpValue::Str(TRAEFIK_LOGROTATE_CONTAINER.into()),
-                        ),
-                        ("image", PhpValue::Str("alpine:3.24".into())),
-                        ("restart", PhpValue::Str("unless-stopped".into())),
-                        ("network_mode", PhpValue::Str("none".into())),
-                        (
-                            "volumes",
-                            PhpValue::strings([format!("{proxy_path}:/traefik")]),
-                        ),
-                        ("labels", PhpValue::strings(["coolify.managed=true"])),
-                        (
-                            "entrypoint",
-                            PhpValue::strings([
-                                "/bin/sh".to_string(),
-                                "-c".to_string(),
-                                ROTATION_SCRIPT.replace('$', "$$"),
-                            ]),
-                        ),
-                    ]),
+                    traefik_logrotate_service(&proxy_path),
                 ));
             }
             PhpValue::map([

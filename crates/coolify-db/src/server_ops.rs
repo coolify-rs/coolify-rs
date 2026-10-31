@@ -519,3 +519,30 @@ pub async fn environment_project(db: &Db, environment_id: i64) -> DbResult<Optio
             .await?,
     )
 }
+
+/// The newest proxy activity of a server after `after` (`activityMonitor` of the "Proxy Startup Logs" dialog):
+/// `(id, properties, description)`.
+pub async fn latest_proxy_activity(
+    db: &Db,
+    server_uuid: &str,
+    after: i64,
+) -> DbResult<Option<(i64, Value, String)>> {
+    let r: Option<(i64, String, String)> = sqlx::query_as(
+        "SELECT id, COALESCE(properties::text, '{}'), COALESCE(description, '[]') FROM activity_log \
+         WHERE id > $1 AND properties->>'server_uuid' = $2 AND properties->>'operation' LIKE 'proxy.%' \
+         ORDER BY id DESC LIMIT 1",
+    )
+    .bind(after)
+    .bind(server_uuid)
+    .fetch_optional(db.pool())
+    .await?;
+    Ok(r.map(|(id, p, d)| (id, serde_json::from_str(&p).unwrap_or_default(), d)))
+}
+
+/// The highest activity id, so that a dialog can wait for the activity an action starts.
+pub async fn max_activity_id(db: &Db) -> DbResult<i64> {
+    let r: Option<i64> = sqlx::query_scalar("SELECT MAX(id) FROM activity_log")
+        .fetch_one(db.pool())
+        .await?;
+    Ok(r.unwrap_or(0))
+}

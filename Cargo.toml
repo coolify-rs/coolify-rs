@@ -27,6 +27,7 @@ clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4"
 hmac = "0.12"
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
+p384 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
 p521 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
 aes = "0.8"
 cbc = { version = "0.1", features = ["std"] }

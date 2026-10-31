@@ -52,7 +52,7 @@
   async function call(path: string, success: string, kind: 'success' | 'info' = 'success') {
     try {
       await post(`${base}/${path}`);
-      if (kind === 'info') notify.info(success);
+      if (kind === 'info') notify.info('Info', success);
       else notify.success(success);
       await load();
     } catch (e) {

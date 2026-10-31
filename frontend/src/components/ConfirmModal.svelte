@@ -32,6 +32,7 @@
     step1ButtonText = 'Continue',
     step2ButtonText = 'Continue',
     step3ButtonText = 'Confirm',
+    literalStep2 = false,
     onconfirm,
     onclose,
   }: {
@@ -47,6 +48,8 @@
     step1ButtonText?: string;
     step2ButtonText?: string;
     step3ButtonText?: string;
+    /** Blade's `:confirmWithPassword="false"` with the default text: upstream keeps "Continue". */
+    literalStep2?: boolean;
     onconfirm: (password: string, selected: string[]) => Promise<string | void>;
     onclose: () => void;
   } = $props();
@@ -62,7 +65,7 @@
   let copied = $state(false);
 
   // "Continue" on step 2 becomes "Confirm" when there is no password step.
-  const effectiveStep2 = $derived(!confirmWithPassword && step2ButtonText === 'Continue' ? 'Confirm' : step2ButtonText);
+  const effectiveStep2 = $derived(!literalStep2 && !confirmWithPassword && step2ButtonText === 'Continue' ? 'Confirm' : step2ButtonText);
 
   async function submit() {
     submitting = true;

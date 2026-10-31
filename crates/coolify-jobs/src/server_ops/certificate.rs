@@ -184,7 +184,6 @@ fn subject_public_key_info(cert: &[u8]) -> Option<&[u8]> {
 
 /// `openssl_x509_check_private_key` for the keys Coolify generates (ECDSA P-521).
 pub fn certificate_matches_key(certificate_pem: &str, key_pem: &str) -> bool {
-    use p521::pkcs8::{DecodePrivateKey, EncodePublicKey};
     let Some(body) = certificate_pem
         .split("-----BEGIN CERTIFICATE-----")
         .nth(1)
@@ -199,13 +198,131 @@ pub fn certificate_matches_key(certificate_pem: &str, key_pem: &str) -> bool {
     let Some(spki) = subject_public_key_info(&der_cert) else {
         return false;
     };
-    let Ok(secret) = p521::SecretKey::from_pkcs8_pem(key_pem) else {
-        return false;
-    };
-    secret
-        .public_key()
-        .to_public_key_der()
-        .is_ok_and(|d| d.as_bytes() == spki)
+    public_key_der(key_pem).is_some_and(|d| d == spki)
+}
+
+/// The SubjectPublicKeyInfo of a private key in PEM, for what `openssl_x509_check_private_key` accepts:
+/// EC P-521, P-384, P-256 (PKCS#8 or SEC1), RSA (PKCS#8 or PKCS#1) and Ed25519 (PKCS#8).
+fn public_key_der(key_pem: &str) -> Option<Vec<u8>> {
+    use p521::pkcs8::{DecodePrivateKey, EncodePublicKey};
+    macro_rules! ec {
+        ($curve:ident) => {
+            if let Some(secret) = $curve::SecretKey::from_pkcs8_pem(key_pem)
+                .ok()
+                .or_else(|| $curve::SecretKey::from_sec1_pem(key_pem).ok())
+            {
+                return secret
+                    .public_key()
+                    .to_public_key_der()
+                    .ok()
+                    .map(|d| d.as_bytes().to_vec());
+            }
+        };
+    }
+    ec!(p521);
+    ec!(p384);
+    ec!(p256);
+    use rsa::pkcs1::DecodeRsaPrivateKey;
+    if let Some(secret) = rsa::RsaPrivateKey::from_pkcs8_pem(key_pem)
+        .ok()
+        .or_else(|| rsa::RsaPrivateKey::from_pkcs1_pem(key_pem).ok())
+    {
+        return secret
+            .to_public_key()
+            .to_public_key_der()
+            .ok()
+            .map(|d| d.as_bytes().to_vec());
+    }
+    ed25519_public_key_der(key_pem)
+}
+
+/// RFC 8410: a PKCS#8 Ed25519 key holds the seed; the public key is derived from it.
+fn ed25519_public_key_der(key_pem: &str) -> Option<Vec<u8>> {
+    let body = key_pem
+        .split("-----BEGIN PRIVATE KEY-----")
+        .nth(1)?
+        .split("-----END PRIVATE KEY-----")
+        .next()?;
+    let compact: String = body.split_whitespace().collect();
+    let der_key = base64::engine::general_purpose::STANDARD
+        .decode(compact)
+        .ok()?;
+    // SEQUENCE { INTEGER 0, SEQUENCE { OID 1.3.101.112 }, OCTET STRING { OCTET STRING seed } }
+    const PREFIX: &[u8] = &[
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
+        0x20,
+    ];
+    let seed: &[u8; 32] = der_key.strip_prefix(PREFIX)?.get(..32)?.try_into().ok()?;
+    let keypair = ssh_key::private::Ed25519Keypair::from_seed(seed);
+    let mut spki = vec![
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+    ];
+    spki.extend_from_slice(keypair.public.as_ref());
+    Some(spki)
+}
+
+#[cfg(test)]
+mod key_match_tests {
+    use super::*;
+
+    /// Keys and self-signed certificates from `openssl req -x509 -newkey`.
+    fn matches(key_type: &[&str]) -> bool {
+        let dir = std::env::temp_dir().join(format!("coolify-ca-test-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let (key, cert) = (dir.join("k.pem"), dir.join("c.pem"));
+        let mut args = vec!["req", "-x509", "-nodes", "-subj", "/CN=x", "-days", "1"];
+        args.extend_from_slice(key_type);
+        args.extend_from_slice(&[
+            "-keyout",
+            key.to_str().expect("path"),
+            "-out",
+            cert.to_str().expect("path"),
+        ]);
+        let ok = std::process::Command::new("openssl")
+            .args(&args)
+            .output()
+            .expect("openssl")
+            .status
+            .success();
+        assert!(ok, "openssl failed for {key_type:?}");
+        let (k, c) = (
+            std::fs::read_to_string(&key).expect("key"),
+            std::fs::read_to_string(&cert).expect("cert"),
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        certificate_matches_key(&c, &k)
+    }
+
+    #[test]
+    fn accepts_every_key_type() {
+        assert!(matches(&[
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:P-521"
+        ]));
+        assert!(matches(&[
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:P-384"
+        ]));
+        assert!(matches(&[
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:P-256"
+        ]));
+        assert!(matches(&["-newkey", "rsa:2048"]));
+        assert!(matches(&["-newkey", "ed25519"]));
+    }
+
+    #[test]
+    fn rejects_another_key() {
+        let (cert, _, _) = new_ca_certificate("x", 1).expect("cert");
+        let (_, key, _) = new_ca_certificate("y", 1).expect("key");
+        assert!(!certificate_matches_key(&cert, &key));
+    }
 }
 
 /// A new self-signed CA certificate: `(certificate PEM, private key PEM, valid until)`.

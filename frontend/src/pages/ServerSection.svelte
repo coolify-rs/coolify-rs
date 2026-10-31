@@ -7,6 +7,7 @@
   import ServerAdvanced from './ServerAdvanced.svelte';
   import ServerRegistries from './ServerRegistries.svelte';
   import ServerAnalytics from './ServerAnalytics.svelte';
+  import ServerCharts from './ServerCharts.svelte';
   import ServerDockerCleanup from './ServerDockerCleanup.svelte';
   import ServerImages from './ServerImages.svelte';
   import ServerLogDrains from './ServerLogDrains.svelte';
@@ -30,6 +31,7 @@
     advanced: ServerAdvanced,
     registries: ServerRegistries,
     analytics: ServerAnalytics,
+    metrics: ServerCharts,
     'docker-cleanup': ServerDockerCleanup,
     images: ServerImages,
     'log-drains': ServerLogDrains,

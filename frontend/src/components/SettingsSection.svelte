@@ -11,10 +11,11 @@
     actions,
     badges,
     children,
-  }: { id?: string; title: string; description?: string; flush?: boolean; actions?: Snippet; badges?: Snippet; children: Snippet } = $props();
+    class: klass = '',
+  }: { class?: string; id?: string; title: string; description?: string; flush?: boolean; actions?: Snippet; badges?: Snippet; children: Snippet } = $props();
 </script>
 
-<section {id} class="application-settings-section" data-settings-section-title={title}>
+<section {id} class="application-settings-section {klass}" data-settings-section-title={title}>
   <header>
     <div class="min-w-0 py-0.5 {badges ? 'flex flex-wrap items-center gap-2' : ''}">
       {#if description}

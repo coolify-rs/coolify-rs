@@ -14,8 +14,8 @@
   import ProcessDialog from '../components/ProcessDialog.svelte';
   import ValidateServer from '../components/ValidateServer.svelte';
   import { sanitizeHtml } from '../lib/sanitize';
-  import Unported from './Unported.svelte';
   import { api, serversUi, ApiError, type ServerDetail, type ServerFacts, type ValidationProgress } from '../lib/api';
+  import { get, post, failure } from '../lib/serverApi';
   import { loadServerContext } from '../lib/serverPage.svelte';
   import { session } from '../lib/session.svelte';
   import { notify } from '../lib/toast.svelte';
@@ -51,7 +51,6 @@
     }
     facts = ctx.facts;
     document.title = `${ctx.facts.name.slice(0, 24)} | Server | coolify-rs`;
-    if (ctx.facts.is_localhost) return;
     const d = await api.get<ServerDetail>(`/servers/${encodeURIComponent(uuid)}`);
     const f: Form = {
       name: d.name,
@@ -69,6 +68,42 @@
     committedRole = role;
     const v = await serversUi.validation(uuid);
     validationLogs = v.validation_logs;
+    details = await get<Details>(`/server-page/${encodeURIComponent(uuid)}/details`).catch(() => null);
+  }
+
+  type Gpu = { index: number | string; uuid: string; name: string; memory_mb: number };
+  type Details = {
+    metadata: { os?: string; arch?: string; kernel?: string; cpus?: number | string; memory_bytes?: number; uptime_since?: string; gpus?: Gpu[] | null; nvidia_container_toolkit?: boolean } | null;
+    docker_version: string | null;
+    compose_version: string | null;
+  };
+  let details = $state<Details | null>(null);
+  let fetchingDetails = $state(false);
+  const hasMetadata = $derived(!!details?.metadata && Object.keys(details.metadata).length > 0);
+
+  /** `refreshServerMetadata`. */
+  async function refreshDetails() {
+    fetchingDetails = true;
+    try {
+      const r = await post<{ message: string }>(`/server-page/${encodeURIComponent(uuid)}/details`);
+      details = await get<Details>(`/server-page/${encodeURIComponent(uuid)}/details`);
+      notify.success(r.message);
+    } catch (e) {
+      failure(e);
+    } finally {
+      fetchingDetails = false;
+    }
+  }
+  /** `checkLocalhostConnection`. */
+  async function checkLocalhost() {
+    try {
+      if (dirty) await save();
+      const r = await post<{ message: string }>(`/server-page/${encodeURIComponent(uuid)}/check-localhost`);
+      notify.success(r.message);
+      await load();
+    } catch (e) {
+      failure(e);
+    }
   }
   $effect(() => {
     void uuid;
@@ -165,14 +200,118 @@
   const err = (k: string) => error?.field(k);
 </script>
 
+{#snippet serverDetails()}
+  {#if hasMetadata && details?.metadata}
+    {@const meta = details.metadata}
+    <dl class="mt-4 grid gap-x-6 gap-y-5 border-t border-neutral-200 pt-4 sm:grid-cols-2 lg:grid-cols-3 dark:border-white/[0.08]">
+      {#each [['Operating system', meta.os ?? 'N/A'], ['Architecture', meta.arch ?? 'N/A'], ['Kernel', meta.kernel ?? 'N/A'], ['CPU cores', meta.cpus ?? 'N/A'], ['Memory', meta.memory_bytes != null ? `${Math.round((meta.memory_bytes / 1073741824) * 10) / 10} GB` : 'N/A'], ['Docker version', details.docker_version ?? 'N/A'], ['Compose version', details.compose_version ?? 'N/A'], ['Up since', meta.uptime_since ?? 'N/A']] as [label, value] (label)}
+        <div>
+          <dt class="text-xs font-medium text-neutral-500 dark:text-fg-dim">{label}</dt>
+          <dd class="mt-1 text-sm font-medium text-neutral-950 dark:text-fg">{value}</dd>
+        </div>
+      {/each}
+    </dl>
+    {#if meta.gpus == null || meta.gpus.length > 0}
+      <div class="mt-5">
+        <p class="text-xs font-medium text-neutral-500 dark:text-fg-dim">GPUs</p>
+        <div class="mt-2 text-[12px] leading-5 text-neutral-600 dark:text-fg-dim">
+          {#if meta.gpus == null}
+            <p>Not checked yet. Refresh to find GPUs.</p>
+          {:else}
+            <ul>
+              {#each meta.gpus as gpu (gpu.uuid)}
+                <li><span class="font-mono font-medium text-neutral-950 dark:text-fg">{gpu.index}</span> · {gpu.name} · {Math.round((gpu.memory_mb / 1024) * 10) / 10} GB · <span class="font-mono">{gpu.uuid}</span></li>
+              {/each}
+            </ul>
+            {#if !meta.nvidia_container_toolkit}
+              <p class="mt-1 text-warning-900 dark:text-warning">
+                NVIDIA Container Toolkit not found. Containers cannot use these GPUs until you
+                <a href="https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html" class="underline" target="_blank" rel="noreferrer">install it</a> and restart Docker.
+              </p>
+            {/if}
+          {/if}
+        </div>
+      </div>
+    {/if}
+  {/if}
+{/snippet}
+
+{#snippet refreshDetailsButton()}
+  <span class="relative inline-flex" title={facts?.functional ? undefined : 'Validate the connection first.'}>
+    <button type="button" class="button" disabled={!facts?.functional || fetchingDetails} onclick={refreshDetails}>
+      <Reicon name="refresh" class="size-3.5" />
+      {hasMetadata ? 'Refresh details' : 'Fetch server details'}
+    </button>
+  </span>
+{/snippet}
+
+{#snippet previousValidation()}
+  {#if validationLogs}
+    <SettingsSection title="Previous validation output" description="The latest output produced while checking this server.">
+      <div class="max-h-72 overflow-auto rounded-lg bg-neutral-950 p-4 font-mono text-xs leading-5 text-neutral-300">{@html sanitizeHtml(validationLogs)}</div>
+    </SettingsSection>
+  {/if}
+{/snippet}
+
 {#if missing}
   <div class="application-settings-form w-full">
     <Empty title="Server not found" description="It may have been deleted, or it belongs to another team." iconName="servers" size="lg" />
   </div>
 {:else if facts}
   <ServerLayout name={facts.name}>
-    {#if facts.is_localhost}
-      <Unported description="The settings of the server Coolify runs on are not ported to coolify-rs yet." />
+    {#if facts.is_localhost && form}
+      <!-- Port of upstream livewire/server/partials/localhost-general.blade.php. -->
+      <form
+        onsubmit={(e) => {
+          e.preventDefault();
+          save();
+        }}
+        class="application-settings-form flex flex-col gap-6"
+      >
+        <UnsavedBar {dirty} {saving} onsave={save} onreset={() => ((form = { ...saved! }), (error = null))} />
+        <SettingsSection id="server-overview-section" title="Server overview" description="Operating system and hardware details for the server running this Coolify instance.">
+          {#snippet actions()}
+            {@render refreshDetailsButton()}
+            <button type="button" class="button" {...facts?.functional ? {} : { ishighlighted: '' }} disabled={!canEdit} onclick={checkLocalhost}>
+              <Reicon name={facts?.functional ? 'refresh' : 'alert-circle'} class="size-3.5" />
+              {facts?.functional ? 'Revalidate connection' : 'Validate connection'}
+            </button>
+          {/snippet}
+          <div class="flex items-start gap-3">
+            <div class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-neutral-600 dark:bg-white/[0.06] dark:text-fg-dim">
+              <Reicon name="servers" class="size-4.5" />
+            </div>
+            <div>
+              <p class="text-sm font-medium text-neutral-950 dark:text-fg">Localhost</p>
+              <p class="mt-1 text-xs leading-5 text-neutral-500 dark:text-fg-dim">
+                {#if facts.functional}
+                  The server is reachable, validated, and ready to host resources.
+                {:else}
+                  Validate the local Docker connection before using this server.
+                {/if}
+              </p>
+            </div>
+          </div>
+          {@render serverDetails()}
+        </SettingsSection>
+        {@render previousValidation()}
+        <SettingsSection id="server-connection-section" title="Connection" description="Configure how Coolify identifies and connects to this server.">
+          <div class="grid gap-4 sm:grid-cols-2">
+            <FormInput id="name" label="Name" required disabled={!canEdit} bind:value={form.name} error={err('name')} />
+            <FormInput id="description" label="Description" disabled={!canEdit} bind:value={form.description} error={err('description')} />
+          </div>
+          <div class="mt-4 grid gap-4 lg:grid-cols-3">
+            <FormInput type="password" id="ip" label="IP address or domain" helper="Enter a hostname or IP address without http:// or https://." required disabled={!canEdit} bind:value={form.ip} error={err('ip')} />
+            <FormInput id="user" label="SSH user" required disabled={!canEdit} bind:value={form.user} error={err('user')} />
+            <FormInput type="number" id="port" label="SSH port" required disabled={!canEdit} bind:value={form.port} error={err('port')} />
+          </div>
+          <div class="mt-4 grid gap-4 lg:grid-cols-3">
+            <FormInput type="number" id="connectionTimeout" label="Connection timeout" helper="Seconds to wait before an SSH connection fails." min="1" max="300" required disabled={!canEdit} bind:value={form.connectionTimeout} error={err('connection_timeout')} />
+            <Listbox searchable id="serverTimezone" label="Server timezone" helper="Used for backup schedules, cron jobs, and displayed timestamps." searchPlaceholder="Search timezones" searchEmptyText="No matching timezone" disabled={!canEdit} bind:value={form.serverTimezone} options={timezones.map((t) => ({ value: t, label: t }))} />
+            <FormInput placeholder="https://example.com" id="wildcardDomain" label="Wildcard domain" helper="New resources can receive generated subdomains from this domain." disabled={!canEdit} bind:value={form.wildcardDomain} error={err('wildcard_domain')} />
+          </div>
+        </SettingsSection>
+      </form>
     {:else if form}
       <form
         onsubmit={(e) => {
@@ -276,12 +415,7 @@
 
         <SettingsSection title="Server overview" description="Provider state, operating system, and hardware details.">
           {#snippet actions()}
-            <span class="relative inline-flex" title={facts?.functional ? undefined : 'Validate the connection first.'}>
-              <button type="button" class="button" disabled={!facts?.functional}>
-                <Reicon name="refresh" class="size-3.5" />
-                Fetch server details
-              </button>
-            </span>
+            {@render refreshDetailsButton()}
           {/snippet}
           <div class="flex items-start gap-3">
             <div class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-neutral-600 dark:bg-white/[0.06] dark:text-fg-dim">
@@ -300,6 +434,7 @@
               </p>
             </div>
           </div>
+          {@render serverDetails()}
         </SettingsSection>
 
         {#if validationLogs}

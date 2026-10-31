@@ -2,6 +2,7 @@
 //! proxy, Sentinel, Docker cleanup, log drains, patches, CA certificate and the
 //! scheduled checks. Each submodule cites what it ports.
 
+pub mod acme;
 pub mod certificate;
 pub mod checks;
 pub mod cleanup;
@@ -13,6 +14,7 @@ pub mod proxy_config;
 pub mod registries;
 pub mod scheduler;
 pub mod sentinel;
+pub mod traffic;
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
