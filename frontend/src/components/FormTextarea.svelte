@@ -15,6 +15,7 @@
     rows = 4,
     placeholder,
     oninput,
+    class: cls = '',
   }: {
     label?: string;
     id: string;
@@ -28,6 +29,7 @@
     rows?: number;
     placeholder?: string;
     oninput?: (e: Event) => void;
+    class?: string;
   } = $props();
 </script>
 
@@ -43,7 +45,7 @@
   {/if}
   <textarea
     {placeholder}
-    class="input scrollbar {monospace ? 'font-mono' : ''}"
+    class="input scrollbar {monospace ? 'font-mono' : ''} {cls}"
     {disabled}
     {readonly}
     {required}

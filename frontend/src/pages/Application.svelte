@@ -12,6 +12,8 @@
   import DatabaseDanger from '../components/DatabaseDanger.svelte';
   import DeploymentHistory from '../components/DeploymentHistory.svelte';
   import DeploymentLogs from '../components/DeploymentLogs.svelte';
+  import EnvironmentVariables from '../components/shared/EnvironmentVariables.svelte';
+  import SecretManagerLinks from '../components/shared/SecretManagerLinks.svelte';
   import Unported from './Unported.svelte';
   import { appUi, dbUi, uiApi, ApiError, type ApplicationRecord, type ApplicationState, type DeploymentDetail } from '../lib/api';
   import { applicationNavContext, applicationSection } from '../lib/applicationMenu';
@@ -169,6 +171,9 @@
               {/if}
             {:else if active === 'source' && !record.dockerfile && record.build_pack !== 'dockerimage'}
               <ApplicationSource uuid={app} onsaved={() => refresh().catch(() => {})} />
+            {:else if active === 'environment-variables'}
+              <EnvironmentVariables kind="application" uuid={app} onconfigurationchanged={() => refresh().catch(() => {})} />
+              <SecretManagerLinks kind="application" uuid={app} />
             {:else if active === 'deployment'}
               <DeploymentHistory uuid={app} {base} {serverName} {timezone} />
             {:else if active === 'danger'}

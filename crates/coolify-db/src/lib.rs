@@ -32,6 +32,7 @@ pub mod private_keys;
 pub mod profile;
 pub mod projects;
 pub mod records;
+pub mod resource_envs;
 pub mod schema;
 pub mod server_ops;
 pub mod servers;

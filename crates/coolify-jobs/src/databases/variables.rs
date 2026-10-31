@@ -26,10 +26,34 @@ pub async fn display_real_value(
     is_literal: bool,
     is_multiline: bool,
 ) -> Result<Option<String>, String> {
+    display_real_value_of(
+        db,
+        enc,
+        &Owner::database(d),
+        server_id,
+        value,
+        legacy,
+        is_literal,
+        is_multiline,
+    )
+    .await
+}
+
+/// `resolveRealValue(revealLockedSharedVariables: false)` for any resource.
+#[allow(clippy::too_many_arguments)]
+pub async fn display_real_value_of(
+    db: &Db,
+    enc: &Encrypter,
+    owner: &Owner<'_>,
+    server_id: Option<i64>,
+    value: Option<&str>,
+    legacy: bool,
+    is_literal: bool,
+    is_multiline: bool,
+) -> Result<Option<String>, String> {
     let Some(value) = value.filter(|v| !v.is_empty()) else {
         return Ok(value.map(str::to_owned));
     };
-    let owner = Owner::database(d);
     let mut out = value.trim().to_owned();
     let found: Vec<String> = REFERENCE
         .captures_iter(&out.clone())
