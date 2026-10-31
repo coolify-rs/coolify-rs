@@ -86,6 +86,8 @@ def norm(text, pairs):
     # Basic auth password hashes are salted.
     text = re.sub(r"\${1,2}2y\${1,2}\d+\${1,2}[./A-Za-z0-9]{53}", "HASH", text)
     text = re.sub(r'time="[^"]*"', 'time="T"', text)
+    # Railpack writes the build time into the image.
+    text = re.sub(r"RAILPACK_BUILT_AT=\d+", "RAILPACK_BUILT_AT=T", text)
     # The Compose build fingerprint hashes per-application inputs.
     text = re.sub(r"coolify\.build-fingerprint=[0-9a-f]{64}", "coolify.build-fingerprint=FP", text)
     return text

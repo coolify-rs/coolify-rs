@@ -52,20 +52,18 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   written as upstream writes it, but for `build_pack = dockercompose` without `instant_deploy` upstream's queued
   `LoadComposeFile` job (clone the repository, read and parse the compose file, store `docker_compose_raw`,
   `docker_compose`, variables and volumes) is not ported, so the compose columns stay empty until a deployment.
-  Every create field and `PATCH /applications/{uuid}` store what upstream stores, but the deployment job does not do
-  all of it yet: starting an application with an inline Dockerfile answers 501, and `instant_deploy` on a create or
-  update that would need it answers 501 before saving anything. The job has `deploy_simple_dockerfile()`, but it has not
-  been compared with the reference yet, so the guard stays. A request that upstream fails halfway (a value PostgreSQL rejects, such as
+  Every create field and `PATCH /applications/{uuid}` store what upstream stores. Inline Dockerfiles deploy, also with
+  `instant_deploy` (`inline` and `inline-instant` in `compat/diff/git_deploy_diff.py`). A request that upstream fails halfway (a value PostgreSQL rejects, such as
   `gpu_driver: null` or `connect_to_docker_network: "maybe"`) answers the same 500 but leaves no row behind, where
   upstream keeps the application it had already saved. PATCH does not queue `ReleaseRemovedDnsHostnamesJob`: managed DNS
   is not ported. The GitHub App repository check does not apply upstream's `SafeExternalUrl` private-network policy to the GitHub API URL, and the
   GitHub App path is not yet verified against a real GitHub App (only up to the lookup of the App).
 - Application envs, storages, tags and the secret manager link are ported; the secret manager stores only the source
   (nothing fetches secrets from Doppler, Infisical or Vault at deployment). File storages are written and deleted on the
-  server by the API, and the deploy job mounts them and writes missing content files (`EnsureContentFilesOnServer`).
-  Deploying or deleting an application that has file storages with content still answers 501: only a first deployment
-  has been compared with the reference so far, so the guard stays until the `file-storage*` and `compose-files` cases of
-  `compat/diff/git_deploy_diff.py` pass.
+  server by the API, and the deploy job mounts them and writes missing content files (`EnsureContentFilesOnServer`), also
+  when a directory is in the way (`file-storage*` and `compose-files` in `compat/diff/git_deploy_diff.py`, with the delete).
+  The job reads the rows `ORDER BY id`; upstream has no `ORDER BY`, so its mount order in the Compose file follows the
+  heap of the table and can differ from ours and between its own runs (the diff sorts these lines).
   `DELETE /applications/{uuid}/envs/bulk` answers 405 instead of upstream's 404 (the literal path wins over `{env_uuid}`).
   Responses of a created or updated storage include the owning application with its server, as upstream does, also
   `proxy.last_saved_proxy_configuration` for tokens without `read:sensitive`: an upstream leak kept for parity.
@@ -107,8 +105,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
     timezone uses chrono-tz data, not PHP's, so a future rule change could differ until both update. A cron step below zero
     (`*/-5`) is invalid here and an endless loop upstream; `validate_cron_expression()` refuses it anyway.
 - Docker Compose applications deploy (build, pull, `docker compose up`, build fingerprint reuse, raw mode). Not ported:
-  custom Compose start/build commands, "preserve repository", preview deployments, configuration files with content
-  (file storages Coolify writes), build secrets. The startup cleanup scopes interrupted deployments by host name, so
+  custom Compose start/build commands, "preserve repository", preview deployments, build secrets. The startup cleanup scopes interrupted deployments by host name, so
   two coolify-rs instances on one host would mark each other's running deployments as failed.
 - At startup upstream (`app:init`) marks every in-progress and queued deployment as failed; coolify-rs marks only the
   in-progress deployments its own host was running (`horizon_job_worker`), so an upstream instance sharing the database
@@ -117,7 +114,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - `sentinel_custom_url` for a new server falls back to the request's scheme and host; `X-Forwarded-*` count only
   from trusted proxies (upstream trusts every proxy).
 - The new-server page offers only "IP address or domain" (no cloud provisioning).
-- Deployments: only the Docker image build pack. Git build packs (Dockerfile, static, Railpack, Nixpacks, Compose), previews, additional servers, build servers, registry pushes, basic auth, pre/post-deployment commands and custom Docker options are not ported (501). `current_process_id` stays empty, and commands that upstream feeds on stdin carry their input inside the script. Jobs run in the coolify-rs process: a restart drops a running deployment.
+- Deployments: previews, additional servers, build servers and registry pushes are not ported or not compared with the reference (`git_deploy_diff.py` runs one server without a registry). `current_process_id` stays empty, and commands that upstream feeds on stdin carry their input inside the script. Jobs run in the coolify-rs process: a restart drops a running deployment.
 - No proxy management, backups, scheduler, notifications or webhooks yet. SSH runs without
   connection multiplexing (one connection per command).
 - coolify-rs cannot bootstrap a new installation: it requires a database created by upstream Coolify at the baseline
