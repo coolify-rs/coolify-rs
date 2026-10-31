@@ -177,6 +177,16 @@ pub async fn destination_servers(db: &Db) -> DbResult<HashMap<(String, i64), i64
     Ok(list.into_iter().map(|(t, i, s)| ((t, i), s)).collect())
 }
 
+/// `$swarmDocker->server_id`.
+pub async fn swarm_server_id(db: &Db, destination_id: i64) -> DbResult<Option<i64>> {
+    Ok(
+        sqlx::query_scalar("SELECT server_id FROM swarm_dockers WHERE id = $1")
+            .bind(destination_id)
+            .fetch_optional(db.pool())
+            .await?,
+    )
+}
+
 /// `$application->additional_servers` per application: server id and pivot status.
 pub async fn additional_servers(
     db: &Db,
@@ -565,4 +575,185 @@ pub async fn application_uuids(db: &Db, ids: &[i64]) -> DbResult<HashMap<i64, St
 /// `{uuid, name}` of a project, for page shells.
 pub fn brief(r: &Record) -> Value {
     json!({"uuid": r.get("uuid"), "name": r.get("name")})
+}
+
+/// The icon columns of `ProjectIconStorageService`: `None` removes the icon.
+pub async fn set_project_icon(
+    db: &Db,
+    id: i64,
+    path: Option<&str>,
+    now: NaiveDateTime,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query(
+        "UPDATE projects SET icon_path = $1, icon_storage_type = CASE WHEN $1::text IS NULL THEN NULL ELSE 'local' END, \
+         icon_s3_storage_id = NULL, updated_at = $2 WHERE id = $3",
+    )
+    .bind(path)
+    .bind(now)
+    .bind(id)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
+/// `project_icon_url($project)` per uuid, for the projects of a team that have an icon.
+pub async fn project_icon_urls(db: &Db, team_id: i64) -> DbResult<HashMap<String, String>> {
+    let list: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT uuid, COALESCE(EXTRACT(EPOCH FROM updated_at)::bigint, 0) FROM projects WHERE team_id = $1 AND icon_path IS NOT NULL",
+    )
+    .bind(team_id)
+    .fetch_all(db.pool())
+    .await?;
+    Ok(list
+        .into_iter()
+        .map(|(uuid, at)| {
+            let url = format!("/project/{uuid}/icon?v={at}");
+            (uuid, url)
+        })
+        .collect())
+}
+
+/// `$team->subscription`.
+pub async fn team_subscription(db: &Db, team_id: i64) -> DbResult<Option<Record>> {
+    let text: Option<String> = sqlx::query_scalar(
+        "SELECT row_to_json(t)::text FROM subscriptions t WHERE t.team_id = $1 ORDER BY t.id LIMIT 1",
+    )
+    .bind(team_id)
+    .fetch_optional(db.pool())
+    .await?;
+    text.as_deref().map(decode).transpose()
+}
+
+/// `$subscription->update([...])`. Column names are the caller's literals.
+pub async fn update_subscription(db: &Db, team_id: i64, values: &[(&str, Value)]) -> DbResult<()> {
+    db.ensure_writable()?;
+    for (column, value) in values {
+        if !column.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+            return Err(DbError::Schema(format!("bad column {column}")));
+        }
+        let sql = format!(
+            "UPDATE subscriptions SET {column} = (SELECT {column} FROM jsonb_to_record(jsonb_build_object('{column}', $1::jsonb)) AS x({column} {kind})), updated_at = now() AT TIME ZONE 'UTC' WHERE team_id = $2",
+            kind = match value {
+                Value::Bool(_) => "boolean",
+                _ if column.ends_with("_at") => "timestamp",
+                _ => "text",
+            }
+        );
+        sqlx::query(&sql)
+            .bind(value.to_string())
+            .bind(team_id)
+            .execute(db.pool())
+            .await?;
+    }
+    Ok(())
+}
+
+/// `Subscription::firstOrNew(['team_id' => ...])`, then `stripe_customer_id` and `save()`.
+pub async fn assign_customer(db: &Db, team_id: i64, customer: &str) -> DbResult<()> {
+    db.ensure_writable()?;
+    let updated = sqlx::query(
+        "UPDATE subscriptions SET stripe_customer_id = $1, updated_at = now() AT TIME ZONE 'UTC' WHERE team_id = $2",
+    )
+    .bind(customer)
+    .bind(team_id)
+    .execute(db.pool())
+    .await?;
+    if updated.rows_affected() == 0 {
+        sqlx::query(
+            "INSERT INTO subscriptions (team_id, stripe_customer_id, created_at, updated_at) \
+             VALUES ($1, $2, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')",
+        )
+        .bind(team_id)
+        .bind(customer)
+        .execute(db.pool())
+        .await?;
+    }
+    Ok(())
+}
+
+pub async fn set_server_limit(db: &Db, team_id: i64, limit: i64) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query("UPDATE teams SET custom_server_limit = $1, updated_at = now() AT TIME ZONE 'UTC' WHERE id = $2")
+        .bind(limit)
+        .bind(team_id)
+        .execute(db.pool())
+        .await?;
+    Ok(())
+}
+
+/// `Team::subscriptionEnded`: every server of the team stops being usable.
+pub async fn subscription_ended(db: &Db, team_id: i64) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query(
+        "UPDATE subscriptions SET stripe_subscription_id = NULL, stripe_cancel_at_period_end = false, stripe_invoice_paid = false, \
+         stripe_trial_already_ended = false, stripe_past_due = false, updated_at = now() AT TIME ZONE 'UTC' WHERE team_id = $1",
+    )
+    .bind(team_id)
+    .execute(db.pool())
+    .await?;
+    sqlx::query(
+        "UPDATE server_settings SET is_usable = false, is_reachable = false WHERE server_id IN (SELECT id FROM servers WHERE team_id = $1)",
+    )
+    .bind(team_id)
+    .execute(db.pool())
+    .await?;
+    sqlx::query("UPDATE servers SET unreachable_count = 3 WHERE team_id = $1")
+        .bind(team_id)
+        .execute(db.pool())
+        .await?;
+    Ok(())
+}
+
+pub struct TeamLimits {
+    pub name: String,
+    pub custom_server_limit: Option<i64>,
+    pub servers: i64,
+    /// `managedServers()`: not transferred away.
+    pub managed_servers: i64,
+}
+
+pub async fn team_limits(db: &Db, team_id: i64) -> DbResult<TeamLimits> {
+    let (name, custom_server_limit, servers, managed_servers): (String, Option<i64>, i64, i64) = sqlx::query_as(
+        "SELECT t.name, t.custom_server_limit::bigint, \
+           (SELECT count(*) FROM servers s WHERE s.team_id = t.id AND s.deleted_at IS NULL), \
+           (SELECT count(*) FROM servers s WHERE s.team_id = t.id AND s.deleted_at IS NULL \
+              AND (s.server_metadata->'transfer'->>'status' IS NULL OR s.server_metadata->'transfer'->>'status' != 'transferred')) \
+         FROM teams t WHERE t.id = $1",
+    )
+    .bind(team_id)
+    .fetch_one(db.pool())
+    .await?;
+    Ok(TeamLimits {
+        name,
+        custom_server_limit,
+        servers,
+        managed_servers,
+    })
+}
+
+/// `Team::whereRelation('subscription', 'stripe_invoice_paid', ...)->count()`: active, inactive.
+pub async fn subscriber_counts(db: &Db) -> DbResult<(i64, i64)> {
+    Ok(sqlx::query_as(
+        "SELECT (SELECT count(*) FROM teams t WHERE EXISTS (SELECT 1 FROM subscriptions s WHERE s.team_id = t.id AND s.stripe_invoice_paid = true)), \
+                (SELECT count(*) FROM teams t WHERE EXISTS (SELECT 1 FROM subscriptions s WHERE s.team_id = t.id AND s.stripe_invoice_paid = false))",
+    )
+    .fetch_one(db.pool())
+    .await?)
+}
+
+/// `Admin\Index::submitSearch`, with the subscription badge of the view.
+pub async fn search_users(db: &Db, search: &str) -> DbResult<Vec<Value>> {
+    let list: Vec<(i64, String, String, bool)> = sqlx::query_as(
+        "SELECT u.id, u.name, u.email, EXISTS (SELECT 1 FROM team_user tu JOIN subscriptions s ON s.team_id = tu.team_id \
+           WHERE tu.user_id = u.id AND s.stripe_invoice_paid = true) \
+         FROM users u WHERE u.name LIKE $1 OR u.email LIKE $1",
+    )
+    .bind(format!("%{search}%"))
+    .fetch_all(db.pool())
+    .await?;
+    Ok(list
+        .into_iter()
+        .map(|(id, name, email, active)| json!({"id": id, "name": name, "email": email, "active": active}))
+        .collect())
 }

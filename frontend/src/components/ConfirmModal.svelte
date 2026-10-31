@@ -62,7 +62,7 @@
   let copied = $state(false);
 
   // Upstream only swaps "Continue" for "Confirm" when `shouldSkipPasswordConfirmation()` holds.
-  const effectiveStep2 = $derived(step2ButtonText);
+  const effectiveStep2 = $derived(session.info?.user.skip_password_confirmation && step2ButtonText === 'Continue' ? 'Confirm' : step2ButtonText);
 
   async function submit() {
     submitting = true;

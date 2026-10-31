@@ -212,7 +212,10 @@ pub(crate) async fn passkey_settings(
 }
 
 /// `DeleteUserAccount::blockers` outside Coolify Cloud.
-async fn account_blockers(state: &AppState, user_id: i64) -> Result<Vec<String>, ApiError> {
+pub(crate) async fn account_blockers(
+    state: &AppState,
+    user_id: i64,
+) -> Result<Vec<String>, ApiError> {
     if user_id == 0 {
         return Ok(vec!["The root user cannot be deleted.".to_string()]);
     }

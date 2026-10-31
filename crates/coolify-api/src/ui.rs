@@ -201,11 +201,13 @@ async fn dashboard_data(
     let servers = dashboard::servers(&state.db, ctx.team_id).await?;
     let rows = coolify_db::servers::list(&state.db, ctx.team_id).await?;
     let private_keys = dashboard::private_key_count(&state.db, ctx.team_id).await?;
+    let icons = coolify_db::canvas::project_icon_urls(&state.db, ctx.team_id).await?;
     let projects: Vec<Value> = projects
         .iter()
         .map(|p| {
             json!({
                 "uuid": p.uuid,
+                "icon_url": icons.get(&p.uuid),
                 "name": p.name,
                 "description": p.description,
                 "created_at": p.created_at,
@@ -251,8 +253,9 @@ async fn project_data(
         ))?;
     let environments = dashboard::environments(&state.db, project.id).await?;
     let projects = dashboard::project_names(&state.db, ctx.team_id).await?;
+    let icons = coolify_db::canvas::project_icon_urls(&state.db, ctx.team_id).await?;
     Ok(ok(json!({
-        "project": {"uuid": project.uuid, "name": project.name, "description": project.description},
+        "project": {"uuid": project.uuid, "name": project.name, "description": project.description, "icon_url": icons.get(&project.uuid)},
         "environments": environments.iter().map(|e| json!({
             "uuid": e.uuid,
             "name": e.name,

@@ -57,6 +57,7 @@
     }
   }
 
+  /** `Notifications\\Concerns\\TogglesNotificationEvents::toggleEvent`. */
   function toggleEvent(column: string) {
     form[column] = !form[column];
     run('save', () => (form[column] = !form[column]));

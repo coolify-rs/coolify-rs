@@ -83,7 +83,7 @@ export const sessionApi = {
 export type Role = 'owner' | 'admin' | 'member';
 
 export interface SessionInfo {
-  user: { id: number; name: string; email: string; two_factor_enabled: boolean; avatar_url: string | null };
+  user: { id: number; name: string; email: string; two_factor_enabled: boolean; avatar_url: string | null; skip_password_confirmation?: boolean };
   force_password_reset: boolean;
   show_boarding: boolean;
   teams: { id: number; name: string; role: Role; avatar_url: string | null }[];
@@ -97,7 +97,7 @@ export interface SessionInfo {
   } | null;
   csrf_token: string;
   version: string;
-  features: { private_keys: boolean; read_only: boolean };
+  features: { private_keys: boolean; read_only: boolean; dev?: boolean; cloud?: boolean; impersonating?: boolean };
 }
 
 export interface ProjectSummary {
@@ -158,6 +158,7 @@ export interface Member {
 export interface DashboardData {
   projects: {
     uuid: string;
+    icon_url?: string | null;
     name: string;
     description: string | null;
     created_at: string | null;

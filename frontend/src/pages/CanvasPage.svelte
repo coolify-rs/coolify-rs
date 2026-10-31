@@ -11,8 +11,9 @@
   import Modal from '../components/Modal.svelte';
   import NewProjectModal from '../components/NewProjectModal.svelte';
   import Reicon from '../components/Reicon.svelte';
-  import ServerFrame from '../components/ServerFrame.svelte';
-  import { api, ApiError } from '../lib/api';
+  import { api, ApiError, uiApi } from '../lib/api';
+  import { setProjectCrumbs } from '../lib/crumbs';
+  import { loadServerContext } from '../lib/serverPage.svelte';
   import { rememberView } from '../lib/canvasView';
   import { link, router } from '../lib/router.svelte';
   import { get } from '../lib/serverApi';
@@ -74,6 +75,9 @@
         shell = s;
         rememberView(remembered[kind], 'canvas');
         document.title = pageTitle(s);
+        if (kind === 'server') loadServerContext(uuid, 'resources');
+        if (kind === 'project') uiApi.project(uuid).then((d) => setProjectCrumbs(d));
+        if (kind === 'environment') uiApi.project(uuid).then((d) => setProjectCrumbs(d, environment));
       })
       .catch(() => (missing = true));
   });
@@ -172,6 +176,7 @@
   let name = $state('');
   let error = $state<ApiError | null>(null);
 
+  /** `Concerns\\CreatesEnvironments::submit`. */
   async function createEnvironment(ev: SubmitEvent) {
     ev.preventDefault();
     try {
@@ -277,16 +282,12 @@
 
 {#if missing}
   <ErrorPage code={404} />
-{:else if kind === 'server' && shell}
-  <ServerFrame {uuid} active="resources" title="Canvas">
-    {#snippet children()}
-      <div class="flex h-full flex-col">
-        <CanvasHost {attrs} class="relative min-h-0 flex-1">{@render actions()}</CanvasHost>
-      </div>
-    {/snippet}
-  </ServerFrame>
 {:else if shell}
   <div class={flexPage ? 'flex h-full flex-col' : 'h-full'}>
+    {#if kind === 'server'}
+      <!-- Its menu shows in the main sidebar on xl; below xl a canvas has no room for it. -->
+      <aside class="application-settings-navigation in-main-nav min-w-0"></aside>
+    {/if}
     <CanvasHost {attrs} class={flexPage ? 'relative min-h-0 flex-1' : 'relative h-full'}>{@render actions()}</CanvasHost>
   </div>
 {/if}

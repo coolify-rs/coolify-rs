@@ -56,7 +56,7 @@ pub fn routes() -> Router<AppState> {
         .route("/ui/resources/{kind}/{uuid}/files/action", post(action))
         .route("/ui/resources/{kind}/{uuid}/files/upload", post(upload))
         .route("/ui/resources/{kind}/{uuid}/files/download", post(download))
-        .route("/project/files/download/{token}", get(stream))
+        .route("/files/download/{token}", get(stream))
 }
 
 fn message_error(message: impl Into<String>) -> Response {
@@ -549,7 +549,7 @@ async fn download(
         map.retain(|_, d| d.created.elapsed() < TOKEN_TTL);
         map.insert(token.clone(), entry);
     }
-    Ok(ok(json!({"url": format!("/project/files/download/{token}")})).into_response())
+    Ok(ok(json!({"url": format!("/files/download/{token}")})).into_response())
 }
 
 /// `FileBrowserDownloadController`.

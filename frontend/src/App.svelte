@@ -47,6 +47,8 @@
   import SourceOauth from './pages/SourceOauth.svelte';
   import Database from './pages/Database.svelte';
   import { canvasRedirect } from './lib/canvasView';
+  import Admin from './pages/Admin.svelte';
+  import SubscriptionPage from './pages/SubscriptionPage.svelte';
   import CanvasPage from './pages/CanvasPage.svelte';
   import DeployCanvasPage from './pages/DeployCanvasPage.svelte';
   import Service from './pages/Service.svelte';
@@ -189,6 +191,11 @@
   // `RemembersCanvasView`: a list page opens the canvas when the user left it there.
   $effect.pre(() => {
     if (!session.info) return;
+    // `Route::any('/{any}')`: every other path goes home.
+    if (router.current.name === 'unported' || (router.current.name === 'realtime' && session.info.current_team?.id !== 0)) {
+      router.go('/', true);
+      return;
+    }
     const to = canvasRedirect(router.current.name, router.current.params);
     if (to) router.go(to, true);
   });
@@ -218,6 +225,13 @@
   <VerifyEmail />
 {:else if router.current.name === 'email-verify'}
   <EmailVerifyLink />
+{:else if router.current.name === 'realtime' && session.info.current_team?.id === 0}
+  <!-- `Controller::realtime_test`: `TestEvent` has no listener here, since the UI has no websocket. -->
+  Look at your other tab.
+{:else if router.current.name === 'dev-error' && session.info.features.dev}
+  <ErrorPage code={Number(params.code) as never} />
+{:else if router.current.name === 'dev-exception' && session.info.features.dev}
+  <ErrorPage code={500} description="Testing Laravel exception page" />
 {:else if router.current.name === 'select-team'}
   <SelectTeam />
 {:else if router.current.name === 'onboarding'}
@@ -232,7 +246,11 @@
   <ErrorPage code={403} />
 {:else}
   <Shell {fullBleed}>
-    {#if router.current.name === 'canvas-deploy'}
+    {#if router.current.name === 'admin'}
+      <Admin />
+    {:else if router.current.name === 'subscription' || router.current.name === 'subscription-new'}
+      {#key router.path}<SubscriptionPage page={router.current.name === 'subscription' ? 'show' : 'index'} />{/key}
+    {:else if router.current.name === 'canvas-deploy'}
       {#key router.path}<DeployCanvasPage />{/key}
     {:else if canvasKinds[router.current.name]}
       {#key router.path}<CanvasPage kind={canvasKinds[router.current.name] as never} uuid={params.uuid} environment={params['env']} />{/key}
@@ -350,8 +368,6 @@
       {#key params.uuid}<ServerDanger uuid={params.uuid} />{/key}
     {:else if router.current.name === 'server-section'}
       {#key router.path}<ServerSection uuid={params.uuid} section={params.section} sub={params.sub} />{/key}
-    {:else}
-      <Unported />
     {/if}
   </Shell>
 {/if}

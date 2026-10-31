@@ -6,7 +6,7 @@
     scripts/parity.py --json
 
 An API operation counts when `routes/mod.rs` has a RouteSpec for it. A web route, with its
-`Route::prefix` groups applied, counts when the frontend router has its path. A Livewire component counts when some Svelte or Rust file names its
+`Route::prefix` groups applied, counts when the frontend router has its path or the backend serves it. A Livewire component counts when some Svelte or Rust file names its
 view or class in a "port of" comment, so this is a coverage guide, not a behaviour proof; the
 differential scripts in compat/diff and the screenshots are the proof.
 """
@@ -80,7 +80,11 @@ def web():
     lands in a catch-all section param counts only when the frontend also names that literal."""
     front = read(f"{ROOT}/frontend/src/lib/router.svelte.ts")
     patterns = [[s for s in p.split("/") if s] for p in re.findall(r"pattern: '([^']+)'", front)]
-    corpus = "\n".join(read(f) for f in glob.glob(f"{ROOT}/frontend/src/**/*.svelte", recursive=True))
+    corpus = "\n".join(
+        read(f)
+        for ext in ("svelte", "ts")
+        for f in glob.glob(f"{ROOT}/frontend/src/**/*.{ext}", recursive=True)
+    )
 
     def named(lit):
         return re.search(r"""['"`/]""" + re.escape(lit) + r"""['"`]""", corpus) is not None
@@ -103,10 +107,20 @@ def web():
                 return True
         return False
 
+    # Routes the backend answers itself: downloads, avatars, icons and /canvas/api.
+    served = set()
+    for f in glob.glob(f"{ROOT}/crates/coolify-api/src/**/*.rs", recursive=True):
+        text = read(f)
+        for path in re.findall(r"""\.route\(\s*"(/[^"]*)\"""", text):
+            served.add(re.sub(r"\{[^}]+\}", "{}", path).rstrip("/"))
+        if f.endswith("ui_canvas.rs"):
+            for path in re.findall(r"""\(\s*"(?:GET|POST|PATCH)",\s*"([^"]+)",?\s*\)""", text):
+                served.add("/canvas/api/" + re.sub(r"\{[^}]+\}", "{}", path))
+
     out = []
     for r in web_routes():
         norm = "/" + re.sub(r"\{[^}]+\}", "{}", r).strip("/")
-        out.append((norm, covered([s for s in norm.split("/") if s])))
+        out.append((norm, norm in served or covered([s for s in norm.split("/") if s])))
     return out
 
 

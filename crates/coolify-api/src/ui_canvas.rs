@@ -180,6 +180,11 @@ pub fn routes(state: AppState) -> Router<AppState> {
     let shells = Router::new()
         .route("/ui/canvas/shell", get(shell))
         .route("/ui/canvas/deploy", get(deploy_shell))
+        .route(
+            "/ui/projects/{uuid}/icon",
+            post(upload_project_icon).delete(remove_project_icon),
+        )
+        .route("/project/{uuid}/icon", get(project_icon))
         .route_layer(from_fn_with_state(state, crate::session::ui_guard));
     canvas.merge(shells)
 }
@@ -1085,6 +1090,94 @@ async fn deploy_shell(Extension(ctx): Extension<AuthCtx>) -> ApiResult {
         "service_logos": logos,
     }))
     .into_response())
+}
+
+/// `ProjectIconController`.
+async fn project_icon(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    let project = db::project_by_uuid(&state.db, ctx.team_id, &uuid)
+        .await?
+        .ok_or(ApiError::Message(StatusCode::NOT_FOUND, "Not Found"))?;
+    let local = matches!(
+        project.get("icon_storage_type").and_then(Value::as_str),
+        None | Some("local")
+    );
+    crate::ui_teams::image_response(project.get("icon_path").and_then(Value::as_str), local).await
+}
+
+/// `Project\Edit::uploadIcon`, `ProjectIconStorageService::storeProject`.
+async fn upload_project_icon(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+    body: Bytes,
+) -> ApiResult {
+    let project = db::project_by_uuid(&state.db, ctx.team_id, &uuid)
+        .await?
+        .ok_or(ApiError::Message(
+            StatusCode::NOT_FOUND,
+            "Project not found.",
+        ))?;
+    if !ctx.is_team_admin() {
+        return Ok(crate::ui_notifications::unauthorized());
+    }
+    let contents = match crate::ui_teams::prepare_avatar(&body) {
+        Ok(c) => c,
+        Err(errors) => {
+            let m = errors.join(" ").replace("avatar", "icon");
+            return Ok(message(StatusCode::UNPROCESSABLE_ENTITY, &m));
+        }
+    };
+    // The uuid is a path segment, so it must not leave the project-icons directory.
+    if uuid.is_empty()
+        || !uuid
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return Ok(message(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Unable to store the project icon: the project UUID is not valid.",
+        ));
+    }
+    let path = format!("project-icons/{uuid}/icon.jpg");
+    if crate::ui_teams::write_image(&path, &contents)
+        .await
+        .is_err()
+    {
+        return Ok(message(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Unable to store the project icon.",
+        ));
+    }
+    db::set_project_icon(&state.db, int(&project, "id"), Some(&path), state.now()).await?;
+    Ok(ok(json!({"message": "Project icon updated."})).into_response())
+}
+
+/// `Project\Edit::removeIcon`, `ProjectIconStorageService::deleteProject`.
+async fn remove_project_icon(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    let project = db::project_by_uuid(&state.db, ctx.team_id, &uuid)
+        .await?
+        .ok_or(ApiError::Message(
+            StatusCode::NOT_FOUND,
+            "Project not found.",
+        ))?;
+    if !ctx.is_team_admin() {
+        return Ok(crate::ui_notifications::unauthorized());
+    }
+    if let Some(path) = project.get("icon_path").and_then(Value::as_str) {
+        if !path.contains("..") {
+            let _ = tokio::fs::remove_file(crate::ui_teams::images_dir().join(path)).await;
+        }
+    }
+    db::set_project_icon(&state.db, int(&project, "id"), None, state.now()).await?;
+    Ok(ok(json!({"message": "Project icon removed."})).into_response())
 }
 
 #[cfg(test)]

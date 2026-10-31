@@ -10,7 +10,7 @@
   const context = $derived(dashboardContext(router.path));
   // Pages inside a project (its environments and their resources) show the switchers they set.
   const inProject = (name: string) =>
-    ['project', 'environment', 'resource', 'database', 'application', 'service', 'destination', 'source-'].some((prefix) => name.startsWith(prefix));
+    ['project', 'environment', 'resource', 'database', 'application', 'service', 'destination', 'source-', 'canvas-project', 'canvas-environment'].some((prefix) => name.startsWith(prefix));
   const switchers = $derived(inProject(router.current.name) ? page.switchers : []);
 
   // Hide the section name when the page heading right below already says it.

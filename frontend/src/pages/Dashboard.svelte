@@ -91,7 +91,7 @@
                   <article class={card}>
                     <a href={navigateTo(p)} use:link class="absolute inset-0 rounded-xl" aria-label="Open {p.name}"></a>
                     <div class="flex min-w-0 items-start gap-3">
-                      <div class={glyph}><Reicon name="projects" class="size-4" /></div>
+                      <div class={glyph}>{#if p.icon_url}<img src={p.icon_url} alt="{p.name} icon" class="h-full w-full rounded-lg object-cover" />{:else}<Reicon name="projects" class="size-4" />{/if}</div>
                       <div class="min-w-0 flex-1 self-center">
                         <h3 class="truncate text-[13px]! leading-4! font-semibold! text-black dark:text-fg">{p.name}</h3>
                         {#if p.description}
@@ -124,7 +124,7 @@
                   <div class="relative grid {projectCols} {tableRow}">
                     <a href={navigateTo(p)} use:link class="absolute inset-0" aria-label="Open {p.name}"></a>
                     <div class="flex min-w-0 items-center gap-3">
-                      <div class={glyph}><Reicon name="projects" class="size-4" /></div>
+                      <div class={glyph}>{#if p.icon_url}<img src={p.icon_url} alt="{p.name} icon" class="h-full w-full rounded-lg object-cover" />{:else}<Reicon name="projects" class="size-4" />{/if}</div>
                       <p class="truncate text-[13px] font-semibold text-black dark:text-fg">{p.name}</p>
                     </div>
                     <div class="relative z-10 flex w-fit items-center gap-3 font-medium text-neutral-600 dark:text-fg-dim">
