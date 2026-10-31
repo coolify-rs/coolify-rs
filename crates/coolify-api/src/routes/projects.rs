@@ -116,15 +116,36 @@ pub async fn environment_details(
 ) -> ApiResult {
     let project = find_project(&state, &ctx, &uuid).await?;
     let env = find_env(&state, &project, &env).await?;
-    // Serializing applications, databases and services (with their sensitive
-    // field rules) belongs to later slices; refuse rather than return partial data.
-    if !projects::environment_is_empty(&state.db, env.id).await? {
-        return Err(ApiError::NotPorted);
-    }
     let mut record = projects::environment_record(&state.db, env.id).await?;
     for rel in DETAIL_RELATIONS {
         record.insert((*rel).to_string(), Value::Array(vec![]));
     }
+    // `exposeSensitiveFields()`: the models themselves, so the `id` stays.
+    let apps = coolify_db::applications::list_for_environment(&state.db, env.id).await?;
+    let mut items = Vec::with_capacity(apps.len());
+    for a in &apps {
+        items.push(super::applications::present_as(&state, &ctx, a, false, true).await?);
+    }
+    record.insert("applications".into(), Value::Array(items));
+    for d in coolify_db::databases::list_for_environment(&state.db, env.id).await? {
+        let rel = match d.kind {
+            coolify_db::databases::Kind::Postgresql => "postgresqls",
+            coolify_db::databases::Kind::Redis => "redis",
+            coolify_db::databases::Kind::Mongodb => "mongodbs",
+            coolify_db::databases::Kind::Mysql => "mysqls",
+            coolify_db::databases::Kind::Mariadb => "mariadbs",
+            _ => continue,
+        };
+        let v = super::databases::present_as(&state, &ctx, &d, false, None, true).await?;
+        if let Some(Value::Array(list)) = record.get_mut(rel) {
+            list.push(v);
+        }
+    }
+    let mut items = Vec::new();
+    for s in coolify_db::services::list_for_environment(&state.db, env.id).await? {
+        items.push(super::services::present_for_environment(&state, &ctx, &s).await?);
+    }
+    record.insert("services".into(), Value::Array(items));
     Ok(ok(Value::Object(serialize_record(record))).into_response())
 }
 

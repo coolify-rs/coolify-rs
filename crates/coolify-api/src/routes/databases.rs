@@ -209,6 +209,18 @@ pub(crate) async fn present(
     with_environment: bool,
     backup_configs: Option<Value>,
 ) -> Result<Value, ApiError> {
+    present_as(state, ctx, d, with_environment, backup_configs, false).await
+}
+
+/// `model`: the plain Eloquent model of `environment_details`, nothing hidden by the controller.
+pub(crate) async fn present_as(
+    state: &AppState,
+    ctx: &AuthCtx,
+    d: &DatabaseRow,
+    with_environment: bool,
+    backup_configs: Option<Value>,
+    model: bool,
+) -> Result<Value, ApiError> {
     let server = match d.server_id() {
         Some(id) => servers::find_by_id(&state.db, id).await?,
         None => None,
@@ -255,7 +267,12 @@ pub(crate) async fn present(
     if let Some(dest) = &d.destination {
         let mut dest = dest.clone();
         if let Some(s) = &server {
-            dest.insert("server".into(), nested_server(state, ctx, s)?);
+            let nested = if model {
+                nested_server_with(state, s, false, ctx.can_read_sensitive)?
+            } else {
+                nested_server(state, ctx, s)?
+            };
+            dest.insert("server".into(), nested);
         }
         r.insert("destination".into(), Value::Object(dest));
     }
@@ -268,6 +285,28 @@ pub(crate) async fn present(
     }
     if let Some(b) = backup_configs {
         r.insert("backup_configs".into(), b);
+    }
+    if model {
+        r.shift_remove("laravel_through_key");
+        if !ctx.can_read_sensitive {
+            return Ok(Value::Object(r));
+        }
+        // `makeVisible($model->getHidden())`: every hidden column, in the order of the table.
+        let mut out = Record::new();
+        for (k, raw) in &d.raw {
+            if k == "laravel_through_key" {
+                continue;
+            }
+            let v = r.shift_remove(k).unwrap_or_else(|| raw.clone());
+            out.insert(k.clone(), v);
+        }
+        for k in ["internal_db_url", "external_db_url"] {
+            if let Some(v) = r.shift_remove(k) {
+                out.insert(k.into(), v);
+            }
+        }
+        out.extend(r);
+        return Ok(Value::Object(out));
     }
     for hidden in ["id", "laravel_through_key"] {
         r.shift_remove(hidden);

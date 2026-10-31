@@ -72,6 +72,18 @@ pub(crate) async fn present(
     a: &ApplicationRow,
     show: bool,
 ) -> Result<Value, ApiError> {
+    present_as(state, ctx, a, show, false).await
+}
+
+/// `model`: a plain Eloquent model through `exposeSensitiveFields()` (`environment_details`),
+/// not `removeSensitiveData()`, so the `id` and `private_key_id` stay and every hidden field opens.
+pub(crate) async fn present_as(
+    state: &AppState,
+    ctx: &AuthCtx,
+    a: &ApplicationRow,
+    show: bool,
+    model: bool,
+) -> Result<Value, ApiError> {
     let server = match a.server_id() {
         Some(id) => servers::find_by_id(&state.db, id).await?,
         None => None,
@@ -79,7 +91,7 @@ pub(crate) async fn present(
     let mut r = APPLICATION.present(a.raw.clone());
     for h in HIDDEN {
         let visible = ctx.can_read_sensitive
-            && !matches!(*h, "domain_dns_statuses" | "domain_port_overrides");
+            && (model || !matches!(*h, "domain_dns_statuses" | "domain_port_overrides"));
         if !visible {
             r.shift_remove(*h);
         } else if ENCRYPTED.contains(h)
@@ -90,10 +102,12 @@ pub(crate) async fn present(
             r.insert((*h).into(), Value::String(plain));
         }
     }
-    if !ctx.can_read_sensitive {
-        r.shift_remove("private_key_id");
+    if !model {
+        if !ctx.can_read_sensitive {
+            r.shift_remove("private_key_id");
+        }
+        r.shift_remove("id");
     }
-    r.shift_remove("id");
     // Accessors and casts.
     r.insert(
         "status".into(),
@@ -124,7 +138,12 @@ pub(crate) async fn present(
     if let Some(dest) = &a.destination {
         let mut dest = dest.clone();
         if let Some(s) = &server {
-            dest.insert("server".into(), nested_server(state, ctx, s)?);
+            let nested = if model {
+                super::databases::nested_server_with(state, s, false, ctx.can_read_sensitive)?
+            } else {
+                nested_server(state, ctx, s)?
+            };
+            dest.insert("server".into(), nested);
         }
         r.insert("destination".into(), Value::Object(dest));
     }
@@ -139,6 +158,9 @@ pub(crate) async fn present(
             settings.shift_remove(k);
         }
         r.insert("settings".into(), Value::Object(settings));
+    }
+    if model {
+        return Ok(Value::Object(r));
     }
     Ok(Value::Object(serialize_record(r)))
 }

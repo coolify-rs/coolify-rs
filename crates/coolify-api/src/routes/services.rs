@@ -215,15 +215,36 @@ pub(crate) fn url_attribute(sub: &SubRow) -> Value {
 }
 
 /// `removeSensitiveData($service)`.
+/// A service as a relation of `environment_details`.
+pub(crate) async fn present_for_environment(
+    state: &AppState,
+    ctx: &AuthCtx,
+    s: &ServiceRow,
+) -> Result<Value, ApiError> {
+    present_service_as(state, ctx, s, false, true).await
+}
+
 async fn present_service(
     state: &AppState,
     ctx: &AuthCtx,
     s: &ServiceRow,
     with_environment: bool,
 ) -> Result<Value, ApiError> {
+    present_service_as(state, ctx, s, with_environment, false).await
+}
+
+async fn present_service_as(
+    state: &AppState,
+    ctx: &AuthCtx,
+    s: &ServiceRow,
+    with_environment: bool,
+    model: bool,
+) -> Result<Value, ApiError> {
     let server = server_of(state, s).await?;
     let mut r = SERVICE.present(s.raw.clone());
-    r.shift_remove("id");
+    if !model {
+        r.shift_remove("id");
+    }
     if !ctx.can_read_sensitive {
         r.shift_remove("docker_compose");
         r.shift_remove("docker_compose_raw");
@@ -271,6 +292,9 @@ async fn present_service(
         let mut env = s.environment.clone();
         env.insert("project".into(), Value::Object(project));
         r.insert("environment".into(), Value::Object(env));
+    }
+    if model {
+        return Ok(Value::Object(r));
     }
     if ctx.can_read_sensitive
         && let Some(mut dest) = svc::destination_record(&state.db, s).await?
