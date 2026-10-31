@@ -22,7 +22,6 @@ rand_core.workspace = true
 sha1.workspace = true
 sqlx.workspace = true
 md-5.workspace = true
-p521 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
 rand.workspace = true
 regex.workspace = true
 reqwest.workspace = true

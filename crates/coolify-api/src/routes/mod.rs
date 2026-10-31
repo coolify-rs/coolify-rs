@@ -59,7 +59,6 @@ const RS: &[&[Ability]] = &[&[ReadSensitive]];
 const W: &[&[Ability]] = &[&[Write]];
 const NONE: &[&[Ability]] = &[];
 /// `api.ability:read:sensitive`.
-const RS: &[&[Ability]] = &[&[Ability::ReadSensitive]];
 /// `api.ability:deploy`.
 const D: &[&[Ability]] = &[&[Deploy]];
 /// `api.ability:write` then `api.ability:deploy`.
