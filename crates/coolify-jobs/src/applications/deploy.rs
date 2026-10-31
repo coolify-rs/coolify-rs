@@ -728,7 +728,7 @@ impl Jobs {
             run.failed(&Fail::new("Server is not functional.")).await;
             return;
         }
-        let result = run.deploy().await;
+        let result = Box::pin(run.deploy()).await;
         if let Err(e) = &result {
             run.failed(e).await;
         }
@@ -1143,6 +1143,20 @@ impl Run {
         self.run_pre_deployment_command().await
     }
 
+    /// `generateLabelsApplication($this->application, $this->preview)`.
+    fn generated_labels(&self, server: &servers::ServerRow) -> Result<Vec<String>, Fail> {
+        let enc = self
+            .jobs
+            .0
+            .encrypter
+            .as_ref()
+            .ok_or_else(|| Fail::new("No application encryption key has been specified."))?;
+        let input = LabelInput::new(&self.app, server)
+            .with_basic_auth(&self.app, server, enc)
+            .map_err(Fail::new)?;
+        Ok(labels::application(&input))
+    }
+
     /// `generate_compose_file()`.
     async fn generate_compose_file(&mut self, image: &str) -> Step {
         self.check_cancelled().await?;
@@ -1158,9 +1172,7 @@ impl Run {
             Some(text) => {
                 let text = match text {
                     Ok(t) => t,
-                    Err(()) => {
-                        labels::application(&LabelInput::new(&self.app, &server_row)).join("\n")
-                    }
+                    Err(()) => self.generated_labels(&server_row)?.join("\n"),
                 };
                 // parseContainerLabels() saves the base64 form; `coolify.` lines are dropped.
                 let kept: Vec<String> = text
@@ -1183,7 +1195,7 @@ impl Run {
                 kept
             }
             None if self.app.setting_bool("is_container_label_readonly_enabled") => {
-                labels::application(&LabelInput::new(&self.app, &server_row))
+                self.generated_labels(&server_row)?
             }
             None => return Err(Fail::new("Undefined variable $labels")),
         };

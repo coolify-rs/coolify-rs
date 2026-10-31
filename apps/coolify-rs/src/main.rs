@@ -240,8 +240,17 @@ async fn shutdown_signal() {
     tracing::info!("shutdown signal received, draining connections");
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // The deployment job is a deep chain of large futures; an unoptimized build overflows the
+    // default 2 MiB worker stack while polling it.
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(16 * 1024 * 1024)
+        .build()?
+        .block_on(run())
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::from_env()?;
     init_tracing(cfg.json_logs);
