@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   // Port of upstream resources/views/source/all.blade.php.
   import Empty from '../components/Empty.svelte';
   import GitIcon from '../components/GitIcon.svelte';
@@ -26,7 +27,8 @@
       .then((d) => (data = d))
       .catch((e) => notify.failure(e instanceof ApiError ? e.message : String(e)));
     const flash = router.query('error');
-    if (flash) notify.failure(flash);
+    // `session('error')`, once: the toast list must not become a dependency of this effect.
+    if (flash) untrack(() => notify.failure(flash));
   });
 
   const label = (s: SourceRow) => (s.is_connected ? 'Connected' : 'Setup incomplete');

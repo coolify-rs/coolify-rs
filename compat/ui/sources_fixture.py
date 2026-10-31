@@ -30,9 +30,9 @@ $g2 = $g(['name' => '{PREFIX}-noinstall', 'app_id' => 4242, 'private_key_id' => 
 $g3 = $g(['name' => '{PREFIX}-connected', 'app_id' => 4242, 'installation_id' => 99, 'private_key_id' => $k->id, 'client_id' => 'cid', 'client_secret' => 's', 'webhook_secret' => 'w', 'contents' => 'read', 'metadata' => 'read', 'pull_requests' => 'write', 'webhook_events' => ['push', 'pull_request']]);
 $o = ['team_id' => $t, 'custom_user' => 'git', 'custom_port' => 22];
 $l1 = App\\Models\\GitlabApp::create($o + ['name' => '{PREFIX}-gl-new', 'html_url' => '{fake}/gl', 'api_url' => '{fake}/gitlab/api/v4', 'webhook_token' => 'tok', 'client_id' => 'appid', 'client_secret' => 'sec', 'redirect_uri' => 'http://192.0.2.10:8000/webhooks/source/gitlab/redirect']);
-$l2 = App\\Models\\GitlabApp::create($o + ['name' => '{PREFIX}-gl-on', 'html_url' => '{fake}/gl', 'api_url' => '{fake}/gitlab/api/v4', 'webhook_token' => 'tok', 'client_id' => 'appid', 'client_secret' => 'sec', 'access_token' => 'a', 'refresh_token' => 'r', 'expires_at' => time() + 9000, 'group_name' => 'acme']);
+$l2 = App\\Models\\GitlabApp::create($o + ['name' => '{PREFIX}-gl-on', 'html_url' => '{fake}/gl', 'api_url' => '{fake}/gitlab/api/v4', 'webhook_token' => 'tok', 'client_id' => 'appid', 'client_secret' => 'sec', 'access_token' => 'a', 'refresh_token' => 'r', 'expires_at' => time() + 9000, 'group_name' => 'o']);
 $e1 = App\\Models\\GiteaApp::create($o + ['name' => '{PREFIX}-gt-new', 'html_url' => '{fake}/gt', 'api_url' => '{fake}/gitea/api/v1', 'webhook_secret' => 'wh']);
-$e2 = App\\Models\\GiteaApp::create($o + ['name' => '{PREFIX}-gt-on', 'html_url' => '{fake}/gt', 'api_url' => '{fake}/gitea/api/v1', 'webhook_secret' => 'wh', 'client_id' => 'cid', 'client_secret' => 'sec', 'access_token' => 'a', 'refresh_token' => 'r', 'expires_at' => time() + 9000, 'organization' => 'acme']);
+$e2 = App\\Models\\GiteaApp::create($o + ['name' => '{PREFIX}-gt-on', 'html_url' => '{fake}/gt', 'api_url' => '{fake}/gitea/api/v1', 'webhook_secret' => 'wh', 'client_id' => 'cid', 'client_secret' => 'sec', 'access_token' => 'a', 'refresh_token' => 'r', 'expires_at' => time() + 9000, 'organization' => 'o']);
 foreach (['g1' => $g1, 'g2' => $g2, 'g3' => $g3, 'l1' => $l1, 'l2' => $l2, 'e1' => $e1, 'e2' => $e2] as $n => $m) {{ echo $n.'='.$m->uuid.PHP_EOL; }}
 """))
 

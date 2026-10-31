@@ -3,7 +3,7 @@
 //   node private_forms.mjs --rs=18085 --dest=<destination uuid> [--only=github,gitlab]
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { chromium } from 'playwright';
+import { chromium } from 'playwright-core';
 
 const args = process.argv.slice(2);
 const opt = (k, d) => (args.find((a) => a.startsWith(`--${k}=`)) ?? `=${d}`).split('=')[1];
@@ -50,8 +50,8 @@ async function deployKeyForm(page, base, name) {
   await dismiss(page);
   await page.locator('button:has-text("uisrc-key")').first().click();
   await page.waitForTimeout(600);
-  await page.fill('#repository_url', 'git@192.0.2.5:o/r.git');
-  await page.fill('#branch', 'main');
+  await page.fill('input[placeholder^="git@github.com"]', 'git@192.0.2.5:o/r.git');
+  await page.fill('input#branch, input[wire\\:model="branch"]', 'main');
   await page.screenshot({ path: `${out}${name}-form.png`, fullPage: true });
   await page.locator('button:has-text("Continue")').first().click();
 }
@@ -109,7 +109,7 @@ for (const [name, run] of cases.filter(([n]) => !only.length || only.includes(n)
       rows[label] = { error: String(e).slice(0, 300) };
     }
   }
-  const same = JSON.stringify(rows.ref) === JSON.stringify(rows.rs);
+  const same = !rows.ref?.error && !rows.rs?.error && JSON.stringify(rows.ref) === JSON.stringify(rows.rs);
   console.log(`${same ? 'PASS' : 'FAIL'} ${name}`);
   if (!same) {
     failed++;

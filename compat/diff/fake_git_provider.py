@@ -117,6 +117,8 @@ class Handler(BaseHTTPRequestHandler):
     def git(self, path, query):
         """Smart HTTP through `git http-backend`."""
         ensure_repo()
+        # Every repository of the fake serves the same content.
+        path = "/r.git/" + path.split("/", 2)[2] if path.count("/") >= 2 else path
         env = dict(os.environ, GIT_PROJECT_ROOT=REPO_DIR, GIT_HTTP_EXPORT_ALL="1", PATH_INFO=path,
                    QUERY_STRING=query, REQUEST_METHOD=self.command,
                    CONTENT_TYPE=self.headers.get("Content-Type", ""), REMOTE_USER="fake",
@@ -145,6 +147,8 @@ class Handler(BaseHTTPRequestHandler):
     def handle_any(self):
         parts = urlsplit(self.path)
         path, query = parts.path, parts.query
+        if self.browser_pages(path, parse_qs(query)):
+            return None
         for prefix in ("/gh/", "/gl/", "/gt/"):
             if path.startswith(prefix):
                 # /gh/o/r.git/info/refs -> /r.git/info/refs
@@ -178,6 +182,8 @@ class Handler(BaseHTTPRequestHandler):
                 "auth": (self.headers.get("Authorization") or "").split(" ")[0],
                 "accept": self.headers.get("Accept"),
             })
+        if path.startswith("/api/v3"):
+            return self.github(path[len("/api/v3"):], q, data)
         if path.startswith("/github"):
             return self.github(path[len("/github"):], q, data)
         if path.startswith("/gitlab"):
@@ -187,6 +193,37 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(404, {"message": "Not Found"})
 
     do_GET = do_POST = do_PATCH = do_PUT = do_DELETE = handle_any
+
+    def redirect(self, to):
+        self.send_response(302)
+        self.send_header("Location", to)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def browser_pages(self, path, q):
+        """What a browser visits at the provider: registering and installing an App, OAuth."""
+        one = lambda k: q.get(k, [""])[0]
+        if path.endswith("/settings/apps/new") and self.command == "POST":
+            form = parse_qs(self.body().decode())
+            manifest = json.loads(form["manifest"][0])
+            STATE["manifest"] = manifest
+            self.redirect(f"{manifest['redirect_url']}?code=fake-code&state={one('state')}")
+            return True
+        if path.endswith("/installations/new"):
+            setup = STATE["manifest"]["setup_url"]
+            self.redirect(f"{setup}?installation_id=99&setup_action=install&state={one('state')}")
+            return True
+        if path.endswith("/oauth/token") or path.endswith("/login/oauth/access_token"):
+            self.body()
+            with LOCK:
+                LOG.append({"method": self.command, "path": path, "query": {}, "json": None, "form": [], "auth": "", "accept": None})
+            self.tokens()
+            return True
+        if path.endswith("/oauth/authorize"):
+            if one("state") and one("redirect_uri"):
+                self.redirect(f"{one('redirect_uri')}?code=fake-code&state={one('state')}")
+                return True
+        return False
 
     def github(self, p, q, data):
         m = self.command
@@ -291,8 +328,14 @@ if __name__ == "__main__":
     REPO_DIR = args.repo_dir
     ensure_repo()
     # Port 80 too when it is free: upstream's GitHub App clone URL has no port.
+    class Shared(ThreadingHTTPServer):
+        def server_bind(self):
+            import socket
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            super().server_bind()
+
     try:
-        threading.Thread(target=ThreadingHTTPServer(("0.0.0.0", 80), Handler).serve_forever, daemon=True).start()
-    except OSError:
-        pass
+        threading.Thread(target=Shared(("0.0.0.0", 80), Handler).serve_forever, daemon=True).start()
+    except OSError as e:
+        print("port 80 is not available:", e, flush=True)
     ThreadingHTTPServer(("0.0.0.0", args.port), Handler).serve_forever()

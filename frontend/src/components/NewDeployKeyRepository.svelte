@@ -16,7 +16,7 @@
   let keyId = $state<number | null>(null);
   let repositoryUrl = $state('');
   let branch = $state('');
-  let baseDirectory = $state('/');
+  let baseDirectory = $state('');
   let submitting = $state(false);
   let errors = $state<Record<string, string[]>>({});
   let config: PrivateBuildConfig | undefined = $state();
@@ -34,7 +34,7 @@
       private_key_id: keyId,
       repository: repositoryUrl,
       git_branch: branch || 'main',
-      base_directory: baseDirectory,
+      base_directory: baseDirectory || '/',
       destination_uuid: destination,
     });
   }

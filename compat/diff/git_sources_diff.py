@@ -2,7 +2,7 @@
 """Differential check of the git source API: `/github-apps` and `/gitlab-apps`.
 
 Needs the reference, a coolify-rs instance (COOLIFY_RS_BASE) and compat/diff/fake_git_provider.py
-running on FAKE_BASE (default http://192.168.86.22:18990), reachable from the reference container.
+running on FAKE_BASE (a host address all sides reach, e.g. http://<en0 address>:18990), reachable from the reference container.
 Provider answers come from that fake, not from GitHub or GitLab. Temporarily allows the fake in
 `webhook_allowed_internal_hosts` and restores the setting at the end. Everything it creates is
 deleted. Exit status 1 when anything differs.
@@ -27,7 +27,7 @@ def call(side, method, path, body=None, tok="acme_owner_write"):
         return st, raw.decode(errors="replace")
 
 
-FAKE = os.environ.get("FAKE_BASE", "http://192.168.86.22:18990")
+FAKE = os.environ["FAKE_BASE"]
 FAKE_HOST = urllib.parse.urlsplit(FAKE).hostname
 GH = {"html_url": f"{FAKE}/gh", "api_url": f"{FAKE}/github"}
 GL = {"html_url": f"{FAKE}/gl", "api_url": f"{FAKE}/gitlab/api/v4"}

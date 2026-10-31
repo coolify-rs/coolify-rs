@@ -25,6 +25,7 @@
     onscan,
     branchLabel = 'Branch',
     deployKey = false,
+    smart = true,
     head,
   }: {
     title?: string;
@@ -41,6 +42,8 @@
     branchLabel?: string;
     /** The field order and required marks of github-private-repository-deploy-key.blade.php. */
     deployKey?: boolean;
+    /** GitLab and Gitea forms have no Smart Scan. */
+    smart?: boolean;
     head?: Snippet;
   } = $props();
 
@@ -363,7 +366,7 @@
     </div>
     <div class="application-settings-section-body space-y-5">
       {@render head?.()}
-      {#if !deployKey}
+      {#if !deployKey && smart}
         {@render smartScan()}
       {/if}
 
@@ -413,7 +416,9 @@
         {@render smartScan()}
         {@render dockerfilePickers()}
       {:else}
-        {@render dockerfilePickers()}
+        {#if smart}
+          {@render dockerfilePickers()}
+        {/if}
         {@render paths()}
       {/if}
 

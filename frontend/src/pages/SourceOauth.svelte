@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   // Port of upstream livewire/source/{gitlab,gitea}/change.blade.php
   // (+ Source\Gitlab\Change, Source\Gitea\Change).
   import Callout from '../components/Callout.svelte';
@@ -120,7 +121,8 @@
   $effect(() => {
     load().catch((e) => notify.failure(e instanceof ApiError ? e.message : String(e)));
     const flash = router.query('error');
-    if (flash) notify.failure(flash);
+    // `session('error')`, once: the toast list must not become a dependency of this effect.
+    if (flash) untrack(() => notify.failure(flash));
   });
 
   /** `persistRedirectUriFromEndpoint()`. */

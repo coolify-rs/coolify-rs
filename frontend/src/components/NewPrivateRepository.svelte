@@ -86,7 +86,7 @@
       branches = r.branches.map((b) => b.name);
       const preferred = selected.default_branch ?? 'main';
       branch = branches.includes(preferred) ? preferred : (branches[0] ?? 'main');
-      queueMicrotask(() => config?.detect());
+      if (provider === 'github') queueMicrotask(() => config?.detect());
     } catch (e) {
       notify.failure(e instanceof ApiError ? e.message : String(e));
     } finally {
@@ -230,13 +230,13 @@
               <button type="button" class="button" disabled={loadingBranches} onclick={loadBranches}>Load repository</button>
             </div>
           {:else}
-            <Empty size="sm" title="No repositories available" description="Review this {name_} App installation and grant access to a repository." />
+            <Empty size="sm" title="No repositories available" description={provider === 'github' ? 'Review this GitHub App installation and grant access to a repository.' : `Review this ${name_} App configuration and grant access to a repository.`} />
           {/if}
         </div>
       </section>
 
       {#if branches.length > 0}
-        <PrivateBuildConfig bind:this={config} {submitting} bind:branch bind:baseDirectory {branches} onsubmit={submit} onscan={scan} />
+        <PrivateBuildConfig bind:this={config} smart={provider === 'github'} {submitting} bind:branch bind:baseDirectory {branches} onsubmit={submit} onscan={scan} />
       {/if}
     {/if}
   </div>

@@ -866,7 +866,11 @@ pub async fn create_dockerfile(
         return Err(ApiError::Unauthorized);
     }
     let m = body(&bytes);
-    let dockerfile = s(&m, "dockerfile");
+    let dockerfile = m
+        .get("dockerfile")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
     if dockerfile.trim().is_empty() {
         return invalid(vec![(
             "dockerfile",
@@ -902,7 +906,7 @@ pub async fn create_dockerfile(
         ("build_pack", ColumnValue::Text(Some("dockerfile".into()))),
         (
             "dockerfile",
-            ColumnValue::Text(Some(dockerfile.trim().to_owned())),
+            ColumnValue::Text(Some(dockerfile.clone())),
         ),
         ("ports_exposes", ColumnValue::Text(Some(port.to_string()))),
         ("health_check_enabled", ColumnValue::Bool(false)),
@@ -912,10 +916,7 @@ pub async fn create_dockerfile(
             ColumnValue::Text(Some(r"App\Models\GithubApp".into())),
         ),
         ("base_directory", ColumnValue::Text(Some("/".into()))),
-        (
-            "publish_directory",
-            ColumnValue::Text(Some(publish_directory_value(None))),
-        ),
+        ("publish_directory", ColumnValue::Text(None)),
     ];
     for k in [
         "manual_webhook_secret_github",

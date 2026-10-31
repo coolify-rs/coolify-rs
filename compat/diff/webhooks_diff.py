@@ -24,7 +24,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from databases_diff import BASES, record, results, sql  # noqa: E402
 
-FAKE = os.environ.get("FAKE_BASE", "http://192.168.86.22:18990")
+FAKE = os.environ["FAKE_BASE"]
 PROJECT = "j8xm2emlllhfnyebjzgyzp7z"
 ENV = "uj3st9yvtvzxh7rul3c3opcz"
 PREFIX = "whdiff"
