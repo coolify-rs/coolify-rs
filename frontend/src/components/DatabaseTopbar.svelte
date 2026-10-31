@@ -14,8 +14,10 @@
     healthcheckUrl,
     restartLimit = null,
     statusTitle = 'Database status',
+    containerName = 'Container',
   }: {
     statusTitle?: string;
+    containerName?: string;
     label: string;
     items: { label: string; href: string; active: boolean }[];
     status: string;
@@ -59,7 +61,7 @@
       </button>
       <!-- Below xl, the page heading shows the status. -->
       <div class="hidden xl:flex">
-        <DatabaseStatusSummary {status} {healthcheckUrl} {restartLimit} title={statusTitle} />
+        <DatabaseStatusSummary {status} {healthcheckUrl} {restartLimit} title={statusTitle} {containerName} />
       </div>
     </div>
 

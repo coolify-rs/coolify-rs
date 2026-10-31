@@ -17,7 +17,7 @@ const NON_TRANSIENT: &[&str] = &[
 ];
 
 /// `database_proxy_dir($uuid)`.
-fn proxy_dir(uuid: &str) -> String {
+pub(crate) fn proxy_dir(uuid: &str) -> String {
     format!("{CONFIGURATION_DIR}/{uuid}/proxy")
 }
 

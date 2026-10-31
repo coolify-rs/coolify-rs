@@ -9,6 +9,7 @@
   import Pager from '../components/Pager.svelte';
   import ViewToggle from '../components/ViewToggle.svelte';
   import ResourceLogo from '../components/ResourceLogo.svelte';
+  import type { ServiceListItem } from '../lib/servicesApi';
   import ResourceStatus, { statusLabel, statusState } from '../components/ResourceStatus.svelte';
   import { uiApi, dbUi, ApiError, type ProjectPageData, type DatabaseRecord, type ApplicationRecord } from '../lib/api';
   import { link } from '../lib/router.svelte';
@@ -23,7 +24,7 @@
 
   // The environment's resources: null while loading, 'unavailable' when the
   // read model is not there (the page then says resources cannot be shown).
-  let resources = $state<{ applications?: ApplicationRecord[]; databases: DatabaseRecord[]; unported: number } | 'unavailable' | null>(null);
+  let resources = $state<{ applications?: ApplicationRecord[]; databases: DatabaseRecord[]; services?: ServiceListItem[]; unported: number } | 'unavailable' | null>(null);
 
   $effect(() => {
     uiApi
@@ -59,6 +60,7 @@
     typeLabel: string;
     databaseType: string;
     application: { buildPack: string | null; sourceType: string | null; fqdn: string | null; basicAuth: boolean } | null;
+    service: { logo: { src: string; fallback: string } | null } | null;
     description: string | null;
     status: string;
     restartLimitReached: boolean;
@@ -81,6 +83,7 @@
       typeLabel: 'Database',
       databaseType: db.database_type,
       application: null,
+      service: null,
       description: db.description ?? null,
       status: db.status ?? '',
       restartLimitReached: limitReached,
@@ -108,6 +111,7 @@
         fqdn: app.fqdn ?? null,
         basicAuth: app.is_http_basic_auth_enabled === true,
       },
+      service: null,
       description: app.description ?? null,
       status: app.status ?? '',
       restartLimitReached: limitReached,
@@ -119,8 +123,31 @@
     };
   }
 
+  // `$servicesJs`: services are listed after the applications and databases.
+  function serviceItem(s: ServiceListItem): Item {
+    return {
+      uuid: s.uuid,
+      name: s.name,
+      type: 'service',
+      typeLabel: 'Service',
+      databaseType: '',
+      application: null,
+      service: { logo: s.logo },
+      description: s.description ?? null,
+      status: s.status ?? '',
+      restartLimitReached: false,
+      restartCount: 0,
+      maxRestartCount: 0,
+      hrefLink: `/project/${uuid}/environment/${env}/service/${s.uuid}`,
+      server: s.server || 'Unknown',
+      tags: s.tags ?? [],
+    };
+  }
+
   const items = $derived(
-    resources && resources !== 'unavailable' ? [...(resources.applications ?? []).map(applicationItem), ...resources.databases.map(toItem)] : [],
+    resources && resources !== 'unavailable'
+      ? [...(resources.applications ?? []).map(applicationItem), ...resources.databases.map(toItem), ...(resources.services ?? []).map(serviceItem)]
+      : [],
   );
   const unported = $derived(resources && resources !== 'unavailable' ? resources.unported : 0);
   // Upstream's `$environment->isEmpty()`: the resource list when there is one, else the project's count.
@@ -447,7 +474,7 @@
                     <div
                       class="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-fg-dim"
                     >
-                      <ResourceLogo databaseType={item.databaseType} application={item.application} />
+                      <ResourceLogo databaseType={item.databaseType} application={item.application} service={item.service} />
                     </div>
                     <div class="min-w-0 flex-1">
                       <div class="flex min-w-0 items-center gap-1.5">
@@ -502,7 +529,7 @@
                   <div
                     class="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.035] dark:text-fg-dim"
                   >
-                    <ResourceLogo databaseType={item.databaseType} application={item.application} />
+                    <ResourceLogo databaseType={item.databaseType} application={item.application} service={item.service} />
                   </div>
                   <div class="min-w-0">
                     <div class="flex min-w-0 items-center gap-1.5">

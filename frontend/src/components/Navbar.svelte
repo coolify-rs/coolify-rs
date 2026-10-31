@@ -141,7 +141,7 @@
                       <a class="menu-item {item.active ? 'menu-item-active' : ''}" use:link href={item.href}>
                         <Reicon name={item.icon} class="menu-item-icon" />
                         <span class="menu-item-label">{item.label}</span>
-                        {#if item.warning}<Reicon name="alert-triangle" class="ml-auto size-3.5 shrink-0 text-orange-500 dark:text-warning" />{:else if item.beta}<BetaBadge class="ml-auto shrink-0" />{/if}
+                        {#if item.warningDot}<span class="ml-auto size-2 shrink-0 rounded-full bg-error" title="Required environment variables missing"></span>{:else if item.warning}<Reicon name="alert-triangle" class="ml-auto size-3.5 shrink-0 text-orange-500 dark:text-warning" />{:else if item.beta}<BetaBadge class="ml-auto shrink-0" />{/if}
                       </a>
                       {#if item.active && item.links?.length}
                         <div class="col-span-full grid grid-cols-1 gap-0.5 border-l border-neutral-200 pl-2 dark:border-white/[0.08]">

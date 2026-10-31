@@ -10,7 +10,10 @@
     databaseType = '',
     application = null,
     iconClass = 'size-4',
+    service = null,
   }: {
+    /** For a service: `resource_logo()` of its template, `undefined` when it has none. */
+    service?: { logo: { src: string; fallback: string } | null } | null;
     databaseType?: string;
     /** For an application: its build pack, source type, domains and basic auth flag. */
     application?: { buildPack: string | null; sourceType: string | null; fqdn: string | null; basicAuth: boolean } | null;
@@ -58,7 +61,9 @@
 
   const logo = $derived(application ? applicationLogo(application) : (logos[databaseType.replace(/^standalone-/, '')] ?? null));
   const favicon = $derived(application && !application.basicAuth ? faviconUrl(application.fqdn) : null);
-  const icon = $derived(application ? 'browser-code' : 'database');
+  const icon = $derived(application ? 'browser-code' : service ? 'layers' : 'database');
+  let serviceSrc = $state<string | null>(null);
+  const serviceImage = $derived(service?.logo ? (serviceSrc ?? service.logo.src) : null);
   const url = (name: string) => `/svgs/resources/${name}.svg`;
   let failed = $state(false);
   let faviconLoaded = $state(false);
@@ -66,6 +71,19 @@
 </script>
 
 <span class="contents" data-resource-logo>
+  {#if serviceImage && !failed}
+    <span class="flex size-full items-center justify-center" data-resource-logo-image>
+      <img
+        src={serviceImage}
+        alt=""
+        onerror={() => {
+          if (service?.logo && serviceImage !== service.logo.fallback) serviceSrc = service.logo.fallback;
+          else failed = true;
+        }}
+        class="size-full object-contain p-1"
+      />
+    </span>
+  {/if}
   {#if logo && !failed}
     <span class="flex size-full items-center justify-center" data-resource-logo-image hidden={faviconLoaded}>
       <img src={url(logo[0])} alt="" onerror={() => (failed = true)} class={['size-full object-contain', logo[1] && 'dark:hidden']} />
@@ -85,7 +103,7 @@
       class="size-full object-contain p-1"
     />
   {/if}
-  {#if (!logo || failed) && !faviconLoaded}
+  {#if (service ? !serviceImage || failed : !logo || failed) && !faviconLoaded}
     <Reicon name={icon} class={iconClass} />
   {/if}
 </span>

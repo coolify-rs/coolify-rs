@@ -1490,3 +1490,67 @@ pub async fn public_port_used(
     .fetch_one(db.pool())
     .await?)
 }
+
+// --- pages ------------------------------------------------------------------------------------
+
+/// `Environment::services()`.
+pub async fn list_for_environment(db: &Db, environment_id: i64) -> DbResult<Vec<ServiceRow>> {
+    let rows: Vec<Joined> = sqlx::query_as(&select("s.environment_id = $1"))
+        .bind(environment_id)
+        .fetch_all(db.pool())
+        .await?;
+    rows.iter().map(to_row).collect()
+}
+
+/// `$part->delete()`: the `deleting` hook, then the soft delete.
+pub async fn sub_delete(db: &Db, kind: SubKind, id: i64, now: NaiveDateTime) -> DbResult<()> {
+    db.ensure_writable()?;
+    if matches!(kind, SubKind::Application) {
+        sqlx::query("UPDATE service_applications SET fqdn = NULL, updated_at = $2 WHERE id = $1")
+            .bind(id)
+            .bind(now)
+            .execute(db.pool())
+            .await?;
+    } else {
+        sqlx::query(
+            "DELETE FROM scheduled_database_backups WHERE database_type = $1 AND database_id = $2",
+        )
+        .bind(kind.morph())
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+    }
+    for table in ["local_persistent_volumes", "local_file_volumes"] {
+        sqlx::query(&format!(
+            "DELETE FROM {table} WHERE resource_type = $1 AND resource_id = $2"
+        ))
+        .bind(kind.morph())
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+    }
+    sqlx::query(&format!(
+        "UPDATE {} SET deleted_at = $2, updated_at = $2 WHERE id = $1",
+        kind.table()
+    ))
+    .bind(id)
+    .bind(now)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
+/// `latest_activity` with the id, for the startup log.
+pub async fn latest_activity_with_id(
+    db: &Db,
+    type_uuid: &str,
+) -> DbResult<Option<(i64, Value, String)>> {
+    let row: Option<(i64, Value, String)> = sqlx::query_as(
+        "SELECT id, properties, description FROM activity_log WHERE properties->>'type_uuid' = $1 \
+         ORDER BY created_at DESC, id DESC LIMIT 1",
+    )
+    .bind(type_uuid)
+    .fetch_optional(db.pool())
+    .await?;
+    Ok(row)
+}

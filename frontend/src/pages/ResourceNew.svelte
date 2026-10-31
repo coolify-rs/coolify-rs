@@ -13,6 +13,7 @@
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
   import Callout from '../components/Callout.svelte';
+  import { servicesApi, type ServiceTemplate } from '../lib/servicesApi';
   import Dropdown from '../components/Dropdown.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
   import NewResourceCard from '../components/NewResourceCard.svelte';
@@ -263,12 +264,38 @@
     (resourceType === 'all' || resourceType === 'applications') && filteredGit.length + filteredDocker.length > 0,
   );
   const showDatabases = $derived((resourceType === 'all' || resourceType === 'databases') && filteredDatabases.length > 0);
-  // Service templates are not loaded, so the section only says they are not available.
-  const showServices = $derived((resourceType === 'all' || resourceType === 'services') && search.trim() === '');
+  // `filteredServices`: the templates of `Select::loadServices`, by search and category.
+  let services = $state<ServiceTemplate[]>([]);
+  let categories = $state<string[]>([]);
+  let category = $state('');
+  $effect(() => {
+    servicesApi
+      .templates()
+      .then((r) => {
+        services = r.services;
+        categories = r.categories;
+      })
+      .catch(() => {});
+  });
+  const shownCategories = $derived(categories.filter((c) => c.toLowerCase().includes(categorySearch.trim().toLowerCase())));
+  const filteredServices = $derived(
+    services.filter((s) => {
+      const q = search.trim().toLowerCase();
+      const inSearch =
+        q === '' ||
+        s.name.toLowerCase().includes(q) ||
+        (s.description ?? '').toLowerCase().includes(q) ||
+        (s.slogan ?? '').toLowerCase().includes(q) ||
+        (s.tags ?? []).some((t) => String(t).toLowerCase().includes(q));
+      const inCategory = category === '' || String(s.category ?? '').toLowerCase().includes(category.toLowerCase());
+      return inSearch && inCategory;
+    }),
+  );
+  const showServices = $derived((resourceType === 'all' || resourceType === 'services') && filteredServices.length > 0);
 
   async function setType(type: string) {
     if (selecting) return;
-    if (!portedDatabases.includes(type) && !portedApplications.includes(type)) {
+    if (!type.startsWith('one-click-service-') && !portedDatabases.includes(type) && !portedApplications.includes(type)) {
       notify.info('Not available in coolify-rs yet', 'This resource type cannot be created in coolify-rs yet. Use Coolify for this resource for now.');
       return;
     }
@@ -307,12 +334,29 @@
       step = 'select-postgresql-type';
       return;
     }
+    if (selectedType.startsWith('one-click-service-')) {
+      createService(selectedType);
+      return;
+    }
     // Other databases are created right away (`resource.create` without an image).
     createDatabase(selectedType);
   }
 
   function setPostgresqlType(image: string) {
     createDatabase('postgresql', image);
+  }
+
+  // `Project\\Resource\\Create` for `one-click-service-*`.
+  async function createService(type: string) {
+    if (creating) return;
+    creating = true;
+    try {
+      const r = await servicesApi.create({ project_uuid: uuid, environment_uuid: env, destination_uuid: destinationUuid, type });
+      router.go(`/project/${uuid}/environment/${env}/service/${r.uuid}`);
+    } catch (e) {
+      notify.error(e instanceof ApiError ? e.message : String(e));
+      creating = false;
+    }
   }
 
   async function createDatabase(type: string, image?: string) {
@@ -468,7 +512,7 @@
                   {/snippet}
                 </Dropdown>
 
-                <!-- Service categories come from the templates, which coolify-rs does not load: only "All categories". -->
+                <!-- Service categories come from the templates (`Select::loadServices`). -->
                 <div class="relative w-48" bind:this={categoryRoot}>
                   <button
                     type="button"
@@ -480,9 +524,9 @@
                     aria-haspopup="listbox"
                     aria-controls="resource-category-options"
                     aria-expanded={categoryOpen}
-                    title="All categories"
+                    title={category || 'All categories'}
                   >
-                    <span class="listbox-trigger-label capitalize">All categories</span>
+                    <span class="listbox-trigger-label capitalize">{category || 'All categories'}</span>
                     <svg class="size-3.5 shrink-0 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m8 9 4-4 4 4m0 6-4 4-4-4" />
                     </svg>
@@ -510,15 +554,32 @@
                           type="button"
                           class="listbox-option"
                           role="option"
-                          aria-selected="true"
+                          aria-selected={category === ''}
                           onclick={() => {
+                            category = '';
                             categorySearch = '';
                             categoryOpen = false;
                           }}
                         >
                           <span>All categories</span>
-                          <Reicon name="check" class="size-3.5 text-black dark:text-fg" />
+                          {#if category === ''}<Reicon name="check" class="size-3.5 text-black dark:text-fg" />{/if}
                         </button>
+                        {#each shownCategories as c (c)}
+                          <button
+                            type="button"
+                            class="listbox-option"
+                            role="option"
+                            aria-selected={category === c}
+                            onclick={() => {
+                              category = c;
+                              categorySearch = '';
+                              categoryOpen = false;
+                            }}
+                          >
+                            <span class="capitalize">{c}</span>
+                            {#if category === c}<Reicon name="check" class="size-3.5 text-black dark:text-fg" />{/if}
+                          </button>
+                        {/each}
                       </div>
                     </div>
                   {/if}
@@ -596,9 +657,79 @@
                   </div>
                 </div>
                 <div class="application-settings-section-body">
-                  <Callout type="info" title="Not available in coolify-rs yet">
-                    One-click service templates have not been ported to coolify-rs. Use Coolify for them for now.
+                  <Callout type="info" title="Trademarks policy" class="mb-4">
+                    The respective trademarks mentioned here are owned by the respective companies, and use of them does not imply any affiliation or
+                    endorsement.
                   </Callout>
+                  <div class="grid grid-cols-1 justify-start gap-3 text-left md:grid-cols-2 xl:grid-cols-3">
+                    {#each filteredServices as service (service.id)}
+                      <article
+                        role="button"
+                        tabindex="0"
+                        aria-label="Deploy {service.name}"
+                        onclick={() => setType('one-click-service-' + service.id)}
+                        onkeydown={(e) => {
+                          if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+                            e.preventDefault();
+                            setType('one-click-service-' + service.id);
+                          }
+                        }}
+                        class="group flex min-h-48 cursor-pointer flex-col rounded-xl border border-neutral-200 bg-white p-4 transition-colors hover:border-neutral-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent dark:border-white/[0.08] dark:bg-white/[0.03] dark:hover:border-white/[0.14]"
+                      >
+                        <div class="flex min-w-0 items-start gap-3">
+                          <div class="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50 dark:border-white/[0.08] dark:bg-white/[0.04]">
+                            <img
+                              class="h-full w-full object-contain p-2"
+                              src={service.logo}
+                              alt=""
+                              loading="lazy"
+                              onerror={(e) => {
+                                const img = e.currentTarget as HTMLImageElement;
+                                if (!img.dataset.cdnTried) {
+                                  img.dataset.cdnTried = 'true';
+                                  img.src = service.logo_cdn_url;
+                                } else if (!img.dataset.defaultTried) {
+                                  img.dataset.defaultTried = 'true';
+                                  img.src = service.logo_default_url;
+                                }
+                              }}
+                            />
+                          </div>
+                          <div class="min-w-0 flex-1">
+                            <h3 class="truncate text-[13px] font-semibold text-black dark:text-fg">{service.name}</h3>
+                            <p class="mt-0.5 truncate text-[11px] text-neutral-500 dark:text-fg-faint">
+                              {#if service.templateLastUpdated}<span>Updated </span>{/if}
+                              <span>{service.templateLastUpdated || 'Template ready'}</span>
+                            </p>
+                          </div>
+                          {#if service.amd_only || service.arm_only}
+                            <span class="shrink-0 rounded-md border border-amber-300/50 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:border-warning/20 dark:bg-warning/10 dark:text-warning"
+                              >{service.arm_only ? 'ARM only' : 'AMD only'}</span
+                            >
+                          {/if}
+                        </div>
+                        <p class="mt-3 line-clamp-2 text-[12px] leading-5 text-neutral-600 dark:text-fg-dim">
+                          {service.slogan || service.description || 'Deploy this service with a ready-to-use Coolify template.'}
+                        </p>
+                        <div class="mt-auto flex items-center gap-1.5 border-t border-neutral-200 pt-3 dark:border-white/[0.07]">
+                          <a
+                            href={'https://coolify.io/docs/services/' + service.docsSlug}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onclick={(e) => e.stopPropagation()}
+                            class="button">Docs</a
+                          >
+                          {#if service.website}
+                            <a href={service.website} target="_blank" rel="noopener noreferrer" class="button" onclick={(e) => e.stopPropagation()}>Website</a>
+                          {/if}
+                          <span class="button button-highlighted ml-auto">
+                            Deploy
+                            <Reicon name="arrow-right" class="size-3.5" />
+                          </span>
+                        </div>
+                      </article>
+                    {/each}
+                  </div>
                 </div>
               </section>
             {/if}

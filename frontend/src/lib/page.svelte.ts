@@ -32,6 +32,8 @@ export interface NavContextItem {
   /** Sub pages the active entry lists below itself (the `children` of components/server/sidebar.blade.php). */
   links?: { label: string; icon: string; href: string; active?: boolean; beta?: boolean }[];
   warning?: boolean;
+  /** The red dot of a menu entry (`hasWarning`). */
+  warningDot?: boolean;
 }
 
 /** A resource menu the main sidebar shows instead of the main menu

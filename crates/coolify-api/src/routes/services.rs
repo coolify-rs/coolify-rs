@@ -179,7 +179,7 @@ fn application_array(sub: &SubRow) -> Record {
 }
 
 /// `ServiceApplication::url()`.
-fn url_attribute(sub: &SubRow) -> Value {
+pub(crate) fn url_attribute(sub: &SubRow) -> Value {
     let Some(fqdn) = sub.str("fqdn").filter(|f| !f.trim().is_empty()) else {
         return Value::Null;
     };
@@ -528,7 +528,7 @@ fn conflict_key(domain: &str) -> String {
 }
 
 /// `checkIfDomainIsAlreadyUsedViaAPI($domains, $teamId, $uuid)`.
-async fn domain_conflicts(
+pub(crate) async fn domain_conflicts(
     state: &AppState,
     team_id: i64,
     domains: &[String],
@@ -614,7 +614,7 @@ impl UrlFailure {
 }
 
 /// `$application->fqdn = $urls; $application->save(); updateCompose($application)`.
-async fn save_application_urls(
+pub(crate) async fn save_application_urls(
     state: &AppState,
     s: &ServiceRow,
     app: &SubRow,
@@ -1076,7 +1076,11 @@ fn parse_error(e: String) -> ApiError {
 }
 
 /// `applyServiceApplicationPrerequisites($service)`.
-async fn apply_prerequisites(state: &AppState, id: i64, kind: &str) -> Result<(), ApiError> {
+pub(crate) async fn apply_prerequisites(
+    state: &AppState,
+    id: i64,
+    kind: &str,
+) -> Result<(), ApiError> {
     let (column, names): (&'static str, &[&str]) = match kind {
         "beszel" => ("is_gzip_enabled", &["beszel"]),
         "appwrite" => (
