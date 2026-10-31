@@ -4,11 +4,21 @@
 while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
 shift
 host=$1
-if [ "$host" != "coolify-rs-e2e.orb.local" ]; then
-    echo "ssh-via-orb: only the test VM is reachable, not $host" >&2
-    exit 255
-fi
+case "$host" in
+    coolify-rs-e2e.orb.local | coolify-rs-agent-*.orb.local) ;;
+    *)
+        echo "ssh-via-orb: only the test VMs are reachable, not $host" >&2
+        exit 255
+        ;;
+esac
 # coolify-rs runs ssh with its own HOME; orb finds its socket under the real one and hangs without it.
 HOME=$(eval echo "~$(id -un)")
 export HOME
-exec orb -m coolify-rs-e2e -u root bash -se
+# compat/ui/server_actions.mjs compares the scripts a VM receives: it creates this file for the length of a run.
+log="$HOME/.cache/coolify-rs-dev/ssh-log/$host"
+if [ -f "$log" ]; then
+    echo "####" >>"$log"
+    tee -a "$log" | orb -m "${host%.orb.local}" -u root bash -se
+    exit $?
+fi
+exec orb -m "${host%.orb.local}" -u root bash -se
