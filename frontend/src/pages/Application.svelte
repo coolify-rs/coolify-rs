@@ -215,11 +215,7 @@
           <aside class="application-settings-navigation in-main-nav min-w-0"></aside>
           <div class="min-w-0">
             {#if active === 'general'}
-              {#if ['dockerimage', 'dockerfile', 'static', 'nixpacks', 'railpack'].includes(record.build_pack ?? '')}
-                <ApplicationGeneral {record} {appState} {base} onsaved={() => refresh().catch(() => {})} />
-              {:else}
-                <Unported description="The settings of this build pack are not ported to coolify-rs yet." />
-              {/if}
+              <ApplicationGeneral {record} {appState} {base} onsaved={() => refresh().catch(() => {})} />
             {:else if active === 'source' && !record.dockerfile && record.build_pack !== 'dockerimage'}
               <ApplicationSource uuid={app} onsaved={() => refresh().catch(() => {})} />
             {:else if active === 'domains'}

@@ -68,6 +68,30 @@
   });
 
   let busy = $state(false);
+  // `needsComposeFile()`.
+  const needsComposeFile = $derived(record.build_pack === 'dockercompose' && record.docker_compose_raw == null);
+
+  /** `Heading::loadComposeFile`. */
+  async function loadComposeFile(isInit: boolean) {
+    busy = true;
+    try {
+      const r = await appUi.loadCompose(record.uuid, isInit);
+      if (r.message) notify.success(r.message);
+    } catch (e) {
+      notify.failure(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      busy = false;
+    }
+    await onrefresh();
+  }
+
+  // `x-init="@js($loadComposeOnOpen) && $wire.loadComposeFile(true)"`: on the configuration page.
+  let composeLoadTried = false;
+  $effect(() => {
+    if (composeLoadTried || !needsComposeFile || !appState?.can_update) return;
+    composeLoadTried = true;
+    if (location.pathname === base) loadComposeFile(true);
+  });
   let confirmRestart = $state(false);
   let confirmStop = $state(false);
   let menuOpen = $state<string | null>(null);
@@ -187,6 +211,19 @@
 
 <!-- components/split-action.blade.php -->
 {#snippet actions(id: string)}
+  {#if needsComposeFile}
+    <div class="flex items-center gap-1">
+      {#if appState?.can_update}
+        <button type="button" class="button" disabled={busy} onclick={() => loadComposeFile(false)}>Load compose</button>
+      {/if}
+      {#if canDeploy}
+        <button type="button" {id} class="button split-action-main rounded-md!" disabled title="Load the Compose file before you deploy.">
+          <Reicon name="play-circle" class="size-3.5" />
+          Deploy
+        </button>
+      {/if}
+    </div>
+  {:else}
   <div class="split-action relative" {id}>
     {#if exited}
       <button type="button" class="split-action-main" disabled={busy} onclick={() => deploy()}>
@@ -241,6 +278,7 @@
       </div>
     {/if}
   </div>
+  {/if}
 {/snippet}
 
 {#snippet warning(key: string)}

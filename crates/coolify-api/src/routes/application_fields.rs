@@ -174,7 +174,7 @@ pub(super) fn normalize_custom_labels(input: &mut Input) -> Result<(), ApiError>
 }
 
 /// `get_port_from_dockerfile()`.
-pub(super) fn port_from_dockerfile(dockerfile: &str) -> Option<i64> {
+pub(crate) fn port_from_dockerfile(dockerfile: &str) -> Option<i64> {
     for line in dockerfile.split('\n') {
         let line = crate::routes::applications::php_trim(line);
         if line.starts_with("EXPOSE") {
@@ -1163,7 +1163,7 @@ fn dockerfile_interval(something: &str) -> i64 {
 }
 
 /// `Application::parseHealthcheckFromDockerfile($dockerfile)`: the columns it saves.
-pub(super) fn healthcheck_from_dockerfile(a: &ApplicationRow, dockerfile: Option<&str>) -> Columns {
+pub(crate) fn healthcheck_from_dockerfile(a: &ApplicationRow, dockerfile: Option<&str>) -> Columns {
     let trim = crate::routes::applications::php_trim;
     let text = trim(dockerfile.unwrap_or_default());
     let has = text.contains("HEALTHCHECK");

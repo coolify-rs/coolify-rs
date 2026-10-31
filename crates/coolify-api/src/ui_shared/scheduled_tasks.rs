@@ -15,6 +15,7 @@ use coolify_jobs::compose_parser::validate::parse_docker_compose_yaml;
 use serde_json::{Map, Value, json};
 
 use super::{Class, Res, find};
+use crate::audit::Meta;
 use crate::auth::AuthCtx;
 use crate::input::Input;
 use crate::response::{ApiError, ApiResult, ok};
@@ -109,7 +110,12 @@ fn check(input: &Input) -> Option<Response> {
             ],
         ),
     ];
-    match validate(input, &rules, &[], &[]) {
+    match validate(
+        input,
+        &rules,
+        &[],
+        &["name", "command", "frequency", "container", "timeout"],
+    ) {
         Err(ApiError::Validation(errors)) => Some(toast(&summarize(&errors))),
         _ => None,
     }
@@ -117,7 +123,12 @@ fn check(input: &Input) -> Option<Response> {
 
 fn input_of(body: Value) -> Input {
     match body {
-        Value::Object(map) => Input(map),
+        // `required` fails on a blank string, which a bound field always sends.
+        Value::Object(map) => Input(
+            map.into_iter()
+                .filter(|(_, v)| v.as_str().is_none_or(|t| !t.trim().is_empty()))
+                .collect(),
+        ),
         _ => Input(Map::new()),
     }
 }
@@ -179,7 +190,9 @@ async fn container_names(state: &AppState, res: &Res) -> Result<Vec<String>, Api
     };
     let services = items.iter().find(|(k, _)| k.as_string() == "services");
     Ok(match services {
-        Some((_, PhpValue::Array(services))) => services.iter().map(|(k, _)| k.as_string()).collect(),
+        Some((_, PhpValue::Array(services))) => {
+            services.iter().map(|(k, _)| k.as_string()).collect()
+        }
         _ => Vec::new(),
     })
 }
@@ -216,6 +229,46 @@ fn task_json(ctx: &AuthCtx, task: &Record, latest: Option<&Record>) -> Value {
     })
 }
 
+/// `taskAuditContext()`.
+fn audit_context(res: &Res, task: &Record) -> Map<String, Value> {
+    let Value::Object(map) = json!({
+        "team_id": res.team_id,
+        "scheduled_task_uuid": text(task, "uuid"),
+        "scheduled_task_name": text(task, "name"),
+        "resource_type": res.type_name,
+        "resource_uuid": res.uuid,
+        "resource_name": res.name,
+    }) else {
+        return Map::new();
+    };
+    map
+}
+
+/// `auditTaskUpdated()`: only the names, because the command can contain secrets.
+async fn audit_updated(
+    state: &AppState,
+    ctx: &AuthCtx,
+    meta: &Meta,
+    res: &Res,
+    task: &Record,
+    changed: Vec<&str>,
+) {
+    if changed.is_empty() {
+        return;
+    }
+    let mut context = audit_context(res, task);
+    context.insert("changed_fields".to_owned(), json!(changed));
+    crate::audit::log(
+        state,
+        ctx,
+        meta,
+        "ui.scheduled_task.updated",
+        Value::Object(context),
+        "info",
+    )
+    .await;
+}
+
 /// `All::render`.
 async fn index(
     State(state): State<AppState>,
@@ -243,6 +296,7 @@ async fn index(
 async fn add(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> ApiResult {
@@ -281,7 +335,15 @@ async fn add(
         state.now(),
     )
     .await?;
-    tracing::info!(target: "audit", event = "ui.scheduled_task.created", team_id = res.team_id, scheduled_task_uuid = text(&task, "uuid"), scheduled_task_name = text(&task, "name"), resource_type = %res.type_name, resource_uuid = %res.uuid, resource_name = %res.name, "scheduled task created");
+    crate::audit::log(
+        &state,
+        &ctx,
+        &meta,
+        "ui.scheduled_task.created",
+        Value::Object(audit_context(&res, &task)),
+        "info",
+    )
+    .await;
     Ok(ok(json!({"message": "Scheduled task added."})).into_response())
 }
 
@@ -298,6 +360,7 @@ async fn owned_task(state: &AppState, owner: Owner, uuid: &str) -> Result<Record
 async fn save(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid, task)): Path<(String, String, String)>,
     Json(body): Json<Value>,
 ) -> ApiResult {
@@ -325,8 +388,28 @@ async fn save(
         timeout: Some(timeout_of(&input)),
         enabled: None,
     };
+    // `auditChangedFields()`: a loose comparison, so null and '' are the same.
+    let same = |key: &str, new: &Option<String>| {
+        text(&task, key).unwrap_or_default() == new.as_deref().unwrap_or_default()
+    };
+    let mut changed = Vec::new();
+    if !same("name", &changes.name) {
+        changed.push("name");
+    }
+    if !same("command", &changes.command) {
+        changed.push("command");
+    }
+    if !same("frequency", &changes.frequency) {
+        changed.push("frequency");
+    }
+    if !same("container", &changes.container.clone().flatten()) {
+        changed.push("container");
+    }
+    if task.get("timeout").and_then(Value::as_i64) != changes.timeout {
+        changed.push("timeout");
+    }
     let updated = tasks::update(&state.db, &task, &changes, state.now()).await?;
-    tracing::info!(target: "audit", event = "ui.scheduled_task.updated", team_id = res.team_id, scheduled_task_uuid = text(&updated, "uuid"), scheduled_task_name = text(&updated, "name"), resource_type = %res.type_name, resource_uuid = %res.uuid, "scheduled task updated");
+    audit_updated(&state, &ctx, &meta, &res, &updated, changed).await;
     Ok(ok(json!({"message": "Scheduled task updated."})).into_response())
 }
 
@@ -334,6 +417,7 @@ async fn save(
 async fn toggle(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid, task)): Path<(String, String, String)>,
 ) -> ApiResult {
     let (res, owner) = resource(&state, &ctx, &kind, &uuid).await?;
@@ -354,7 +438,7 @@ async fn toggle(
         enabled: Some(enabled),
     };
     let updated = tasks::update(&state.db, &task, &changes, state.now()).await?;
-    tracing::info!(target: "audit", event = "ui.scheduled_task.updated", team_id = res.team_id, scheduled_task_uuid = text(&updated, "uuid"), scheduled_task_name = text(&updated, "name"), resource_type = %res.type_name, resource_uuid = %res.uuid, "scheduled task updated");
+    audit_updated(&state, &ctx, &meta, &res, &updated, vec!["enabled"]).await;
     Ok(ok(json!({
         "message": if enabled { "Scheduled task enabled." } else { "Scheduled task disabled." },
     }))
@@ -365,6 +449,7 @@ async fn toggle(
 async fn execute(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid, task)): Path<(String, String, String)>,
 ) -> ApiResult {
     let (res, owner) = resource(&state, &ctx, &kind, &uuid).await?;
@@ -374,7 +459,21 @@ async fn execute(
     let task = owned_task(&state, owner, &task).await?;
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     jobs.dispatch_scheduled_task(id_of(&task));
-    tracing::info!(target: "audit", event = "ui.scheduled_task.executed", team_id = res.team_id, resource_uuid = %res.uuid, resource_name = %res.name, scheduled_task_uuid = text(&task, "uuid"), scheduled_task_name = text(&task, "name"), "scheduled task executed");
+    crate::audit::log(
+        &state,
+        &ctx,
+        &meta,
+        "ui.scheduled_task.executed",
+        json!({
+            "team_id": res.team_id,
+            "resource_uuid": res.uuid,
+            "resource_name": res.name,
+            "scheduled_task_uuid": text(&task, "uuid"),
+            "scheduled_task_name": text(&task, "name"),
+        }),
+        "info",
+    )
+    .await;
     Ok(ok(json!({"message": "Scheduled task executed."})).into_response())
 }
 
@@ -382,6 +481,7 @@ async fn execute(
 async fn destroy(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid, task)): Path<(String, String, String)>,
 ) -> ApiResult {
     let (res, owner) = resource(&state, &ctx, &kind, &uuid).await?;
@@ -390,7 +490,15 @@ async fn destroy(
     }
     let task = owned_task(&state, owner, &task).await?;
     tasks::delete(&state.db, id_of(&task)).await?;
-    tracing::info!(target: "audit", event = "ui.scheduled_task.deleted", team_id = res.team_id, scheduled_task_uuid = text(&task, "uuid"), scheduled_task_name = text(&task, "name"), resource_type = %res.type_name, resource_uuid = %res.uuid, resource_name = %res.name, "scheduled task deleted");
+    crate::audit::log(
+        &state,
+        &ctx,
+        &meta,
+        "ui.scheduled_task.deleted",
+        Value::Object(audit_context(&res, &task)),
+        "info",
+    )
+    .await;
     Ok(ok(json!({"message": "Scheduled task deleted."})).into_response())
 }
 

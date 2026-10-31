@@ -8,6 +8,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Extension, Json, Router};
+use coolify_compat::yaml::PhpValue;
 use coolify_db::application_ops::{self as ops, NewPreview};
 use coolify_db::applications::{self as apps, ApplicationRow};
 use coolify_db::records::Record;
@@ -22,7 +23,6 @@ use coolify_jobs::compose_parser::domains::{
     compose_domain_entry_string, get_compose_service_domain_string, get_fqdn_without_port,
 };
 use coolify_jobs::compose_parser::php;
-use coolify_compat::yaml::PhpValue;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
@@ -31,6 +31,7 @@ use super::domains::{
     parts_json, split,
 };
 use super::find;
+use crate::audit::Meta;
 use crate::auth::AuthCtx;
 use crate::response::{ApiError, ApiResult, ok};
 use crate::state::AppState;
@@ -66,18 +67,12 @@ pub fn routes() -> Router<AppState> {
             "/ui/resources/{kind}/{uuid}/previews/{pr}/rebuild",
             post(force_deploy_without_cache),
         )
-        .route(
-            "/ui/resources/{kind}/{uuid}/previews/{pr}/stop",
-            post(stop),
-        )
+        .route("/ui/resources/{kind}/{uuid}/previews/{pr}/stop", post(stop))
         .route(
             "/ui/resources/{kind}/{uuid}/previews/{pr}/tag",
             post(save_tag),
         )
-        .route(
-            "/ui/resources/{kind}/{uuid}/previews/{pr}",
-            delete(destroy),
-        )
+        .route("/ui/resources/{kind}/{uuid}/previews/{pr}", delete(destroy))
         .route(
             "/ui/resources/{kind}/{uuid}/previews/{pr}/domains/add",
             post(domain_add),
@@ -295,7 +290,9 @@ fn row_json(a: &ApplicationRow, preview: &Record, row: &Row) -> Value {
 
 /// `stoppedAfterRestartLimit()` of `HasRestartLimit` and `restartLimitMaximum()`.
 fn restart_limit(a: &ApplicationRow, preview: &Record) -> Option<i64> {
-    let exited = text(preview, "status").unwrap_or_default().starts_with("exited");
+    let exited = text(preview, "status")
+        .unwrap_or_default()
+        .starts_with("exited");
     let reached = preview
         .get("restart_limit_reached")
         .and_then(Value::as_bool)
@@ -329,6 +326,28 @@ fn preview_json(a: &ApplicationRow, preview: &Record) -> Value {
         "restart_limit": restart_limit(a, preview),
         "rows": rows,
     })
+}
+
+/// `auditPreviewEvent()`.
+async fn audit_preview(
+    state: &AppState,
+    ctx: &AuthCtx,
+    meta: &Meta,
+    a: &ApplicationRow,
+    event: &str,
+    pull_request_id: i64,
+    changed: &[&str],
+) {
+    let mut context = json!({
+        "team_id": a.team_id,
+        "application_uuid": a.uuid,
+        "application_name": a.str("name"),
+        "pull_request_id": pull_request_id,
+    });
+    if !changed.is_empty() {
+        context["changed_fields"] = json!(changed);
+    }
+    crate::audit::log(state, ctx, meta, event, context, "info").await;
 }
 
 /// `Preview\Form::generateRealUrl()`.
@@ -390,6 +409,7 @@ async fn index(
 async fn save_settings(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> ApiResult {
@@ -402,17 +422,42 @@ async fn save_settings(
         .get("public_enabled")
         .and_then(Value::as_bool)
         .unwrap_or_else(|| a.setting_bool("is_pr_deployments_public_enabled"));
+    let mut changed = Vec::new();
+    if enabled != a.setting_bool("is_preview_deployments_enabled") {
+        changed.push("is_preview_deployments_enabled");
+    }
+    if public != a.setting_bool("is_pr_deployments_public_enabled") {
+        changed.push("is_pr_deployments_public_enabled");
+    }
     apps::update_settings(
         &state.db,
         a.id,
         &[
             ("is_preview_deployments_enabled", ColumnValue::Bool(enabled)),
-            ("is_pr_deployments_public_enabled", ColumnValue::Bool(public)),
+            (
+                "is_pr_deployments_public_enabled",
+                ColumnValue::Bool(public),
+            ),
         ],
         state.now(),
     )
     .await?;
-    tracing::info!(target: "audit", event = "ui.application.settings_updated", team_id = a.team_id, application_uuid = %a.uuid, "preview settings saved");
+    if !changed.is_empty() {
+        crate::audit::log(
+            &state,
+            &ctx,
+            &meta,
+            "ui.application.settings_updated",
+            json!({
+                "team_id": a.team_id,
+                "application_uuid": a.uuid,
+                "application_name": a.str("name"),
+                "changed_fields": changed,
+            }),
+            "info",
+        )
+        .await;
+    }
     Ok(answer("Settings saved."))
 }
 
@@ -499,6 +544,8 @@ async fn load_prs(
 /// `ApplicationPreview::create([...])` of `add` and `deploy`, or the row that exists.
 async fn find_or_create(
     state: &AppState,
+    ctx: &AuthCtx,
+    meta: &Meta,
     a: &ApplicationRow,
     pull_request_id: i64,
     html_url: Option<&str>,
@@ -537,13 +584,24 @@ async fn find_or_create(
         state.now(),
     )
     .await?;
-    tracing::info!(target: "audit", event = "ui.application.preview_created", team_id = a.team_id, application_uuid = %a.uuid, application_name = a.str("name"), pull_request_id, "preview created");
+    audit_preview(
+        state,
+        ctx,
+        meta,
+        a,
+        "ui.application.preview_created",
+        pull_request_id,
+        &[],
+    )
+    .await;
     Ok((Some(created), true))
 }
 
 /// `saveDockerTagWithAudit()`.
 async fn save_docker_tag(
     state: &AppState,
+    ctx: &AuthCtx,
+    meta: &Meta,
     a: &ApplicationRow,
     preview: &Record,
     tag: Option<&str>,
@@ -564,7 +622,16 @@ async fn save_docker_tag(
         state.now(),
     )
     .await?;
-    tracing::info!(target: "audit", event = "ui.application.preview_updated", team_id = a.team_id, application_uuid = %a.uuid, pull_request_id = pull_request_of(preview), changed_fields = "docker_registry_image_tag", "preview updated");
+    audit_preview(
+        state,
+        ctx,
+        meta,
+        a,
+        "ui.application.preview_updated",
+        pull_request_of(preview),
+        &["docker_registry_image_tag"],
+    )
+    .await;
     Ok(())
 }
 
@@ -666,12 +733,15 @@ async fn generate_single(
 /// non-Compose branch reports "Preview added."
 async fn add_preview(
     state: &AppState,
+    ctx: &AuthCtx,
+    meta: &Meta,
     a: &ApplicationRow,
     pull_request_id: i64,
     html_url: Option<&str>,
     tag: Option<&str>,
 ) -> Result<Result<bool, Response>, ApiError> {
-    let (found, created) = find_or_create(state, a, pull_request_id, html_url, tag).await?;
+    let (found, created) =
+        find_or_create(state, ctx, meta, a, pull_request_id, html_url, tag).await?;
     // `$found->generate_...` on null, caught by the `try`.
     let Some(found) = found else {
         return Ok(Err(toast(if is_compose(a) {
@@ -684,7 +754,7 @@ async fn add_preview(
         generate_compose(state, a, &found, !created).await?;
         return Ok(Ok(false));
     }
-    save_docker_tag(state, a, &found, tag).await?;
+    save_docker_tag(state, ctx, meta, a, &found, tag).await?;
     let found = ops::preview_by_id(&state.db, id_of(&found))
         .await?
         .ok_or(ApiError::Internal)?;
@@ -696,6 +766,7 @@ async fn add_preview(
 async fn add(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> ApiResult {
@@ -704,7 +775,7 @@ async fn add(
         return Err(ApiError::Internal);
     };
     let html_url = body.get("html_url").and_then(Value::as_str);
-    match add_preview(&state, &a, pr, html_url, None).await? {
+    match add_preview(&state, &ctx, &meta, &a, pr, html_url, None).await? {
         Err(failure) => Ok(failure),
         Ok(true) => Ok(answer("Preview added.")),
         Ok(false) => Ok(ok(json!({})).into_response()),
@@ -755,6 +826,7 @@ async fn queue_preview(
 async fn deploy(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> ApiResult {
@@ -765,13 +837,13 @@ async fn deploy(
     let html_url = body.get("html_url").and_then(Value::as_str);
     let tag = body.get("tag").and_then(Value::as_str);
     if body.get("add").and_then(Value::as_bool).unwrap_or(false)
-        && let Err(failure) = add_preview(&state, &a, pr, html_url, tag).await?
+        && let Err(failure) = add_preview(&state, &ctx, &meta, &a, pr, html_url, tag).await?
     {
         return Ok(failure);
     }
-    let (found, _) = find_or_create(&state, &a, pr, html_url, tag).await?;
+    let (found, _) = find_or_create(&state, &ctx, &meta, &a, pr, html_url, tag).await?;
     if let Some(found) = &found {
-        save_docker_tag(&state, &a, found, tag).await?;
+        save_docker_tag(&state, &ctx, &meta, &a, found, tag).await?;
     }
     queue_preview(&state, &a, pr, false, tag).await
 }
@@ -798,6 +870,7 @@ async fn force_deploy_without_cache(
 async fn add_docker_image_preview(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> ApiResult {
@@ -832,7 +905,7 @@ async fn add_docker_image_preview(
     let (Some(pr), false) = (pr, tag.is_empty()) else {
         return Ok(toast("Both pull request id and docker tag are required."));
     };
-    if let Err(failure) = add_preview(&state, &a, pr, None, Some(tag)).await? {
+    if let Err(failure) = add_preview(&state, &ctx, &meta, &a, pr, None, Some(tag)).await? {
         return Ok(failure);
     }
     queue_preview(&state, &a, pr, false, Some(tag)).await
@@ -848,6 +921,7 @@ async fn preview_of(state: &AppState, a: &ApplicationRow, pr: i64) -> Result<Rec
 async fn stop(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid, pr)): Path<(String, String, i64)>,
 ) -> ApiResult {
     let a = admin_application(&state, &ctx, &kind, &uuid).await?;
@@ -864,7 +938,20 @@ async fn stop(
         )
         .await?;
     }
-    tracing::info!(target: "audit", event = "ui.application.preview_stopped", team_id = a.team_id, application_uuid = %a.uuid, application_name = a.str("name"), pull_request_id = pr, "preview stopped");
+    crate::audit::log(
+        &state,
+        &ctx,
+        &meta,
+        "ui.application.preview_stopped",
+        json!({
+            "team_id": a.team_id,
+            "application_uuid": a.uuid,
+            "application_name": a.str("name"),
+            "pull_request_id": pr,
+        }),
+        "info",
+    )
+    .await;
     Ok(answer("Preview Deployment stopped."))
 }
 
@@ -872,6 +959,7 @@ async fn stop(
 async fn destroy(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid, pr)): Path<(String, String, i64)>,
 ) -> ApiResult {
     let a = admin_application(&state, &ctx, &kind, &uuid).await?;
@@ -880,7 +968,16 @@ async fn destroy(
     };
     let preview_id = id_of(&preview);
     ops::soft_delete_preview(&state.db, preview_id, state.now()).await?;
-    tracing::info!(target: "audit", event = "ui.application.preview_deleted", team_id = a.team_id, application_uuid = %a.uuid, application_name = a.str("name"), pull_request_id = pr, "preview deleted");
+    audit_preview(
+        &state,
+        &ctx,
+        &meta,
+        &a,
+        "ui.application.preview_deleted",
+        pr,
+        &[],
+    )
+    .await;
     if let Some(jobs) = state.jobs.clone() {
         tokio::spawn(async move {
             jobs.cleanup_preview_deployment(&a, pr, preview_id).await;
@@ -895,6 +992,7 @@ async fn destroy(
 async fn save_tag(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid, pr)): Path<(String, String, i64)>,
     Json(body): Json<Value>,
 ) -> ApiResult {
@@ -912,7 +1010,16 @@ async fn save_tag(
             state.now(),
         )
         .await?;
-        tracing::info!(target: "audit", event = "ui.application.preview_updated", team_id = a.team_id, application_uuid = %a.uuid, pull_request_id = pr, changed_fields = "docker_registry_image_tag", "preview updated");
+        audit_preview(
+            &state,
+            &ctx,
+            &meta,
+            &a,
+            "ui.application.preview_updated",
+            pr,
+            &["docker_registry_image_tag"],
+        )
+        .await;
     }
     Ok(answer(
         "Preview saved.<br><br>Do not forget to redeploy the preview to apply the changes.",
@@ -925,6 +1032,8 @@ async fn save_tag(
 /// `persistDomains()` and `persistDnsStatuses()`: `None` when saved, the toast otherwise.
 async fn persist(
     state: &AppState,
+    ctx: &AuthCtx,
+    meta: &Meta,
     a: &ApplicationRow,
     preview: &Record,
     rows: &[Row],
@@ -1002,8 +1111,36 @@ async fn persist(
         "domain_dns_statuses",
         ColumnValue::Text((!statuses.is_empty()).then(|| Value::Object(statuses).to_string())),
     ));
+    // `auditChangedFields()` of the three domain columns.
+    let mut changed = Vec::new();
+    for (column, value) in &values {
+        if let ColumnValue::Text(new) = value {
+            let same = match *column {
+                "fqdn" | "docker_compose_domains" => text(preview, column) == new.as_deref(),
+                "domain_port_overrides" => {
+                    ops::json_column(preview, column)
+                        == new.as_deref().and_then(|t| serde_json::from_str(t).ok())
+                }
+                _ => true,
+            };
+            if !same {
+                changed.push(*column);
+            }
+        }
+    }
     ops::update_preview(&state.db, id_of(preview), &values, state.now()).await?;
-    tracing::info!(target: "audit", event = "ui.application.preview_updated", team_id = a.team_id, application_uuid = %a.uuid, application_name = a.str("name"), pull_request_id = pull_request_of(preview), "preview domains updated");
+    if !changed.is_empty() {
+        audit_preview(
+            state,
+            ctx,
+            meta,
+            a,
+            "ui.application.preview_updated",
+            pull_request_of(preview),
+            &changed,
+        )
+        .await;
+    }
     Ok(None)
 }
 
@@ -1033,6 +1170,7 @@ fn validated_domain(body: &Value, port: &str) -> Result<String, Response> {
 async fn domain_add(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid, pr)): Path<(String, String, i64)>,
     Json(body): Json<Value>,
 ) -> ApiResult {
@@ -1080,7 +1218,17 @@ async fn domain_add(
         url: domain,
         service: service.map(str::to_owned),
     });
-    if let Some(failure) = persist(&state, &a, &preview, &rows, overrides_of(&preview)).await? {
+    if let Some(failure) = persist(
+        &state,
+        &ctx,
+        &meta,
+        &a,
+        &preview,
+        &rows,
+        overrides_of(&preview),
+    )
+    .await?
+    {
         return Ok(failure);
     }
     Ok(answer("Domain added."))
@@ -1121,6 +1269,7 @@ async fn generate_compose_domains(
 async fn domain_generate(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid, pr)): Path<(String, String, i64)>,
     Json(body): Json<Value>,
 ) -> ApiResult {
@@ -1152,7 +1301,7 @@ async fn domain_generate(
                 });
             }
         }
-        if let Some(failure) = persist(&state, &a, &preview, &rows, overrides).await? {
+        if let Some(failure) = persist(&state, &ctx, &meta, &a, &preview, &rows, overrides).await? {
             return Ok(failure);
         }
     } else {
@@ -1165,6 +1314,7 @@ async fn domain_generate(
 async fn domain_update(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid, pr)): Path<(String, String, i64)>,
     Json(body): Json<Value>,
 ) -> ApiResult {
@@ -1210,7 +1360,7 @@ async fn domain_update(
         overrides.remove(&domains::without_port(&domain));
     }
     rows[index].url = domain;
-    if let Some(failure) = persist(&state, &a, &preview, &rows, overrides).await? {
+    if let Some(failure) = persist(&state, &ctx, &meta, &a, &preview, &rows, overrides).await? {
         return Ok(failure);
     }
     Ok(answer("Domain updated."))
@@ -1220,6 +1370,7 @@ async fn domain_update(
 async fn domain_remove(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
     Path((kind, uuid, pr)): Path<(String, String, i64)>,
     Json(body): Json<Value>,
 ) -> ApiResult {
@@ -1234,7 +1385,17 @@ async fn domain_remove(
         return Ok(ok(json!({})).into_response());
     };
     rows.remove(index);
-    if let Some(failure) = persist(&state, &a, &preview, &rows, overrides_of(&preview)).await? {
+    if let Some(failure) = persist(
+        &state,
+        &ctx,
+        &meta,
+        &a,
+        &preview,
+        &rows,
+        overrides_of(&preview),
+    )
+    .await?
+    {
         return Ok(failure);
     }
     Ok(answer("Domain removed."))

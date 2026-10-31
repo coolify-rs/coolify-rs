@@ -1,12 +1,7 @@
 <script lang="ts">
   // Port of upstream livewire/project/application/general.blade.php (+
-  // Project\Application\General) with livewire/project/application/internal-access.blade.php,
-  // for the build packs coolify-rs deploys: Docker image, Dockerfile, Static,
-  // Nixpacks and Railpack (build strategy, site type, web server, paths,
-  // build commands, Nginx configuration, image registry). HTTP Basic
-  // Authentication, custom Docker options, deployment commands and build
-  // servers have no backend in coolify-rs yet: they render as upstream renders
-  // them and say so when used. Docker Compose sections are not ported.
+  // Project\Application\General) with livewire/project/application/internal-access.blade.php.
+  // Building on a build server has no backend here yet: it says so when used.
   import { untrack } from 'svelte';
   import Reicon from './Reicon.svelte';
   import Modal from './Modal.svelte';
@@ -17,6 +12,7 @@
   import CopyInput from './CopyInput.svelte';
   import FormInput from './FormInput.svelte';
   import MonacoEditor from './MonacoEditor.svelte';
+  import Checkbox from './Checkbox.svelte';
   import FormTextarea from './FormTextarea.svelte';
   import RepositoryPaths from './RepositoryPaths.svelte';
   import UnsavedBar from './UnsavedBar.svelte';
@@ -45,6 +41,13 @@
     customDockerRunOptions: string;
     preDeploymentCommand: string;
     postDeploymentCommand: string;
+    preDeploymentCommandContainer: string;
+    postDeploymentCommandContainer: string;
+    dockerComposeLocation: string;
+    dockerComposeCustomBuildCommand: string;
+    dockerComposeCustomStartCommand: string;
+    httpBasicAuthUsername: string;
+    httpBasicAuthPassword: string;
     customLabels: string;
     staticImage: string;
     baseDirectory: string;
@@ -71,6 +74,13 @@
     customDockerRunOptions: str(r.custom_docker_run_options),
     preDeploymentCommand: str(r.pre_deployment_command),
     postDeploymentCommand: str(r.post_deployment_command),
+    preDeploymentCommandContainer: str(r.pre_deployment_command_container),
+    postDeploymentCommandContainer: str(r.post_deployment_command_container),
+    dockerComposeLocation: str(r.docker_compose_location),
+    dockerComposeCustomBuildCommand: str(r.docker_compose_custom_build_command),
+    dockerComposeCustomStartCommand: str(r.docker_compose_custom_start_command),
+    httpBasicAuthUsername: str(r.http_basic_auth_username),
+    httpBasicAuthPassword: str(s.http_basic_auth_password),
     customLabels: str(s.custom_labels),
     staticImage: str(r.static_image),
     baseDirectory: str(r.base_directory),
@@ -86,6 +96,14 @@
     dockerfile: str(r.dockerfile),
   });
 
+  const HASH_HELPER = "Algorithm that hashes the password for the proxy labels.<br><br>Traefik supports only bcrypt. Argon2id needs the Caddy proxy, version 2.11 or newer. With Argon2id, labels generated for Traefik use bcrypt.";
+  const MEMORY_HELPER = "Memory that the proxy needs to check a password. More memory makes the hash harder to crack, but every login attempt that the proxy has not seen before uses this much memory on the server.";
+  const COST_HELPER = "Each step doubles the work to check or crack the password. Traefik checks the password on every request, so a higher cost makes every request slower.";
+  const COMPOSE_BUILD_HELPER = "The compose file path (<span class='dark:text-brand-light'>-f</span> flag) and environment variables (<span class='dark:text-brand-light'>--env-file</span> flag) are automatically injected based on your Base Directory and Docker Compose Location settings. You can override by providing your own <span class='dark:text-brand-light'>-f</span> or <span class='dark:text-brand-light'>--env-file</span> flags.<br><br>If you use this, you need to specify paths relatively and should use the same compose file in the custom command, otherwise the automatically configured labels / etc won't work.<br><br>Example usage: <span class='dark:text-brand-light'>docker compose build</span>";
+  const COMPOSE_START_HELPER = "The compose file path (<span class='dark:text-brand-light'>-f</span> flag) and environment variables (<span class='dark:text-brand-light'>--env-file</span> flag) are automatically injected based on your Base Directory and Docker Compose Location settings. You can override by providing your own <span class='dark:text-brand-light'>-f</span> or <span class='dark:text-brand-light'>--env-file</span> flags.<br><br>If you use this, you need to specify paths relatively and should use the same compose file in the custom command, otherwise the automatically configured labels / etc won't work.<br><br>Example usage: <span class='dark:text-brand-light'>docker compose up -d</span>";
+  const WATCH_HELPER = "Order-based pattern matching to filter Git webhook deployments. Enter one pattern per line. Commas do not separate patterns. Supports wildcards (*, **, ?) and negation (!). Last matching pattern wins.";
+  const CONTAINER_HELPER = "The name of the container to execute within. You can leave it blank if your application only has one container.";
+
   // The form starts from the record once; status refreshes of the record do not reset typing.
   let form = $state<Form>(untrack(() => fromRecord(record, appState)));
   let saved = $state<Form>(untrack(() => fromRecord(record, appState)));
@@ -96,6 +114,14 @@
   let labelsManaged = $state(untrack(() => setting('is_container_label_readonly_enabled')));
   let labelsEscaped = $state(untrack(() => setting('is_container_label_escape_enabled')));
   let basicAuth = $state(untrack(() => !!record.is_http_basic_auth_enabled));
+  let hashAlgorithm = $state(untrack(() => (record.http_basic_auth_hash_algorithm === 'argon2id' && appState.supports_argon2id ? 'argon2id' : 'bcrypt')));
+  let bcryptCost = $state(untrack(() => String(record.http_basic_auth_bcrypt_cost ?? 10)));
+  let argonMemory = $state(untrack(() => String(record.http_basic_auth_argon2id_memory_cost ?? 65536)));
+  let argonTime = $state(untrack(() => String(record.http_basic_auth_argon2id_time_cost ?? 3)));
+  let preserveRepository = $state(untrack(() => setting('is_preserve_repository_enabled')));
+  let showRaw = $state(true);
+  let composeBusy = $state(false);
+  let composePreview = $state<{ build: string; start: string }>({ build: '', start: '' });
   let internalHostname = $state<string | null>(null);
   let internalHostnameLoaded = $state(false);
 
@@ -164,6 +190,43 @@
       .catch(() => {})
       .finally(() => (internalHostnameLoaded = true));
   });
+
+  // `getDockerCompose{Build,Start}CommandPreviewProperty()`.
+  $effect(() => {
+    // Deferred `wire:model`: the fields follow what the last request sent.
+    const body = { build: saved.dockerComposeCustomBuildCommand, start: saved.dockerComposeCustomStartCommand, base_directory: saved.baseDirectory, docker_compose_location: saved.dockerComposeLocation };
+    if (buildPack !== 'dockercompose' || (!body.build && !body.start)) return;
+    const timer = setTimeout(() => appUi.composePreviews(record.uuid, body).then((r) => (composePreview = r)).catch(() => {}), 0);
+    return () => clearTimeout(timer);
+  });
+
+  // `mount()`: parse() saves the deployable file, the form shows it with locked values redacted.
+  let deployable = $state('');
+  async function parseCompose() {
+    if (storedPackAtMount !== 'dockercompose') return;
+    const r = await appUi.parseCompose(record.uuid);
+    if (r.error) notify.failure(r.error);
+    deployable = r.docker_compose ?? '';
+  }
+  const storedPackAtMount = untrack(() => record.build_pack ?? '');
+  $effect(() => {
+    untrack(() => parseCompose().catch(() => {}));
+  });
+
+  /** `$wire.dispatch('loadCompose', false)`. */
+  async function reloadCompose() {
+    composeBusy = true;
+    try {
+      const r = await appUi.loadCompose(record.uuid);
+      if (r.message) notify.success(r.message);
+      await reloadForm();
+      await parseCompose();
+    } catch (e) {
+      notify.failure(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      composeBusy = false;
+    }
+  }
 
   function unavailable(what: string) {
     notify.info('Not available in coolify-rs yet', `${what} is not supported by coolify-rs yet.`);
@@ -277,16 +340,26 @@
       custom_docker_run_options: orNull(form.customDockerRunOptions),
       pre_deployment_command: orNull(form.preDeploymentCommand),
       post_deployment_command: orNull(form.postDeploymentCommand),
+      pre_deployment_command_container: orNull(form.preDeploymentCommandContainer),
+      post_deployment_command_container: orNull(form.postDeploymentCommandContainer),
+      http_basic_auth_username: orNull(form.httpBasicAuthUsername),
+      http_basic_auth_password: orNull(form.httpBasicAuthPassword),
     };
+    if (buildPack === 'dockercompose') {
+      body.docker_compose_location = keep(record.docker_compose_location, form.dockerComposeLocation);
+      body.docker_compose_custom_build_command = keep(record.docker_compose_custom_build_command, form.dockerComposeCustomBuildCommand);
+      body.docker_compose_custom_start_command = keep(record.docker_compose_custom_start_command, form.dockerComposeCustomStartCommand);
+    }
     body.docker_registry_image_name = orNull(form.imageName);
     body.docker_registry_image_tag = orNull(form.imageTag);
-    if (storedPack !== 'dockerimage') Object.assign(body, buildBody());
+    Object.assign(body, buildBody());
     try {
       if (!labelsManaged && form.customLabels !== saved.customLabels) {
         await appUi.settings(record.uuid, { custom_labels: form.customLabels });
       }
       const r = await appUi.update(record.uuid, body);
       showToasts(r.toasts);
+      if (r.error) notify.failure(r.error);
       notify.success(r.message);
       networking = false;
       await onsaved();
@@ -296,7 +369,7 @@
       form.customLabels = str(fresh.custom_labels);
       // `submit()` normalises the paths (`rtrim('/')`) and `syncData()` shows the stored values.
       const stored = fromRecord(record, fresh);
-      for (const k of ['baseDirectory', 'publishDirectory', 'installCommand', 'buildCommand', 'startCommand', 'dockerfileLocation', 'watchPaths', 'customNginxConfiguration'] as const)
+      for (const k of ['dockerComposeLocation', 'baseDirectory', 'publishDirectory', 'installCommand', 'buildCommand', 'startCommand', 'dockerfileLocation', 'watchPaths', 'customNginxConfiguration'] as const)
         form[k] = stored[k];
       saved = JSON.parse(JSON.stringify(form));
     } catch (e) {
@@ -312,8 +385,9 @@
 
   async function instantSave(values: Record<string, unknown>) {
     try {
-      await appUi.settings(record.uuid, values);
+      const r = await appUi.settings(record.uuid, values);
       notify.success('Settings saved.');
+      if (r.error) notify.failure(r.error);
       const fresh = await appUi.state(record.uuid);
       form.customLabels = str(fresh.custom_labels);
       saved.customLabels = form.customLabels;
@@ -333,6 +407,13 @@
   }
 </script>
 
+{#snippet composeEditor(title: string, content: string)}
+          <div class="mb-1.5 flex h-4 w-full items-center gap-1.5">
+            <span class="flex items-center gap-1.5 text-sm font-medium leading-4">{title}<Helper helper="You need to modify the docker compose file in the git repository." /></span>
+          </div>
+          {#key content}<div class="font-mono"><MonacoEditor value={content} language="yaml" readonly rows={10} /></div>{/key}
+        {/snippet}
+
 <div>
   <form
     class="application-settings-form flex flex-col"
@@ -348,6 +429,11 @@
         title="Application details"
         description="Name the application and choose the build strategy Coolify should use to deploy it."
       >
+        {#snippet actions()}
+          {#if buildPack === 'dockercompose' && record.docker_compose_raw && canUpdate}
+            <button type="button" class="button" disabled={composeBusy} onclick={reloadCompose}>Reload compose</button>
+          {/if}
+        {/snippet}
         <div class="grid gap-4">
           <FormInput label="Name" id="name" required disabled={!canUpdate} bind:value={form.name} error={err('name')} />
           <FormInput label="Description" id="description" disabled={!canUpdate} bind:value={form.description} error={err('description')} />
@@ -425,15 +511,80 @@
                 helper="HTTP Basic Authentication adds the required authentication labels to the proxy. Coolify currently supports a single username and password."
                 disabled={!canUpdate}
                 bind:value={basicAuth}
-                onchange={() => {
-                  basicAuth = !!record.is_http_basic_auth_enabled;
-                  unavailable('HTTP Basic Authentication');
-                }}
+                onchange={() => instantSave({ is_http_basic_auth_enabled: basicAuth })}
                 options={[
                   { value: false, label: 'None' },
                   { value: true, label: 'HTTP Basic Authentication' },
                 ]}
               />
+              {#if basicAuth}
+                <div class="mt-5 grid w-full gap-4 border-t border-neutral-200 pt-5 sm:grid-cols-2 dark:border-white/[0.07]">
+                  <FormInput id="httpBasicAuthUsername" label="Username" required disabled={!canUpdate} bind:value={form.httpBasicAuthUsername} error={err('http_basic_auth_username')} />
+                  <FormInput id="httpBasicAuthPassword" type="password" label="Password" required disabled={!canUpdate} bind:value={form.httpBasicAuthPassword} error={err('http_basic_auth_password')} />
+                </div>
+                <div class="mt-5 border-t border-neutral-200 pt-5 dark:border-white/[0.07]">
+                  <h3 class="mb-3 text-sm font-semibold text-black dark:text-fg">Password hashing</h3>
+                  <div class="grid w-full gap-4 {hashAlgorithm === 'argon2id' ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}">
+                    <Listbox
+                      id="httpBasicAuthHashAlgorithm"
+                      label="Algorithm"
+                      helper={HASH_HELPER}
+                      disabled={!canUpdate}
+                      bind:value={hashAlgorithm}
+                      onchange={() => instantSave({ http_basic_auth_hash_algorithm: hashAlgorithm })}
+                      options={[
+                        { value: 'bcrypt', label: 'bcrypt', description: 'Works with every proxy' },
+                        {
+                          value: 'argon2id',
+                          label: 'Argon2id',
+                          disabled: !appState.supports_argon2id,
+                          description: appState.supports_argon2id
+                            ? 'Memory-hard, more resistant to cracking'
+                            : appState.proxy_type === 'CADDY'
+                              ? 'Needs Caddy 2.11 or newer on this server'
+                              : 'Only supported by the Caddy proxy',
+                        },
+                      ]}
+                    />
+                    {#if hashAlgorithm === 'argon2id'}
+                      <div class="min-w-0">
+                        <Listbox
+                          id="httpBasicAuthArgon2idMemoryCost"
+                          label="Memory"
+                          helper={MEMORY_HELPER}
+                          disabled={!canUpdate}
+                          bind:value={argonMemory}
+                          onchange={() => instantSave({ http_basic_auth_argon2id_memory_cost: Number(argonMemory) })}
+                          options={[8, 16, 32, 64, 128, 256].map((m) => ({ value: String(m * 1024), label: `${m} MiB` }))}
+                        />
+                      </div>
+                      <div class="min-w-0">
+                        <Listbox
+                          id="httpBasicAuthArgon2idTimeCost"
+                          label="Iterations"
+                          helper="Number of passes over the memory. More iterations make the hash harder to crack and a password check slower."
+                          disabled={!canUpdate}
+                          bind:value={argonTime}
+                          onchange={() => instantSave({ http_basic_auth_argon2id_time_cost: Number(argonTime) })}
+                          options={Array.from({ length: 12 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) }))}
+                        />
+                      </div>
+                    {:else}
+                      <div class="min-w-0">
+                        <Listbox
+                          id="httpBasicAuthBcryptCost"
+                          label="Cost factor"
+                          helper={COST_HELPER}
+                          disabled={!canUpdate}
+                          bind:value={bcryptCost}
+                          onchange={() => instantSave({ http_basic_auth_bcrypt_cost: Number(bcryptCost) })}
+                          options={Array.from({ length: 11 }, (_, i) => ({ value: String(i + 4), label: String(i + 4) }))}
+                        />
+                      </div>
+                    {/if}
+                  </div>
+                </div>
+              {/if}
             {/if}
           </DatabaseSubsection>
 
@@ -532,7 +683,66 @@
           {:else}
             <div class="flex flex-col gap-5">
               {#if buildPack === 'dockercompose'}
-                <p class="text-sm text-neutral-500 dark:text-fg-dim">The Docker Compose settings are not available in coolify-rs yet.</p>
+                <div class="flex flex-col gap-2">
+                  <RepositoryPaths
+                    class="lg:grid-cols-2"
+                    bind:base={form.baseDirectory}
+                    bind:file={() => form.dockerComposeLocation, (v) => (form.dockerComposeLocation = v ?? '')}
+                    showFile
+                    fileLabel="Docker compose location"
+                    defaultFile="/docker-compose.yaml"
+                    disabled={!canUpdate || composeBusy}
+                    baseError={err('base_directory')}
+                    fileError={err('docker_compose_location')}
+                  />
+                  <div class="w-full sm:w-96">
+                    <Checkbox
+                      id="isPreserveRepositoryEnabled"
+                      label="Preserve repository during deployment"
+                      helper="Git repository (based on the base directory settings) will be copied to the deployment directory."
+                      disabled={!canUpdate || composeBusy}
+                      bind:checked={preserveRepository}
+                      onchange={() => instantSave({ is_preserve_repository_enabled: preserveRepository })}
+                    />
+                  </div>
+                  <div class="grid gap-4 pt-4">
+                    <div class="grid gap-4 lg:grid-cols-2">
+                      <FormInput
+                        placeholder="docker compose build"
+                        id="dockerComposeCustomBuildCommand"
+                        helper={COMPOSE_BUILD_HELPER}
+                        label="Custom build command"
+                        disabled={!canUpdate || composeBusy}
+                        bind:value={form.dockerComposeCustomBuildCommand}
+                        error={err('docker_compose_custom_build_command')}
+                      />
+                      <FormInput
+                        placeholder="docker compose up -d"
+                        id="dockerComposeCustomStartCommand"
+                        helper={COMPOSE_START_HELPER}
+                        label="Custom start command"
+                        disabled={!canUpdate || composeBusy}
+                        bind:value={form.dockerComposeCustomStartCommand}
+                        error={err('docker_compose_custom_start_command')}
+                      />
+                    </div>
+                    {#if saved.dockerComposeCustomBuildCommand}
+                      <div>
+                        <FormInput id="dockerComposeBuildPreview" readonly value={composePreview.build} label="Final build command (preview)" helper="This shows the actual command that will be executed with auto-injected flags." />
+                      </div>
+                    {/if}
+                    {#if saved.dockerComposeCustomStartCommand}
+                      <div>
+                        <FormInput id="dockerComposeStartPreview" readonly value={composePreview.start} label="Final start command (preview)" helper="This shows the actual command that will be executed with auto-injected flags." />
+                      </div>
+                    {/if}
+                  </div>
+                  {#if record.source_type === 'App\\Models\\GithubApp' && !appState.source_is_public}
+                    <div class="pt-4">
+                      <FormTextarea helper={WATCH_HELPER} placeholder="services/api/**" id="watchPaths" label="Watch paths" disabled={!canUpdate || composeBusy} bind:value={form.watchPaths} />
+                    </div>
+                  {/if}
+                </div>
               {:else}
                 <RepositoryPaths
                   class="lg:grid-cols-2"
@@ -663,6 +873,38 @@
             <MonacoEditor language="nginx" rows={10} readonly={!canUpdate} bind:value={form.customNginxConfiguration} />
           </div>
         {/if}
+        {#if compose}
+          <div class="mt-5">
+            {#if canUpdate}
+              <div class="mb-2 flex items-center justify-between gap-4">
+                <h3>Docker Compose</h3>
+                {#if !setting('is_raw_compose_deployment_enabled')}
+                  <button type="button" class="button" onclick={() => (showRaw = !showRaw)}>{showRaw ? 'Show deployable compose' : 'Show raw compose'}</button>
+                {/if}
+              </div>
+              {#if setting('is_raw_compose_deployment_enabled')}
+                {@render composeEditor(`Docker compose content (applicationId: ${record.id})`, str(record.docker_compose_raw))}
+              {:else if showRaw && Number(record.compose_parsing_version ?? 0) >= 3}
+                {@render composeEditor('Docker compose content (raw)', str(record.docker_compose_raw))}
+              {:else if !showRaw}
+                {@render composeEditor('Docker compose content', deployable)}
+              {/if}
+            {:else}
+              <h3 class="mb-2">Docker Compose</h3>
+              <Callout type="info" title="Hidden (only admins can view)" class="mb-4">The Docker Compose file can contain secrets.</Callout>
+            {/if}
+            <div class="w-full sm:w-96">
+              <Checkbox
+                id="isContainerLabelEscapeEnabled"
+                label="Escape special characters in labels?"
+                helper="By default, $ (and other chars) is escaped. So if you write $ in the labels, it will be saved as $$.<br><br>If you want to use env variables inside the labels, turn this off."
+                disabled={!canUpdate}
+                bind:checked={labelsEscaped}
+                onchange={() => instantSave({ is_container_label_escape_enabled: labelsEscaped })}
+              />
+            </div>
+          </div>
+        {/if}
         {#if hasDockerfile}
           <div class="mt-6">
             <div class="w-full">
@@ -757,6 +999,9 @@
                 bind:value={form.preDeploymentCommand}
                 error={err('pre_deployment_command')}
               />
+              {#if compose}
+                <FormInput id="preDeploymentCommandContainer" label="Container name" helper={CONTAINER_HELPER} disabled={!canUpdate} bind:value={form.preDeploymentCommandContainer} error={err('pre_deployment_command_container')} />
+              {/if}
             </div>
             <div class="flex flex-col gap-4">
               <FormInput
@@ -768,6 +1013,9 @@
                 bind:value={form.postDeploymentCommand}
                 error={err('post_deployment_command')}
               />
+              {#if compose}
+                <FormInput id="postDeploymentCommandContainer" label="Container name" helper={CONTAINER_HELPER} disabled={!canUpdate} bind:value={form.postDeploymentCommandContainer} error={err('post_deployment_command_container')} />
+              {/if}
             </div>
           </div>
         </DatabaseSubsection>
