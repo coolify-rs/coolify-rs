@@ -200,7 +200,14 @@ async fn unknown_and_unported_routes() {
     h.call("DELETE", "/api/v1/projects", Some("acme_owner_root"), None)
         .await
         .assert(404, nf);
-    let r = h.get("/api/v1/servers/x/canvas", "acme_owner_root").await;
+    let r = h
+        .call(
+            "POST",
+            "/api/v1/applications/x/migrate",
+            Some("acme_owner_root"),
+            None,
+        )
+        .await;
     assert_eq!(r.status, 501);
     h.finish().await;
 }
