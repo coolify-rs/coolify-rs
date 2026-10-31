@@ -744,3 +744,135 @@ async fn a_task_notifies_for_applications_and_services() {
         2
     );
 }
+
+#[tokio::test]
+async fn regenerating_certificates_replaces_the_database_certificate() {
+    let (t, jobs, endpoint, _dir) = setup().await;
+    let db = &t.db;
+    let enc = Encrypter::new(KEY).unwrap();
+    let (certificate, key, until) =
+        coolify_jobs::server_ops::certificate::new_ca_certificate("Coolify CA Certificate", 3650)
+            .unwrap();
+    sqlx::query(
+        "INSERT INTO ssl_certificates (ssl_certificate, ssl_private_key, server_id, valid_until, is_ca_certificate, common_name, subject_alternative_names) \
+         VALUES ($1, $2, 1, $3, true, 'Coolify CA Certificate', '[]')",
+    )
+    .bind(enc.encrypt_string(&certificate))
+    .bind(enc.encrypt_string(&key))
+    .bind(until)
+    .execute(db.pool())
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO ssl_certificates (ssl_certificate, ssl_private_key, server_id, valid_until, is_ca_certificate, common_name, subject_alternative_names, resource_type, resource_id) \
+         VALUES ('old', 'old', 1, now() + interval '3 days', false, 'pg-uuid', '[]', 'App\\Models\\StandalonePostgresql', 1)",
+    )
+    .execute(db.pool())
+    .await
+    .unwrap();
+    jobs.regenerate_ssl_certificates(Some(1), None, false)
+        .await
+        .unwrap();
+    let (stored, days): (String, f64) = sqlx::query_as(
+        "SELECT ssl_certificate, extract(epoch FROM valid_until - now())::float8 / 86400 FROM ssl_certificates \
+         WHERE is_ca_certificate = false AND resource_id = 1",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    assert_ne!(stored, "old");
+    assert!(
+        enc.decrypt_string(&stored)
+            .unwrap()
+            .contains("BEGIN CERTIFICATE")
+    );
+    assert!(days > 360.0, "{days}");
+    assert_eq!(
+        count(
+            db,
+            "SELECT count(*) FROM local_file_volumes WHERE resource_id = 1"
+        )
+        .await,
+        2
+    );
+    // The team passed to the job hears about it, and the new certificate is not due again.
+    let bodies = endpoint.wait_for(1).await;
+    assert!(
+        serde_json::to_string(&bodies).unwrap().contains("pg"),
+        "{bodies:?}"
+    );
+    jobs.regenerate_ssl_certificates(None, None, false)
+        .await
+        .unwrap();
+    assert_eq!(count(db, "SELECT count(*) FROM ssl_certificates").await, 2);
+}
+
+#[tokio::test]
+async fn pull_request_comments_go_to_the_source_of_the_application() {
+    use coolify_jobs::applications::previews::PullRequestStatus;
+    use rsa::pkcs1::EncodeRsaPrivateKey;
+
+    let (t, jobs, _endpoint, _dir) = setup().await;
+    let db = &t.db;
+    let enc = Encrypter::new(KEY).unwrap();
+    let github = Endpoint::default();
+    let port = github.start().await;
+    github.reply(
+        "/app/installations/5/access_tokens",
+        r#"{"token": "fake-token"}"#,
+    );
+    github.reply("/repos/o/r/issues/7/comments", r#"{"id": 99}"#);
+    let mut rng = rand::thread_rng();
+    let key = rsa::RsaPrivateKey::new(&mut rng, 2048).unwrap();
+    let pem = key.to_pkcs1_pem(rsa::pkcs1::LineEnding::LF).unwrap();
+    sqlx::query("INSERT INTO private_keys (id, uuid, name, private_key, team_id) VALUES (2, 'gh', 'gh', $1, 1)")
+        .bind(enc.encrypt_string(pem.as_str()))
+        .execute(db.pool())
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO github_apps (id, uuid, name, api_url, html_url, team_id, is_public, app_id, installation_id, private_key_id) \
+         VALUES (1, 'gh', 'gh', $1, 'http://github.test', 1, false, 1, 5, 2)",
+    )
+    .bind(format!("http://127.0.0.1:{port}"))
+    .execute(db.pool())
+    .await
+    .unwrap();
+    sqlx::raw_sql(
+        "UPDATE applications SET source_type = 'App\\Models\\GithubApp', source_id = 1, git_repository = 'o/r' WHERE id = 1; \
+         INSERT INTO application_previews (id, uuid, pull_request_id, pull_request_html_url, application_id, fqdn) \
+           VALUES (1, 'pv', 7, 'http://github.test/o/r/pull/7', 1, 'https://pr.test');",
+    )
+    .execute(db.pool())
+    .await
+    .unwrap();
+    let app = coolify_db::applications::find_by_id(db, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    let preview = coolify_db::application_ops::preview(db, 1, 7)
+        .await
+        .unwrap()
+        .unwrap();
+    jobs.update_pull_request(&app, &preview, PullRequestStatus::Finished, Some("dep-1"))
+        .await;
+    let bodies = github.bodies();
+    let comment = bodies
+        .iter()
+        .find(|(p, _)| p == "/repos/o/r/issues/7/comments")
+        .unwrap_or_else(|| panic!("{bodies:?}"));
+    let text = comment.1["body"].as_str().unwrap();
+    assert!(text.starts_with("The preview deployment for **my-app** is ready. 🟢\n\n[Open Preview](https://pr.test) | [Open Build Logs]("), "{text}");
+    assert!(
+        text.contains("/project/p-uuid/environment/e-uuid/application/app-uuid/deployment/dep-1)"),
+        "{text}"
+    );
+    assert_eq!(
+        count(
+            db,
+            "SELECT count(*) FROM application_previews WHERE pull_request_issue_comment_id = '99'"
+        )
+        .await,
+        1
+    );
+}
