@@ -41,6 +41,19 @@ CASES = {
     # --ip stops the rolling update; each side needs its own address ({ip}).
     "custom-ip": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80",
                       custom_docker_run_options="--ip {ip}"),
+    # Pre- and post-deployment commands: deploy 1 has no old container, deploy 2 does.
+    "commands": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80",
+                     pre_deployment_command="echo 'pre output' && hostname",
+                     post_deployment_command="echo post output\nid -u"),
+    "post-fail": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80", post_deployment_command="echo oops; exit 3"),
+    "post-fail-silent": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80", post_deployment_command="exit 4"),
+    "pre-fail": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80", pre_deployment_command="echo bad; exit 5"),
+    "pre-named": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests", docker_compose_location="/docker-compose-simple.yaml", pre_deployment_command="hostname", pre_deployment_command_container="api",
+                      post_deployment_command="hostname", post_deployment_command_container="analytics"),
+    "pre-missing": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests", docker_compose_location="/docker-compose-simple.yaml", pre_deployment_command="hostname", pre_deployment_command_container="nope"),
+    "pre-unnamed": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests", docker_compose_location="/docker-compose-simple.yaml", pre_deployment_command="hostname"),
+    "post-missing": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests", docker_compose_location="/docker-compose-simple.yaml", post_deployment_command="hostname", post_deployment_command_container="nope"),
+    "post-unnamed": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests", docker_compose_location="/docker-compose-simple.yaml", post_deployment_command="hostname"),
     # A deploy key against a git-over-SSH mirror of the repository (--deploy-key, --ssh-repo).
     "deploykey": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
 }
@@ -57,6 +70,10 @@ def norm(text, pairs):
     return text
 
 
+# The status each deployment of a case ends with, when it is not `finished`.
+EXPECTED_STATUS = {("pre-fail", 2): "failed", ("pre-missing", 2): "failed", ("pre-unnamed", 2): "failed"}
+# Cases that wait for the status pollers: the columns they compare do not depend on the other cases.
+STATUS_CASES = ("dockerfile", "static", "nixpacks", "railpack", "deploykey")
 SECCOMP_PROFILE = '{"defaultAction":"SCMP_ACT_ALLOW"}'
 # What the Compose file and the Docker options change on the container.
 HOST_CONFIG = ("{{json .HostConfig.CapAdd}} {{json .HostConfig.CapDrop}} {{json .HostConfig.Init}} {{json .HostConfig.Ulimits}} "
@@ -151,7 +168,8 @@ def main():
                         record(f"[{case}] deploy {n} accepted by {side}", False, f"{c} {r}")
                 qr, qs = wait(ur, n), wait(us, n)
                 label = f"[{case}] deploy {n}"
-                record(f"{label}: both finished", qr and qs and qr["status"] == qs["status"] == "finished",
+                expected = EXPECTED_STATUS.get((case, n), "finished")
+                record(f"{label}: both {expected}", qr and qs and qr["status"] == qs["status"] == expected,
                        f"{qr and qr['status']} / {qs and qs['status']}")
                 if not (qr and qs):
                     continue
@@ -172,6 +190,8 @@ def main():
                         if e["hidden"]:
                             continue
                         text = norm(e["output"], pairs)
+                        # `docker ps` order of the containers of an application.
+                        text = re.sub(r"Available: (.*)$", lambda m: "Available: " + ", ".join(sorted(m[1].split(", "))), text)
                         # How many attempts see "starting" depends on timing.
                         if text.startswith("Attempt "):
                             starting = '"starting"' in text
@@ -248,6 +268,8 @@ def main():
                 host = fqdn.split("://", 1)[-1].split("/")[0]
                 codes.append(vm(f"curl -s -o /dev/null -w '%{{http_code}}' -H 'Host: {host}' http://127.0.0.1/"))
             record(f"[{case}] both answer through the proxy", codes[0] == codes[1] == "200", codes)
+            if case not in STATUS_CASES:
+                continue
             time.sleep(70)  # both status pollers run at least once
             ar = json.loads(sql(f"SELECT row_to_json(x)::text FROM applications x WHERE uuid='{ur}'"))
             as_ = json.loads(sql(f"SELECT row_to_json(x)::text FROM applications x WHERE uuid='{us}'"))

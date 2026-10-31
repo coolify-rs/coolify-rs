@@ -1213,10 +1213,7 @@ async fn finish_create(
     if cx.instant
         && columns.iter().any(|(k, v)| match (*k, v) {
             ("is_http_basic_auth_enabled", ColumnValue::Bool(b)) => *b,
-            (
-                "dockerfile" | "pre_deployment_command" | "post_deployment_command",
-                ColumnValue::Text(Some(t)),
-            ) => !t.trim().is_empty(),
+            ("dockerfile", ColumnValue::Text(Some(t))) => !t.trim().is_empty(),
             _ => false,
         })
     {
@@ -1925,10 +1922,6 @@ pub(super) async fn deployable(state: &AppState, a: &ApplicationRow) -> Result<(
     ) || a.str("dockerfile").is_some_and(|d| !d.is_empty())
         || a.destination.is_none()
         || a.bool("is_http_basic_auth_enabled")
-        || a.str("pre_deployment_command")
-            .is_some_and(|o| !o.trim().is_empty())
-        || a.str("post_deployment_command")
-            .is_some_and(|o| !o.trim().is_empty())
         || !apps::unported_parts(&state.db, a.id).await?.is_empty();
     if unsupported {
         Err(ApiError::NotPorted)

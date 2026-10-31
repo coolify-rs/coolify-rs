@@ -5,6 +5,7 @@
 //! upstream's job; the git build packs are in `build.rs`.
 
 mod build;
+mod commands;
 mod compose_pack;
 mod git;
 
@@ -1138,7 +1139,8 @@ impl Run {
         self.graceful_shutdown(&dep, true).await;
         let mkdir = in_docker(&dep, &format!("mkdir -p /artifacts/{dep}"));
         self.exec(vec![Cmd::new(run_command).hidden(), Cmd::new(mkdir)])
-            .await
+            .await?;
+        self.run_pre_deployment_command().await
     }
 
     /// `generate_compose_file()`.
@@ -1748,6 +1750,9 @@ impl Run {
         let jobs = self.jobs.clone();
         let server_id = self.server.id;
         tokio::spawn(async move { jobs.check_server_applications(server_id).await });
+        if let Err(Fail::Error { message, .. }) = self.run_post_deployment_command().await {
+            tracing::warn!("Post deployment command failed for {}: {message}", self.dep);
+        }
     }
 
     /// `completeDeployment()` → `transitionToStatus(FINISHED)`.
@@ -1826,6 +1831,32 @@ impl Run {
         .await;
         self.log(&format!("Error code: {code}"), "stderr", true)
             .await;
+        self.log("========================================", "stderr", false)
+            .await;
+        if self.app.str("build_pack") != Some("dockercompose")
+            && code != 69420
+            && !self
+                .app
+                .setting_bool("is_consistent_container_name_enabled")
+        {
+            if self.healthy {
+                self.log(
+                    "Deployment failed after the new version became healthy. Keeping the new version of your application running.",
+                    "stderr",
+                    false,
+                )
+                .await;
+            } else {
+                self.log(
+                    "Deployment failed. Removing the new version of your application.",
+                    "stderr",
+                    false,
+                )
+                .await;
+                let name = self.container.clone();
+                self.remove_container(&name).await;
+            }
+        }
     }
 
     /// `write_deployment_configurations()`: the generated compose file and README in the
