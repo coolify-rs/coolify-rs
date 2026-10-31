@@ -24,6 +24,7 @@ pub mod ui;
 pub mod ui_applications;
 pub mod ui_auth;
 pub mod ui_boarding;
+pub mod ui_canvas;
 pub mod ui_changelog;
 pub mod ui_database_backups;
 pub mod ui_database_general;

@@ -169,7 +169,7 @@ fn documentation(s: &ServiceRow) -> String {
 }
 
 /// `service_logo_urls()`, without the host.
-fn logo_urls(logo: Option<&str>) -> (String, String, String) {
+pub(crate) fn logo_urls(logo: Option<&str>) -> (String, String, String) {
     const DEFAULT: &str = "svgs/default.webp";
     let basename = |v: &str| v.rsplit('/').next().unwrap_or(v).to_owned();
     let Some(logo) = logo.filter(|l| !l.is_empty() && basename(l) != basename(DEFAULT)) else {

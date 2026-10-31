@@ -661,6 +661,55 @@ pub async fn ui_guard(State(state): State<AppState>, mut req: Request, next: Nex
     }
 }
 
+/// `UseSessionTeamApiToken` and `api.token.team` for `/canvas/api`: the session user with an
+/// in-memory token for the team of the canvas page (`X-Canvas-Team`), not the session team.
+pub async fn canvas_guard(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
+    let headers = req.headers().clone();
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let result = async {
+        let live = live_session(&state, &headers).await?;
+        if needs_csrf(&method) && !csrf_ok(&headers, &live.csrf) {
+            return Err(ApiError::Message(
+                StatusCode::from_u16(419).unwrap_or(StatusCode::FORBIDDEN),
+                "CSRF token mismatch.",
+            ));
+        }
+        web_gates(&live, &path)?;
+        let team = headers
+            .get("x-canvas-team")
+            .and_then(|v| v.to_str().ok())
+            .filter(|t| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|t| t.parse::<i64>().ok())
+            .ok_or(ApiError::Message(
+                StatusCode::BAD_REQUEST,
+                "Missing canvas team.",
+            ))?;
+        let m = live
+            .memberships
+            .iter()
+            .find(|m| m.team_id == team)
+            .ok_or(ApiError::InvalidToken)?;
+        Ok(AuthCtx {
+            token_id: 0,
+            user_id: live.user.id,
+            team_id: m.team_id,
+            team_id_raw: m.team_id.to_string(),
+            role: m.role,
+            can_read_sensitive: m.role.is_admin(),
+            abilities: abilities_for(m.role),
+        })
+    }
+    .await;
+    match result {
+        Ok(ctx) => {
+            req.extensions_mut().insert(ctx);
+            next.run(req).await
+        }
+        Err(e) => e.into_response(),
+    }
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/ui/session", get(current).post(login).delete(logout))

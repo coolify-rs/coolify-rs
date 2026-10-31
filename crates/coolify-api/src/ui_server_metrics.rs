@@ -156,7 +156,7 @@ async fn toggle(
 const TYPES: [&str; 5] = ["cpu", "memory", "disk", "load", "network"];
 
 /// `HasMetrics::prefetchMetrics`: `None` when the round trip failed.
-async fn prefetch(srv: &Srv, mins: i64) -> Option<HashMap<&'static str, String>> {
+pub(crate) async fn prefetch(srv: &Srv, mins: i64) -> Option<HashMap<&'static str, String>> {
     let from = (chrono::Utc::now() - chrono::Duration::minutes(mins))
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
@@ -192,7 +192,7 @@ async fn prefetch(srv: &Srv, mins: i64) -> Option<HashMap<&'static str, String>>
 }
 
 /// `HasMetrics::fetchMetricRows`: an error in the answer is an error, an empty answer has no rows.
-fn rows(response: Option<&String>) -> Result<Vec<Value>, String> {
+pub(crate) fn rows(response: Option<&String>) -> Result<Vec<Value>, String> {
     let response = response.map_or("", String::as_str);
     if response.contains("error") {
         let error = serde_json::from_str::<Value>(response)
@@ -274,7 +274,7 @@ fn downsample_lttb(data: &[(i64, f64)], threshold: usize) -> Vec<(i64, f64)> {
 }
 
 /// `HasMetrics::mapRows`.
-fn map_rows(rows: &[Value], field: &str, mins: i64) -> Vec<(i64, f64)> {
+pub(crate) fn map_rows(rows: &[Value], field: &str, mins: i64) -> Vec<(i64, f64)> {
     let mut metrics: Vec<(i64, f64)> = rows
         .iter()
         .map(|m| (number(m.get("time")) as i64, number(m.get(field))))
