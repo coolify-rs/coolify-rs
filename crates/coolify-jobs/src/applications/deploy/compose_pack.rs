@@ -214,6 +214,11 @@ impl Run {
             self.app
                 .raw
                 .insert("docker_compose_raw".into(), Value::String(raw.clone()));
+            // Users define the secrets in their own compose file.
+            if self.b.secrets_supported && !self.b.build_secrets.is_empty() {
+                self.info("Build secrets are configured. Ensure your docker-compose file includes build.secrets configuration for services that need them.")
+                    .await;
+            }
             (raw, None)
         } else {
             let mut parsed =
@@ -233,6 +238,10 @@ impl Run {
             if parsed.is_empty() {
                 self.info("Failed to parse docker-compose file.").await;
                 return Err(Fail::new("Failed to parse docker-compose file."));
+            }
+            // Add build secrets to compose file if enabled and BuildKit is supported
+            if self.b.secrets_supported && !self.b.build_secrets.is_empty() {
+                self.add_build_secrets_to_compose(&mut parsed).await?;
             }
             let build_env = self.generate_buildtime_environment_variables().await?;
             let fingerprint = self.compose_build_fingerprint(&build_env).await?;
@@ -428,7 +437,7 @@ impl Run {
         if self.b.force_rebuild {
             command.push_str(" --no-cache");
         }
-        if !self.b.build_args.is_empty() {
+        if !self.app.setting_bool("use_build_secrets") && !self.b.build_args.is_empty() {
             command.push_str(&format!(" {}", self.b.build_args.join(" ")));
             self.info("Adding build arguments to Docker Compose build command.")
                 .await;
@@ -438,7 +447,7 @@ impl Run {
             .await
     }
 
-    /// `modify_dockerfiles_for_compose($composeFile)` (no build secrets).
+    /// `modify_dockerfiles_for_compose($composeFile)`.
     async fn modify_dockerfiles_for_compose(&mut self, compose: &ParsedCompose) -> Step {
         if self
             .app
@@ -585,6 +594,13 @@ impl Run {
             } else {
                 self.info(&format!(
                     "Service {name}: All required ARG declarations already exist."
+                ))
+                .await;
+            }
+            if self.b.secrets_supported && !self.b.build_secrets.is_empty() {
+                self.modify_dockerfile_for_secrets(&full).await?;
+                self.info(&format!(
+                    "Modified Dockerfile for service {name} to use build secrets."
                 ))
                 .await;
             }

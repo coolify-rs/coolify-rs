@@ -27,6 +27,7 @@ from databases_diff import call, record, results, sql  # noqa: E402
 
 REPO = "https://github.com/coollabsio/coolify-examples"
 INLINE_DOCKERFILE = base64.b64encode(b"FROM nginx:alpine\nARG DIFF_ARG=x\nRUN echo inline > /usr/share/nginx/html/index.html\nHEALTHCHECK --interval=5s CMD wget -q -O- http://127.0.0.1/ || exit 1\n").decode()
+INLINE_SECRET_DOCKERFILE = base64.b64encode(b"FROM nginx:alpine AS base\nRUN echo \"$DIFF_SECRET\" > /usr/share/nginx/html/index.html\nFROM base\nRUN env > /usr/share/nginx/html/env.html\nHEALTHCHECK --interval=5s CMD wget -q -O- http://127.0.0.1/ || exit 1\n").decode()
 # An older commit of the repository that still has dockerfile/single-stage.
 ROLLBACK_COMMIT = "ff425d7999a5bb92bc0e977e89567d68c2a6b45b"
 CASES = {
@@ -75,6 +76,11 @@ CASES = {
     "rollback": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
     # A deploy key against a git-over-SSH mirror of the repository (--deploy-key, --ssh-repo).
     "deploykey": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
+    # Build secrets (PREPARE_SQL, ENVS): the helper holds the values, the Dockerfile mounts them.
+    "secrets": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
+    "secrets-inline": dict(dockerfile=INLINE_SECRET_DOCKERFILE, ports_exposes="80"),
+    "secrets-nixpacks": dict(build_pack="nixpacks", base_directory="/javascript/runtimes/nodejs", ports_exposes="3000"),
+    "secrets-compose": dict(build_pack="dockercompose", base_directory="/internal/compose", docker_compose_location="/docker-compose.yaml"),
 }
 
 
@@ -90,6 +96,7 @@ def norm(text, pairs):
     text = re.sub(r"RAILPACK_BUILT_AT=\d+", "RAILPACK_BUILT_AT=T", text)
     # The Compose build fingerprint hashes per-application inputs.
     text = re.sub(r"coolify\.build-fingerprint=[0-9a-f]{64}", "coolify.build-fingerprint=FP", text)
+    text = re.sub(r"COOLIFY_BUILD_SECRETS_HASH(=|: )[0-9a-f]{64}", r"COOLIFY_BUILD_SECRETS_HASH\1H", text)
     return text
 
 
@@ -122,7 +129,18 @@ DEPLOYS = {"rollback": 3}
 # Each side deletes the application through its own API, and the result is compared.
 OWN_DELETE = ("file-storage", "compose-files")
 # SQL on the created row before the first deployment; {u} is its uuid.
-PREPARE_SQL = {"basic-auth-generated": "UPDATE applications SET custom_labels = NULL WHERE uuid = '{u}'"}
+SETTING = "UPDATE application_settings SET {col} = true WHERE application_id = (SELECT id FROM applications WHERE uuid = '{u}')"
+BUILD_SECRETS = SETTING.replace("{col}", "use_build_secrets")
+PREPARE_SQL = {"basic-auth-generated": "UPDATE applications SET custom_labels = NULL WHERE uuid = '{u}'",
+               "secrets": BUILD_SECRETS, "secrets-inline": BUILD_SECRETS, "secrets-nixpacks": BUILD_SECRETS, "secrets-compose": BUILD_SECRETS}
+# POST /applications/{uuid}/envs through the reference, for both rows.
+SECRET_ENV = [{"key": "DIFF_SECRET", "value": "hunter2-secret", "is_buildtime": True, "is_runtime": True},
+              {"key": "DIFF_MULTI", "value": "line one\nline two", "is_multiline": True, "is_buildtime": True, "is_runtime": False}]
+ENVS = {"secrets": SECRET_ENV, "secrets-inline": SECRET_ENV, "secrets-nixpacks": SECRET_ENV[:1], "secrets-compose": SECRET_ENV[:1]}
+# Cases that also compare the hidden log: build.sh and the steps BuildKit prints, which show the rewritten Dockerfile.
+HIDDEN_CASES = {"secrets", "secrets-inline", "secrets-nixpacks", "secrets-compose"}
+# A file in the running image: what the build saw.
+IMAGE_FILES = {"secrets": "/usr/share/nginx/html/env.html", "secrets-inline": "/usr/share/nginx/html/env.html"}
 # The status each deployment of a case ends with, when it is not `finished`.
 EXPECTED_STATUS = {("pre-fail", 2): "failed", ("pre-missing", 2): "failed", ("pre-unnamed", 2): "failed"}
 # Cases that wait for the status pollers: the columns they compare do not depend on the other cases.
@@ -142,6 +160,7 @@ def main():
     ap.add_argument("--case", default=",".join(c for c in CASES if c != "deploykey"))
     ap.add_argument("--deploy-key", help="private key file the --ssh-repo accepts")
     ap.add_argument("--ssh-repo", help="e.g. git@192.168.139.220:examples.git")
+    ap.add_argument("--track", help="file that receives each created uuid as it is created")
     a = ap.parse_args()
 
     def vm(cmd):
@@ -209,6 +228,9 @@ def main():
                     record(f"[{case}] create", False, r)
                     break
                 created.append(body["uuid"])
+                if a.track:
+                    with open(a.track, "a") as f:
+                        f.write(body["uuid"] + "\n")
                 apps[side] = body
             if len(apps) < 2:
                 continue
@@ -222,6 +244,14 @@ def main():
             if case in PREPARE_SQL:
                 for u in (ur, us):
                     sql(PREPARE_SQL[case].replace("{u}", u))
+            if case in ENVS and spec.get("build_pack") == "dockercompose":
+                # The job that stored the file still creates the SERVICE_* rows; the order of the rows is compared.
+                time.sleep(15)
+            for body in ENVS.get(case, []):
+                for u in (ur, us):
+                    c, r = call("ref", "POST", f"/api/v1/applications/{u}/envs", body, tok="acme_owner_root")
+                    if c != 201:
+                        record(f"[{case}] env accepted", False, f"{c} {r}")
             if case in STORAGES:
                 bodies, shell = STORAGES[case]
                 for side, u in (("ref", ur), ("rs", us)):
@@ -315,11 +345,34 @@ def main():
                         ordered.append(c)
                     ordered.extend(sorted(run))
                     return visible, ordered
+                def hidden(q, u):
+                    pairs = [(u, "U"), (q["deployment_uuid"], "DEP"), (commit, "SHA"), (f"{case}-ref", "NAME"), (f"{case}-rs", "NAME")]
+                    text = "\n".join(e["output"] for e in json.loads(q["logs"] or "[]") if e["hidden"] and not e.get("command"))
+                    lines = []
+                    for line in norm(text, pairs).splitlines():
+                        step = re.match(r"#\d+ (\[.*)", line)
+                        if step:
+                            lines.append(step[1])
+                        elif "docker build" in line or line.startswith("cd /artifacts/"):
+                            lines.append(line)
+                    return sorted(set(lines))
+                if case in HIDDEN_CASES:
+                    hr, hs = hidden(qr, ur), hidden(qs, us)
+                    record(f"{label}: build steps and build.sh identical", hr == hs, "\n".join(difflib.unified_diff(hr, hs, lineterm="")))
                 (vr, cr), (vs, cs) = entries(qr, ur), entries(qs, us)
                 record(f"{label}: visible log entries identical", vr == vs,
                        "\n".join(difflib.unified_diff([f"{t} {o}" for t, o in vr], [f"{t} {o}" for t, o in vs], lineterm="")))
                 record(f"{label}: logged commands identical", cr == cs,
                        "\n".join(difflib.unified_diff(cr, cs, lineterm="")))
+            if case in IMAGE_FILES:
+                seen = []
+                for u in (ur, us):
+                    name = vm(f"docker ps --filter label=coolify.applicationUuid={u} --format '{{{{.Names}}}}'").split()
+                    text = vm(f"docker exec {name[0]} cat {IMAGE_FILES[case]}") if name else ""
+                    # The build container's hostname and working directory.
+                    seen.append(sorted(norm(l, [(u, "U"), (f"{case}-ref", "NAME"), (f"{case}-rs", "NAME")]) for l in text.splitlines() if not l.startswith(("HOSTNAME=", "SOURCE_COMMIT="))))
+                record(f"[{case}] the build saw the same variables", seen[0] == seen[1] and seen[0] != [], "\n".join(difflib.unified_diff(seen[0], seen[1], lineterm="")))
+                record(f"[{case}] the build saw the secret", any("hunter2-secret" in l for l in seen[0]), seen[0])
             ip_pairs = [(ip, "IP") for ip in ips.values()]
             if case == "rollback":
                 images = [vm(f"docker ps --filter label=coolify.applicationUuid={u} --format '{{{{.Image}}}}'").strip() for u in (ur, us)]

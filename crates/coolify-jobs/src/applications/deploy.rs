@@ -8,6 +8,7 @@ mod build;
 mod commands;
 mod compose_pack;
 mod git;
+mod secrets;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -162,6 +163,12 @@ struct BuildState {
     compose_location: String,
     buildkit: bool,
     buildx: bool,
+    /// `$this->pull_request_id`.
+    pull_request_id: i64,
+    /// `$this->dockerSecretsSupported`.
+    secrets_supported: bool,
+    /// `$this->build_secrets`.
+    build_secrets: String,
     variables: Option<Vec<Var>>,
     env_args: build::Ordered,
     build_args: Vec<String>,
@@ -172,6 +179,13 @@ struct BuildState {
     compose_env: Option<compose::ComposeEnv>,
     compose_fingerprint: Option<String>,
     compose_build_env: Option<Vec<String>>,
+}
+
+impl BuildState {
+    /// `$this->pull_request_id !== 0`.
+    fn is_preview(&self) -> bool {
+        self.pull_request_id != 0
+    }
 }
 
 /// The state of one deployment.
@@ -375,7 +389,12 @@ impl Run {
             let queue_id = self.queue_id;
             let command_for_log =
                 (!cmd.skip_command_log && !cmd.command_hidden).then(|| self.redact(&cmd.command));
-            let raw_command = cmd.command.clone();
+            // `$message.' '.$command`: the command of the entry, which these two do not have.
+            let raw_command = if cmd.skip_command_log || cmd.command_hidden {
+                String::new()
+            } else {
+                cmd.command.clone()
+            };
             let hint_added = self.hint_added.clone();
             let known = self.known.clone();
             let locked = self.locked.clone();
@@ -1039,6 +1058,27 @@ impl Run {
                 .await;
             }
         }
+        if self.app.setting_bool("use_build_secrets") && self.b.buildkit {
+            let secrets = self
+                .instant(
+                    &["docker build --help 2>&1 | grep -q 'secret' && echo 'supported' || echo 'not-supported'"],
+                    true,
+                )
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            if secrets == "supported" {
+                self.b.secrets_supported = true;
+                self.info("Build secrets are enabled and will be used for enhanced security.")
+                    .await;
+            } else {
+                self.info(&format!(
+                    "Docker on {name} does not support build secrets. Using traditional build arguments."
+                ))
+                .await;
+            }
+        }
     }
 
     /// `deploy_dockerimage_buildpack()`.
@@ -1090,6 +1130,11 @@ impl Run {
 
     /// `prepare_builder_image()`.
     async fn prepare_builder_image(&mut self) -> Step {
+        self.prepare_builder_image_again(true).await
+    }
+
+    /// `prepare_builder_image($firstTry)`.
+    async fn prepare_builder_image_again(&mut self, first_try: bool) -> Step {
         self.check_cancelled().await?;
         let settings = coolify_db::instance::deployment_settings(&self.jobs.0.db)
             .await
@@ -1118,29 +1163,37 @@ impl Run {
             )
             .await?
             .unwrap_or_default();
+        let env_flags = self.generate_docker_env_flags_for_secrets().await?;
         let buildx = format!("-v {home}/.docker/buildx:/root/.docker/buildx");
         let net = quote(self.app.network());
         let dep = &self.dep;
-        // `{env_flags}` is empty: build secrets are not ported.
         // seccompProfileMountFlags(): docker compose runs in this helper and reads the profiles.
         let seccomp =
             docker_run::seccomp_profile_mount_flags(self.app.str("custom_docker_run_options"));
         let run_command = if config == "OK" {
             format!(
-                "docker run -d --network {net} --name {dep}  --rm -v {home}/.docker/config.json:/root/.docker/config.json:ro {buildx} -v /var/run/docker.sock:/var/run/docker.sock {seccomp} {helper}"
+                "docker run -d --network {net} --name {dep} {env_flags} --rm -v {home}/.docker/config.json:/root/.docker/config.json:ro {buildx} -v /var/run/docker.sock:/var/run/docker.sock {seccomp} {helper}"
             )
         } else {
             format!(
-                "docker run -d --network {net} --name {dep}  --rm {buildx} -v /var/run/docker.sock:/var/run/docker.sock {seccomp} {helper}"
+                "docker run -d --network {net} --name {dep} {env_flags} --rm {buildx} -v /var/run/docker.sock:/var/run/docker.sock {seccomp} {helper}"
             )
         };
-        self.info(&format!("Preparing container with helper image: {helper}"))
-            .await;
+        if first_try {
+            self.info(&format!("Preparing container with helper image: {helper}"))
+                .await;
+        } else {
+            self.info("Preparing container with helper image with updated envs.")
+                .await;
+        }
         let dep = self.dep.clone();
         self.graceful_shutdown(&dep, true).await;
         let mkdir = in_docker(&dep, &format!("mkdir -p /artifacts/{dep}"));
-        self.exec(vec![Cmd::new(run_command).hidden(), Cmd::new(mkdir)])
-            .await?;
+        let mut run = Cmd::new(run_command).hidden();
+        if !env_flags.is_empty() {
+            run = run.skip_command_log();
+        }
+        self.exec(vec![run, Cmd::new(mkdir)]).await?;
         self.run_pre_deployment_command().await
     }
 

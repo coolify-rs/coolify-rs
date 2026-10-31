@@ -42,7 +42,7 @@ const DOCKER_CLIENT_ENV_KEYS: &[&str] = &[
 ];
 
 /// `is_reserved_docker_client_env_key($key)`.
-fn reserved_docker_client_key(key: &str) -> bool {
+pub(super) fn reserved_docker_client_key(key: &str) -> bool {
     !key.is_empty() && DOCKER_CLIENT_ENV_KEYS.contains(&key.to_uppercase().as_str())
 }
 
@@ -182,7 +182,7 @@ fn php_assoc(v: Value) -> Value {
 }
 
 /// A PHP scalar as a string (`(string) $value`).
-fn php_string(v: &Value) -> String {
+pub(super) fn php_string(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Bool(true) => "1".into(),
@@ -192,7 +192,7 @@ fn php_string(v: &Value) -> String {
 }
 
 impl Run {
-    fn build_pack(&self) -> String {
+    pub(super) fn build_pack(&self) -> String {
         self.app.str("build_pack").unwrap_or_default().to_owned()
     }
 
@@ -1035,10 +1035,15 @@ impl Run {
         }
         self.reuse_commit_message().await;
         self.set_coolify_variables();
+        // Restart helper container with actual SOURCE_COMMIT value
         if self.app.setting_bool("use_build_secrets") && self.commit != "HEAD" {
-            return Err(Fail::new(
-                "Build secrets are not supported by coolify-rs yet.",
-            ));
+            self.info("Restarting helper container with actual SOURCE_COMMIT value.")
+                .await;
+            // restart_builder_container_with_actual_commit()
+            let dep = self.dep.clone();
+            self.graceful_shutdown(&dep, true).await;
+            self.b.env_args = Ordered::default();
+            Box::pin(self.prepare_builder_image_again(false)).await?;
         }
         Ok(())
     }
@@ -1428,7 +1433,7 @@ impl Run {
     }
 
     /// `validatedBuildtimeEnvironmentVariableKey($key, $origin)`.
-    async fn validated_buildtime_key(&self, key: &str, origin: &str) -> Step {
+    pub(super) async fn validated_buildtime_key(&self, key: &str, origin: &str) -> Step {
         if valid_env_key(key) {
             return Ok(());
         }
@@ -1597,7 +1602,7 @@ impl Run {
     }
 
     /// `generate_secrets_hash($variables)` for a key/value collection.
-    fn secrets_hash(&self, pairs: &[(String, String)]) -> String {
+    pub(super) fn secrets_hash(&self, pairs: &[(String, String)]) -> String {
         let mut sorted: Vec<&(String, String)> = pairs.iter().collect();
         sorted.sort_by(|a, b| a.0.cmp(&b.0));
         let text = sorted
@@ -1613,20 +1618,10 @@ impl Run {
             .unwrap_or_default()
     }
 
-    /// `generate_build_env_variables()` without build secrets.
+    /// `generate_build_env_variables()`.
     pub(super) async fn generate_build_env_variables(&mut self) -> Step {
         let variables: Vec<(String, String)> = if self.build_pack() == "nixpacks" {
-            match self
-                .b
-                .nixpacks_plan
-                .as_ref()
-                .and_then(|p| p.get("variables"))
-            {
-                Some(Value::Object(m)) => {
-                    m.iter().map(|(k, v)| (k.clone(), php_string(v))).collect()
-                }
-                _ => Vec::new(),
-            }
+            super::secrets::plan_variables(self.b.nixpacks_plan.as_ref())
         } else {
             self.generate_env_variables().await?;
             self.b
@@ -1638,6 +1633,11 @@ impl Run {
         };
         if !variables.is_empty() {
             self.analyze_build_time_variables(&variables).await?;
+        }
+        if self.b.secrets_supported {
+            self.generate_build_secrets(&variables).await?;
+            self.b.build_args = Vec::new();
+            return Ok(());
         }
         let hash = (!variables.is_empty()).then(|| self.secrets_hash(&variables));
         let mut args = Vec::new();
@@ -1710,8 +1710,12 @@ impl Run {
         Ok(())
     }
 
-    /// `add_build_env_variables_to_dockerfile()` (no build secrets).
+    /// `add_build_env_variables_to_dockerfile()`.
     async fn add_build_env_variables_to_dockerfile(&mut self) -> Step {
+        if self.b.secrets_supported {
+            // The variables are passed with the --secret flag.
+            return Ok(());
+        }
         if self
             .app
             .settings
@@ -1911,15 +1915,22 @@ impl Run {
         Ok(())
     }
 
-    /// `build_image()` without build secrets.
+    /// `build_image()`.
     async fn build_image(&mut self) -> Step {
-        for (key, _) in self.coolify_env(true).await?.0 {
-            self.validated_buildtime_key(&key, "the Coolify build environment")
-                .await?;
-            self.b
-                .build_args
-                .push(format!("--build-arg {}", quote(&key)));
+        if !self.b.secrets_supported {
+            for (key, _) in self.coolify_env(true).await?.0 {
+                self.validated_buildtime_key(&key, "the Coolify build environment")
+                    .await?;
+                self.b
+                    .build_args
+                    .push(format!("--build-arg {}", quote(&key)));
+            }
         }
+        let secrets_flags = if self.b.build_secrets.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", self.b.build_secrets)
+        };
         let build_args = self.b.build_args.join(" ");
         self.info(SEPARATOR).await;
         if self.b.disable_build_cache {
@@ -1997,7 +2008,11 @@ impl Run {
                 Cmd::new(in_docker(&self.dep, &format!("cat {w}/.nixpacks/Dockerfile"))).hidden(),
             ])
             .await?;
-            let build = if self.b.buildkit {
+            let build = if self.b.secrets_supported {
+                self.modify_dockerfile_for_secrets(&format!("{w}/.nixpacks/Dockerfile"))
+                    .await?;
+                self.wrap(&format!("DOCKER_BUILDKIT=1 docker build {nc}{hosts} --network host -f {w}/.nixpacks/Dockerfile{secrets_flags} --progress plain -t {first_image} {w}"))
+            } else if self.b.buildkit {
                 self.wrap(&format!("DOCKER_BUILDKIT=1 docker build {nc}{hosts} --network host -f {w}/.nixpacks/Dockerfile --progress plain -t {first_image} {build_args} {w}"))
             } else {
                 self.wrap(&format!("docker build {nc}{hosts} --network host -f {w}/.nixpacks/Dockerfile -t {first_image} {build_args} {w}"))
@@ -2008,7 +2023,19 @@ impl Run {
             ])
             .await?;
         } else {
-            let build = if self.b.buildkit {
+            let build = if self.b.secrets_supported {
+                self.modify_dockerfile_for_secrets(&format!("{w}{df}"))
+                    .await?;
+                let command = format!(
+                    "DOCKER_BUILDKIT=1 docker build {nc}{pull}{target} {hosts} --network host -f {w}{df}{secrets_flags} --progress plain -t {first_image} {w}"
+                );
+                // "Pure Dockerfile based deployment": the secrets are in the helper's environment.
+                if pull.is_empty() {
+                    self.wrap(&command)
+                } else {
+                    command
+                }
+            } else if self.b.buildkit {
                 self.wrap(&format!("DOCKER_BUILDKIT=1 docker build {nc}{pull}{target} {hosts} --network host -f {w}{df} --progress plain -t {first_image} {build_args} {w}"))
             } else {
                 self.wrap(&format!("docker build {nc}{pull}{target} {hosts} --network host -f {w}{df} {build_args} -t {first_image} {w}"))
