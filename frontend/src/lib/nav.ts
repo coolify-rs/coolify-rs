@@ -58,7 +58,7 @@ export const navSections: [string, NavItem[]][] = [
           { label: 'Sources', icon: 'sources', href: '/sources', active: ['sources', 'source/*'] },
           { label: 'Destinations', icon: 'destinations', href: '/destinations', active: ['destinations', 'destination/*'] },
           { label: 'Registries', icon: 'layers', href: '/registries', active: ['registries'], visible: (c) => c.isAdmin },
-          { label: 'S3 Storage', icon: 'storages', href: '/storages', active: ['storages', 'storages/*'] },
+          { label: 'S3 Storage', icon: 'storages', href: '/storages', active: ['storages', 'storages/*'], ported: true },
         ],
       },
       {

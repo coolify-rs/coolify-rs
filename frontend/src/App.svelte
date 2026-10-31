@@ -27,6 +27,8 @@
   import SharedVariables from './pages/SharedVariables.svelte';
   import SharedVariableOwners from './pages/SharedVariableOwners.svelte';
   import SharedVariableScope from './pages/SharedVariableScope.svelte';
+  import Storages from './pages/Storages.svelte';
+  import Storage from './pages/Storage.svelte';
   import Unported from './pages/Unported.svelte';
   import { router } from './lib/router.svelte';
   import { session } from './lib/session.svelte';
@@ -138,6 +140,10 @@
       {#key router.path}<SharedVariableScope kind="environment" uuid={params.uuid} env={params['env']} />{/key}
     {:else if router.current.name === 'shared-server'}
       {#key router.path}<SharedVariableScope kind="server" uuid={params.uuid} />{/key}
+    {:else if router.current.name === 'storages'}
+      <Storages />
+    {:else if router.current.name === 'storage'}
+      {#key router.path}<Storage uuid={params.uuid} section={params.section ?? 'general'} />{/key}
     {:else if router.current.name === 'servers'}
       <Servers />
     {:else if router.current.name === 'server-new' || router.current.name === 'server-new-type'}

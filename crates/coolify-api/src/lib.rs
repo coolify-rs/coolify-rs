@@ -23,6 +23,7 @@ pub mod ui_applications;
 pub mod ui_databases;
 pub mod ui_notifications;
 pub mod ui_shared_variables;
+pub mod ui_storages;
 pub mod ui_tags;
 pub mod validation;
 
