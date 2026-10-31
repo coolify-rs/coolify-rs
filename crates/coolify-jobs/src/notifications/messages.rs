@@ -3444,6 +3444,8 @@ pub enum Mail {
         new_email: String,
         verification_code: String,
     },
+    /// `User::sendVerificationEmail`.
+    EmailVerification { url: String },
     /// `TransactionalEmails\Test`.
     Test,
     /// `TracksDeliveryFailures::sendChannelDisabledEmail`.
@@ -3505,6 +3507,10 @@ impl Mail {
                     views::reset_password(app, &url, PASSWORD_EXPIRE_MINUTES),
                 )
             }
+            Mail::EmailVerification { url } => (
+                "Coolify: Verify your email.".to_owned(),
+                views::email_verification(app, url),
+            ),
             Mail::TeamInvitation {
                 team,
                 invitation_link,

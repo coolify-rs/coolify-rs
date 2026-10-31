@@ -2,6 +2,15 @@
   import Shell from './components/Shell.svelte';
   import Toasts from './components/Toasts.svelte';
   import Login from './pages/Login.svelte';
+  import Register from './pages/Register.svelte';
+  import ForgotPassword from './pages/ForgotPassword.svelte';
+  import ResetPassword from './pages/ResetPassword.svelte';
+  import TwoFactorChallenge from './pages/TwoFactorChallenge.svelte';
+  import ForcePasswordReset from './pages/ForcePasswordReset.svelte';
+  import TwoFactorRequired from './pages/TwoFactorRequired.svelte';
+  import VerifyEmail from './pages/VerifyEmail.svelte';
+  import EmailVerifyLink from './pages/EmailVerifyLink.svelte';
+  import SettingsOauth from './pages/SettingsOauth.svelte';
   import Dashboard from './pages/Dashboard.svelte';
   import Projects from './pages/Projects.svelte';
   import Project from './pages/Project.svelte';
@@ -49,6 +58,7 @@
   import { session } from './lib/session.svelte';
   import { page } from './lib/page.svelte';
   import { setUnauthenticatedHandler } from './lib/api';
+  import { authUi } from './lib/authApi';
 
   session.refresh();
   setUnauthenticatedHandler(() => {
@@ -59,21 +69,40 @@
   // `redirect()->guest()`: an invitation comes back after signing in.
   let intended: string | null = null;
 
-  // Route guard: signed-out users see the login page; signed-in users skip it.
+  // Pages behind `guest`: a signed-in user goes to the dashboard.
+  const guestPages = ['login', 'register', 'forgot-password', 'reset-password', 'two-factor-challenge'];
+  // `allowedPathsForTwoFactorSetup()`.
+  const twoFactorSetup = ['two-factor-required', 'confirm-password'];
+  // `allowedPathsForBoardingAccounts()` with the pages behind them.
+  const boardingAllowed = ['onboarding', 'force-password-reset', 'profile', 'appearance', 'profile-passkey-confirm', ...twoFactorSetup];
+
+  // The web middleware group, in order: `Authenticate`, `CheckForcePasswordReset`,
+  // `DecideWhatToDoWithUser` (team selection, then boarding; the email and subscription checks
+  // only apply to Coolify Cloud), `RequireTeamTwoFactor`.
   $effect(() => {
     if (!session.loaded) return;
     const name = router.current.name;
-    if (name === 'auth-link') return;
-    if (!session.info && name !== 'login') {
-      if (name === 'invitation') intended = router.path;
-      router.go('/login', true);
-    } else if (session.info && intended) {
+    if (name === 'auth-link' || name === 'oauth-denied') return;
+    const info = session.info;
+    if (!info) {
+      if (!guestPages.includes(name)) {
+        // `redirect()->guest()`: the page comes back after signing in.
+        if (router.path !== '/') intended = router.path + router.search;
+        router.go('/login', true);
+      }
+      return;
+    }
+    if (intended) {
       const to = intended;
       intended = null;
       router.go(to, true);
-    } else if (session.info && name === 'login') router.go('/', true);
-    // `DecideWhatToDoWithUser`: no active team and several to choose from.
-    else if (session.info && !session.info.current_team && !['select-team', 'invitation', 'confirm-password', 'profile', 'profile-passkey-confirm'].includes(name)) router.go('/select-team', true);
+    } else if (guestPages.includes(name)) router.go('/', true);
+    else if (info.force_password_reset) {
+      if (name !== 'force-password-reset') router.go('/force-password-reset', true);
+    } else if (name === 'force-password-reset') router.go('/', true);
+    else if (!info.current_team && !['select-team', 'invitation', 'confirm-password', 'profile', 'profile-passkey-confirm'].includes(name)) router.go('/select-team', true);
+    else if (info.show_boarding && !boardingAllowed.includes(name)) router.go('/onboarding', true);
+    else if (info.current_team?.two_factor_blocked && !twoFactorSetup.includes(name)) router.go('/two-factor-required', true);
   });
 
   // Breadcrumb switchers belong to the page that set them.
@@ -83,11 +112,20 @@
     page.resourceSwitcher = null;
     page.navContext = null;
     page.server = null;
+    page.navChildren = null;
   });
 
   // Pages that show a named record set their own title once it loads.
   const titles: Record<string, string> = {
     login: 'Login',
+    register: 'Register',
+    'forgot-password': 'Forgot Password',
+    'reset-password': 'Reset Password',
+    'two-factor-challenge': 'Two Factor Challenge',
+    'force-password-reset': 'Set a new password',
+    'two-factor-required': 'Two-factor authentication required',
+    verify: 'Verify Email',
+    'settings-oauth': 'Authentication',
     dashboard: 'Dashboard',
     projects: 'Projects',
     keys: 'Keys & Tokens',
@@ -111,14 +149,39 @@
   });
 
   const params = $derived(router.current.params);
+
+  /** `Boarding\Index::skipBoarding`. */
+  async function skipBoarding() {
+    await authUi.skipBoarding();
+    await session.refresh();
+    router.go('/', true);
+  }
 </script>
 
 {#if !session.loaded}
   <main class="h-full bg-neutral-50 dark:bg-base"></main>
 {:else if router.current.name === 'auth-link'}
   <Invitation token={router.query('token') ?? ''} />
-{:else if !session.info || router.current.name === 'login'}
+{:else if router.current.name === 'oauth-denied'}
+  <ErrorPage code={403} description="OAuth provider is not enabled" />
+{:else if !session.info && router.current.name === 'register'}
+  <Register />
+{:else if !session.info && router.current.name === 'forgot-password'}
+  <ForgotPassword />
+{:else if !session.info && router.current.name === 'reset-password'}
+  <ResetPassword token={params.token} email={router.query('email') ?? ''} />
+{:else if !session.info && router.current.name === 'two-factor-challenge'}
+  <TwoFactorChallenge />
+{:else if !session.info || guestPages.includes(router.current.name)}
   <Login />
+{:else if router.current.name === 'force-password-reset'}
+  <ForcePasswordReset />
+{:else if router.current.name === 'two-factor-required'}
+  <TwoFactorRequired />
+{:else if router.current.name === 'verify'}
+  <VerifyEmail />
+{:else if router.current.name === 'email-verify'}
+  <EmailVerifyLink />
 {:else if router.current.name === 'select-team'}
   <SelectTeam />
 {:else if router.current.name === 'invitation'}
@@ -133,12 +196,6 @@
   <Shell>
     {#if router.current.name === 'profile'}
       <Profile />
-    {:else if session.info.current_team?.two_factor_blocked}
-      <Unported
-        title="Two-factor authentication required"
-        description="This team requires two-factor authentication. Enable it for your account in Coolify, then sign in again."
-        iconName="keys"
-      />
     {:else if router.current.name === 'dashboard'}
       <Dashboard />
     {:else if router.current.name === 'projects'}
@@ -209,6 +266,12 @@
       {#key params.uuid}<CloudInitScript uuid={params.uuid} />{/key}
     {:else if router.current.name === 'integration-tokens'}
       <IntegrationTokens />
+    {:else if router.current.name === 'settings-oauth' && session.isInstanceAdmin}
+      {#key router.path}<SettingsOauth provider={params.provider} />{/key}
+    {:else if router.current.name === 'onboarding'}
+      <Unported title="Onboarding" description="The onboarding wizard is not ported yet." iconName="rocket">
+        <button type="button" class="button" onclick={skipBoarding}>Skip setup</button>
+      </Unported>
     {:else if router.current.name === 'servers'}
       <Servers />
     {:else if router.current.name === 'server-new' || router.current.name === 'server-new-type'}

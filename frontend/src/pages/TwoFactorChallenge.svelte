@@ -1,0 +1,120 @@
+<script lang="ts">
+  // Port of upstream auth/two-factor-challenge.blade.php (TwoFactorAuthenticatedSessionController).
+  import { onMount, tick } from 'svelte';
+  import AuthAlert from '../components/AuthAlert.svelte';
+  import AuthShell from '../components/AuthShell.svelte';
+  import FormInput from '../components/FormInput.svelte';
+  import Reicon from '../components/Reicon.svelte';
+  import { authUi, errorList } from '../lib/authApi';
+  import { link, router } from '../lib/router.svelte';
+  import { session } from '../lib/session.svelte';
+
+  let ready = $state(false);
+  let showRecovery = $state(false);
+  let submitting = $state(false);
+  let code = $state('');
+  let recovery = $state('');
+  let errors = $state<string[]>([]);
+  let status = $state<string | null>(null);
+  let form: HTMLFormElement | undefined = $state();
+  let codeInput: HTMLInputElement | undefined = $state();
+  const highlighted = { ishighlighted: '' };
+
+  onMount(async () => {
+    const g = await authUi.state();
+    // `hasChallengedUser`.
+    if (!g.two_factor_challenge) {
+      router.go('/login', true);
+      return;
+    }
+    status = g.status;
+    errors = g.errors;
+    ready = true;
+    await tick();
+    codeInput?.focus();
+  });
+
+  function onCodeInput(e: Event) {
+    const input = e.target as HTMLInputElement;
+    code = input.value.replace(/\D/g, '').slice(0, 6);
+    input.value = code;
+    if (code.length === 6) queueMicrotask(() => form?.requestSubmit());
+  }
+
+  async function toggle(toRecovery: boolean) {
+    showRecovery = toRecovery;
+    await tick();
+    if (toRecovery) document.getElementById('recovery_code')?.focus();
+    else codeInput?.focus();
+  }
+
+  async function submit(e: SubmitEvent) {
+    e.preventDefault();
+    if (submitting) return;
+    submitting = true;
+    errors = [];
+    status = null;
+    try {
+      const res = await authUi.twoFactor(showRecovery ? { recovery_code: recovery } : { code });
+      session.set(res);
+      router.go('/', true);
+    } catch (err) {
+      errors = errorList(err);
+      code = '';
+      recovery = '';
+      if (codeInput) codeInput.value = '';
+    } finally {
+      submitting = false;
+    }
+  }
+</script>
+
+{#if ready}
+  <AuthShell title="coolify-rs" description="Verify your identity to finish signing in.">
+    <div class="flex flex-col gap-4">
+      {#if status}<AuthAlert type="success">{status}</AuthAlert>{/if}
+      {#if errors.length}<AuthAlert type="error" messages={errors} />{/if}
+
+      <div class="auth-guidance">
+        <Reicon name="info-circle" class="mt-0.5 size-4 shrink-0" />
+        {#if showRecovery}
+          <p>Enter one of the recovery codes you saved when setting up two-factor authentication.</p>
+        {:else}
+          <p>Enter the 6-digit code from your authenticator app.</p>
+        {/if}
+      </div>
+
+      <form bind:this={form} onsubmit={submit} class="flex flex-col gap-4">
+        <div class="flex flex-col gap-3" style:display={showRecovery ? 'none' : null}>
+          <input
+            bind:this={codeInput}
+            type="text"
+            name="code"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            maxlength="6"
+            autocomplete="one-time-code"
+            aria-label="Two-factor authentication code"
+            disabled={showRecovery}
+            oninput={onCodeInput}
+            class="mx-auto h-14 w-64 rounded-md border border-neutral-300 bg-white px-4 text-center text-xl font-semibold tracking-[0.5em] text-neutral-900 transition-colors focus:border-warning focus:outline-none focus:ring-1 focus:ring-warning dark:border-white/10 dark:bg-coolgray-100 dark:text-white"
+          />
+          <button type="button" class="auth-text-link self-center" onclick={() => toggle(true)}>Use a recovery code</button>
+        </div>
+
+        <div class="flex flex-col gap-3" style:display={showRecovery ? null : 'none'}>
+          <FormInput id="recovery_code" autocomplete="one-time-code" disabled={!showRecovery} label="Recovery code" bind:value={recovery} />
+          <button type="button" class="auth-text-link self-center" onclick={() => toggle(false)}>Use an authenticator code</button>
+        </div>
+
+        <button class="button w-full justify-center" type="submit" disabled={submitting} {...highlighted}>Verify and continue</button>
+      </form>
+    </div>
+    {#snippet footer()}
+      <span>Not your account?</span>
+      <a href="/login" use:link class="auth-text-link">Back to login</a>
+    {/snippet}
+  </AuthShell>
+{:else}
+  <main class="h-full bg-neutral-50 dark:bg-base"></main>
+{/if}

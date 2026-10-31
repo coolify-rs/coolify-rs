@@ -379,6 +379,11 @@ pub fn reset_password(app: &str, url: &str, count: i64) -> String {
     )
 }
 
+/// `emails/email-verification.blade.php`.
+pub fn email_verification(app: &str, url: &str) -> String {
+    layout(app, &format!("Verify your email [here]({}).\n", e(url)))
+}
+
 pub fn scheduled_task_success(app: &str, name: &str, output: &str, url: Option<&str>) -> String {
     layout(
         app,

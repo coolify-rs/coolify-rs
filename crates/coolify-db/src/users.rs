@@ -88,6 +88,8 @@ pub struct Membership {
     pub role: Role,
     /// `teams.is_two_factor_required` (absent before upstream 2026_10_25 → false).
     pub two_factor_required: bool,
+    /// `teams.show_boarding`.
+    pub show_boarding: bool,
     pub avatar_path: Option<String>,
     pub updated_at: Option<NaiveDateTime>,
 }
@@ -117,9 +119,14 @@ pub async fn memberships(db: &Db, user_id: i64) -> DbResult<Vec<Membership>> {
     } else {
         "NULL::text"
     };
+    let boarding = if db.schema().has_column("teams", "show_boarding") {
+        "t.show_boarding"
+    } else {
+        "false"
+    };
     #[allow(clippy::type_complexity)]
-    let rows: Vec<(i64, String, String, bool, Option<String>, Option<NaiveDateTime>)> = sqlx::query_as(&format!(
-        "SELECT t.id, t.name, tu.role, {flag}, {avatar}, t.updated_at FROM team_user tu JOIN teams t ON t.id = tu.team_id \
+    let rows: Vec<(i64, String, String, bool, bool, Option<String>, Option<NaiveDateTime>)> = sqlx::query_as(&format!(
+        "SELECT t.id, t.name, tu.role, {flag}, {boarding}, {avatar}, t.updated_at FROM team_user tu JOIN teams t ON t.id = tu.team_id \
          WHERE tu.user_id = $1 ORDER BY tu.id"
     ))
     .bind(user_id)
@@ -128,12 +135,21 @@ pub async fn memberships(db: &Db, user_id: i64) -> DbResult<Vec<Membership>> {
     Ok(rows
         .into_iter()
         .filter_map(
-            |(team_id, team_name, role, two_factor_required, avatar_path, updated_at)| {
+            |(
+                team_id,
+                team_name,
+                role,
+                two_factor_required,
+                show_boarding,
+                avatar_path,
+                updated_at,
+            )| {
                 Some(Membership {
                     team_id,
                     team_name,
                     role: Role::parse(&role)?,
                     two_factor_required,
+                    show_boarding,
                     avatar_path,
                     updated_at,
                 })

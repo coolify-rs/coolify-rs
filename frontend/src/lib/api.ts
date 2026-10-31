@@ -68,8 +68,7 @@ export const api = {
 
 export const sessionApi = {
   current: () => request<SessionInfo>('GET', '/ui/session'),
-  login: (body: { email: string; password: string; code?: string }) =>
-    request<SessionInfo | { two_factor: true }>('POST', '/ui/session', body),
+  login: (body: { email: string; password: string }) => request<SessionInfo | { two_factor: true }>('POST', '/ui/session', body),
   logout: () => request<{ message: string }>('DELETE', '/ui/session'),
   switchTeam: (teamId: number) => request<SessionInfo>('POST', '/ui/session/team', { team_id: teamId }),
 };
@@ -80,6 +79,8 @@ export type Role = 'owner' | 'admin' | 'member';
 
 export interface SessionInfo {
   user: { id: number; name: string; email: string; two_factor_enabled: boolean; avatar_url: string | null };
+  force_password_reset: boolean;
+  show_boarding: boolean;
   teams: { id: number; name: string; role: Role; avatar_url: string | null }[];
   current_team: {
     id: number;

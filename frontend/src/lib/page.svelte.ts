@@ -62,6 +62,8 @@ class PageState {
   resourceSwitcher = $state<ResourceSwitcher | null>(null);
   navContext = $state<NavContext | null>(null);
   server = $state<ServerTopbar | null>(null);
+  /** Sub-items of the current page under its entry in the main sidebar (`#main-nav-active-children`). */
+  navChildren = $state<import('svelte').Snippet | null>(null);
 }
 
 export const page = new PageState();

@@ -8,6 +8,18 @@ export interface Match {
 
 const routes: { name: string; pattern: string }[] = [
   { name: 'login', pattern: '/login' },
+  { name: 'register', pattern: '/register' },
+  { name: 'forgot-password', pattern: '/forgot-password' },
+  { name: 'reset-password', pattern: '/reset-password/:token' },
+  { name: 'two-factor-challenge', pattern: '/two-factor-challenge' },
+  { name: 'force-password-reset', pattern: '/force-password-reset' },
+  { name: 'two-factor-required', pattern: '/two-factor-required' },
+  { name: 'verify', pattern: '/verify' },
+  { name: 'email-verify', pattern: '/email/verify/:id/:hash' },
+  { name: 'oauth-denied', pattern: '/auth/:provider/redirect' },
+  { name: 'onboarding', pattern: '/onboarding' },
+  { name: 'settings-oauth', pattern: '/settings/oauth' },
+  { name: 'settings-oauth', pattern: '/settings/oauth/:provider' },
   { name: 'dashboard', pattern: '/' },
   { name: 'projects', pattern: '/projects' },
   { name: 'project', pattern: '/project/:uuid' },

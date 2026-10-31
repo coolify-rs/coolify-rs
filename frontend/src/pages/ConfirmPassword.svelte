@@ -5,11 +5,18 @@
   import Reicon from '../components/Reicon.svelte';
   import FormInput from '../components/FormInput.svelte';
   import { ApiError } from '../lib/api';
+  import PasskeyVerify from '../components/PasskeyVerify.svelte';
+  import { authUi, passkeyConfirm } from '../lib/authApi';
   import { profileUi } from '../lib/profileApi';
   import { router } from '../lib/router.svelte';
   import { onMount } from 'svelte';
 
-  onMount(() => document.getElementById('password')?.focus());
+  let canUsePasskey = $state(false);
+  onMount(async () => {
+    document.getElementById('password')?.focus();
+    canUsePasskey = (await authUi.confirmState().catch(() => ({ can_confirm_with_passkey: false }))).can_confirm_with_passkey;
+  });
+  const afterConfirm = () => router.go(router.query('intended') ?? '/profile', true);
 
   let password = $state('');
   let errors = $state<string[]>([]);
@@ -55,5 +62,8 @@
       <FormInput id="password" label="Password" type="password" required copyable={false} autocomplete="current-password" bind:value={password} />
       <button class="button w-full justify-center" type="submit" disabled={busy} {...highlighted}>Confirm password</button>
     </form>
+    {#if canUsePasskey}
+      <PasskeyVerify routes={passkeyConfirm} label="Confirm with a passkey" done={afterConfirm} />
+    {/if}
   </div>
 </AuthShell>

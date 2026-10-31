@@ -155,10 +155,60 @@ pub fn throttle(key: &str, max: usize, window: Duration) -> Option<u64> {
     None
 }
 
+/// `RateLimiter::tooManyAttempts`: whether `key` is over `max`, without a hit.
+pub fn too_many(key: &str, max: usize, window: Duration) -> Option<u64> {
+    let now = Instant::now();
+    let m = HITS.lock().ok()?;
+    let v = m.get(key)?;
+    let live: Vec<&Instant> = v
+        .iter()
+        .filter(|t| now.duration_since(**t) < window)
+        .collect();
+    if live.len() < max {
+        return None;
+    }
+    let oldest = live.iter().min().map_or(now, |t| **t);
+    Some(
+        window
+            .saturating_sub(now.duration_since(oldest))
+            .as_secs()
+            .max(1),
+    )
+}
+
+/// `normalize_email_identity()`.
+pub fn normalize_email_identity(email: Option<&str>) -> Option<String> {
+    let email = email?.trim().to_lowercase();
+    let (local, domain) = email.split_once('@')?;
+    let local = if matches!(domain, "gmail.com" | "googlemail.com") {
+        local.split('+').next().unwrap_or_default().replace('.', "")
+    } else {
+        local.to_string()
+    };
+    if local.trim().is_empty() || domain.trim().is_empty() {
+        return None;
+    }
+    Some(format!("{local}@{domain}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn email_identities() {
+        assert_eq!(
+            normalize_email_identity(Some(" A.B+c@GMail.com ")).as_deref(),
+            Some("ab@gmail.com")
+        );
+        assert_eq!(
+            normalize_email_identity(Some("a.b+c@example.test")).as_deref(),
+            Some("a.b+c@example.test")
+        );
+        assert_eq!(normalize_email_identity(Some("nope")), None);
+        assert_eq!(normalize_email_identity(None), None);
+    }
 
     #[test]
     fn emails() {

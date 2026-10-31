@@ -1,165 +1,184 @@
 <script lang="ts">
-  // Port of upstream auth/login.blade.php and auth/two-factor-challenge.blade.php
-  // (components/auth/shell.blade.php markup).
-  import Reicon from '../components/Reicon.svelte';
+  // Port of upstream auth/login.blade.php (components/auth/shell.blade.php markup).
+  import { onMount } from 'svelte';
+  import AuthAlert from '../components/AuthAlert.svelte';
+  import AuthShell from '../components/AuthShell.svelte';
   import PasswordInput from '../components/PasswordInput.svelte';
+  import PasskeyVerify from '../components/PasskeyVerify.svelte';
   import { ApiError, sessionApi, type SessionInfo } from '../lib/api';
+  import { authUi, errorList, passkeyLogin, type GuestState } from '../lib/authApi';
   import { session, takeLoginError } from '../lib/session.svelte';
-  import { router } from '../lib/router.svelte';
+  import { link, router } from '../lib/router.svelte';
   import { focusOnMount } from '../lib/focus';
 
   let email = $state('');
   let password = $state('');
-  let code = $state('');
-  let needsCode = $state(false);
   let busy = $state(false);
-  let errors = $state<string[]>(((m) => (m ? [m] : []))(takeLoginError()));
-  let codeForm: HTMLFormElement | undefined = $state();
+  let guest = $state<GuestState | null>(null);
+  let errors = $state<string[]>([]);
+  let flashError = $state<string | null>(takeLoginError());
+  let status = $state<string | null>(null);
+  let tooltip = $state(false);
+  let tipTimer: ReturnType<typeof setTimeout> | undefined;
+  let tip: HTMLElement | undefined = $state();
+  let tipHost: HTMLElement | undefined = $state();
   // Upstream renders `<x-forms.button isHighlighted>` as a bare attribute the CSS matches.
   const highlighted = { ishighlighted: '' };
+
+  onMount(async () => {
+    try {
+      const g = await authUi.state();
+      // `Fortify::loginView`: a new instance goes to the registration page.
+      if (g.redirect_to_register) {
+        router.go('/register', true);
+        return;
+      }
+      guest = g;
+      status = g.status;
+      flashError = g.error ?? flashError;
+      if (g.errors.length) errors = g.errors;
+    } catch (e) {
+      errors = errorList(e);
+    }
+  });
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
     if (busy) return;
     busy = true;
     errors = [];
+    status = null;
+    flashError = null;
     try {
-      const res = await sessionApi.login({ email, password, code: needsCode ? code : undefined });
+      const res = await sessionApi.login({ email, password });
       if ('two_factor' in res) {
-        needsCode = true;
+        router.go('/two-factor-challenge');
         return;
       }
       session.set(res as SessionInfo);
       router.go('/', true);
     } catch (err) {
-      if (err instanceof ApiError) {
-        const all = Object.values(err.errors).flat();
-        errors = all.length ? all : [err.message];
-      } else errors = [String(err)];
-      if (needsCode) code = '';
+      if (err instanceof ApiError && err.status === 429) errors = ['Too Many Requests'];
+      else errors = errorList(err);
     } finally {
       busy = false;
     }
   }
 
-  function onCodeInput(e: Event) {
-    const input = e.target as HTMLInputElement;
-    code = input.value.replace(/\D/g, '').slice(0, 6);
-    if (code.length === 6) queueMicrotask(() => codeForm?.requestSubmit());
+  function passkeyDone(response: unknown) {
+    session.set(response as SessionInfo);
+    router.go('/', true);
   }
 
-  function backToLogin(e: MouseEvent) {
-    e.preventDefault();
-    needsCode = false;
-    code = '';
-    errors = [];
+  // The Alpine tooltip of the disabled "Forgot password?" link.
+  function showTip() {
+    tooltip = true;
+    queueMicrotask(() =>
+      requestAnimationFrame(() => {
+        if (!tip || !tipHost) return;
+        const r = tipHost.getBoundingClientRect();
+        const t = tip.getBoundingClientRect();
+        let top = r.top - t.height - 6;
+        let left = r.left;
+        if (top < 4) top = r.bottom + 6;
+        if (left + t.width > innerWidth - 8) left = innerWidth - 8 - t.width;
+        if (left < 4) left = 4;
+        tip.style.top = `${top}px`;
+        tip.style.left = `${left}px`;
+      }),
+    );
   }
 </script>
 
-{#snippet alert(messages: string[])}
-  <div class="flex items-start gap-3 rounded-lg border px-3 py-2.5 text-sm border-error/35 bg-error/10 text-error">
-    <Reicon name="alert-circle" class="mt-0.5 size-4 shrink-0" />
-    <div class="min-w-0 flex-1 leading-5">
-      <div class="flex flex-col gap-1">
-        {#each messages as m, i (i)}<p>{m}</p>{/each}
+<AuthShell title="coolify-rs" description="Sign in to manage your applications and infrastructure.">
+  <div class="flex flex-col gap-4">
+    {#if status}<AuthAlert type="success">{status}</AuthAlert>{/if}
+    {#if flashError}<AuthAlert type="error">{flashError}</AuthAlert>{/if}
+    {#if errors.length}<AuthAlert type="error" messages={errors} />{/if}
+    <form onsubmit={submit} class="flex flex-col gap-4">
+      <div class="w-full">
+        <div class="mb-1.5 flex h-4 w-full items-center gap-1.5">
+          <label for="email" class="mb-0! flex items-center gap-1 text-sm font-medium leading-4"
+            >Email
+            <span class="text-helper">*</span>
+          </label>
+        </div>
+        <input
+          autocomplete={guest?.passkeys_available ? 'email webauthn' : 'email'}
+          class="input"
+          required
+          type="email"
+          id="email"
+          name="email"
+          bind:value={email}
+          use:focusOnMount
+        />
       </div>
-    </div>
-  </div>
-{/snippet}
+      <div class="w-full">
+        <div class="mb-1.5 flex h-4 w-full items-center gap-1.5">
+          <label for="password" class="mb-0! flex items-center gap-1 text-sm font-medium leading-4"
+            >Password
+            <span class="text-helper">*</span>
+          </label>
+        </div>
+        <PasswordInput id="password" name="password" autocomplete="current-password" required bind:value={password} />
+      </div>
+      <div class="flex justify-end">
+        {#if guest?.transactional_emails}
+          <a href="/forgot-password" use:link class="auth-text-link">Forgot password?</a>
+        {:else}
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <span
+            bind:this={tipHost}
+            class="relative inline-flex"
+            onmouseenter={() => (tipTimer = setTimeout(showTip, 300))}
+            onmouseleave={() => {
+              clearTimeout(tipTimer);
+              tooltip = false;
+            }}
+            onfocusin={showTip}
+            onfocusout={() => (tooltip = false)}
+          >
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <span tabindex="0" role="link" aria-disabled="true" class="auth-text-link cursor-not-allowed opacity-50" aria-describedby="forgot-password-disabled-tooltip">
+              Forgot password?
+            </span>
+            <div bind:this={tip} id="forgot-password-disabled-tooltip" style:display={tooltip ? null : 'none'} class="auth-tooltip max-w-xs whitespace-normal">
+              Password reset is unavailable because transactional email (SMTP or Resend) is not configured on this instance.
+            </div>
+          </span>
+        {/if}
+      </div>
+      <button {...highlighted} class="button w-full justify-center" type="submit" disabled={busy}>Login</button>
+    </form>
 
-<main class="h-full bg-neutral-50 dark:bg-base">
-  <section class="auth-shell application-settings-form">
-    <div class="auth-shell-content">
-      <div class="auth-card">
-        <div class="auth-card-heading">
-          <h1>coolify-rs</h1>
-          <p>{needsCode ? 'Verify your identity to finish signing in.' : 'Sign in to manage your applications and infrastructure.'}</p>
-        </div>
-        <div class="auth-card-body">
-          {#if !needsCode}
-            <div class="flex flex-col gap-4">
-              {#if errors.length}{@render alert(errors)}{/if}
-              <form onsubmit={submit} class="flex flex-col gap-4">
-                <div class="w-full">
-                  <div class="mb-1.5 flex h-4 w-full items-center gap-1.5">
-                    <label for="email" class="mb-0! flex items-center gap-1 text-sm font-medium leading-4"
-                      >Email
-                      <span class="text-helper">*</span>
-                    </label>
-                  </div>
-                  <input
-                    autocomplete="email"
-                    class="input"
-                    required
-                    type="email"
-                    id="email"
-                    name="email"
-                    bind:value={email}
-                    use:focusOnMount
-                  />
-                </div>
-                <div class="w-full">
-                  <div class="mb-1.5 flex h-4 w-full items-center gap-1.5">
-                    <label for="password" class="mb-0! flex items-center gap-1 text-sm font-medium leading-4"
-                      >Password
-                      <span class="text-helper">*</span>
-                    </label>
-                  </div>
-                  <PasswordInput id="password" name="password" autocomplete="current-password" required bind:value={password} />
-                </div>
-                <div class="flex justify-end">
-                  <span class="relative inline-flex">
-                    <span
-                      tabindex="0"
-                      role="link"
-                      aria-disabled="true"
-                      class="auth-text-link cursor-not-allowed opacity-50"
-                      title="Password reset is not available in coolify-rs yet."
-                    >
-                      Forgot password?
-                    </span>
-                  </span>
-                </div>
-                <button {...highlighted} class="button w-full justify-center" type="submit" disabled={busy}>Login</button>
-              </form>
-            </div>
-          {:else}
-            <div class="flex flex-col gap-4">
-              {#if errors.length}{@render alert(errors)}{/if}
-              <div class="auth-guidance">
-                <Reicon name="info-circle" class="mt-0.5 size-4 shrink-0" />
-                <p>Enter the 6-digit code from your authenticator app.</p>
-              </div>
-              <form bind:this={codeForm} onsubmit={submit} class="flex flex-col gap-4">
-                <div class="flex flex-col gap-3">
-                  <input
-                    type="text"
-                    name="code"
-                    inputmode="numeric"
-                    pattern="[0-9]*"
-                    maxlength="6"
-                    autocomplete="one-time-code"
-                    aria-label="Two-factor authentication code"
-                    value={code}
-                    oninput={onCodeInput}
-                    use:focusOnMount
-                    class="mx-auto h-14 w-64 rounded-md border border-neutral-300 bg-white px-4 text-center text-xl font-semibold tracking-[0.5em] text-neutral-900 transition-colors focus:border-warning focus:outline-none focus:ring-1 focus:ring-warning dark:border-white/10 dark:bg-coolgray-100 dark:text-white"
-                  />
-                </div>
-                <button class="button w-full justify-center" type="submit" disabled={busy} {...highlighted}>Verify and continue</button>
-              </form>
-            </div>
-          {/if}
-        </div>
-        <footer class="auth-card-footer">
-          {#if needsCode}
-            <span>Not your account?</span>
-            <a href="/login" class="auth-text-link" onclick={backToLogin}>Back to login</a>
-          {:else}
-            <span>Accounts are managed in Coolify.</span>
-          {/if}
-        </footer>
+    {#if guest?.passkeys_available}
+      <PasskeyVerify routes={passkeyLogin} autofill done={passkeyDone} />
+    {/if}
+
+    {#if guest?.enabled_oauth_providers.length}
+      <div class="auth-divider"><span>Or continue with</span></div>
+      <div class="flex flex-col gap-2">
+        {#each guest.enabled_oauth_providers as p (p.provider)}
+          <button class="button w-full justify-center" type="button" onclick={() => (document.location.href = `/auth/${p.provider}/redirect`)}>
+            {#if p.provider !== 'oidc'}
+              <img class="size-5 shrink-0 dark:invert" src="/svgs/{p.provider}.svg" alt="" aria-hidden="true" />
+            {/if}
+            {p.label}
+          </button>
+        {/each}
       </div>
-    </div>
-  </section>
-</main>
+    {/if}
+  </div>
+
+  {#snippet footer()}
+    {#if guest?.is_registration_enabled}
+      <span>New to coolify-rs?</span>
+      <a href="/register" use:link class="auth-text-link">Register</a>
+    {:else if guest?.can_register_with_oauth}
+      <span>Only OAuth registration is enabled.</span>
+    {:else if guest}
+      <span>Registration is disabled. Please contact the administrator.</span>
+    {/if}
+  {/snippet}
+</AuthShell>

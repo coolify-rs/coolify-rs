@@ -196,7 +196,7 @@ fn relying_party(fqdn: Option<&str>, headers: &HeaderMap) -> Option<(String, Vec
     })
 }
 
-async fn passkey_settings(
+pub(crate) async fn passkey_settings(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<(bool, Option<(String, Vec<String>)>), ApiError> {
@@ -251,7 +251,7 @@ async fn account_blockers(state: &AppState, user_id: i64) -> Result<Vec<String>,
     Ok(out)
 }
 
-fn decrypted(state: &AppState, stored: Option<&str>) -> Option<String> {
+pub(crate) fn decrypted(state: &AppState, stored: Option<&str>) -> Option<String> {
     let e = state.encrypter.as_ref()?;
     e.decrypt_maybe_serialized(stored?).ok()
 }
@@ -334,7 +334,7 @@ async fn show(
 }
 
 /// `config('app.name')`, the issuer of the one-time password.
-fn app_name() -> String {
+pub(crate) fn app_name() -> String {
     std::env::var("APP_NAME").unwrap_or_else(|_| "Coolify".to_string())
 }
 
@@ -633,7 +633,14 @@ async fn cancel_email_change(
 /// `Password::defaults()` in production, without `uncompromised()`, which asks an external
 /// service about the password; and `confirmed`.
 fn password_errors(new: &str, confirmation: &str) -> Vec<String> {
-    const FIELD: &str = "The new password field";
+    password_errors_for("new password", new, confirmation)
+}
+
+/// The same rules for the attribute `field`.
+pub(crate) fn password_errors_for(field: &str, new: &str, confirmation: &str) -> Vec<String> {
+    let label = format!("The {field} field");
+    #[allow(non_snake_case)]
+    let FIELD = label.as_str();
     let mut out = Vec::new();
     if new.is_empty() {
         out.push(format!("{FIELD} is required."));

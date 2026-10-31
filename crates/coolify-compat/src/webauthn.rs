@@ -234,6 +234,158 @@ pub fn verify_registration(
     })
 }
 
+/// What an assertion has to match: `PublicKeyCredentialRequestOptions` and the relying party.
+#[derive(Debug, Clone)]
+pub struct AssertionExpected<'a> {
+    /// The challenge of the options, base64url.
+    pub challenge: &'a str,
+    pub rp_id: &'a str,
+    pub origins: &'a [String],
+}
+
+/// `RSASSA-PKCS1-v1_5` with SHA-256 for a public key given as big-endian modulus and exponent.
+pub fn rs256_verify(n: &[u8], e: &[u8], message: &[u8], signature: &[u8]) -> bool {
+    use rsa::{BigUint, Pkcs1v15Sign, RsaPublicKey};
+    /// `DigestInfo` of SHA-256.
+    const PREFIX: [u8; 19] = [
+        0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+        0x05, 0x00, 0x04, 0x20,
+    ];
+    let Ok(key) = RsaPublicKey::new(BigUint::from_bytes_be(n), BigUint::from_bytes_be(e)) else {
+        return false;
+    };
+    let scheme = Pkcs1v15Sign {
+        hash_len: Some(32),
+        prefix: PREFIX.to_vec().into_boxed_slice(),
+    };
+    let hashed: [u8; 32] = Sha256::digest(message).into();
+    key.verify(scheme, &hashed, signature).is_ok()
+}
+
+/// The signature of an assertion against a COSE key: ES256 and RS256, as registration accepts.
+fn cose_verify(cose: &Cbor, message: &[u8], signature: &[u8]) -> bool {
+    match cose.get_int(3) {
+        Some(Cbor::Int(-7)) => {
+            use p256::ecdsa::signature::Verifier;
+            use p256::ecdsa::{Signature, VerifyingKey};
+            let (Some(Cbor::Bytes(x)), Some(Cbor::Bytes(y))) = (cose.get_int(-2), cose.get_int(-3))
+            else {
+                return false;
+            };
+            let mut point = vec![0x04];
+            point.extend_from_slice(x);
+            point.extend_from_slice(y);
+            let (Ok(key), Ok(sig)) = (
+                VerifyingKey::from_sec1_bytes(&point),
+                Signature::from_der(signature),
+            ) else {
+                return false;
+            };
+            key.verify(message, &sig).is_ok()
+        }
+        Some(Cbor::Int(-257)) => {
+            let (Some(Cbor::Bytes(n)), Some(Cbor::Bytes(e))) = (cose.get_int(-1), cose.get_int(-2))
+            else {
+                return false;
+            };
+            rs256_verify(n, e, message, signature)
+        }
+        _ => false,
+    }
+}
+
+/// `AuthenticatorAssertionResponseValidator::check`: returns the stored `credential` JSON with
+/// the new counter and backup state, in its key order.
+pub fn verify_assertion(
+    credential: &Value,
+    stored: &Value,
+    expected: &AssertionExpected<'_>,
+) -> Result<Value, String> {
+    const FAILED: &str = "Unable to verify passkey. Please try again.";
+    let fail = || FAILED.to_string();
+    let response = credential.get("response").ok_or_else(fail)?;
+    let field = |k: &str| {
+        response
+            .get(k)
+            .and_then(Value::as_str)
+            .and_then(from_b64)
+            .ok_or_else(fail)
+    };
+    let client_data_raw = field("clientDataJSON")?;
+    let auth = field("authenticatorData")?;
+    let signature = field("signature")?;
+    let client: Value = serde_json::from_slice(&client_data_raw).map_err(|_| fail())?;
+    if client.get("type").and_then(Value::as_str) != Some("webauthn.get") {
+        return Err(fail());
+    }
+    let challenge = client
+        .get("challenge")
+        .and_then(Value::as_str)
+        .and_then(from_b64);
+    if challenge.is_none() || challenge != from_b64(expected.challenge) {
+        return Err(fail());
+    }
+    let origin = client.get("origin").and_then(Value::as_str).unwrap_or("");
+    if !expected.origins.iter().any(|o| o == origin) {
+        return Err(fail());
+    }
+    // rpIdHash(32) flags(1) counter(4)
+    if auth.len() < 37 {
+        return Err(fail());
+    }
+    let rp_hash: [u8; 32] = Sha256::digest(expected.rp_id.as_bytes()).into();
+    if auth[..32] != rp_hash {
+        return Err(fail());
+    }
+    let flags = auth[32];
+    let (user_present, user_verified, backup_eligible, backup_state) = (
+        flags & 0x01 != 0,
+        flags & 0x04 != 0,
+        flags & 0x08 != 0,
+        flags & 0x10 != 0,
+    );
+    // `userVerification: required`; a backed-up credential must be backup eligible.
+    if !user_present || !user_verified || (backup_state && !backup_eligible) {
+        return Err(fail());
+    }
+    // The handle a discoverable credential returns has to be the stored one.
+    let stored_handle = stored.get("userHandle").and_then(Value::as_str);
+    if let Some(handle) = response
+        .get("userHandle")
+        .and_then(Value::as_str)
+        .filter(|h| !h.is_empty())
+        && from_b64(handle) != stored_handle.and_then(from_b64)
+    {
+        return Err(fail());
+    }
+    let key = stored
+        .get("credentialPublicKey")
+        .and_then(Value::as_str)
+        .and_then(from_b64)
+        .ok_or_else(fail)?;
+    let (cose, _) = decode_cbor(&key, 0).ok_or_else(fail)?;
+    let mut signed = auth.clone();
+    signed.extend_from_slice(&Sha256::digest(&client_data_raw));
+    if !cose_verify(&cose, &signed, &signature) {
+        return Err(fail());
+    }
+    // `CounterChecker`: a counter in use has to grow, or the authenticator was cloned.
+    let counter = u32::from_be_bytes(auth[33..37].try_into().map_err(|_| fail())?);
+    let old = stored
+        .get("counter")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    if (counter != 0 || old != 0) && u64::from(counter) <= old {
+        return Err(fail());
+    }
+    let mut updated = stored.clone();
+    updated["counter"] = json!(counter);
+    updated["backupEligible"] = json!(backup_eligible);
+    updated["backupStatus"] = json!(backup_state);
+    updated["uvInitialized"] = json!(true);
+    Ok(updated)
+}
+
 fn uuid_text(b: &[u8]) -> String {
     let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
     format!(

@@ -52,7 +52,7 @@ export const profileUi = {
   deletePasskey: (id: number, password: string) => request<Message>('POST', `/ui/profile/passkeys/${id}/delete`, { password }),
 };
 
-const toBuffer = (s: string): ArrayBuffer => {
+export const toBuffer = (s: string): ArrayBuffer => {
   const b = s.replace(/-/g, '+').replace(/_/g, '/');
   const raw = atob(b.padEnd(b.length + ((4 - (b.length % 4)) % 4), '='));
   const out = new Uint8Array(raw.length);
@@ -60,7 +60,7 @@ const toBuffer = (s: string): ArrayBuffer => {
   return out.buffer;
 };
 
-const fromBuffer = (buffer: ArrayBuffer): string => {
+export const fromBuffer = (buffer: ArrayBuffer): string => {
   let s = '';
   for (const byte of new Uint8Array(buffer)) s += String.fromCharCode(byte);
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
