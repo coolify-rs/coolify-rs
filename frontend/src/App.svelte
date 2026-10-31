@@ -192,7 +192,8 @@
   $effect.pre(() => {
     if (!session.info) return;
     // `Route::any('/{any}')`: every other path goes home.
-    if (router.current.name === 'unported' || (router.current.name === 'realtime' && session.info.current_team?.id !== 0)) {
+    const devOnly = (router.current.name === 'dev-error' || router.current.name === 'dev-exception') && !session.info.features.dev;
+    if (router.current.name === 'unported' || devOnly || (router.current.name === 'realtime' && session.info.current_team?.id !== 0)) {
       router.go('/', true);
       return;
     }
@@ -242,6 +243,9 @@
   <ConfirmPassword />
 {:else if router.current.name === 'profile-passkey-confirm'}
   <PasskeyConfirm />
+{:else if router.current.name === 'admin' && !((session.info.features.cloud || session.info.features.dev) && (session.info.user.id === 0 || session.info.features.impersonating))}
+  <!-- `Admin\\Index::mount`: abort(403). -->
+  <ErrorPage code={403} />
 {:else if (router.current.name === 'team-danger' && !session.isOwner) || ((router.current.name === 'team-audit' || router.current.name === 'terminal') && !session.isAdmin)}
   <ErrorPage code={403} />
 {:else}

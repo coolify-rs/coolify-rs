@@ -47,6 +47,7 @@ pub(crate) fn environment_page(base: &str, project: &str, environment: &str) -> 
 }
 
 /// A loaded set of top-level resources with the relations the canvas reads.
+#[derive(Debug)]
 pub struct Loaded {
     pub resources: Vec<Resource>,
     pub environments: HashMap<i64, Record>,
@@ -459,6 +460,7 @@ fn application_status(value: Option<&str>, additional: &[(i64, Option<String>)])
     format!("{status}:{health}")
 }
 
+#[derive(Debug)]
 pub struct Graph {
     pub zones: Vec<Value>,
     pub nodes: Vec<Map<String, Value>>,

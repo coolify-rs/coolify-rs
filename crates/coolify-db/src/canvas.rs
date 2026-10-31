@@ -390,6 +390,7 @@ pub async fn save_zone_position(
     Ok(())
 }
 
+#[derive(Debug)]
 pub struct LinkEnds<'a> {
     pub environment_id: i64,
     pub source_type: &'a str,
@@ -705,6 +706,7 @@ pub async fn subscription_ended(db: &Db, team_id: i64) -> DbResult<()> {
     Ok(())
 }
 
+#[derive(Debug)]
 pub struct TeamLimits {
     pub name: String,
     pub custom_server_limit: Option<i64>,

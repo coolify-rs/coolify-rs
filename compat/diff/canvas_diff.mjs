@@ -342,6 +342,49 @@ try {
   }
   record('variable link lifecycle', { json: JSON.parse(normalize(variableSteps[0], REF)) }, { json: JSON.parse(normalize(variableSteps[1], RS)) });
 
+  // Project icons: the reference stores through ProjectIconStorageService (its upload is Livewire's
+  // temporary file flow), coolify-rs through its route. Each side serves its own file.
+  const iconRow = () => JSON.parse(sql(`SELECT json_build_object('path', icon_path, 'type', icon_storage_type, 's3', icon_s3_storage_id) FROM projects WHERE id = ${projectId}`));
+  const fetchIcon = (page) =>
+    page.evaluate(async (path) => {
+      const r = await fetch(path);
+      return { status: r.status, type: r.headers.get('content-type'), cache: r.headers.get('cache-control') };
+    }, `/project/${project}/icon`);
+  const tinker = (code) => execFileSync('docker', ['exec', 'coolify-rs-reference-coolify-1', 'php', '/var/www/html/artisan', 'tinker', '--execute', code], { encoding: 'utf8' });
+  const icons = [];
+  {
+    icons.push({ none: await fetchIcon(refPage) });
+    const jpeg = '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=';
+    tinker(`app(\\App\\Services\\ProjectIconStorageService::class)->storeProjectContents(\\App\\Models\\Project::find(${projectId}), base64_decode('${jpeg}'));`);
+    const stored = { row: iconRow(), icon: await fetchIcon(refPage) };
+    tinker(`app(\\App\\Services\\ProjectIconStorageService::class)->deleteProject(\\App\\Models\\Project::find(${projectId}));`);
+    icons[0] = { ...icons[0], stored, removed: iconRow() };
+  }
+  {
+    const none = await fetchIcon(rsPage);
+    const made = await rsPage.evaluate(async (project) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 64;
+      canvas.getContext('2d').fillRect(0, 0, 64, 64);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+      const session = await (await fetch('/ui/session')).json();
+      const r = await fetch(`/ui/projects/${project}/icon`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg', 'X-CSRF-Token': session.csrf_token }, body: blob });
+      return { status: r.status, body: await r.json() };
+    }, project);
+    if (made.status !== 200 || made.body.message !== 'Project icon updated.') failures.push(`project icon upload: ${JSON.stringify(made)}`);
+    const stored = { row: iconRow(), icon: await fetchIcon(rsPage) };
+    const removed = await rsPage.evaluate(async (project) => {
+      const session = await (await fetch('/ui/session')).json();
+      return (await fetch(`/ui/projects/${project}/icon`, { method: 'DELETE', headers: { 'X-CSRF-Token': session.csrf_token } })).status;
+    }, project);
+    if (removed !== 200) failures.push(`project icon remove: ${removed}`);
+    icons.push({ none, stored, removed: iconRow() });
+  }
+  // A missing icon is a 404 on both; upstream's body is the HTML error page, which an <img> never shows.
+  delete icons[0].none.type;
+  delete icons[1].none.type;
+  record('project icon lifecycle', { json: icons[0] }, { json: icons[1] });
+
   // A member: read only, no IPs, no editing.
   refMember = await login(REF, 'bob');
   rsMember = await login(RS, 'bob');
