@@ -209,9 +209,7 @@ impl Run {
         if bp == "dockerimage" {
             self.deploy_docker_image().await?;
         } else if self.app.str("dockerfile").is_some_and(|d| !d.is_empty()) {
-            return Err(Fail::new(
-                "Deployments of an inline Dockerfile are not supported by coolify-rs yet.",
-            ));
+            self.deploy_simple_dockerfile().await?;
         } else {
             match bp.as_str() {
                 "dockerfile" => self.deploy_dockerfile().await?,
@@ -251,6 +249,43 @@ impl Run {
         Box::pin(self.should_skip_build()).await?;
         self.complete_deployment().await;
         Ok(())
+    }
+
+    /// `deploy_simple_dockerfile()`.
+    async fn deploy_simple_dockerfile(&mut self) -> Step {
+        let dockerfile = B64.encode(self.app.str("dockerfile").unwrap_or_default());
+        self.info(&format!(
+            "Starting deployment of {} to {}.",
+            self.app.str("name").unwrap_or_default(),
+            self.server_name
+        ))
+        .await;
+        // The constructor reads `dockerfile_location` for the dockerfile build pack.
+        if self.build_pack() == "dockerfile"
+            && let Some(loc) = self
+                .app
+                .str("dockerfile_location")
+                .filter(|l| !l.is_empty())
+        {
+            self.b.dockerfile_location = validate_path(loc, "dockerfile_location")?;
+        }
+        self.prepare_builder_image().await?;
+        let target = format!("{}{}", self.workdir, self.b.dockerfile_location);
+        self.exec(vec![Cmd::new(in_docker(
+            &self.dep,
+            &format!("echo '{dockerfile}' | base64 -d | tee {target} > /dev/null"),
+        ))])
+        .await?;
+        self.generate_image_names();
+        let image = self.b.production_image.clone();
+        self.generate_compose_file(&image).await?;
+        self.save_buildtime_environment_variables().await?;
+        self.generate_build_env_variables().await?;
+        self.add_build_env_variables_to_dockerfile().await?;
+        self.build_image().await?;
+        self.save_runtime_environment().await?;
+        self.push_to_docker_registry().await?;
+        self.rolling_update().await
     }
 
     /// `deploy_dockerfile_buildpack()`.
@@ -1183,6 +1218,11 @@ impl Run {
             .str("docker_registry_image_name")
             .filter(|n| !n.is_empty())
             .map_or_else(|| self.app.uuid.clone(), str::to_owned);
+        if self.app.str("dockerfile").is_some_and(|d| !d.is_empty()) {
+            self.b.build_image = format!("{name}:build");
+            self.b.production_image = format!("{name}:latest");
+            return;
+        }
         self.b.build_image = format!("{name}:{tag}-build");
         self.b.production_image = format!("{name}:{tag}");
     }
@@ -1907,6 +1947,12 @@ impl Run {
         };
         let nixpacks = self.build_pack() == "nixpacks";
         let is_static = self.app.setting_bool("is_static");
+        // "Pure Dockerfile based deployment": an inline Dockerfile always pulls its base image.
+        let pull = if !is_static && self.app.str("dockerfile").is_some_and(|d| !d.is_empty()) {
+            "--pull "
+        } else {
+            ""
+        };
         // Static sites build the app first, then copy it into the web server image.
         let first_image = if is_static {
             self.b.build_image.clone()
@@ -1963,9 +2009,9 @@ impl Run {
             .await?;
         } else {
             let build = if self.b.buildkit {
-                self.wrap(&format!("DOCKER_BUILDKIT=1 docker build {nc}{target} {hosts} --network host -f {w}{df} --progress plain -t {first_image} {build_args} {w}"))
+                self.wrap(&format!("DOCKER_BUILDKIT=1 docker build {nc}{pull}{target} {hosts} --network host -f {w}{df} --progress plain -t {first_image} {build_args} {w}"))
             } else {
-                self.wrap(&format!("docker build {nc}{target} {hosts} --network host -f {w}{df} {build_args} -t {first_image} {w}"))
+                self.wrap(&format!("docker build {nc}{pull}{target} {hosts} --network host -f {w}{df} {build_args} -t {first_image} {w}"))
             };
             self.run_build_script(Vec::new(), &build).await?;
         }

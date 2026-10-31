@@ -13,6 +13,7 @@ deploys both again (the build is skipped) and compares those logs too. Everythin
 creates is deleted at the end. Exit status 1 when anything differs.
 """
 import argparse
+import base64
 import difflib
 import json
 import os
@@ -25,6 +26,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from databases_diff import call, record, results, sql  # noqa: E402
 
 REPO = "https://github.com/coollabsio/coolify-examples"
+INLINE_DOCKERFILE = base64.b64encode(b"FROM nginx:alpine\nARG DIFF_ARG=x\nRUN echo inline > /usr/share/nginx/html/index.html\nHEALTHCHECK --interval=5s CMD wget -q -O- http://127.0.0.1/ || exit 1\n").decode()
+# An older commit of the repository that still has dockerfile/single-stage.
+ROLLBACK_COMMIT = "ff425d7999a5bb92bc0e977e89567d68c2a6b45b"
 CASES = {
     "dockerfile": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
     "static": dict(build_pack="static", base_directory="/static", ports_exposes="80"),
@@ -64,6 +68,11 @@ CASES = {
     # Each side creates the row, so the parser of coolify-rs inserts the file mounts and saves them.
     "compose-files": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests",
                           docker_compose_location="/docker-compose-local-volumes.yaml"),
+    # An inline Dockerfile from POST /applications/dockerfile on each side's own API.
+    "inline": dict(dockerfile=INLINE_DOCKERFILE, ports_exposes="80"),
+    "inline-instant": dict(dockerfile=INLINE_DOCKERFILE, ports_exposes="80", instant_deploy=True),
+    # Deploy 2 rolls back to the commit of deploy 1 (the image exists), deploy 3 to an older commit (ROLLBACK_COMMIT).
+    "rollback": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
     # A deploy key against a git-over-SSH mirror of the repository (--deploy-key, --ssh-repo).
     "deploykey": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
 }
@@ -90,7 +99,11 @@ STORAGES = {"file-storage": (STORAGE_BODIES, "rm -f {file}"),
             "file-storage-blocked": (STORAGE_BODIES, "rm -f {file} && mkdir -p {file} && touch {file}/x"),
             "file-storage-empty-dir": (STORAGE_BODIES, "rm -f {file} && mkdir -p {file}")}
 # Each side creates the application through its own API.
-OWN_CREATE = ("compose-files",)
+OWN_CREATE = ("compose-files", "inline", "inline-instant")
+# Queued by the create request, so the first deployment needs no call.
+INSTANT = ("inline-instant",)
+# How many deployments a case runs, when it is not two.
+DEPLOYS = {"rollback": 3}
 # Each side deletes the application through its own API, and the result is compared.
 OWN_DELETE = ("file-storage", "compose-files")
 # SQL on the created row before the first deployment; {u} is its uuid.
@@ -166,7 +179,11 @@ def main():
                 ips = {"ref": f"{prefix}.201", "rs": f"{prefix}.202"}
             for side in ("ref", "rs"):
                 spec = {k: v.replace("{seccomp}", seccomp).replace("{ip}", ips.get(side, "")) if isinstance(v, str) else v for k, v in template.items()}
-                if case == "deploykey":
+                if "dockerfile" in spec:
+                    body = dict(server_uuid=a.server, project_uuid=project, environment_name="production", name=f"{case}-{side}",
+                                **{"instant_deploy": False, **spec})
+                    c, r = call(side, "POST", "/api/v1/applications/dockerfile", body, tok="acme_owner_root")
+                elif case == "deploykey":
                     body = dict(base, name=f"{case}-{side}", git_repository=a.ssh_repo, private_key_uuid=key_uuid, **spec)
                     c, r = call("ref", "POST", "/api/v1/applications/private-deploy-key", body, tok="acme_owner_root")
                 else:
@@ -181,7 +198,7 @@ def main():
             if len(apps) < 2:
                 continue
             ur, us = apps["ref"]["uuid"], apps["rs"]["uuid"]
-            if spec["build_pack"] == "dockercompose":
+            if spec.get("build_pack") == "dockercompose":
                 # Creating queues upstream's LoadComposeFile job; deploy after it stored the file.
                 for _ in range(60):
                     if all(sql(f"SELECT docker_compose_raw IS NOT NULL FROM applications WHERE uuid='{u}'") == "t" for u in (ur, us)):
@@ -205,9 +222,16 @@ def main():
                         time.sleep(2)
                     record(f"[{case}] {side} saved the file on the server", vm(f"cat {first}") == bodies[0]["content"])
                     vm(shell.replace("{file}", first))
-            for n in (1, 2):
+            first_commit = None
+            for n in range(1, DEPLOYS.get(case, 2) + 1):
                 for side, u in (("ref", ur), ("rs", us)):
-                    c, r = deploy(side, u)
+                    if n == 1 and case in INSTANT:
+                        continue
+                    if case == "rollback" and n > 1:
+                        target = first_commit if n == 2 else ROLLBACK_COMMIT
+                        c, r = call(side, "POST", f"/api/v1/applications/{u}/rollback", {"commit": target}, tok="acme_owner_root")
+                    else:
+                        c, r = deploy(side, u)
                     if c != 200:
                         record(f"[{case}] deploy {n} accepted by {side}", False, f"{c} {r}")
                 qr, qs = wait(ur, n), wait(us, n)
@@ -223,6 +247,11 @@ def main():
                 record(f"{label}: rows alike", {k: v for k, v in qr.items() if k not in skip} == {k: v for k, v in qs.items() if k not in skip},
                        {k: (qr[k], qs.get(k)) for k in qr if k not in skip and qr[k] != qs.get(k)})
                 commit = qr.get("commit")
+                first_commit = first_commit or commit
+                if case == "rollback" and n > 1:
+                    target = first_commit if n == 2 else ROLLBACK_COMMIT
+                    record(f"{label}: rollback rows", all(q["rollback"] and q["commit"] == target and not q["force_rebuild"] for q in (qr, qs)),
+                           [(q["rollback"], q["commit"], q["force_rebuild"]) for q in (qr, qs)])
 
                 def entries(q, u):
                     pairs = [(u, "U"), (q["deployment_uuid"], "DEP"), (commit, "SHA"), (f"{case}-ref", "NAME"), (f"{case}-rs", "NAME")]
@@ -277,6 +306,9 @@ def main():
                 record(f"{label}: logged commands identical", cr == cs,
                        "\n".join(difflib.unified_diff(cr, cs, lineterm="")))
             ip_pairs = [(ip, "IP") for ip in ips.values()]
+            if case == "rollback":
+                images = [vm(f"docker ps --filter label=coolify.applicationUuid={u} --format '{{{{.Image}}}}'").strip() for u in (ur, us)]
+                record(f"[{case}] both run the older commit", images[0] == f"{ur}:{ROLLBACK_COMMIT}" and images[1] == f"{us}:{ROLLBACK_COMMIT}", images)
             fr = norm(vm(f"cat /data/coolify/applications/{ur}/docker-compose.yaml"), [(ur, "U"), (f"{case}-ref", "NAME")] + ip_pairs)
             fs = norm(vm(f"cat /data/coolify/applications/{us}/docker-compose.yaml"), [(us, "U"), (f"{case}-rs", "NAME")] + ip_pairs)
             record(f"[{case}] docker-compose.yaml identical", fr == fs and fr != "",
@@ -334,7 +366,7 @@ def main():
                         time.sleep(3)
                     gone.append(left)
                 record(f"[{case}] delete removes the row, the files and the containers", gone[0] == gone[1] == ("0", "0", "0"), gone)
-            if spec["build_pack"] == "dockercompose":
+            if spec.get("build_pack") == "dockercompose":
                 for col in ("docker_compose", "docker_compose_domains", "fqdn"):
                     vr = json.loads(sql(f"SELECT to_json({col})::text FROM applications WHERE uuid='{ur}'") or "null")
                     vs = json.loads(sql(f"SELECT to_json({col})::text FROM applications WHERE uuid='{us}'") or "null")

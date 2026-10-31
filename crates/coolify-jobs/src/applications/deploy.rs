@@ -1231,7 +1231,9 @@ impl Run {
             &version,
         ));
         // Custom HEALTHCHECK of the repository's Dockerfile.
-        if self.app.str("build_pack") == Some("dockerfile") {
+        if self.app.str("build_pack") == Some("dockerfile")
+            || self.app.str("dockerfile").is_some_and(|d| !d.is_empty())
+        {
             self.read_dockerfile_healthcheck().await?;
         }
         let volumes = apps::persistent_volumes(&db, self.app.id)
