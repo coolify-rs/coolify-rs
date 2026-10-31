@@ -10,12 +10,15 @@
   let {
     uuid,
     active,
+    sub,
     title,
     onloaded,
     children,
   }: {
     uuid: string;
     active: string;
+    /** The active entry below the menu item. */
+    sub?: string;
     /** The page part of the title (`{name} > Advanced | Coolify`). */
     title: string;
     onloaded?: (facts: ServerFacts) => void;
@@ -29,7 +32,7 @@
   const limit = (s: string) => (s.length > 10 ? `${s.slice(0, 10)}...` : s);
 
   $effect(() => {
-    loadServerContext(uuid, active).then((ctx) => {
+    loadServerContext(uuid, active, sub).then((ctx) => {
       if (!ctx) {
         missing = true;
         return;

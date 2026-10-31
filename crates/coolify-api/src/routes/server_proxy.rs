@@ -91,7 +91,7 @@ pub async fn proxy_show(
     Ok(ok(proxy_payload(&ctx, &s)).into_response())
 }
 
-static RESOLVER: LazyLock<Regex> =
+pub(crate) static RESOLVER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_-]+\n?\z").unwrap_or_else(|_| unreachable!()));
 
 fn page_size_rule(v: &Value) -> Option<String> {

@@ -5,6 +5,7 @@
   // and Traefik update checks are not part of coolify-rs yet.
   import Reicon from './Reicon.svelte';
   import { link } from '../lib/router.svelte';
+  import ServerProxyActions from './ServerProxyActions.svelte';
   import type { ServerTopbar } from '../lib/page.svelte';
 
   let { server }: { server: ServerTopbar } = $props();
@@ -115,3 +116,7 @@
     {/if}
   </div>
 </div>
+
+{#if server.proxySet}
+  <ServerProxyActions {server} />
+{/if}

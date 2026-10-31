@@ -31,7 +31,7 @@
   }
 </script>
 
-<ServerFrame {uuid} active="security" title="Terminal Access" onloaded={(f) => ((serverName = f.name), load())}>
+<ServerFrame {uuid} active="security" sub="terminal-access" title="Terminal Access" onloaded={(f) => ((serverName = f.name), load())}>
   {#snippet children()}
     {#if data}
       <div class="application-settings-form w-full">

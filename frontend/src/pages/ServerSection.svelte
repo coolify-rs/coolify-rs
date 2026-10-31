@@ -5,6 +5,10 @@
   import ServerFrame from '../components/ServerFrame.svelte';
   import Unported from './Unported.svelte';
   import ServerAdvanced from './ServerAdvanced.svelte';
+  import ServerProxy from './ServerProxy.svelte';
+  import ServerProxyDynamic from './ServerProxyDynamic.svelte';
+  import ServerProxyCertificates from './ServerProxyCertificates.svelte';
+  import ServerLogsPage from './ServerLogsPage.svelte';
   import ServerCaCertificate from './ServerCaCertificate.svelte';
   import ServerDestinations from './ServerDestinations.svelte';
   import ServerPrivateKey from './ServerPrivateKey.svelte';
@@ -17,6 +21,10 @@
 
   const pages: Record<string, Component<{ uuid: string; sub?: string }>> = {
     advanced: ServerAdvanced,
+    proxy: ServerProxy,
+    'proxy/dynamic': ServerProxyDynamic,
+    'proxy/certificates': ServerProxyCertificates,
+    'proxy/logs': ServerLogsPage,
     'ca-certificate': ServerCaCertificate,
     destinations: ServerDestinations,
     'private-key': ServerPrivateKey,

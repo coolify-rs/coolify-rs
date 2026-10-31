@@ -5,11 +5,11 @@ import { page } from './page.svelte';
 import { session } from './session.svelte';
 import { serverNavContext } from './serverMenu';
 
-export async function loadServerContext(uuid: string, active: string): Promise<{ facts: ServerFacts; list: ServersPageData } | null> {
+export async function loadServerContext(uuid: string, active: string, sub?: string): Promise<{ facts: ServerFacts; list: ServersPageData } | null> {
   const list = await serversUi.list();
   const facts = list.servers.find((s) => s.uuid === uuid);
   if (!facts) return null;
-  page.navContext = serverNavContext(facts, active, session.isAdmin);
+  page.navContext = serverNavContext(facts, active, session.isAdmin, sub);
   page.server = {
     uuid: facts.uuid,
     name: facts.name,

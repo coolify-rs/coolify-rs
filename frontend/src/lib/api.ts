@@ -221,6 +221,8 @@ export const teamUi = {
 
 /** One server as `GET /ui/servers` describes it (facts the server pages need). */
 export interface ServerFacts {
+  proxy_type?: string | null;
+  outdated_warning?: [boolean, boolean];
   uuid: string;
   name: string;
   description: string | null;

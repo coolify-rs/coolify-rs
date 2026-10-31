@@ -42,7 +42,7 @@
   const headline = (s: string) =>
     s
       .replace(/([a-z])([A-Z])/g, '$1 $2')
-      .replace(/[_:-]+/g, ' ')
+      .replace(/[_-]+/g, ' ')
       .trim()
       .split(/\s+/)
       .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
