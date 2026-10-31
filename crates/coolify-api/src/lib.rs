@@ -4,6 +4,7 @@
 //! in [`routes::ROUTES`] are implemented; other upstream routes answer 501,
 //! and unknown routes answer upstream's 404.
 
+pub mod audit;
 pub mod auth;
 pub mod fallback;
 pub mod git_urls;
@@ -12,6 +13,7 @@ pub mod ip;
 pub mod laravel_url;
 pub mod response;
 pub mod routes;
+pub mod rules;
 pub mod safe_url;
 pub mod serialize;
 pub mod session;
