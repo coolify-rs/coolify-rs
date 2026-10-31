@@ -42,7 +42,12 @@ pub(crate) fn present(
 }
 
 /// An `encrypted` attribute as Eloquent returns it.
-fn decrypted(state: &AppState, ch: &Channel, r: &Record, k: &str) -> Result<Value, ApiError> {
+pub(crate) fn decrypted(
+    state: &AppState,
+    ch: &Channel,
+    r: &Record,
+    k: &str,
+) -> Result<Value, ApiError> {
     let Some(v) = r.get(k) else {
         return Ok(Value::Null);
     };
@@ -161,7 +166,7 @@ fn url_field(ch: &Channel) -> Option<&'static str> {
 }
 
 /// Eloquent `fill()` for one attribute.
-fn column_value(
+pub(crate) fn column_value(
     state: &AppState,
     ch: &Channel,
     k: &'static str,

@@ -21,6 +21,7 @@ pub mod state;
 pub mod ui;
 pub mod ui_applications;
 pub mod ui_databases;
+pub mod ui_notifications;
 pub mod validation;
 
 pub use routes::router;

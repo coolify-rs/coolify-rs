@@ -25,6 +25,8 @@ const routes: { name: string; pattern: string }[] = [
   { name: 'team', pattern: '/team' },
   { name: 'members', pattern: '/team/members' },
   { name: 'appearance', pattern: '/profile/appearance' },
+  { name: 'notification-email', pattern: '/notifications/email' },
+  { name: 'notification-channel', pattern: '/notifications/:channel' },
   { name: 'servers', pattern: '/servers' },
   { name: 'server-new', pattern: '/servers/new' },
   { name: 'server-new-type', pattern: '/servers/new/:type' },

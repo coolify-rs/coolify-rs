@@ -121,10 +121,16 @@ impl Ctx {
     }
 }
 
+fn rate_limiter_state() -> &'static Mutex<Option<HashMap<String, Instant>>> {
+    static SEEN: Mutex<Option<HashMap<String, Instant>>> = Mutex::new(None);
+    &SEEN
+}
+
 /// `RateLimiter::attempt($key, 0, ..., $decay)`: true when the key is free, and marks it.
 fn rate_limiter_attempt(key: &str, decay: Duration) -> bool {
-    static SEEN: Mutex<Option<HashMap<String, Instant>>> = Mutex::new(None);
-    let mut guard = SEEN.lock().unwrap_or_else(|p| p.into_inner());
+    let mut guard = rate_limiter_state()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let map = guard.get_or_insert_with(HashMap::new);
     let now = Instant::now();
     map.retain(|_, until| *until > now);
@@ -133,6 +139,27 @@ fn rate_limiter_attempt(key: &str, decay: Duration) -> bool {
     }
     map.insert(key.to_owned(), now + decay);
     true
+}
+
+/// `RateLimiter::tooManyAttempts($key, 0)`.
+fn rate_limiter_taken(key: &str) -> bool {
+    let guard = rate_limiter_state()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    guard
+        .as_ref()
+        .and_then(|m| m.get(key))
+        .is_some_and(|until| *until > Instant::now())
+}
+
+/// `RateLimiter::hit($key, $decay)`.
+fn rate_limiter_hit(key: &str, decay: Duration) {
+    let mut guard = rate_limiter_state()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    guard
+        .get_or_insert_with(HashMap::new)
+        .insert(key.to_owned(), Instant::now() + decay);
 }
 
 /// `NotificationThrottle::claim($notifiable, $notification, $sentBefore)`.

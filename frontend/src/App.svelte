@@ -21,6 +21,8 @@
   import ResourceNew from './pages/ResourceNew.svelte';
   import Database from './pages/Database.svelte';
   import Application from './pages/Application.svelte';
+  import NotificationEmail from './pages/NotificationEmail.svelte';
+  import NotificationChannel from './pages/NotificationChannel.svelte';
   import Unported from './pages/Unported.svelte';
   import { router } from './lib/router.svelte';
   import { session } from './lib/session.svelte';
@@ -113,6 +115,10 @@
       <Members />
     {:else if router.current.name === 'appearance'}
       <Appearance />
+    {:else if router.current.name === 'notification-email'}
+      <NotificationEmail />
+    {:else if router.current.name === 'notification-channel'}
+      {#key params.channel}<NotificationChannel channel={params.channel} />{/key}
     {:else if router.current.name === 'servers'}
       <Servers />
     {:else if router.current.name === 'server-new' || router.current.name === 'server-new-type'}

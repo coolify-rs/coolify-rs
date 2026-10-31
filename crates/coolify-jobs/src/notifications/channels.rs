@@ -724,6 +724,9 @@ async fn smtp_send(
     let port = settings.int("smtp_port").unwrap_or(0) as u16;
     let mode = settings.plain("smtp_encryption").map(|m| m.to_lowercase());
     let tls_parameters = TlsParameters::new(host.clone()).map_err(|e| fail(e.to_string()))?;
+    let implicit_tls =
+        mode.as_deref() == Some("tls") || (mode.as_deref() != Some("none") && port == 465);
+    let symfony_host = host.clone();
     let tls = match mode.as_deref() {
         Some("none") => Tls::None,
         Some("tls") => Tls::Wrapper(tls_parameters),
@@ -792,9 +795,19 @@ async fn smtp_send(
                         message: e.to_string(),
                     });
             }
+            // Symfony's `SocketStream::initialize` message, which the test email toast shows.
+            let message = if text.contains("Connection refused") {
+                let scheme = if implicit_tls { "ssl://" } else { "" };
+                let url = format!("{scheme}{symfony_host}:{port}");
+                format!(
+                    "Connection could not be established with host \"{url}\": stream_socket_client(): Unable to connect to {url} (Connection refused)"
+                )
+            } else {
+                text
+            };
             Err(SmtpFailure {
                 code: smtp_code(&e),
-                message: text,
+                message,
             })
         }
     }
@@ -1124,11 +1137,10 @@ pub async fn send_test(
     };
     match ch.name {
         "email" => {
-            // `RateLimiter::attempt('test-email:'.$team->id, 0, ..., 10)`.
-            if !super::rate_limiter_attempt(
-                &format!("test-email:{team_id}"),
-                Duration::from_secs(10),
-            ) {
+            // `RateLimiter::attempt('test-email:'.$team->id, 0, ..., 10)`: the hit is recorded after
+            // the callback, so a failed send leaves the key free.
+            let limit_key = format!("test-email:{team_id}");
+            if super::rate_limiter_taken(&limit_key) {
                 return Err("Too many messages sent!".to_owned());
             }
             let mail = notification
@@ -1144,7 +1156,9 @@ pub async fn send_test(
                 true,
                 &mail,
             )
-            .await
+            .await?;
+            super::rate_limiter_hit(&limit_key, Duration::from_secs(10));
+            Ok(())
         }
         "telegram" => {
             // `Livewire\Notifications\Telegram::sendTestNotification`.

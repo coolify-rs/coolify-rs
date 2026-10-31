@@ -92,12 +92,12 @@ export const navSections: [string, NavItem[]][] = [
         label: 'Notifications',
         icon: 'notifications',
         children: [
-          { label: 'Email', icon: 'mail', href: '/notifications/email', active: ['notifications/email'] },
-          { label: 'Discord', brandIcon: 'discord', href: '/notifications/discord', active: ['notifications/discord'] },
-          { label: 'Telegram', brandIcon: 'telegram', href: '/notifications/telegram', active: ['notifications/telegram'] },
-          { label: 'Slack', brandIcon: 'slack', href: '/notifications/slack', active: ['notifications/slack'] },
-          { label: 'Pushover', brandIcon: 'pushover', href: '/notifications/pushover', active: ['notifications/pushover'] },
-          { label: 'Webhook', icon: 'destinations', href: '/notifications/webhook', active: ['notifications/webhook'] },
+          { label: 'Email', icon: 'mail', href: '/notifications/email', active: ['notifications/email'], ported: true },
+          { label: 'Discord', brandIcon: 'discord', href: '/notifications/discord', active: ['notifications/discord'], ported: true },
+          { label: 'Telegram', brandIcon: 'telegram', href: '/notifications/telegram', active: ['notifications/telegram'], ported: true },
+          { label: 'Slack', brandIcon: 'slack', href: '/notifications/slack', active: ['notifications/slack'], ported: true },
+          { label: 'Pushover', brandIcon: 'pushover', href: '/notifications/pushover', active: ['notifications/pushover'], ported: true },
+          { label: 'Webhook', icon: 'destinations', href: '/notifications/webhook', active: ['notifications/webhook'], ported: true },
         ],
       },
       {
