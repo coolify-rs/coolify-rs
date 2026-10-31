@@ -25,6 +25,7 @@ const routes: { name: string; pattern: string }[] = [
   { name: 'team', pattern: '/team' },
   { name: 'members', pattern: '/team/members' },
   { name: 'appearance', pattern: '/profile/appearance' },
+  { name: 'registries', pattern: '/registries' },
   { name: 'destinations', pattern: '/destinations' },
   { name: 'destination', pattern: '/destination/:uuid' },
   { name: 'destination', pattern: '/destination/:uuid/:section' },

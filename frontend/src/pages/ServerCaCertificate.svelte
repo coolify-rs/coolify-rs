@@ -32,7 +32,7 @@
   const until = $derived(validUntil ? new Date(`${validUntil.replace(' ', 'T')}${validUntil.endsWith('Z') ? '' : 'Z'}`).getTime() : null);
   const now = Date.now();
   const day = 86400000;
-  const state = $derived(until === null ? null : now > until ? 'Expired' : now + 30 * day > until ? 'Expiring soon' : 'Valid');
+  const validity = $derived(until === null ? null : now > until ? 'Expired' : now + 30 * day > until ? 'Expiring soon' : 'Valid');
 
   async function save() {
     try {
@@ -59,8 +59,8 @@
     <div class="application-settings-form flex w-full flex-col gap-6">
       <SettingsSection id="server-ca-overview-section" title="CA certificate" description="Manage the certificate authority used to sign database certificates on this server.">
         {#snippet actions()}
-          {#if state}
-            <StatusBadge label={state} type={state === 'Valid' ? 'success' : 'error'} />
+          {#if validity}
+            <StatusBadge label={validity} type={validity === 'Valid' ? 'success' : 'error'} />
           {/if}
         {/snippet}
         <Callout type="info" title="Using this certificate">

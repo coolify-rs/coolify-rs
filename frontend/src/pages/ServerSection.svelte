@@ -5,6 +5,13 @@
   import ServerFrame from '../components/ServerFrame.svelte';
   import Unported from './Unported.svelte';
   import ServerAdvanced from './ServerAdvanced.svelte';
+  import ServerRegistries from './ServerRegistries.svelte';
+  import ServerAnalytics from './ServerAnalytics.svelte';
+  import ServerDockerCleanup from './ServerDockerCleanup.svelte';
+  import ServerImages from './ServerImages.svelte';
+  import ServerLogDrains from './ServerLogDrains.svelte';
+  import ServerSentinel from './ServerSentinel.svelte';
+  import ServerSentinelLogs from './ServerSentinelLogs.svelte';
   import ServerProxy from './ServerProxy.svelte';
   import ServerProxyDynamic from './ServerProxyDynamic.svelte';
   import ServerProxyCertificates from './ServerProxyCertificates.svelte';
@@ -21,6 +28,13 @@
 
   const pages: Record<string, Component<{ uuid: string; sub?: string }>> = {
     advanced: ServerAdvanced,
+    registries: ServerRegistries,
+    analytics: ServerAnalytics,
+    'docker-cleanup': ServerDockerCleanup,
+    images: ServerImages,
+    'log-drains': ServerLogDrains,
+    sentinel: ServerSentinel,
+    'sentinel/logs': ServerSentinelLogs,
     proxy: ServerProxy,
     'proxy/dynamic': ServerProxyDynamic,
     'proxy/certificates': ServerProxyCertificates,

@@ -160,8 +160,8 @@ fn traefik_warnings(s: &ServerRow) -> Value {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .trim_start_matches('v');
-        let is_minor = info.and_then(|i| i.get("type")).and_then(Value::as_str)
-            == Some("minor_upgrade");
+        let is_minor =
+            info.and_then(|i| i.get("type")).and_then(Value::as_str) == Some("minor_upgrade");
         let target = info
             .and_then(|i| i.get("upgrade_target"))
             .and_then(Value::as_str);
@@ -416,9 +416,7 @@ async fn redirect(
     if !ctx.is_team_admin() {
         return toast_error(UNAUTHORIZED);
     }
-    let enabled = body
-        .get("redirect_enabled")
-        .is_some_and(php_truthy);
+    let enabled = body.get("redirect_enabled").is_some_and(php_truthy);
     let mut srv = srv(&state, s)?;
     srv.proxy_set("redirect_enabled", Value::Bool(enabled));
     if let Err(e) = srv.save_proxy().await {
@@ -543,7 +541,10 @@ async fn reset_configuration(
         });
     }
     tracing::info!(target: "audit", event = "ui.server.proxy.configuration_reset", team_id = ctx.team_id, server_uuid = %s.uuid, "proxy configuration reset");
-    Ok(ok(json!({"message": "Proxy configuration reset to default.", "configuration": configuration})).into_response())
+    Ok(ok(
+        json!({"message": "Proxy configuration reset to default.", "configuration": configuration}),
+    )
+    .into_response())
 }
 
 /// `Navbar::restart`, `checkProxy` + `startProxy`, `stop` and `checkProxyStatus`.
@@ -644,7 +645,9 @@ async fn dynamic(
     let mut items = Vec::new();
     if !ctx.is_team_admin() {
         for f in &files {
-            items.push(json!({"name": f, "content": null, "managed": MANAGED.contains(&f.as_str())}));
+            items.push(
+                json!({"name": f, "content": null, "managed": MANAGED.contains(&f.as_str())}),
+            );
         }
         return Ok(ok(json!({"files": items})).into_response());
     }
@@ -668,7 +671,8 @@ async fn dynamic(
             continue;
         }
         total += content.len();
-        items.push(json!({"name": f, "content": content, "managed": MANAGED.contains(&f.as_str())}));
+        items
+            .push(json!({"name": f, "content": content, "managed": MANAGED.contains(&f.as_str())}));
     }
     let warning = (!skipped.is_empty()).then(|| {
         format!(
@@ -835,7 +839,10 @@ async fn delete_dynamic(
     if let Err(e) = jobs
         .instant_remote(
             &s,
-            &[format!("rm -f {}", shell_arg(&format!("{path}/dynamic/{name}")))],
+            &[format!(
+                "rm -f {}",
+                shell_arg(&format!("{path}/dynamic/{name}"))
+            )],
             true,
             "server.proxy.dynamic",
         )

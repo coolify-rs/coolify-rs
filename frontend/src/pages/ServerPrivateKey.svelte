@@ -84,7 +84,7 @@
             </button>
             {#if canEdit}
               <div class="relative" bind:this={root}>
-                <button type="button" class="button" ishighlighted="" aria-haspopup="menu" aria-expanded={menu} onclick={() => (menu = !menu)}>
+                <button type="button" class="button" {...{ ishighlighted: '' }} aria-haspopup="menu" aria-expanded={menu} onclick={() => (menu = !menu)}>
                   <Reicon name="plus" class="size-3.5" />
                   Add
                   <Reicon name="chevron-down" class="size-3 opacity-55" />

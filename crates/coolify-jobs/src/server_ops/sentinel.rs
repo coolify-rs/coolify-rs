@@ -363,6 +363,11 @@ pub fn sentinel_live(srv: &Srv) -> bool {
 }
 
 /// `rememberSentinelPushProblem`.
+/// `$server->sentinelPushProblem()`.
+pub fn push_problem(server_id: i64) -> Option<String> {
+    MARKS.get(&format!("sentinel:push-problem:{server_id}"))
+}
+
 pub fn remember_push_problem(server_id: i64, problem: Option<&str>) {
     let key = format!("sentinel:push-problem:{server_id}");
     match problem.filter(|p| !p.trim().is_empty()) {

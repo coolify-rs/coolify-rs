@@ -25,7 +25,7 @@
     loading = true;
     try {
       const r = await get<{ logs: string }>(`/server-page/${encodeURIComponent(uuid)}/logs/${container}?lines=${encodeURIComponent(lines)}&timestamps=${timestamps ? 1 : 0}`);
-      logs = r.logs;
+      logs = r.logs.replace(/\x1b\[[0-9;]*m/g, '');
     } catch (e) {
       failure(e);
     } finally {

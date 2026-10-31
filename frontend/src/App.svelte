@@ -13,6 +13,7 @@
   import Team from './pages/Team.svelte';
   import Members from './pages/Members.svelte';
   import Appearance from './pages/Appearance.svelte';
+  import DockerRegistries from './pages/DockerRegistries.svelte';
   import Destinations from './pages/Destinations.svelte';
   import Destination from './pages/Destination.svelte';
   import Servers from './pages/Servers.svelte';
@@ -61,6 +62,7 @@
     members: 'Team Members',
     appearance: 'Appearance',
     destinations: 'Destinations',
+    registries: 'Docker Registries',
     servers: 'Servers',
     'server-new': 'New Server',
     'server-new-type': 'New Server',
@@ -116,6 +118,8 @@
       <Members />
     {:else if router.current.name === 'appearance'}
       <Appearance />
+    {:else if router.current.name === 'registries'}
+      <DockerRegistries />
     {:else if router.current.name === 'destinations'}
       <Destinations />
     {:else if router.current.name === 'destination'}

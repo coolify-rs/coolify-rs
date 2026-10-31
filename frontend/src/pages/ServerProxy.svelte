@@ -217,7 +217,7 @@
                   </div>
                 {/snippet}
                 {#if data.changed}
-                  <Callout type="warning" title="Your configuration changed, please restart the proxy."></Callout>
+                  <Callout type="warning" title="Your configuration changed, please restart the proxy.">{""}</Callout>
                 {:else if data.pending}
                   <Callout type="warning" title="Restart required">Restart the proxy to apply TLS certificate changes.</Callout>
                 {:else}

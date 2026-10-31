@@ -37,7 +37,7 @@ const sides = [['ref', await session('http://127.0.0.1:18000'), 'http://127.0.0.
 for (const t of targets) {
   for (const [label, page, base] of sides) {
     await page.goto(base + (label === 'ref' ? t.refPath : t.rsPath));
-    await page.waitForTimeout(2500);
+    await page.waitForTimeout(Number(opt('wait', 2500)));
     // Upstream's first-run notification popup is not part of the page.
     await page.locator('button:has-text("Accept And Close"), button:has-text("Accept and Close")').first().click({ timeout: 500 }).catch(() => {});
     const file = `${out}${t.name}-${label}.png`;

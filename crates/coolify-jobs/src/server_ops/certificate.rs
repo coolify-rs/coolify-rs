@@ -85,7 +85,9 @@ fn pem(label: &str, data: &[u8]) -> String {
 
 /// `TraefikAcmeService::expirationDate`: `notAfter` of the base64 PEM in acme.json.
 pub fn acme_expiration(encoded: &str) -> Option<String> {
-    let decoded = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
     let text = String::from_utf8(decoded).ok()?;
     let body = text
         .split("-----BEGIN CERTIFICATE-----")
@@ -93,7 +95,9 @@ pub fn acme_expiration(encoded: &str) -> Option<String> {
         .split("-----END CERTIFICATE-----")
         .next()?;
     let compact: String = body.split_whitespace().collect();
-    let data = base64::engine::general_purpose::STANDARD.decode(compact).ok()?;
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(compact)
+        .ok()?;
     let (0x30, start, _) = der_element(&data, 0)? else {
         return None;
     };
@@ -113,7 +117,11 @@ pub fn acme_expiration(encoded: &str) -> Option<String> {
     let not_before_end = der_element(&data, validity)?.2;
     let (tag, s, e) = der_element(&data, not_before_end)?;
     let raw = std::str::from_utf8(&data[s..e]).ok()?;
-    let format = if tag == 0x17 { "%y%m%d%H%M%SZ" } else { "%Y%m%d%H%M%SZ" };
+    let format = if tag == 0x17 {
+        "%y%m%d%H%M%SZ"
+    } else {
+        "%Y%m%d%H%M%SZ"
+    };
     let t = NaiveDateTime::parse_from_str(raw, format).ok()?;
     Some(t.format("%Y-%m-%d %H:%M:%S").to_string())
 }
