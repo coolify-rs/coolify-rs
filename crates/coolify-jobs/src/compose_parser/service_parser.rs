@@ -298,7 +298,7 @@ fn first_domain_from_list(fqdns: Option<&str>) -> String {
 }
 
 /// `ServiceApplication::serviceType()`.
-fn service_type(image: Option<&str>) -> Option<&'static str> {
+pub fn service_type(image: Option<&str>) -> Option<&'static str> {
     let image = php::before(image.unwrap_or_default(), ":");
     SPECIFIC_SERVICES.iter().find(|s| **s == image).copied()
 }

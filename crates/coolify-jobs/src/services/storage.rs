@@ -273,7 +273,12 @@ pub fn resolve_host_path(dir: &str, path: &str, context: &str) -> Result<String,
 }
 
 /// `LocalFileVolume::isAdminControlledComposeMount()` for a service part.
-fn is_admin_controlled(raw: Option<&str>, fs_path: &str, mount_path: &str, dir: &str) -> bool {
+pub(crate) fn is_admin_controlled(
+    raw: Option<&str>,
+    fs_path: &str,
+    mount_path: &str,
+    dir: &str,
+) -> bool {
     let Some(raw) = raw.filter(|r| !r.is_empty()) else {
         return false;
     };
@@ -814,6 +819,78 @@ pub async fn ensure_content_files(
         }
     }
     out
+}
+
+/// `composeExternalVolumeMounts($compose)`: `(key, dockerName, service, mountPaths)`.
+pub fn compose_external_volume_mounts(
+    raw: Option<&str>,
+) -> Vec<(String, String, String, Vec<String>)> {
+    let Some(yaml) = raw
+        .filter(|r| !r.trim().is_empty())
+        .and_then(|r| validate::parse_docker_compose_yaml(r).ok())
+    else {
+        return Vec::new();
+    };
+    let (Some(top @ PhpValue::Array(_)), Some(PhpValue::Array(services))) =
+        (php::get(&yaml, "volumes"), php::get(&yaml, "services"))
+    else {
+        return Vec::new();
+    };
+    let mut mounts: Vec<(String, String, String, Vec<String>)> = Vec::new();
+    for (service_key, service) in services {
+        let service_name = match service_key {
+            coolify_compat::yaml::Key::Str(s) => s.clone(),
+            coolify_compat::yaml::Key::Int(i) => i.to_string(),
+        };
+        let Some(PhpValue::Array(volumes)) = php::get(service, "volumes") else {
+            continue;
+        };
+        for (_, volume) in volumes {
+            let (source, target) = match volume {
+                PhpValue::Str(s) => match validate::parse_docker_volume_string(s) {
+                    Ok(v) => (v.source, v.target),
+                    Err(_) => continue,
+                },
+                PhpValue::Array(_) => (
+                    Some(php::data_get_str(volume, "source", "")).filter(|s| !s.is_empty()),
+                    Some(php::data_get_str(volume, "target", "")).filter(|s| !s.is_empty()),
+                ),
+                _ => continue,
+            };
+            let (Some(source), Some(target)) = (source, target) else {
+                continue;
+            };
+            let declaration = php::get(top, &source);
+            if !validate::is_compose_external_volume(declaration) {
+                continue;
+            }
+            let declaration = declaration.unwrap_or(&PhpValue::Null);
+            let docker_name = {
+                let name = php::data_get_str(declaration, "name", "");
+                if name.is_empty() {
+                    let nested = php::data_get_str(declaration, "external.name", "");
+                    if nested.is_empty() {
+                        source.clone()
+                    } else {
+                        nested
+                    }
+                } else {
+                    name
+                }
+            };
+            if let Some(m) = mounts
+                .iter_mut()
+                .find(|m| m.0 == source && m.2 == service_name)
+            {
+                if !m.3.contains(&target) {
+                    m.3.push(target);
+                }
+            } else {
+                mounts.push((source, docker_name, service_name.clone(), vec![target]));
+            }
+        }
+    }
+    mounts
 }
 
 #[cfg(test)]

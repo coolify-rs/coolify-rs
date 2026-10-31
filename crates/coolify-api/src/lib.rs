@@ -40,6 +40,7 @@ pub mod ui_server_ops;
 pub mod ui_server_patches;
 pub mod ui_server_proxy;
 pub mod ui_server_tunnel;
+pub mod ui_services;
 pub mod ui_settings;
 pub mod ui_shared_variables;
 pub mod ui_sources;

@@ -2993,6 +2993,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::ui::routes(state.clone()))
         .merge(crate::webhooks::routes())
         .merge(crate::ui_notifications::routes(state.clone()))
+        .merge(crate::ui_services::routes(state.clone()))
         .merge(crate::ui_tags::routes(state.clone()))
         .merge(crate::ui_teams::routes(state.clone()))
         .merge(crate::ui_profile::routes(state.clone()))

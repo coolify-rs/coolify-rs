@@ -43,7 +43,7 @@ pub async fn resources(
             "Environment not found.",
         ))?;
     let mut databases = Vec::new();
-    let mut unported = dbs::count_other_resources(&state.db, e.id).await?;
+    let mut unported = 0;
     for d in dbs::list_for_environment(&state.db, e.id).await? {
         if d.kind.ported() {
             let mut v = present(&state, &ctx, &d, false, None).await?;
@@ -64,10 +64,13 @@ pub async fn resources(
     for a in &rows {
         applications.push(crate::routes::applications::present(&state, &ctx, a, false).await?);
     }
-    Ok(
-        ok(json!({"applications": applications, "databases": databases, "unported": unported}))
-            .into_response(),
-    )
+    Ok(ok(json!({
+        "applications": applications,
+        "databases": databases,
+        "services": crate::ui_services::environment_services(&state, e.id).await?,
+        "unported": unported,
+    }))
+    .into_response())
 }
 
 /// `Project\New\Select`: servers that can host resources, with their destinations.

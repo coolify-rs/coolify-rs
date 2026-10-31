@@ -45,6 +45,7 @@
   import SourceGithub from './pages/SourceGithub.svelte';
   import SourceOauth from './pages/SourceOauth.svelte';
   import Database from './pages/Database.svelte';
+  import Service from './pages/Service.svelte';
   import Application from './pages/Application.svelte';
   import NotificationEmail from './pages/NotificationEmail.svelte';
   import NotificationChannel from './pages/NotificationChannel.svelte';
@@ -227,6 +228,8 @@
       {#key router.path + router.search}<ResourceNew uuid={params.uuid} env={params['env']} />{/key}
     {:else if router.current.name === 'database' || router.current.name === 'database-section'}
       {#key router.path}<Database uuid={params.uuid} env={params['env']} db={params['db']} section={params['section'] ?? 'general'} />{/key}
+    {:else if router.current.name === 'service' || router.current.name === 'service-section'}
+      {#key router.path}<Service uuid={params.uuid} env={params['env']} service={params['service']} section={params['section'] ?? 'general'} />{/key}
     {:else if router.current.name === 'application' || router.current.name === 'application-section'}
       {#key router.path}<Application uuid={params.uuid} env={params['env']} app={params['app']} section={params['section'] ?? 'general'} />{/key}
     {:else if router.current.name === 'application-deployment'}

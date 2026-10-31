@@ -421,7 +421,7 @@ fn conflict_key(domain: &str) -> String {
 }
 
 /// `checkDomainUsage(domain: $fqdn)`: applications and service applications of every team.
-async fn domain_usage(state: &AppState, fqdn: &str) -> Result<Vec<Value>, ApiError> {
+pub(crate) async fn domain_usage(state: &AppState, fqdn: &str) -> Result<Vec<Value>, ApiError> {
     let wanted = conflict_key(fqdn.trim_end_matches('/'));
     let mut conflicts = Vec::new();
     let pool = state.db.pool();

@@ -26,6 +26,7 @@ use coolify_compat::yaml::PhpValue;
 pub mod status;
 pub mod storage;
 pub mod templates;
+pub mod ui_ops;
 
 /// `service_configuration_dir()`.
 pub const CONFIGURATION_DIR: &str = "/data/coolify/services";

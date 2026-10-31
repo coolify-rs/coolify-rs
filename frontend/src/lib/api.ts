@@ -413,10 +413,12 @@ export interface DestinationServer {
   destinations: { uuid: string; name: string; network: string }[];
 }
 
+import type { ServiceListItem } from './servicesApi';
+
 export const dbUi = {
   /** Resources of an environment. `unported` counts applications, services and database kinds coolify-rs cannot show yet. */
   resources: (project: string, env: string) =>
-    request<{ applications?: ApplicationRecord[]; databases: DatabaseRecord[]; unported: number }>(
+    request<{ applications?: ApplicationRecord[]; databases: DatabaseRecord[]; services?: ServiceListItem[]; unported: number }>(
       'GET',
       `/ui/projects/${encodeURIComponent(project)}/environments/${encodeURIComponent(env)}/resources`,
     ),

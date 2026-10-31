@@ -10,9 +10,10 @@
   let {
     status,
     title = 'Database status',
+    containerName = 'Container',
     healthcheckUrl,
     restartLimit = null,
-  }: { status: string; title?: string; healthcheckUrl?: string; restartLimit?: number | null } = $props();
+  }: { status: string; title?: string; containerName?: string; healthcheckUrl?: string; restartLimit?: number | null } = $props();
 
   let open = $state(false);
   let root: HTMLDivElement | undefined = $state();
@@ -94,7 +95,7 @@
         <div class="px-3 py-2 text-[11px] font-medium text-neutral-400 dark:text-fg-faint">{title}</div>
         <div class="listbox-option cursor-default! gap-2.5!">
           <span class="size-1.5 shrink-0 rounded-full {dot[parsed.containerType]}"></span>
-          <span class="flex-1">Container</span>
+          <span class="flex-1">{containerName}</span>
           <span>{parsed.containerLabel}</span>
         </div>
         {#if healthcheckUrl}
