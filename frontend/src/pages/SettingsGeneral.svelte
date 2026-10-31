@@ -12,6 +12,7 @@
   import { router } from '../lib/router.svelte';
   import { settingsUi, type ActionResult, type DomainConflict, type Values } from '../lib/settingsApi';
   import { notify } from '../lib/toast.svelte';
+  import { portal } from '../lib/portal';
 
   document.title = 'Settings | coolify-rs';
 
@@ -25,7 +26,8 @@
   // `targets="fqdn,instance_name,public_ipv4,public_ipv6,dev_helper_version"`.
   const targets = ['fqdn', 'instance_name', 'public_ipv4', 'public_ipv6', 'dev_helper_version'];
   const dirty = $derived(!!form && targets.some((k) => (form![k] ?? '') !== (saved[k] ?? '')));
-  const https = $derived((form?.fqdn ?? '').toLowerCase().startsWith('https://'));
+  // Blade decides on what the server holds: the field appears after a round trip.
+  const https = $derived((saved.fqdn ?? '').toLowerCase().startsWith('https://'));
 
   settingsUi.general().then((d) => {
     if (d.redirect) return router.go(d.redirect, true);
@@ -43,7 +45,11 @@
     if (r.instance_timezone && form) form.instance_timezone = r.instance_timezone;
     if (r.settings) apply(r.settings);
     if (r.dns_error) notify.failure(r.dns_error);
-    if (r.conflicts) conflicts = r.conflicts;
+    if (r.conflicts) {
+      // Livewire's snapshot holds the submitted form now.
+      conflicts = r.conflicts;
+      if (form) saved = { ...$state.snapshot(form) };
+    }
     if (r.error) notify.failure(r.error);
     if (r.message) notify.success(r.message);
   }
@@ -147,7 +153,7 @@
 
     {#if conflicts.length}
       <div class="relative w-auto h-auto z-40">
-        <div class="fixed inset-0 z-99 flex min-h-full items-center justify-center overflow-y-auto p-4">
+        <div use:portal class="fixed inset-0 z-99 flex min-h-full items-center justify-center overflow-y-auto p-4">
           <div class="absolute inset-0 bg-black/50 backdrop-blur-[2px]"></div>
           <div
             class="application-settings-form application-settings-section relative w-full lg:min-w-[36rem] lg:max-w-2xl"

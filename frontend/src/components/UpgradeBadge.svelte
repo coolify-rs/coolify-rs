@@ -6,6 +6,7 @@
   import { ApiError } from '../lib/api';
   import { settingsUi, type UpgradeState } from '../lib/settingsApi';
   import { notify } from '../lib/toast.svelte';
+  import { portal } from '../lib/portal';
 
   let { fullButton = false, state: given = null }: { fullButton?: boolean; state?: UpgradeState | null } = $props();
 
@@ -47,7 +48,7 @@
         </button>
       {/if}
       {#if open}
-        <div class="fixed inset-0 z-99 flex min-h-full items-center justify-center overflow-y-auto p-4">
+        <div use:portal class="fixed inset-0 z-99 flex min-h-full items-center justify-center overflow-y-auto p-4">
           <div class="absolute inset-0 w-full h-full bg-black/50 backdrop-blur-[2px]"></div>
           <div
             class="application-settings-form application-settings-section relative flex max-h-[calc(100dvh-2rem)] w-full flex-col lg:min-w-[36rem] lg:max-w-2xl"

@@ -1,6 +1,7 @@
 <script lang="ts">
   // Port of upstream components/top-user-menu.blade.php.
   import Reicon from './Reicon.svelte';
+  import HelpForm from './HelpForm.svelte';
   import WhatsNew from './WhatsNew.svelte';
   import { link, router } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
@@ -50,6 +51,7 @@
   function onWindowClick(e: MouseEvent) {
     if (open && root && !root.contains(e.target as Node)) open = false;
   }
+  let helpOpen = $state(false);
 </script>
 
 <svelte:window
@@ -134,6 +136,19 @@
           Documentation
         </span>
       </a>
+      <button
+        type="button"
+        class="listbox-option w-full cursor-pointer text-left"
+        onclick={() => {
+          open = false;
+          helpOpen = true;
+        }}
+      >
+        <span class="flex items-center gap-2">
+          <Reicon name="feedback" class="size-4 opacity-80" />
+          Feedback
+        </span>
+      </button>
       <a href="https://coolify.io/sponsorships" target="_blank" rel="noopener noreferrer" class="listbox-option">
         <span class="flex items-center gap-2">
           <Reicon name="sponsor" class="size-4 text-pink-500" />
@@ -152,3 +167,7 @@
     </div>
   </div>
 </div>
+
+{#if helpOpen}
+  <HelpForm onclose={() => (helpOpen = false)} />
+{/if}

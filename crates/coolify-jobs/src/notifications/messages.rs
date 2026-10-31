@@ -3448,6 +3448,11 @@ pub enum Mail {
     EmailVerification { url: String },
     /// `TransactionalEmails\Test`.
     Test,
+    /// `Livewire\Help::submit`: `emails.help`.
+    Help {
+        subject: String,
+        description: String,
+    },
     /// `TracksDeliveryFailures::sendChannelDisabledEmail`.
     ChannelDisabled {
         channel: String,
@@ -3538,6 +3543,21 @@ impl Mail {
                 ),
             ),
             Mail::Test => ("Coolify: Test Email".to_owned(), views::test_email(app)),
+            Mail::Help {
+                subject,
+                description,
+            } => (
+                format!("[HELP]: {subject}"),
+                format!(
+                    "{}\n\n<hr />\n\n",
+                    description
+                        .replace('&', "&amp;")
+                        .replace('<', "&lt;")
+                        .replace('>', "&gt;")
+                        .replace('"', "&quot;")
+                        .replace('\'', "&#039;")
+                ),
+            ),
             Mail::ChannelDisabled {
                 channel,
                 failures,

@@ -58,12 +58,12 @@
   import SettingsUpdates from './pages/SettingsUpdates.svelte';
   import SettingsEmail from './pages/SettingsEmail.svelte';
   import SettingsBackup from './pages/SettingsBackup.svelte';
+  import Onboarding from './pages/Onboarding.svelte';
   import Unported from './pages/Unported.svelte';
   import { router } from './lib/router.svelte';
   import { session } from './lib/session.svelte';
   import { page } from './lib/page.svelte';
   import { setUnauthenticatedHandler } from './lib/api';
-  import { authUi } from './lib/authApi';
 
   session.refresh();
   setUnauthenticatedHandler(() => {
@@ -154,13 +154,6 @@
   });
 
   const params = $derived(router.current.params);
-
-  /** `Boarding\Index::skipBoarding`. */
-  async function skipBoarding() {
-    await authUi.skipBoarding();
-    await session.refresh();
-    router.go('/', true);
-  }
 </script>
 
 {#if !session.loaded}
@@ -189,6 +182,8 @@
   <EmailVerifyLink />
 {:else if router.current.name === 'select-team'}
   <SelectTeam />
+{:else if router.current.name === 'onboarding'}
+  <Onboarding />
 {:else if router.current.name === 'invitation'}
   {#key params.uuid}<Invitation uuid={params.uuid} />{/key}
 {:else if router.current.name === 'confirm-password'}
@@ -283,10 +278,6 @@
       <SettingsBackup />
     {:else if router.current.name === 'settings-oauth'}
       {#key router.path}<SettingsOauth provider={params.provider} />{/key}
-    {:else if router.current.name === 'onboarding'}
-      <Unported title="Onboarding" description="The onboarding wizard is not ported yet." iconName="rocket">
-        <button type="button" class="button" onclick={skipBoarding}>Skip setup</button>
-      </Unported>
     {:else if router.current.name === 'servers'}
       <Servers />
     {:else if router.current.name === 'server-new' || router.current.name === 'server-new-type'}

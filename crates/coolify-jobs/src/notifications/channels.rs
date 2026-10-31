@@ -709,6 +709,17 @@ async fn smtp_send(
     to: &[String],
     mail: &MailMessage,
 ) -> Result<(), SmtpFailure> {
+    smtp_send_with_cc(settings, from, to, None, mail).await
+}
+
+/// `->replyTo($email)->cc($cc)` of `send_user_an_email`.
+async fn smtp_send_with_cc(
+    settings: &Settings,
+    from: &(String, String),
+    to: &[String],
+    cc: Option<&str>,
+    mail: &MailMessage,
+) -> Result<(), SmtpFailure> {
     let fail = |message: String| SmtpFailure {
         code: None,
         message,
@@ -761,11 +772,20 @@ async fn smtp_send(
     let mut message = lettre::Message::builder()
         .from(mailbox)
         .subject(mail.subject.clone());
+    if let Some(cc) = cc {
+        let mb: Mailbox = cc
+            .parse()
+            .map_err(|e: lettre::address::AddressError| fail(e.to_string()))?;
+        message = message.cc(mb);
+    }
     for recipient in to {
         let mb: Mailbox = recipient
             .parse()
             .map_err(|e: lettre::address::AddressError| fail(e.to_string()))?;
-        message = message.to(mb);
+        message = message.to(mb.clone());
+        if cc.is_some() {
+            message = message.reply_to(mb);
+        }
     }
     let message = message
         .header(ContentType::TEXT_HTML)
@@ -1264,8 +1284,17 @@ pub async fn send_transactional(
         Mail::EmailChangeVerification { new_email, .. } => new_email.as_str(),
         _ => to,
     };
+    // `send_user_an_email($mail, $email, 'feedback@coollabs.io')`.
+    let cc = matches!(mail, Mail::Help { .. }).then(|| {
+        std::env::var("COOLIFY_RS_FEEDBACK_EMAIL")
+            .unwrap_or_else(|_| "feedback@coollabs.io".to_owned())
+    });
     if settings.flag("resend_enabled") {
-        let body = laravel_resend_body(&from, recipient, &message);
+        let mut body = laravel_resend_body(&from, recipient, &message);
+        if let Some(cc) = &cc {
+            body["cc"] = json!([cc]);
+            body["reply_to"] = json!([recipient]);
+        }
         let api_key = settings.secret("resend_api_key")?.unwrap_or_default();
         return resend_send(&api_key, &body).await.map_err(|e| match e {
             ResendFailure::Api(e) => {
@@ -1276,9 +1305,15 @@ pub async fn send_transactional(
             }
         });
     }
-    smtp_send(&settings, &from, &[recipient.to_owned()], &message)
-        .await
-        .map_err(|e| e.message)
+    smtp_send_with_cc(
+        &settings,
+        &from,
+        &[recipient.to_owned()],
+        cc.as_deref(),
+        &message,
+    )
+    .await
+    .map_err(|e| e.message)
 }
 
 /// `Illuminate\Mail\Transport\ResendTransport::doSend`.
