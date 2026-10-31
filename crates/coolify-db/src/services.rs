@@ -1365,48 +1365,6 @@ pub async fn scheduled_task_executions(db: &Db, task_id: i64) -> DbResult<Vec<Re
         .collect()
 }
 
-/// `ScheduledTaskExecution::forceCreate([...])`.
-pub async fn scheduled_task_execution_start(
-    db: &Db,
-    task_id: i64,
-    now: NaiveDateTime,
-) -> DbResult<i64> {
-    db.ensure_writable()?;
-    Ok(sqlx::query_scalar(
-        "INSERT INTO scheduled_task_executions (uuid, scheduled_task_id, started_at, retry_count, created_at, updated_at) \
-         VALUES ($1, $2, $3, 0, $3, $3) RETURNING id",
-    )
-    .bind(new_public_id())
-    .bind(task_id)
-    .bind(now)
-    .fetch_one(db.pool())
-    .await?)
-}
-
-/// The final `update()`s of a task execution: `status`, `message`, `finished_at`, `duration`.
-pub async fn scheduled_task_execution_finish(
-    db: &Db,
-    id: i64,
-    status: &str,
-    message: &str,
-    duration: f64,
-    now: NaiveDateTime,
-) -> DbResult<()> {
-    db.ensure_writable()?;
-    sqlx::query(
-        "UPDATE scheduled_task_executions SET status = $2, message = $3, finished_at = $4, \
-         duration = round($5::numeric, 2), updated_at = $4 WHERE id = $1",
-    )
-    .bind(id)
-    .bind(status)
-    .bind(message)
-    .bind(now)
-    .bind(duration.to_string())
-    .execute(db.pool())
-    .await?;
-    Ok(())
-}
-
 // --- move -------------------------------------------------------------------------------------
 
 /// `Environment::ownedByCurrentTeamAPI($teamId)->whereUuid($uuid)->first()`: `(id, project uuid)`.

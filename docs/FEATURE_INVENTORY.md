@@ -105,7 +105,7 @@ Upstream references are relative to the upstream repository root.
 | UI: API tokens, integration tokens | `Livewire/Security/{ApiTokens, IntegrationToken*}` | verified on both UIs (`compat/ui/flow_security.mjs`, Vault against a local fake); Cloudflare tokens are refused, see KNOWN_LIMITATIONS |
 | Persistent storage, volume backups | `LocalPersistentVolume`, `VolumeBackupJob` | |
 | Database backups to S3, restore | `DatabaseBackupJob` | |
-| Scheduled tasks, scheduler, Horizon queues | `app/Console/Kernel.php`, 72 jobs | application tasks API and `ScheduledTaskJob` ported; scheduler with a source interface (`coolify_jobs::scheduler`), tasks registered; backups, cleanups and other jobs not |
+| Scheduled tasks, scheduler, Horizon queues | `app/Console/Kernel.php`, 72 jobs | one scheduler (`coolify_jobs::scheduler`, `kernel`, `schedule_sources`): every source of `ScheduledJobManager`, `ServerManagerJob`, the Kernel's jobs and commands; `compat/diff/kernel_schedule_diff.py`, `compat/diff/scheduler_window.py` |
 | Notifications (email, Discord, Slack, Telegram, Pushover, webhook) | `app/Notifications/*` | SSRF protections must be ported with them |
 | Terminal and file browser | `docker/coolify-terminal`, `ContainerFilesystemService` | high-risk; security review required |
 | Cloud providers (Hetzner, DigitalOcean, Vultr, Hostinger), cloud-init | controllers + jobs | |

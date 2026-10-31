@@ -1032,17 +1032,25 @@ mod tests {
         assert!(invalid.iter().all(|e| e.timezone == "UTC"));
     }
 
-    /// `crc32('cdn-delay:instance') % window`, from PHP: `crc32('cdn-delay:instance')` = 2196238131.
+    /// PHP: `crc32('cdn-delay:instance')` is 2873956007.
     #[test]
     fn the_cdn_delay_is_stable_and_inside_the_interval() {
-        let hourly = cdn_delay_seconds("0 * * * *", "instance", at(0, 0));
+        assert_eq!(crc32(b"cdn-delay:instance"), 2_873_956_007);
         assert_eq!(
-            hourly,
-            u64::from(crc32(b"cdn-delay:instance")) % MAX_CDN_DELAY_SECONDS
+            cdn_delay_seconds("0 * * * *", "instance", at(0, 0)),
+            2_873_956_007 % 3600
         );
-        assert!(hourly < 3600);
         assert!(cdn_delay_seconds("* * * * *", "instance", at(0, 0)) < 60);
         assert!(cdn_delay_seconds("garbage", "instance", at(0, 0)) < 3600);
+    }
+
+    /// For `compat/diff/kernel_schedule_diff.py`.
+    #[test]
+    #[ignore = "prints the table"]
+    fn print_schedule() {
+        for e in schedule(None, None) {
+            println!("KERNEL {} {}", e.name, e.frequency);
+        }
     }
 
     #[test]

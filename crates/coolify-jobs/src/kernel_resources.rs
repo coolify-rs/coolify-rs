@@ -514,7 +514,8 @@ pub(crate) async fn cleanup_stucked_resources(jobs: &Jobs) {
     // Functional servers: `CleanupHelperContainersJob::dispatch($server)`.
     if let Ok(rows) = servers::all(db).await {
         for row in rows {
-            if ServerInfo::from_row(&row).is_functional() {
+            if allowed(&format!("server:{}", row.id)) && ServerInfo::from_row(&row).is_functional()
+            {
                 let jobs = jobs.clone();
                 tokio::spawn(async move {
                     if let Err(e) = jobs.cleanup_helper_containers(&row).await {

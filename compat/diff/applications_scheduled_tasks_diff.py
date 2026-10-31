@@ -6,7 +6,9 @@ tokens. Execution checks: one application the reference deployed, and for each c
 made through that side's API with `enabled: false`, so no scheduler fires it. `POST .../execute` runs it,
 and the execution rows and the command line on the VM are compared.
 
-With `--scheduler` (start the rs side with COOLIFY_RS_SCHEDULER=on for this run) one enabled task with a
+With `--scheduler` (start the rs side with COOLIFY_RS_SCHEDULER=on for this run, on a database nobody else uses: the
+scheduler now also runs the server checks and Docker cleanups of every row; compat/diff/scheduler_window.py is the safe
+run on the shared VM) one enabled task with a
 `* * * * *` frequency exists for a few minutes on the running application, with both schedulers on: each
 minute must have exactly one execution. A task with a far away frequency stays unfired.
 
