@@ -266,7 +266,7 @@
       {#key params.uuid}<CloudInitScript uuid={params.uuid} />{/key}
     {:else if router.current.name === 'integration-tokens'}
       <IntegrationTokens />
-    {:else if router.current.name === 'settings-oauth' && session.isInstanceAdmin}
+    {:else if router.current.name === 'settings-oauth'}
       {#key router.path}<SettingsOauth provider={params.provider} />{/key}
     {:else if router.current.name === 'onboarding'}
       <Unported title="Onboarding" description="The onboarding wizard is not ported yet." iconName="rocket">
