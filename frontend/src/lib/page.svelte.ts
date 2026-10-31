@@ -48,8 +48,18 @@ export interface ServerTopbar {
   servers: { uuid: string; name: string; functional: boolean }[];
 }
 
+/** `<x-breadcrumb-switcher>` after the section name (a tag, an S3 storage). */
+export interface ResourceSwitcher {
+  title: string;
+  label: string;
+  items: SwitcherItem[];
+  /** The storage's status pill. */
+  usable?: boolean;
+}
+
 class PageState {
   switchers = $state<Switcher[]>([]);
+  resourceSwitcher = $state<ResourceSwitcher | null>(null);
   navContext = $state<NavContext | null>(null);
   server = $state<ServerTopbar | null>(null);
 }

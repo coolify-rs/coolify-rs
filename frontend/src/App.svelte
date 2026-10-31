@@ -23,6 +23,7 @@
   import Application from './pages/Application.svelte';
   import NotificationEmail from './pages/NotificationEmail.svelte';
   import NotificationChannel from './pages/NotificationChannel.svelte';
+  import Tags from './pages/Tags.svelte';
   import Unported from './pages/Unported.svelte';
   import { router } from './lib/router.svelte';
   import { session } from './lib/session.svelte';
@@ -47,6 +48,7 @@
   $effect.pre(() => {
     void router.path;
     page.switchers = [];
+    page.resourceSwitcher = null;
     page.navContext = null;
     page.server = null;
   });
@@ -119,6 +121,8 @@
       <NotificationEmail />
     {:else if router.current.name === 'notification-channel'}
       {#key params.channel}<NotificationChannel channel={params.channel} />{/key}
+    {:else if router.current.name === 'tags'}
+      {#key router.path}<Tags tagName={params.tagName} />{/key}
     {:else if router.current.name === 'servers'}
       <Servers />
     {:else if router.current.name === 'server-new' || router.current.name === 'server-new-type'}

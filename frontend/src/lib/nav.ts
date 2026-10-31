@@ -111,7 +111,7 @@ export const navSections: [string, NavItem[]][] = [
           { label: 'API Tokens', icon: 'code', href: '/security/api-tokens', active: ['security/api-tokens'] },
         ],
       },
-      { label: 'Tags', icon: 'tags', href: '/tags', active: ['tags*', 'canvas/tags'] },
+      { label: 'Tags', icon: 'tags', href: '/tags', active: ['tags*', 'canvas/tags'], ported: true },
       {
         label: 'Settings',
         icon: 'settings',

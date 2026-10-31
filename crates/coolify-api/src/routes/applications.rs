@@ -2204,10 +2204,169 @@ pub async fn cancel_deployment(
     Ok(ok(json!({"message": "Deployment cancelled successfully.", "deployment_uuid": uuid, "status": "cancelled-by-user"})).into_response())
 }
 
-/// `POST /deploy` by `uuid` (tags and pull requests are not ported).
+/// What `deploy_resource` returned for one application.
+pub(crate) enum Deployed {
+    /// `(message, deployment_uuid)`.
+    Done(String, Option<String>),
+    /// `['status' => 429]`.
+    QueueFull(String),
+}
+
+/// The `Application` branch of `DeployController::deploy_resource` for an authorized user.
+pub(crate) async fn deploy_application(
+    state: &AppState,
+    ctx: &AuthCtx,
+    meta: &crate::audit::Meta,
+    a: &ApplicationRow,
+    force: bool,
+) -> Result<Deployed, ApiError> {
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    deployable(state, a).await?;
+    let deployment_uuid = coolify_domain::new_public_id();
+    let result = jobs
+        .queue_application_deployment(
+            a,
+            &deployment_uuid,
+            QueueOptions {
+                force_rebuild: force,
+                is_api: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "deployment could not be queued");
+            ApiError::Internal
+        })?;
+    let name = a.str("name").unwrap_or_default();
+    Ok(match result {
+        Queued::QueueFull => Deployed::QueueFull(
+            "Deployment queue is full. Please wait for existing deployments to complete."
+                .to_owned(),
+        ),
+        Queued::Skipped { .. } => Deployed::Done(
+            "Deployment already queued for this commit.".to_owned(),
+            Some(deployment_uuid),
+        ),
+        Queued::Queued { .. } => {
+            crate::audit::log(
+                state,
+                ctx,
+                meta,
+                "api.deployment.triggered",
+                json!({
+                    "resource_type": "application",
+                    "application_uuid": a.uuid,
+                    "application_name": name,
+                    "deployment_uuid": deployment_uuid,
+                    "force_rebuild": force,
+                    "pull_request_id": 0,
+                }),
+                "info",
+            )
+            .await;
+            Deployed::Done(
+                format!("Application {name} deployment queued."),
+                Some(deployment_uuid),
+            )
+        }
+    })
+}
+
+/// `DeployController::by_tags`.
+async fn deploy_by_tags(
+    state: &AppState,
+    ctx: &AuthCtx,
+    meta: &crate::audit::Meta,
+    tags: &str,
+    force: bool,
+) -> ApiResult {
+    use coolify_db::tag_pages;
+    let names: Vec<&str> = tags.split(',').filter(|t| !t.is_empty()).collect();
+    if names.is_empty() {
+        return Err(ApiError::Message(
+            StatusCode::BAD_REQUEST,
+            "No TAGs provided.",
+        ));
+    }
+    let team_tags = tag_pages::tags_with_counts(&state.db, ctx.team_id).await?;
+    let mut messages: Vec<Value> = Vec::new();
+    let mut details: Vec<Value> = Vec::new();
+    for name in names {
+        let Some(id) = team_tags
+            .iter()
+            .find(|t| t.get("name").and_then(Value::as_str) == Some(name))
+            .and_then(|t| t.get("id").and_then(Value::as_i64))
+        else {
+            continue;
+        };
+        let applications = tag_pages::tag_applications(&state.db, id).await?;
+        let services = tag_pages::tag_services(&state.db, id).await?;
+        if applications.is_empty() && services.is_empty() {
+            messages.push(json!(format!("No resources found for tag {name}.")));
+            continue;
+        }
+        for row in applications {
+            let uuid = row.get("uuid").and_then(Value::as_str).unwrap_or_default();
+            if !ctx.is_team_admin() {
+                messages.push(json!("Unauthorized to deploy this application."));
+                continue;
+            }
+            let Some(a) = apps::find_in_team(&state.db, ctx.team_id, uuid).await? else {
+                continue;
+            };
+            match deploy_application(state, ctx, meta, &a, force).await? {
+                Deployed::QueueFull(m) => {
+                    let mut resp = PhpJson(StatusCode::TOO_MANY_REQUESTS, json!({"message": m}))
+                        .into_response();
+                    resp.headers_mut()
+                        .insert("Retry-After", axum::http::HeaderValue::from_static("60"));
+                    return Ok(resp);
+                }
+                Deployed::Done(m, dep) => {
+                    if let Some(dep) = dep {
+                        details.push(json!({"resource_uuid": uuid, "deployment_uuid": dep}));
+                    }
+                    messages.push(json!(m));
+                }
+            }
+        }
+        for row in services {
+            if !ctx.is_team_admin() {
+                messages.push(json!("Unauthorized to deploy this service."));
+                continue;
+            }
+            let m = crate::routes::services::deploy_service(
+                state,
+                ctx,
+                meta,
+                row.get("id").and_then(Value::as_i64).unwrap_or(0),
+                row.get("uuid").and_then(Value::as_str).unwrap_or_default(),
+                row.get("name").and_then(Value::as_str).unwrap_or_default(),
+            )
+            .await?;
+            messages.push(json!(m));
+        }
+    }
+    if messages.is_empty() {
+        return Err(ApiError::Message(
+            StatusCode::NOT_FOUND,
+            "No resources found with this tag.",
+        ));
+    }
+    let mut payload = Map::new();
+    payload.insert("message".into(), Value::Array(messages));
+    if !details.is_empty() {
+        payload.insert("details".into(), Value::Array(details));
+    }
+    Ok(ok(Value::Object(serialize_record(payload))).into_response())
+}
+
+/// `POST /deploy` by `uuid` or `tag` (pull requests are not ported).
 pub async fn deploy(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: crate::audit::Meta,
     headers: HeaderMap,
     uri: Uri,
     body: Bytes,
@@ -2248,8 +2407,11 @@ pub async fn deploy(
     if docker_tag.is_some() && tag.is_some() {
         return bad("You can only use tag or docker_tag, not both.");
     }
-    if tag.is_some() || pr != 0 {
+    if pr != 0 {
         return Err(ApiError::NotPorted);
+    }
+    if let Some(tag) = &tag {
+        return deploy_by_tags(&state, &ctx, &meta, tag, input_bool(&input, "force")).await;
     }
     let Some(uuids) = uuid else {
         return bad("You must provide uuid or tag.");

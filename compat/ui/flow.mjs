@@ -32,7 +32,7 @@ export function restoreRow(s) {
 
 export const auditMax = () => Number(psql('select coalesce(max(id),0) from audit_events') || 0);
 export function auditSince(id, event = '.') {
-  const cols = 'team_id,event,source,action,level,actor_type,actor_id,actor_name,actor_email,actor_token_id,actor_token_name,resource_type,resource_name,description,metadata,changes';
+  const cols = 'team_id,event,source,action,level,actor_type,actor_id,actor_name,actor_email,actor_token_id,actor_token_name,resource_type,resource_name,description,metadata,(changes is not null) as has_changes';
   const t = psql(`select coalesce(json_agg(r), '[]') from (select ${cols} from audit_events where id > ${id} and event ~ '${event}' order by id) r`);
   return JSON.parse(t);
 }

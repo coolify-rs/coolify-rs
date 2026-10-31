@@ -34,6 +34,7 @@ pub mod server_ops;
 pub mod servers;
 pub mod services;
 pub mod shared_variables;
+pub mod tag_pages;
 pub mod teams;
 #[cfg(feature = "testing")]
 pub mod testing;

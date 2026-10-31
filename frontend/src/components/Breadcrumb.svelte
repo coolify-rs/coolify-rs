@@ -3,6 +3,7 @@
   // then either the section name or the project/environment switchers.
   import { tick } from 'svelte';
   import TeamSwitcher from './TeamSwitcher.svelte';
+  import BreadcrumbSwitcher from './BreadcrumbSwitcher.svelte';
   import { page, dashboardContext } from '../lib/page.svelte';
   import { router, link } from '../lib/router.svelte';
 
@@ -43,6 +44,10 @@
   {#if switchers.length === 0 && context && !titleRepeats}
     <span class="shrink-0 px-0.5 text-neutral-300 dark:text-fg-faint">/</span>
     <span class="flex h-8 min-w-0 items-center truncate px-2 font-semibold text-black opacity-70 dark:text-fg">{context}</span>
+  {/if}
+
+  {#if page.resourceSwitcher}
+    <BreadcrumbSwitcher switcher={page.resourceSwitcher} />
   {/if}
 
   {#each switchers as s, i (s.heading)}

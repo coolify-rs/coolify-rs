@@ -2889,6 +2889,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::session::routes())
         .merge(crate::ui::routes(state.clone()))
         .merge(crate::ui_notifications::routes(state.clone()))
+        .merge(crate::ui_tags::routes(state.clone()))
         .fallback(crate::fallback::fallback)
         .with_state(state)
 }
