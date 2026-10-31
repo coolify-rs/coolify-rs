@@ -97,6 +97,17 @@ const ALWAYS_SEND: [&str; 7] = [
     "api_token_expiring",
 ];
 
+pub(super) async fn any_enabled(
+    db: &Db,
+    encrypter: Option<&Encrypter>,
+    team_id: i64,
+    event: &str,
+) -> bool {
+    !enabled_channels(db, encrypter, team_id, event)
+        .await
+        .is_empty()
+}
+
 /// `HasNotificationSettings::getEnabledChannels($event)`. Rows are created by `Team::created`
 /// upstream; a missing row (`null` relation) is a disabled channel.
 async fn enabled_channels(

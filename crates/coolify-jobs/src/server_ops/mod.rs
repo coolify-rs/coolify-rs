@@ -351,7 +351,12 @@ impl Srv {
 
 /// `versions.json`, which `CheckForUpdatesJob` refreshes upstream.
 pub fn versions_data() -> Value {
-    serde_json::from_str(include_str!("../../versions.json")).unwrap_or(Value::Null)
+    std::fs::read_to_string(crate::kernel::data_dir().join("versions.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| {
+            serde_json::from_str(include_str!("../../versions.json")).unwrap_or(Value::Null)
+        })
 }
 
 /// `get_latest_sentinel_version()`.

@@ -779,8 +779,12 @@ impl Jobs {
             run.failed(&Fail::new("Server is not functional.")).await;
             return;
         }
+        run.update_pull_request(crate::applications::previews::PullRequestStatus::InProgress);
         let result = Box::pin(run.deploy()).await;
         if let Err(e) = &result {
+            if matches!(e, Fail::Error { .. }) {
+                run.update_pull_request(crate::applications::previews::PullRequestStatus::Error);
+            }
             run.failed(e).await;
         }
         run.finally().await;
@@ -1901,6 +1905,21 @@ impl Run {
         Ok(())
     }
 
+    /// `ApplicationPullRequestUpdateJob::dispatch(...)`, for a preview of a GitHub App source.
+    fn update_pull_request(&self, status: crate::applications::previews::PullRequestStatus) {
+        if let Some(preview) = &self.b.preview
+            && self.b.is_preview()
+            && self.app.str("source_type") == Some(r"App\Models\GithubApp")
+        {
+            self.jobs.spawn_pull_request_update(
+                self.app.clone(),
+                preview.clone(),
+                status,
+                self.dep.clone(),
+            );
+        }
+    }
+
     /// `failDeployment()` → `transitionToStatus(FAILED)`.
     async fn fail_deployment(&self) {
         let prev = apps::transition_status(&self.jobs.0.db, self.queue_id, "failed", now())
@@ -1939,6 +1958,7 @@ impl Run {
         let jobs = self.jobs.clone();
         let server_id = self.server.id;
         tokio::spawn(async move { jobs.check_server_applications(server_id).await });
+        self.update_pull_request(crate::applications::previews::PullRequestStatus::Finished);
         if let Err(Fail::Error { message, .. }) = self.run_post_deployment_command().await {
             tracing::warn!("Post deployment command failed for {}: {message}", self.dep);
         }

@@ -352,7 +352,7 @@ async fn delivery_tracking_and_throttles() {
     let backup = lookup::database_backup(db, "pg", "db-uuid", Some(1), Some("app"), "daily").await;
     assert_eq!(backup.project_uuid.as_deref(), Some("p-uuid"));
     assert_eq!(backup.environment_uuid.as_deref(), Some("e-uuid"));
-    let task = lookup::service_task(db, "t", "t-uuid", "out", "svc", Some(1)).await;
+    let task = lookup::scheduled_task(db, "t", "t-uuid", "out", Some("svc"), Some(1), false).await;
     assert_eq!(
         task.resource.and_then(|r| r.project_uuid).as_deref(),
         Some("p-uuid")

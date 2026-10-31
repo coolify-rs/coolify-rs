@@ -188,14 +188,15 @@ pub async fn s3_uuid(db: &Db, s3_storage_id: Option<i64>) -> Option<String> {
         .flatten()
 }
 
-/// `TaskSuccess` / `TaskFailed` of a service's task.
-pub async fn service_task(
+/// `TaskSuccess` / `TaskFailed` of a task of an application or a service.
+pub async fn scheduled_task(
     db: &Db,
     name: &str,
     uuid: &str,
     output: &str,
-    service_uuid: &str,
+    resource_uuid: Option<&str>,
     environment_id: Option<i64>,
+    is_application: bool,
 ) -> Task {
     let env = match environment_id {
         Some(id) => environment(db, id).await,
@@ -205,13 +206,45 @@ pub async fn service_task(
         name: name.to_owned(),
         uuid: uuid.to_owned(),
         output: output.to_owned(),
-        resource: Some(TaskResource {
-            is_application: false,
-            uuid: service_uuid.to_owned(),
+        resource: resource_uuid.map(|resource_uuid| TaskResource {
+            is_application,
+            uuid: resource_uuid.to_owned(),
             project_uuid: env.as_ref().map(|e| e.project_uuid.clone()),
             environment_uuid: env.as_ref().map(|e| e.environment_uuid.clone()),
         }),
     }
+}
+
+/// `new RestartLimitReached($application)` and `new RestartLimitReached($preview)`.
+#[allow(clippy::too_many_arguments)]
+pub async fn application_restart_limit(
+    db: &Db,
+    environment_id: i64,
+    kind: RestartKind,
+    resource_name: String,
+    resource_uuid: &str,
+    application_uuid: &str,
+    fqdn: Option<&str>,
+    restart_count: i64,
+    max_restart_count: i64,
+) -> Option<(i64, Notification)> {
+    let env = environment(db, environment_id).await?;
+    Some((
+        env.team_id?,
+        Notification::RestartLimitReached(RestartLimit {
+            kind,
+            resource_name,
+            resource_uuid: resource_uuid.to_owned(),
+            url_uuid: application_uuid.to_owned(),
+            project_name: env.project_name,
+            project_uuid: env.project_uuid,
+            environment_name: env.environment_name,
+            environment_uuid: env.environment_uuid,
+            fqdn: fqdn.map(str::to_owned),
+            restart_count,
+            max_restart_count,
+        }),
+    ))
 }
 
 /// `new RestartLimitReached($subResource)` for a part of a service.

@@ -351,6 +351,19 @@ pub fn invitation_link(app: &str, team: &str, link: &str) -> String {
     )
 }
 
+/// `emails.s3-connection-error`.
+pub fn s3_connection_error(app: &str, name: &str, reason: &str, url: &str) -> String {
+    layout(
+        app,
+        &format!(
+            "\nConnection could not be established with one of your S3 Storage ({}). Please fix it [here]({}).\n\n{}\n",
+            e(name),
+            e(url),
+            e(reason),
+        ),
+    )
+}
+
 pub fn notification_channel_disabled(
     app: &str,
     channel: &str,

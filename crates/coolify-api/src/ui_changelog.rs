@@ -1,6 +1,6 @@
 //! `App\Livewire\SettingsDropdown` and `App\Services\ChangelogService` (livewire/settings-dropdown.blade.php).
 //! Entries come from `{COOLIFY_RS_DATA_DIR}/changelogs/*.json`, upstream's monthly files.
-//! `PullChangelog` is not ported, because it fetches them from upstream's CDN.
+//! `PullChangelog` (`coolify_jobs::kernel`) writes them.
 
 use std::sync::LazyLock;
 
@@ -26,10 +26,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
 }
 
 fn changelog_dir() -> std::path::PathBuf {
-    std::env::var_os("COOLIFY_RS_DATA_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("changelogs")
+    coolify_jobs::kernel::data_dir().join("changelogs")
 }
 
 /// `ChangelogService::applyCustomStyling`.

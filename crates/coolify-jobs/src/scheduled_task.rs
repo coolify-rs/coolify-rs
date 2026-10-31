@@ -14,7 +14,11 @@ use serde_json::{Value, json};
 
 use crate::Jobs;
 use crate::applications::status::aggregate;
-use crate::scheduler::{BoxFuture, Due, Occurrence, Overlap, ScheduleSource, server_timezone};
+use crate::notifications::{Notification, Task, lookup, notify};
+use crate::schedule_sources::notify_missed_occurrence;
+use crate::scheduler::{
+    BoxFuture, Due, Occurrence, Overlap, ScheduleSource, allowed, server_timezone,
+};
 use crate::server::ServerInfo;
 
 /// `ScheduledTaskJob::MAX_OUTPUT_SIZE_BYTES`.
@@ -54,17 +58,50 @@ fn select_container<'a>(
         .find(|c| containers.len() == 1 || c.as_str() == wanted || c.starts_with(&prefix))
 }
 
-/// `$this->team?->notify(new TaskSuccess($task, $output))`. Notifications are not ported yet.
-fn notify_task_success(task: &TaskContext, _output: &str) {
-    tracing::debug!(task_uuid = %task.uuid, "TaskSuccess notification is not ported");
+/// `new TaskSuccess($task, $output)`, `new TaskFailed($task, $message)`: the resource of the task
+/// decides the URL, `Team::find($task->team_id)` the receiver.
+async fn task_notification(jobs: &Jobs, task: &TaskContext, output: &str) -> Task {
+    let db = &jobs.0.db;
+    let (uuid, environment, is_application) = match (&task.application_uuid, &task.service_uuid) {
+        (Some(uuid), _) => (Some(uuid.as_str()), task.application_environment_id, true),
+        (None, Some(uuid)) => (Some(uuid.as_str()), task.service_environment_id, false),
+        (None, None) => (None, None, false),
+    };
+    lookup::scheduled_task(
+        db,
+        &task.name,
+        &task.uuid,
+        output,
+        uuid,
+        environment,
+        is_application,
+    )
+    .await
 }
 
-/// `$this->team?->notify(new TaskFailed($task, $message))`. Notifications are not ported yet.
-fn notify_task_failed(task: &TaskContext, _message: &str) {
-    tracing::debug!(task_uuid = %task.uuid, "TaskFailed notification is not ported");
+async fn notify_task_success(jobs: &Jobs, task: &TaskContext, output: &str) {
+    let t = task_notification(jobs, task, output).await;
+    notify(
+        &jobs.0.db,
+        jobs.0.encrypter.as_ref(),
+        task.team_id,
+        Notification::TaskSuccess(t),
+    )
+    .await;
 }
 
-/// `ScheduledTaskDone::dispatch($team->id)`: the broadcast that refreshes the UI is not ported.
+async fn notify_task_failed(jobs: &Jobs, task: &TaskContext, message: &str) {
+    let t = task_notification(jobs, task, message).await;
+    notify(
+        &jobs.0.db,
+        jobs.0.encrypter.as_ref(),
+        task.team_id,
+        Notification::TaskFailed(t),
+    )
+    .await;
+}
+
+/// `ScheduledTaskDone::dispatch($team_id)`: the UI polls instead of listening.
 fn scheduled_task_done(_team_id: i64) {}
 
 impl Jobs {
@@ -129,7 +166,7 @@ impl Jobs {
             }
         };
         tracing::error!(target: "scheduled-errors", task_id = %task.uuid, task_name = %task.name, error = %error, "ScheduledTask permanently failed");
-        notify_task_failed(task, &error);
+        notify_task_failed(self, task, &error).await;
         Err(error)
     }
 
@@ -202,7 +239,7 @@ impl Jobs {
                     .await
                 {
                     Ok(()) => {
-                        notify_task_success(task, &output);
+                        notify_task_success(self, task, &output).await;
                         Ok(())
                     }
                     Err(e) => Err((Some(output), e.to_string())),
@@ -422,6 +459,9 @@ impl ScheduleSource for ScheduledTaskSource {
             let mut servers_seen: HashMap<i64, Option<ServerInfo>> = HashMap::new();
             let mut due = Vec::with_capacity(enabled.len());
             for task in enabled {
+                if !allowed(&format!("scheduled-task:{}", task.id)) {
+                    continue;
+                }
                 let server = match task.server_id {
                     None => None,
                     Some(id) => {
@@ -497,7 +537,7 @@ impl ScheduleSource for ScheduledTaskSource {
         })
     }
 
-    /// `reportMissedOccurrence()` for `scheduled-task`, without its notification.
+    /// `reportMissedOccurrence()` for `scheduled-task`.
     fn report_missed<'a>(
         &'a self,
         jobs: &'a Jobs,
@@ -514,7 +554,15 @@ impl ScheduleSource for ScheduledTaskSource {
                 tracing::error!(target: "scheduled-errors", occurrence_uuid = %occurrence.uuid, error = %e, "Failed to report missed scheduled occurrence");
             }
             scheduled_task_done(task.team_id);
-            notify_task_failed(&task, message);
+            let t = task_notification(jobs, &task, message).await;
+            notify_missed_occurrence(
+                jobs,
+                "App\\Models\\ScheduledTask",
+                task.id,
+                task.team_id,
+                Notification::TaskFailed(t),
+            )
+            .await;
         })
     }
 }

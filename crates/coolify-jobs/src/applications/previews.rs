@@ -21,7 +21,72 @@ pub enum PullRequestStatus {
     InProgress,
     Finished,
     Error,
+    Killed,
+    Cancelled,
     Closed,
+}
+
+/// `getPreviewLinks()`.
+fn preview_links(build_pack: Option<&str>, preview: &Record) -> String {
+    if build_pack == Some("dockercompose") {
+        let domains: serde_json::Map<String, Value> = preview
+            .get("docker_compose_domains")
+            .and_then(Value::as_str)
+            .and_then(|t| serde_json::from_str(t).ok())
+            .unwrap_or_default();
+        let mut links = Vec::new();
+        for (service, config) in &domains {
+            let first = config
+                .get("domain")
+                .and_then(Value::as_str)
+                .and_then(|d| d.split(',').next())
+                .map(str::trim)
+                .unwrap_or_default();
+            if !first.is_empty() {
+                links.push(format!("[Open {service}]({first})"));
+            }
+        }
+        return if links.is_empty() {
+            String::new()
+        } else {
+            format!("{} | ", links.join(" | "))
+        };
+    }
+    preview
+        .get("fqdn")
+        .and_then(Value::as_str)
+        .filter(|f| !f.is_empty())
+        .map(|f| format!("[Open Preview]({f}) | "))
+        .unwrap_or_default()
+}
+
+/// The status line of `ApplicationPullRequestUpdateJob::handle()`.
+fn pull_request_status_line(
+    status: PullRequestStatus,
+    name: &str,
+    build_pack: Option<&str>,
+    preview: &Record,
+) -> String {
+    match status {
+        PullRequestStatus::Queued => {
+            format!("The preview deployment for **{name}** is queued. ⏳\n\n")
+        }
+        PullRequestStatus::InProgress => {
+            format!("The preview deployment for **{name}** is in progress. 🟡\n\n")
+        }
+        PullRequestStatus::Finished => format!(
+            "The preview deployment for **{name}** is ready. 🟢\n\n{}",
+            preview_links(build_pack, preview)
+        ),
+        PullRequestStatus::Error => format!("The preview deployment for **{name}** failed. 🔴\n\n"),
+        PullRequestStatus::Killed => {
+            format!("The preview deployment for **{name}** was killed. ⚫\n\n")
+        }
+        PullRequestStatus::Cancelled => {
+            format!("The preview deployment for **{name}** was cancelled. 🚫\n\n")
+        }
+        PullRequestStatus::Closed => String::new(),
+    }
 }
 
 /// `generatedPreviewDomain($sourceDomain)`: the URL and the port override.
@@ -216,6 +281,21 @@ impl Jobs {
         }
     }
 
+    /// `ApplicationPullRequestUpdateJob::dispatch(...)`.
+    pub fn spawn_pull_request_update(
+        &self,
+        a: ApplicationRow,
+        preview: Record,
+        status: PullRequestStatus,
+        deployment_uuid: String,
+    ) {
+        let jobs = self.clone();
+        tokio::spawn(async move {
+            jobs.update_pull_request(&a, &preview, status, Some(&deployment_uuid))
+                .await;
+        });
+    }
+
     /// `ApplicationPullRequestUpdateJob`: creates, updates or deletes the comment on the pull
     /// request of a private GitHub App source. Errors stay inside like upstream's `catch`.
     pub async fn update_pull_request(
@@ -275,33 +355,8 @@ impl Jobs {
             return Ok(());
         }
         let name = a.str("name").unwrap_or_default();
-        let mut body = match status {
-            PullRequestStatus::Queued => {
-                format!("The preview deployment for **{name}** is queued. ⏳\n\n")
-            }
-            PullRequestStatus::InProgress => {
-                format!("The preview deployment for **{name}** is in progress. 🟡\n\n")
-            }
-            PullRequestStatus::Finished => {
-                let link = preview
-                    .get("fqdn")
-                    .and_then(Value::as_str)
-                    .filter(|f| !f.is_empty())
-                    .map(|f| format!("[Open Preview]({f}) | "))
-                    .unwrap_or_default();
-                format!("The preview deployment for **{name}** is ready. 🟢\n\n{link}")
-            }
-            PullRequestStatus::Error => {
-                format!("The preview deployment for **{name}** failed. 🔴\n\n")
-            }
-            PullRequestStatus::Closed => String::new(),
-        };
-        let row: Option<Option<String>> =
-            sqlx::query_scalar("SELECT fqdn FROM instance_settings WHERE id = 0")
-                .fetch_optional(db.pool())
-                .await
-                .map_err(|e| e.to_string())?;
-        let base = row.flatten().unwrap_or_default();
+        let mut body = pull_request_status_line(status, name, a.str("build_pack"), preview);
+        let base = crate::notifications::Ctx::load(db).await.base_url;
         let project = a
             .project
             .get("uuid")

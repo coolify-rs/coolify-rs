@@ -1,6 +1,6 @@
 //! `VolumeBackupJob`, `DeleteScheduledVolumeBackup` and `VolumeBackupRecoveryJob`. The job's own
-//! recovery runs once; `retry_volume_recovery` is `retryRecovery`. Starting recovery and missing
-//! backup checks from the scheduler is not ported.
+//! recovery runs once; `retry_volume_recovery` is `retryRecovery`, which the scheduler also runs
+//! (`schedule_sources.rs`).
 
 use chrono::{Duration, Utc};
 use coolify_db::database_parts as parts;
@@ -19,6 +19,8 @@ use crate::notifications::{Notification, VolumeBackup, notify};
 use crate::server::ServerInfo;
 
 const OP: &str = "volume.backup";
+/// `ScheduledVolumeBackup::DEFAULT_TIMEOUT`.
+pub const DEFAULT_TIMEOUT: i64 = 36000;
 
 /// `VolumeBackupJob::archiveScript`.
 pub fn archive_script(percentage: i64) -> String {
@@ -325,7 +327,11 @@ impl Jobs {
     }
 
     /// The fields the `VolumeBackup` notifications read from the schedule.
-    async fn volume_backup_details(&self, backup: &Record, target: &BackupTarget) -> VolumeBackup {
+    pub(crate) async fn volume_backup_details(
+        &self,
+        backup: &Record,
+        target: &BackupTarget,
+    ) -> VolumeBackup {
         let db = &self.0.db;
         let (kind, name) = if target.morph == FILE_MORPH {
             ("Directory", str_of(&target.row, "fs_path"))

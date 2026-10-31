@@ -613,13 +613,15 @@ async fn save_ca(
         .await?;
         tracing::info!(target: "audit", event = "ui.server.ca_certificate.updated", team_id = ctx.team_id, server_uuid = %uuid, "CA certificate updated");
         let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
-        // `remote_process` runs in the background; `RegenerateSslCertJob` is not ported.
+        // `remote_process` runs in the background.
+        let server_id = s.id;
         let _ = Srv::from_row(jobs, s)
             .run_quiet(
                 &certificate::ca_certificate_file_commands(&cleaned),
                 "server.ca_certificate",
             )
             .await;
+        jobs.spawn_regenerate_ssl_certificates(server_id);
     }
     Ok(
         ok(json!({"message": "CA Certificate saved successfully.", "certificate": cleaned}))

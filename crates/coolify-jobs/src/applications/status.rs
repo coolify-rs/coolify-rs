@@ -5,11 +5,14 @@ use std::time::Duration;
 
 use chrono::Utc;
 use coolify_db::applications::{self as apps, ApplicationRow};
+use coolify_db::instance_jobs as queries;
+use coolify_db::records::Record;
 use coolify_db::servers::{self, ColumnValue};
 use coolify_remote::RunOptions;
 use serde_json::Value;
 
 use crate::Jobs;
+use crate::notifications::{RestartKind, lookup, notify};
 use crate::server::ServerInfo;
 
 /// `ContainerStatusAggregator::containerStatus()`.
@@ -175,8 +178,9 @@ impl Jobs {
         let mut statuses: BTreeMap<i64, Vec<(String, i64)>> = BTreeMap::new();
         let mut found: Vec<i64> = Vec::new();
         let mut found_previews: Vec<i64> = Vec::new();
-        // $previewContainerRestartCounts: the preview row and the highest count of its containers.
-        let mut preview_restarts: BTreeMap<i64, (i64, i64)> = BTreeMap::new();
+        // $previewContainerRestartCounts: the preview, its application and the highest count of its
+        // containers.
+        let mut preview_restarts: BTreeMap<i64, (Record, i64, i64)> = BTreeMap::new();
         for c in &containers {
             let Some(labels) = c.pointer("/Config/Labels").and_then(Value::as_object) else {
                 continue;
@@ -224,12 +228,10 @@ impl Jobs {
                         .unwrap_or_default();
                     found_previews.push(id);
                     let observed = c.get("RestartCount").and_then(Value::as_i64).unwrap_or(0);
-                    let stored = preview
-                        .get("restart_count")
-                        .and_then(Value::as_i64)
-                        .unwrap_or(0);
-                    let entry = preview_restarts.entry(id).or_insert((stored, 0));
-                    entry.1 = entry.1.max(observed);
+                    let entry = preview_restarts
+                        .entry(id)
+                        .or_insert_with(|| (preview.clone(), a.id, 0));
+                    entry.2 = entry.2.max(observed);
                     let status = container_status(c);
                     let values =
                         if preview.get("status").and_then(Value::as_str) == Some(status.as_str()) {
@@ -267,8 +269,12 @@ impl Jobs {
                     .push((container_status(c), restarts));
             }
         }
-        // trackPreviewRestartCounts(); the restart limit of a preview is not ported.
-        for (id, (stored, observed)) in preview_restarts {
+        // trackPreviewRestartCounts()
+        for (id, (preview, application_id, observed)) in preview_restarts {
+            let stored = preview
+                .get("restart_count")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
             if observed > stored {
                 let _ = coolify_db::application_ops::update_preview(
                     db,
@@ -281,6 +287,53 @@ impl Jobs {
                     now,
                 )
                 .await;
+            }
+            let Some(a) = applications.iter().find(|a| a.id == application_id) else {
+                continue;
+            };
+            // `restartLimitMaximum()`: the application's maximum, then the preview's own.
+            let max = a
+                .int("max_restart_count")
+                .or_else(|| preview.get("max_restart_count").and_then(Value::as_i64))
+                .unwrap_or(0);
+            if max > 0
+                && observed >= max
+                && queries::claim_preview_restart_limit(db, id, now)
+                    .await
+                    .unwrap_or(false)
+            {
+                let pull_request_id = preview
+                    .get("pull_request_id")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let jobs = self.clone();
+                let stopped = (*a).clone();
+                tokio::spawn(async move {
+                    jobs.stop_application_preview(&stopped, id, pull_request_id, false, false)
+                        .await;
+                });
+                if let Some(environment_id) = a.int("environment_id")
+                    && let Some((team_id, notification)) = lookup::application_restart_limit(
+                        db,
+                        environment_id,
+                        RestartKind::Preview,
+                        format!(
+                            "{} PR #{pull_request_id}",
+                            a.str("name").unwrap_or_default()
+                        ),
+                        preview
+                            .get("uuid")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                        &a.uuid,
+                        preview.get("fqdn").and_then(Value::as_str),
+                        observed.max(stored),
+                        max,
+                    )
+                    .await
+                {
+                    notify(db, self.0.encrypter.as_ref(), team_id, notification).await;
+                }
             }
         }
         // $notRunningApplicationPreviews
@@ -356,7 +409,9 @@ impl Jobs {
                 continue;
             };
             let observed = list.iter().map(|(_, r)| *r).max().unwrap_or(0);
-            if observed > a.int("restart_count").unwrap_or(0) {
+            let previous = a.int("restart_count").unwrap_or(0);
+            let max = a.int("max_restart_count").unwrap_or(0);
+            if observed > previous {
                 let _ = apps::update_if_changed(
                     db,
                     id,
@@ -389,6 +444,36 @@ impl Jobs {
                     now,
                 )
                 .await;
+            }
+            // `$restartLimitReached`: the first check that sees it stops the application and tells
+            // the team; the application stays stopped until a deployment resets the limit.
+            if max > 0
+                && observed >= max
+                && queries::claim_application_restart_limit(db, id, now)
+                    .await
+                    .unwrap_or(false)
+            {
+                let jobs = self.clone();
+                let stopped = a.clone();
+                tokio::spawn(async move {
+                    jobs.stop_application(&stopped, false, false, false).await;
+                });
+                if let Some(environment_id) = a.int("environment_id")
+                    && let Some((team_id, notification)) = lookup::application_restart_limit(
+                        db,
+                        environment_id,
+                        RestartKind::Application,
+                        a.str("name").unwrap_or_default().to_owned(),
+                        &a.uuid,
+                        &a.uuid,
+                        a.str("fqdn"),
+                        observed.max(previous),
+                        max,
+                    )
+                    .await
+                {
+                    notify(db, self.0.encrypter.as_ref(), team_id, notification).await;
+                }
             }
         }
     }

@@ -6,7 +6,7 @@
 //! Docker image installs it, so a newer file can replace it without a rebuild.
 
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, RwLock};
 
 use base64::Engine as _;
 use serde_json::Value;
@@ -22,38 +22,70 @@ fn parse(text: &str) -> BTreeMap<String, Value> {
     serde_json::from_str(text).unwrap_or_default()
 }
 
-static TEMPLATES: LazyLock<BTreeMap<String, Value>> = LazyLock::new(|| {
-    if let Ok(dir) = std::env::var("COOLIFY_RS_TEMPLATES_DIR")
-        && let Ok(text) = std::fs::read_to_string(std::path::Path::new(&dir).join(FILE_NAME))
-    {
-        let parsed = parse(&text);
-        if !parsed.is_empty() {
-            return parsed;
-        }
-    }
-    parse(EMBEDDED)
+/// `service_templates_path()`.
+fn templates_path() -> std::path::PathBuf {
+    std::env::var_os("COOLIFY_RS_TEMPLATES_DIR")
+        .map_or_else(crate::kernel::data_dir, std::path::PathBuf::from)
+        .join(FILE_NAME)
+}
+
+/// The current bundle. A bundle lives as long as the process, so readers keep `&'static` references;
+/// one is only added when `PullTemplatesFromCDN` brings a different file.
+static TEMPLATES: LazyLock<RwLock<&'static BTreeMap<String, Value>>> = LazyLock::new(|| {
+    let parsed = std::fs::read_to_string(templates_path())
+        .map(|text| parse(&text))
+        .unwrap_or_default();
+    let bundle = if parsed.is_empty() {
+        parse(EMBEDDED)
+    } else {
+        parsed
+    };
+    RwLock::new(Box::leak(Box::new(bundle)))
 });
+
+fn current() -> &'static BTreeMap<String, Value> {
+    *TEMPLATES.read().unwrap_or_else(|p| p.into_inner())
+}
+
+/// `store_service_templates_bundle($json)`: a 200 response can still be an empty body or an error
+/// page, which keeps the current bundle. Whether the file was written.
+pub fn store_bundle(json: &str) -> bool {
+    let parsed = parse(json);
+    if parsed.is_empty() {
+        return false;
+    }
+    let path = templates_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let written = std::fs::write(&path, json).is_ok();
+    let mut slot = TEMPLATES.write().unwrap_or_else(|p| p.into_inner());
+    if **slot != parsed {
+        *slot = Box::leak(Box::new(parsed));
+    }
+    written
+}
 
 /// `get_service_templates()`: sorted by key (`sortKeys()`).
 pub fn get_service_templates() -> &'static BTreeMap<String, Value> {
-    &TEMPLATES
+    current()
 }
 
 /// `serviceKeys()`.
 pub fn service_keys() -> Vec<String> {
-    TEMPLATES.keys().cloned().collect()
+    current().keys().cloned().collect()
 }
 
 /// `resolve_service_template_key($type)`: a renamed template keeps its old key as an alias.
 pub fn resolve_service_template_key(kind: &str) -> String {
-    if kind == "denoKV" && !TEMPLATES.contains_key(kind) {
+    if kind == "denoKV" && !current().contains_key(kind) {
         return "deno-kv".to_owned();
     }
     kind.to_owned()
 }
 
 fn field<'a>(kind: &str, name: &str) -> Option<&'a str> {
-    TEMPLATES.get(kind)?.get(name)?.as_str()
+    current().get(kind)?.get(name)?.as_str()
 }
 
 fn decode(encoded: &str) -> String {
@@ -86,7 +118,7 @@ pub fn template_envs(kind: &str) -> Vec<String> {
 pub fn required_port(service_type: Option<&str>) -> Option<i64> {
     let kind = service_type.filter(|t| !t.trim().is_empty())?;
     let kind = resolve_service_template_key(kind);
-    let port = TEMPLATES.get(&kind)?.get("port")?;
+    let port = current().get(&kind)?.get("port")?;
     match port {
         Value::Number(n) => n.as_i64().filter(|p| *p != 0),
         Value::String(s) => {

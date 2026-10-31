@@ -283,8 +283,7 @@ async fn cleanup_show(
     };
     Ok(ok(json!({
         "is_cleanup_stale": stale,
-        // `Cache::get('scheduled-job-manager:heartbeat')`: this process has its scheduler switched on or it does not.
-        "is_scheduler_healthy": std::env::var("COOLIFY_RS_SERVER_SCHEDULER").is_ok_and(|v| v == "1"),
+        "is_scheduler_healthy": coolify_jobs::scheduler::heartbeat_alive(chrono::Utc::now()),
         "docker_cleanup_frequency": setting(&s, "docker_cleanup_frequency"),
         "docker_cleanup_threshold": setting(&s, "docker_cleanup_threshold"),
         "force_docker_cleanup": setting(&s, "force_docker_cleanup"),
@@ -322,24 +321,21 @@ fn cleanup_is_stale(last: Option<&str>, frequency: &str) -> bool {
     if age <= 10 {
         return false;
     }
-    use coolify_jobs::server_ops::scheduler::cron_is_due;
-    // `getNextRunDate` twice. An interval of half the age or more means "not stale", so the walk stops there.
-    const MINUTES_IN_400_DAYS: i64 = 400 * 24 * 60;
-    let mut next = None;
-    for minute in 1..=MINUTES_IN_400_DAYS {
-        let at = now + chrono::Duration::minutes(minute);
-        if !cron_is_due(frequency, at) {
-            continue;
-        }
-        match next {
-            None => next = Some(minute),
-            Some(first) => return age > ((minute - first) * 2).max(10),
-        }
-        if next.is_some_and(|first| minute - first >= age) {
-            return false;
-        }
-    }
-    false
+    // `getNextRunDate` twice.
+    let Ok(cron) = coolify_jobs::scheduler::parse_frequency(frequency) else {
+        return false;
+    };
+    let Some(zone) = coolify_compat::cron_expression::time_zone("UTC") else {
+        return false;
+    };
+    let local = coolify_compat::cron_expression::in_zone(now, zone);
+    let Ok(first) = cron.next_run_date(&local, false) else {
+        return false;
+    };
+    let Ok(second) = cron.next_run_date(&first, false) else {
+        return false;
+    };
+    age > ((second - first).num_minutes() * 2).max(10)
 }
 
 /// `DockerCleanup::submit` and `instantSave`.
