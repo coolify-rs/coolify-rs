@@ -4,7 +4,7 @@
   import Reicon from '../components/Reicon.svelte';
   import PasswordInput from '../components/PasswordInput.svelte';
   import { ApiError, sessionApi, type SessionInfo } from '../lib/api';
-  import { session } from '../lib/session.svelte';
+  import { session, takeLoginError } from '../lib/session.svelte';
   import { router } from '../lib/router.svelte';
   import { focusOnMount } from '../lib/focus';
 
@@ -13,7 +13,7 @@
   let code = $state('');
   let needsCode = $state(false);
   let busy = $state(false);
-  let errors = $state<string[]>([]);
+  let errors = $state<string[]>(((m) => (m ? [m] : []))(takeLoginError()));
   let codeForm: HTMLFormElement | undefined = $state();
   // Upstream renders `<x-forms.button isHighlighted>` as a bare attribute the CSS matches.
   const highlighted = { ishighlighted: '' };

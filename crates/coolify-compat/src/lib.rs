@@ -15,6 +15,7 @@ pub mod sanctum;
 pub mod sshkey;
 pub mod timezones;
 pub mod totp;
+pub mod webauthn;
 pub mod yaml;
 pub mod yaml_parse;
 

@@ -2890,6 +2890,8 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::ui::routes(state.clone()))
         .merge(crate::ui_notifications::routes(state.clone()))
         .merge(crate::ui_tags::routes(state.clone()))
+        .merge(crate::ui_teams::routes(state.clone()))
+        .merge(crate::ui_profile::routes(state.clone()))
         .merge(crate::ui_security::routes(state.clone()))
         .merge(crate::ui_storages::routes(state.clone()))
         .merge(crate::ui_shared_variables::routes(state.clone()))

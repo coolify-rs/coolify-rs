@@ -27,6 +27,7 @@ pub mod instance_settings;
 pub mod integration_tokens;
 pub mod notification_settings;
 pub mod private_keys;
+pub mod profile;
 pub mod projects;
 pub mod records;
 pub mod schema;
@@ -35,6 +36,7 @@ pub mod servers;
 pub mod services;
 pub mod shared_variables;
 pub mod tag_pages;
+pub mod team_pages;
 pub mod teams;
 #[cfg(feature = "testing")]
 pub mod testing;

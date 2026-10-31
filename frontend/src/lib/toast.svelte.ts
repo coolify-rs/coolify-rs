@@ -18,7 +18,8 @@ class Toasts {
 
   push(type: ToastType, message: string, description?: string): void {
     const id = this.next++;
-    this.items.push({ id, type, message, description });
+    // `this.toasts.unshift(toast)` under `flex-col-reverse`: the newest is at the bottom.
+    this.items.unshift({ id, type, message, description });
     this.schedule(id, 4000);
   }
 

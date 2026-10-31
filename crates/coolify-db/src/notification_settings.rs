@@ -251,6 +251,14 @@ pub async fn first_or_create(db: &Db, ch: &Channel, team_id: i64) -> DbResult<(R
     Ok((r, true))
 }
 
+/// `Team::createDefaultNotificationSettings`.
+pub async fn create_defaults(db: &Db, team_id: i64) -> DbResult<()> {
+    for ch in ALL {
+        first_or_create(db, ch, team_id).await?;
+    }
+    Ok(())
+}
+
 /// `$settings->fill($values)->save()`. The `saving` hook of `TracksDeliveryFailures` sets
 /// `failure_count` back to zero when anything else changes.
 pub async fn update(

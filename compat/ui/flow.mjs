@@ -68,6 +68,7 @@ function helpers(page, base, label) {
     label,
     page,
     base,
+    secret,
     async go(path) {
       await page.goto(base + path);
       await page.waitForTimeout(1500);
@@ -122,7 +123,7 @@ function helpers(page, base, label) {
 
 /** Compares two JSON-able values and prints the first differences. Returns true when equal. */
 export function diff(name, a, b) {
-  const norm = (v) => JSON.stringify(v).replace(/127\.0\.0\.1:\d+/g, 'HOST');
+  const norm = (v) => JSON.stringify(v).replace(/(127\.0\.0\.1|localhost):\d+/g, 'HOST');
   const ja = norm(a);
   const jb = norm(b);
   if (ja === jb) {
@@ -144,8 +145,8 @@ export async function flow(port, user, body, opts = {}) {
   const results = {};
   try {
     for (const [label, base] of [
-      ['ref', 'http://127.0.0.1:18000'],
-      ['rs', `http://127.0.0.1:${port}`],
+      ['ref', `http://${opts.host ?? '127.0.0.1'}:18000`],
+      ['rs', `http://${opts.host ?? '127.0.0.1'}:${port}`],
     ]) {
       opts.before?.();
       const page = await login(browser, base, user);

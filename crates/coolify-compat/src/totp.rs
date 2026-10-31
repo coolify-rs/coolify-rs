@@ -78,6 +78,69 @@ pub fn verify(
     matched
 }
 
+/// `generateSecretKey`: a random base32 secret.
+pub fn generate_secret(length: usize) -> String {
+    use rand::Rng;
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let mut rng = rand::thread_rng();
+    (0..length)
+        .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char)
+        .collect()
+}
+
+/// `RecoveryCode::generate`: `Str::random(10).'-'.Str::random(10)`.
+pub fn recovery_code() -> String {
+    use rand::Rng;
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let mut rng = rand::thread_rng();
+    let mut part = || -> String {
+        (0..10)
+            .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char)
+            .collect()
+    };
+    format!("{}-{}", part(), part())
+}
+
+/// `rawurlencode`.
+fn raw_url_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// `QRCode::getQRCodeUrl` with Google2FA's defaults.
+pub fn otpauth_url(company: &str, holder: &str, secret: &str) -> String {
+    let company = raw_url_encode(company);
+    format!(
+        "otpauth://totp/{company}:{}?secret={secret}&issuer={company}&algorithm=SHA1&digits=6&period=30",
+        raw_url_encode(holder)
+    )
+}
+
+/// `twoFactorQrCodeSvg`: 192 pixels, no margin, a white ground and #2d3748 modules.
+pub fn qr_svg(text: &str) -> String {
+    let Ok(code) = qrcode::QrCode::with_error_correction_level(text, qrcode::EcLevel::L) else {
+        return String::new();
+    };
+    let width = code.width();
+    let mut path = String::new();
+    for (i, color) in code.to_colors().iter().enumerate() {
+        if *color == qrcode::Color::Dark {
+            path.push_str(&format!("M{} {}h1v1h-1Z", i % width, i / width));
+        }
+    }
+    // The modules fill the whole image, as BaconQrCode's fractional module size does.
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" width=\"192\" height=\"192\" viewBox=\"0 0 {width} {width}\"><rect x=\"0\" y=\"0\" width=\"{width}\" height=\"{width}\" fill=\"#ffffff\"/><path fill=\"#2d3748\" d=\"{path}\"/></svg>"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,6 +148,20 @@ mod tests {
     // RFC 6238 test secret "12345678901234567890" (ASCII), SHA-1, 8-digit
     // vectors truncated to 6 digits.
     const RFC_SECRET_B32: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+    #[test]
+    fn enrolment_values() {
+        let secret = generate_secret(16);
+        assert_eq!(secret.len(), 16);
+        assert!(base32_decode(&secret).is_some());
+        assert_eq!(recovery_code().len(), 21);
+        let url = otpauth_url("Coolify", "a+b@x.test", "ABC");
+        assert_eq!(
+            url,
+            "otpauth://totp/Coolify:a%2Bb%40x.test?secret=ABC&issuer=Coolify&algorithm=SHA1&digits=6&period=30"
+        );
+        assert!(qr_svg(&url).starts_with("<svg"));
+    }
 
     #[test]
     fn rfc6238_vectors() {

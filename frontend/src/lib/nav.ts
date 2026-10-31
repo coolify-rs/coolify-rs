@@ -83,9 +83,9 @@ export const navSections: [string, NavItem[]][] = [
         children: [
           { label: 'General', icon: 'settings', href: '/team', active: ['team'], ported: true },
           { label: 'Members', icon: 'teams', href: '/team/members', active: ['team/members*'], ported: true },
-          { label: 'Audit log', icon: 'time-back', href: '/team/audit-log', active: ['team/audit-log'], visible: (c) => c.isAdmin },
-          { label: 'Admin View', icon: 'admin', href: '/team/admin', active: ['team/admin'], visible: (c) => c.isInstanceAdmin },
-          { label: 'Danger Zone', icon: 'danger', href: '/team/danger', active: ['team/danger'], visible: (c) => c.isOwner, sectionStart: true },
+          { label: 'Audit log', icon: 'time-back', href: '/team/audit-log', active: ['team/audit-log'], visible: (c) => c.isAdmin, ported: true },
+          { label: 'Admin View', icon: 'admin', href: '/team/admin', active: ['team/admin'], visible: (c) => c.isInstanceAdmin, ported: true },
+          { label: 'Danger Zone', icon: 'danger', href: '/team/danger', active: ['team/danger'], visible: (c) => c.isOwner, sectionStart: true, ported: true },
         ],
       },
       {

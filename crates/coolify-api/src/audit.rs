@@ -46,7 +46,32 @@ impl FromRequestParts<AppState> for Meta {
     }
 }
 
-async fn actor(state: &AppState, ctx: &AuthCtx, meta: &Meta) -> Actor {
+/// `auditLog` with the row's team taken from the context, and an actor read before the request
+/// removed the user (`array_key_exists('team_id', $context)` in `attributesFor`).
+pub async fn log_as(
+    state: &AppState,
+    team_id: Option<i64>,
+    actor: &Actor,
+    event: &str,
+    context: Value,
+) {
+    if let Err(e) = audit::record(
+        &state.db,
+        team_id,
+        event,
+        &context,
+        "info",
+        actor,
+        None,
+        state.now(),
+    )
+    .await
+    {
+        tracing::warn!(error = %e, event, "audit event persistence failed");
+    }
+}
+
+pub async fn actor(state: &AppState, ctx: &AuthCtx, meta: &Meta) -> Actor {
     let user = audit::actor_user(&state.db, ctx.user_id)
         .await
         .ok()
@@ -119,6 +144,74 @@ pub async fn mutation(
         "info",
         &actor,
         changes.as_deref(),
+        state.now(),
+    )
+    .await
+    {
+        tracing::warn!(error = %e, event, "audit event persistence failed");
+    }
+}
+
+/// `Auditable` on `Team` (`ui.team.created`, `updated`, `deleted`): `$old` and `$new` are the raw
+/// rows; only `updated` compares them, and every other action lists the row's attributes.
+pub async fn team_mutation(
+    state: &AppState,
+    actor: &Actor,
+    team_id: i64,
+    action: &str,
+    old: Option<&serde_json::Map<String, Value>>,
+    new: Option<&serde_json::Map<String, Value>>,
+) {
+    // `isExcludedAuditField` for the columns of `teams`.
+    let excluded = |k: &str| {
+        k == "id" || k.ends_with("_id") || k.ends_with("_at") || audit::is_sensitive_field(k)
+    };
+    let (Some(row), other) = (new.or(old), old) else {
+        return;
+    };
+    let mut changes = serde_json::Map::new();
+    let mut changed_fields = Vec::new();
+    for (k, v) in row {
+        if action == "updated" {
+            let before = other.and_then(|o| o.get(k));
+            if before == Some(v) || k == "updated_at" {
+                continue;
+            }
+            changed_fields.push(k.clone());
+        }
+        if excluded(k) {
+            continue;
+        }
+        let before = other.and_then(|o| o.get(k)).cloned().unwrap_or(Value::Null);
+        let (old_v, new_v) = match action {
+            "created" => (Value::Null, v.clone()),
+            "deleted" => (before, Value::Null),
+            _ => (before, v.clone()),
+        };
+        changes.insert(k.clone(), serde_json::json!({"old": old_v, "new": new_v}));
+    }
+    if action == "updated" && changed_fields.is_empty() {
+        return;
+    }
+    let event = format!("ui.team.{action}");
+    let context = serde_json::json!({
+        "team_id": team_id,
+        "team_uuid": null,
+        "team_name": row.get("name"),
+        "changed_fields": changed_fields,
+    });
+    let encrypted = state
+        .encrypter
+        .as_ref()
+        .map(|e| e.encrypt_string(&coolify_compat::php_json::encode(&Value::Object(changes))));
+    if let Err(e) = audit::record(
+        &state.db,
+        Some(team_id),
+        &event,
+        &context,
+        "info",
+        actor,
+        encrypted.as_deref(),
         state.now(),
     )
     .await

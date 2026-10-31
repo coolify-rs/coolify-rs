@@ -47,7 +47,26 @@ struct Session {
     password_fp: [u8; 32],
     created: Instant,
     last_seen: Instant,
+    /// `auth.password_confirmed_at`.
+    password_confirmed: Option<Instant>,
+    /// What upstream flashes with `session('status')` and `session('errors')`; read once.
+    flash: Option<Flash>,
+    /// `passkey.registration_options`: the challenge and handle of a passkey registration.
+    passkey_challenge: Option<String>,
 }
+
+/// A value upstream keeps in the session for the next page.
+#[derive(Debug, Clone, Default)]
+pub struct Flash {
+    pub status: Option<String>,
+    pub errors: bool,
+}
+
+/// `config('auth.password_timeout')`.
+const PASSWORD_TIMEOUT: Duration = Duration::from_secs(10_800);
+
+/// A session whose user has several teams and no stored choice (`/select-team`).
+pub const NO_TEAM: TeamId = -1;
 
 /// In-memory session store, login throttle and TOTP replay guard.
 pub struct SessionStore {
@@ -108,10 +127,70 @@ impl SessionStore {
                     password_fp: digest(password_hash),
                     created: now,
                     last_seen: now,
+                    password_confirmed: None,
+                    flash: None,
+                    passkey_challenge: None,
                 },
             );
         }
         (id, csrf)
+    }
+
+    /// `session()->passwordConfirmed()`.
+    pub(crate) fn mark_password_confirmed(&self, id: &str) {
+        if let Ok(mut m) = self.sessions.lock()
+            && let Some(s) = m.get_mut(&digest(id))
+        {
+            s.password_confirmed = Some(Instant::now());
+        }
+    }
+
+    /// `hasRecentPasswordConfirmation()`.
+    pub(crate) fn password_recently_confirmed(&self, id: &str) -> bool {
+        self.sessions
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&digest(id)).and_then(|s| s.password_confirmed))
+            .is_some_and(|t| t.elapsed() < PASSWORD_TIMEOUT)
+    }
+
+    pub(crate) fn set_flash(&self, id: &str, flash: Flash) {
+        if let Ok(mut m) = self.sessions.lock()
+            && let Some(s) = m.get_mut(&digest(id))
+        {
+            s.flash = Some(flash);
+        }
+    }
+
+    pub(crate) fn take_flash(&self, id: &str) -> Flash {
+        self.sessions
+            .lock()
+            .ok()
+            .and_then(|mut m| m.get_mut(&digest(id)).and_then(|s| s.flash.take()))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn set_passkey_challenge(&self, id: &str, challenge: String) {
+        if let Ok(mut m) = self.sessions.lock()
+            && let Some(s) = m.get_mut(&digest(id))
+        {
+            s.passkey_challenge = Some(challenge);
+        }
+    }
+
+    pub(crate) fn passkey_challenge(&self, id: &str) -> Option<String> {
+        self.sessions
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&digest(id)).and_then(|s| s.passkey_challenge.clone()))
+    }
+
+    /// Ends every session of a user (a password change is noticed on the next request anyway;
+    /// `deleteAllSessions` also drops the ones of a deleted user).
+    pub(crate) fn remove_user(&self, user_id: i64) {
+        if let Ok(mut m) = self.sessions.lock() {
+            m.retain(|_, s| s.user_id != user_id);
+        }
     }
 
     /// (user, team, csrf, password fingerprint) for a live session; touches it.
@@ -252,7 +331,31 @@ async fn live_session(state: &AppState, headers: &HeaderMap) -> Result<Live, Api
         state.sessions.remove(&id);
         return Err(ApiError::Unauthenticated);
     };
-    let memberships = users::memberships(&state.db, user.id).await?;
+    let mut memberships = users::memberships(&state.db, user.id).await?;
+    // `DecideWhatToDoWithUser`: a user without teams gets a personal team again, and a session
+    // whose team is gone restores the stored or sole team, or waits on the selection screen.
+    if memberships.is_empty() && state.db.schema().read_only_reason.is_none() {
+        let team = coolify_db::team_pages::recreate_personal_team(
+            &state.db,
+            user.id,
+            &user.name,
+            state.now(),
+        )
+        .await?;
+        coolify_db::notification_settings::create_defaults(&state.db, team).await?;
+        memberships = users::memberships(&state.db, user.id).await?;
+    }
+    let mut team_id = team_id;
+    if !memberships.iter().any(|m| m.team_id == team_id) {
+        team_id = resolve_stored_team(&user, &memberships).unwrap_or(NO_TEAM);
+        state.sessions.set_team(&id, team_id);
+        if team_id != NO_TEAM
+            && user.current_team_id != Some(team_id)
+            && let Err(e) = users::set_current_team(&state.db, user.id, team_id).await
+        {
+            tracing::warn!(error = %e, "could not persist current team");
+        }
+    }
     Ok(Live {
         id,
         user,
@@ -260,6 +363,87 @@ async fn live_session(state: &AppState, headers: &HeaderMap) -> Result<Live, Api
         team_id,
         csrf,
     })
+}
+
+/// The session behind a request, for pages upstream serves in any team state (`/profile`,
+/// invitations): the guard's checks without the team requirement. `team_id` may be [`NO_TEAM`].
+#[derive(Debug, Clone)]
+pub struct SessionUser {
+    pub id: String,
+    pub user_id: i64,
+    pub team_id: TeamId,
+    pub ctx: AuthCtx,
+}
+
+/// Guard for pages that need a signed-in user but no usable team.
+pub async fn user_guard(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
+    let headers = req.headers().clone();
+    let method = req.method().clone();
+    let result = async {
+        let live = live_session(&state, &headers).await?;
+        if needs_csrf(&method) && !csrf_ok(&headers, &live.csrf) {
+            return Err(ApiError::Message(
+                StatusCode::from_u16(419).unwrap_or(StatusCode::FORBIDDEN),
+                "CSRF token mismatch.",
+            ));
+        }
+        let role = live
+            .memberships
+            .iter()
+            .find(|m| m.team_id == live.team_id)
+            .map_or(Role::Member, |m| m.role);
+        Ok(SessionUser {
+            id: live.id,
+            user_id: live.user.id,
+            team_id: live.team_id,
+            ctx: AuthCtx {
+                token_id: 0,
+                user_id: live.user.id,
+                team_id: live.team_id,
+                team_id_raw: live.team_id.to_string(),
+                role,
+                can_read_sensitive: role.is_admin(),
+                abilities: abilities_for(role),
+            },
+        })
+    }
+    .await;
+    match result {
+        Ok(user) => {
+            req.extensions_mut().insert(user.ctx.clone());
+            req.extensions_mut().insert(user);
+            next.run(req).await
+        }
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `refreshSession($team)`: the session's team and `users.current_team_id`.
+pub(crate) async fn activate_team(
+    state: &AppState,
+    session_id: &str,
+    user_id: i64,
+    team_id: TeamId,
+) -> Result<(), ApiError> {
+    users::set_current_team(&state.db, user_id, team_id).await?;
+    state.sessions.set_team(session_id, team_id);
+    Ok(())
+}
+
+/// A session for `Auth::login($user)` outside the login form (invitation magic link).
+pub(crate) fn start_session(
+    state: &AppState,
+    user_id: i64,
+    team_id: TeamId,
+    password_hash: &str,
+) -> (HeaderValue, String) {
+    let (id, csrf) = state.sessions.create(user_id, team_id, password_hash);
+    (set_cookie(state, &id, None), csrf)
+}
+
+/// The session id of a request, for handlers behind a guard.
+pub(crate) fn session_id(headers: &HeaderMap) -> Option<String> {
+    session_cookie(headers)
 }
 
 const TEAM_2FA_REQUIRED: &str = "Two-factor authentication is required by this team.";
@@ -329,12 +513,14 @@ fn session_json(
             "name": user.name,
             "email": user.email,
             "two_factor_enabled": user.has_two_factor(),
+            "avatar_url": user.avatar_url(),
         },
-        "teams": memberships.iter().map(|m| json!({"id": m.team_id, "name": m.team_name, "role": m.role.as_str()})).collect::<Vec<_>>(),
+        "teams": memberships.iter().map(|m| json!({"id": m.team_id, "name": m.team_name, "role": m.role.as_str(), "avatar_url": m.avatar_url()})).collect::<Vec<_>>(),
         "current_team": current.map(|m| json!({
             "id": m.team_id,
             "name": m.team_name,
             "role": m.role.as_str(),
+            "avatar_url": m.avatar_url(),
             "two_factor_required": m.two_factor_required,
             "two_factor_blocked": m.two_factor_required && user.two_factor_confirmed_at.is_none(),
         })),
@@ -374,11 +560,15 @@ fn failed_login() -> ApiError {
     ApiError::ValidationWithMessage("These credentials do not match our records.", errors)
 }
 
-/// `users.current_team_id` if still a member, else the first membership.
-fn initial_team(user: &LoginUser, memberships: &[Membership]) -> Option<TeamId> {
+/// `User::resolveStoredTeam`: the stored team if still a member, the sole team, or none when
+/// the choice is ambiguous and the user has to pick one on `/select-team`.
+pub(crate) fn resolve_stored_team(user: &LoginUser, memberships: &[Membership]) -> Option<TeamId> {
     user.current_team_id
         .filter(|t| memberships.iter().any(|m| m.team_id == *t))
-        .or_else(|| memberships.first().map(|m| m.team_id))
+        .or(match memberships {
+            [only] => Some(only.team_id),
+            _ => None,
+        })
 }
 
 pub async fn login(State(state): State<AppState>, req: Request) -> Result<Response, ApiError> {
@@ -490,11 +680,30 @@ pub async fn login(State(state): State<AppState>, req: Request) -> Result<Respon
             "A password reset is required for this account. Set a new password in Coolify first.",
         ));
     }
-    let memberships = users::memberships(&state.db, user.id).await?;
-    let team_id = initial_team(&user, &memberships).ok_or(ApiError::Message(
-        StatusCode::FORBIDDEN,
-        "This account is not a member of any team.",
-    ))?;
+    // `Fortify::authenticateUsing`: touches the user, restores the last team, and recreates the
+    // personal team of a user without teams. Without a clear choice the session has no team yet.
+    if let Err(e) = users::touch(&state.db, user.id, state.now()).await {
+        tracing::warn!(error = %e, "could not touch user on login");
+    }
+    let mut memberships = users::memberships(&state.db, user.id).await?;
+    if memberships.is_empty() {
+        let team = coolify_db::team_pages::recreate_personal_team(
+            &state.db,
+            user.id,
+            &user.name,
+            state.now(),
+        )
+        .await?;
+        coolify_db::notification_settings::create_defaults(&state.db, team).await?;
+        memberships = users::memberships(&state.db, user.id).await?;
+    }
+    let team_id = resolve_stored_team(&user, &memberships).unwrap_or(NO_TEAM);
+    if team_id != NO_TEAM
+        && user.current_team_id != Some(team_id)
+        && let Err(e) = users::set_current_team(&state.db, user.id, team_id).await
+    {
+        tracing::warn!(error = %e, "could not persist current team");
+    }
     state.sessions.clear_failures(&keys);
     let hash = user.password.clone().unwrap_or_default();
     let (id, csrf) = state.sessions.create(user.id, team_id, &hash);

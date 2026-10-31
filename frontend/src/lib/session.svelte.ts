@@ -36,3 +36,14 @@ class SessionState {
 }
 
 export const session = new SessionState();
+
+/** Upstream's `redirect()->route('login')->with('error', ...)`: one message for the login page. */
+let loginError: string | null = null;
+export function setLoginError(message: string): void {
+  loginError = message;
+}
+export function takeLoginError(): string | null {
+  const m = loginError;
+  loginError = null;
+  return m;
+}

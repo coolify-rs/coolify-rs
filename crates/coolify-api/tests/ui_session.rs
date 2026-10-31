@@ -121,18 +121,33 @@ async fn members_are_read_only_in_the_ui() {
 
 #[tokio::test]
 async fn password_change_and_membership_loss_end_access() {
-    let h = Harness::new().await;
+    let h = Harness::with_extra_sql(
+        "INSERT INTO team_user (team_id, user_id, role) VALUES (0, 1, 'member'); \
+         SELECT setval('teams_id_seq', 1000);",
+    )
+    .await;
     let (cookie, _) = h.ui_login("alice@example.test").await;
+    let team_of = |r: &serde_json::Value| r["current_team"]["id"].as_i64();
+    // `DecideWhatToDoWithUser`: the session follows to the only team left.
+    sqlx::query("DELETE FROM team_user WHERE user_id = 1 AND team_id <> 0")
+        .execute(h.tdb.db.pool())
+        .await
+        .unwrap();
+    let r = h
+        .request("GET", "/ui/session", &[("cookie", &cookie)], None)
+        .await;
+    assert_eq!(team_of(&r.json()), Some(0));
+    // Without any team, a personal team is created again.
     sqlx::query("DELETE FROM team_user WHERE user_id = 1")
         .execute(h.tdb.db.pool())
         .await
         .unwrap();
-    h.request("GET", "/ui/api/v1/projects", &[("cookie", &cookie)], None)
-        .await
-        .assert(
-            403,
-            r#"{"message":"You are no longer a member of this team."}"#,
-        );
+    let r = h
+        .request("GET", "/ui/session", &[("cookie", &cookie)], None)
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["current_team"]["role"], "owner");
+    assert!(team_of(&r.json()).is_some_and(|t| t > 1000));
     sqlx::query("UPDATE users SET password = 'changed' WHERE id = 1")
         .execute(h.tdb.db.pool())
         .await
@@ -306,4 +321,35 @@ async fn serves_the_web_ui_with_security_headers() {
     assert_eq!(h.request("POST", "/projects", &[], None).await.status, 405);
     h.finish().await;
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn several_teams_without_a_stored_choice_wait_for_selection() {
+    let h = Harness::with_extra_sql(
+        "INSERT INTO team_user (team_id, user_id, role) VALUES (0, 1, 'member'); \
+         UPDATE users SET current_team_id = NULL WHERE id = 1;",
+    )
+    .await;
+    let (cookie, csrf) = h.ui_login("alice@example.test").await;
+    let headers = [("cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+    let r = h.request("GET", "/ui/session", &headers, None).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.json()["current_team"].is_null());
+    h.request("GET", "/ui/api/v1/projects", &headers, None)
+        .await
+        .assert(
+            403,
+            r#"{"message":"You are no longer a member of this team."}"#,
+        );
+    let r = h
+        .request(
+            "POST",
+            "/ui/session/team",
+            &headers,
+            Some(json!({"team_id": 0})),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["current_team"]["id"], 0);
+    h.finish().await;
 }

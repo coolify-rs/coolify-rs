@@ -68,11 +68,15 @@
       .filter(Boolean)
       .join(' ')}
   >
-    <span
-      class="flex size-5 shrink-0 items-center justify-center rounded-full bg-neutral-200 text-[11px] font-semibold text-neutral-700 dark:bg-white/[0.1] dark:text-fg"
-    >
-      {userInitial}
-    </span>
+    {#if session.info?.user.avatar_url}
+      <img src={session.info.user.avatar_url} alt={userName} class="size-5 shrink-0 rounded-full object-cover" />
+    {:else}
+      <span
+        class="flex size-5 shrink-0 items-center justify-center rounded-full bg-neutral-200 text-[11px] font-semibold text-neutral-700 dark:bg-white/[0.1] dark:text-fg"
+      >
+        {userInitial}
+      </span>
+    {/if}
     {#if sidebar}
       <span class="min-w-0 flex-1 truncate text-left text-xs font-medium {collapsed ? 'hidden' : ''}">{userName}</span>
     {/if}

@@ -1,12 +1,16 @@
 <script lang="ts">
-  // Port of upstream livewire/team/member/index.blade.php with
-  // livewire/team/member.blade.php. Invitations are not available yet.
+  // Port of upstream livewire/team/member/index.blade.php with livewire/team/member.blade.php,
+  // livewire/team/invite-link.blade.php and livewire/team/invitations.blade.php.
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
   import Listbox from '../components/Listbox.svelte';
   import Pager from '../components/Pager.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
   import TeamLayout from '../components/TeamLayout.svelte';
+  import Callout from '../components/Callout.svelte';
+  import FormInput from '../components/FormInput.svelte';
+  import { session } from '../lib/session.svelte';
+  import { teamsUi, type InvitationsData } from '../lib/teamsApi';
   import { teamUi, ApiError, type Role, type TeamPageData } from '../lib/api';
   import { notify } from '../lib/toast.svelte';
 
@@ -21,10 +25,65 @@
   let menuFor = $state<number | null>(null);
   let menuStyle = $state('');
 
+  let invitations = $state<InvitationsData | null>(null);
+  let inviteEmail = $state('');
+  let inviteRole = $state('member');
+  let inviteBusy = $state(false);
+  let inviteError = $state<ApiError | null>(null);
+  let copiedId = $state<number | null>(null);
+
   async function load() {
     data = await teamUi.get();
+    invitations = await teamsUi.invitations();
   }
   load();
+
+  const roleOptions = $derived([
+    ...(data?.my_role === 'owner' ? [{ value: 'owner', label: 'Owner' }] : []),
+    { value: 'admin', label: 'Admin' },
+    { value: 'member', label: 'Member' },
+  ]);
+
+  /** `InviteLink::viaEmail` and `viaLink`. */
+  async function invite(via: 'email' | 'link') {
+    if (inviteBusy) return;
+    inviteBusy = true;
+    inviteError = null;
+    try {
+      const r = await teamsUi.invite(inviteEmail, inviteRole, via);
+      notify.success(r.message);
+      // `$this->email = strtolower($this->email)` once validation passed.
+      inviteEmail = inviteEmail.toLowerCase();
+      invitations = await teamsUi.invitations();
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : String(e);
+      if (e instanceof ApiError) inviteError = e;
+      if (message.includes(inviteEmail.toLowerCase())) inviteEmail = inviteEmail.toLowerCase();
+      notify.failure(message);
+    } finally {
+      inviteBusy = false;
+    }
+  }
+
+  async function revoke(id: number) {
+    try {
+      const r = await teamsUi.revoke(id);
+      notify.success(r.message);
+    } catch (e) {
+      notify.failure(e instanceof ApiError ? e.message : String(e));
+    }
+    invitations = await teamsUi.invitations();
+  }
+
+  async function copyLink(id: number, value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      copiedId = id;
+      setTimeout(() => (copiedId = null), 1500);
+    } catch {
+      // Clipboard access can be denied.
+    }
+  }
 
   const filtered = $derived.by(() => {
     const q = search.trim().toLowerCase();
@@ -65,9 +124,10 @@
     try {
       if (action === 'remove') await teamUi.remove(m.id);
       else await teamUi.setRole(m.id, action);
-      await load();
+      // `dispatch('reloadWindow')`.
+      await Promise.all([load(), session.refresh()]);
     } catch (e) {
-      notify.error(e instanceof ApiError ? e.message : String(e));
+      notify.failure(e instanceof ApiError ? e.message : String(e));
     }
   }
 
@@ -163,11 +223,15 @@
               <div class="data-table-row {gridClass} border-b border-neutral-200 last:border-b-0 dark:border-white/[0.07]">
                 <div>
                   <div class="flex items-center gap-2">
-                    <div
-                      class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-[11px] font-semibold text-neutral-600 dark:bg-white/[0.06] dark:text-fg-dim"
-                    >
-                      {(m.name || m.email).slice(0, 1).toUpperCase()}
-                    </div>
+                    {#if m.avatar_url}
+                      <img src={m.avatar_url} alt={m.name} class="size-7 shrink-0 rounded-lg object-cover" />
+                    {:else}
+                      <div
+                        class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-[11px] font-semibold text-neutral-600 dark:bg-white/[0.06] dark:text-fg-dim"
+                      >
+                        {(m.name || m.email).slice(0, 1).toUpperCase()}
+                      </div>
+                    {/if}
                     <span class="truncate text-[13px] font-medium text-black dark:text-fg">{m.name}</span>
                     {#if m.id === data.me}
                       <span
@@ -261,6 +325,76 @@
           <Pager total={filtered.length} bind:page bind:pageSize={perPage} storageKey="coolify.page-size.team-members" />
         {/if}
       </SettingsSection>
+
+      {#if invitations?.can_manage}
+        <div>
+          <form
+            onsubmit={(e) => {
+              e.preventDefault();
+              invite('link');
+            }}
+          >
+            <SettingsSection title="Invite a member" description="Create a reusable invitation link or deliver it by email.">
+              {#snippet actions()}
+                {#if invitations?.email_enabled}
+                  <button type="button" class="button" onclick={() => invite('email')}>
+                    <Reicon name="notifications" class="size-3.5" />
+                    Send email
+                  </button>
+                {/if}
+                <button type="submit" class="button button-highlighted">
+                  <Reicon name="plus" class="size-3.5" />
+                  Generate link
+                </button>
+              {/snippet}
+              {#if !invitations?.email_enabled && invitations?.instance_admin}
+                <Callout type="warning" title="Email delivery is not configured">
+                  Configure transactional email in instance settings to send invitations directly.
+                </Callout>
+              {/if}
+              <div class="mt-4 grid gap-4 lg:grid-cols-2">
+                <FormInput id="email" type="email" label="Email address" placeholder="teammate@example.com" required bind:value={inviteEmail} error={inviteError?.field('email')} />
+                <Listbox id="role" label="Role" bind:value={inviteRole} options={roleOptions} />
+              </div>
+            </SettingsSection>
+          </form>
+        </div>
+        <div>
+          {#if invitations.invitations.length > 0}
+            <SettingsSection title="Pending invitations" description="Invitation links that have not been accepted yet." flush>
+              <div class="overflow-x-auto">
+                <div class="data-table min-w-[760px]">
+                  <div class="data-table-header grid-cols-[minmax(13rem,1.2fr)_7rem_7rem_minmax(15rem,1.5fr)_6rem]">
+                    <span>Email</span>
+                    <span>Method</span>
+                    <span>Role</span>
+                    <span>Invitation link</span>
+                    <span class="text-right">Actions</span>
+                  </div>
+                  {#each invitations.invitations as row (row.id)}
+                    <div class="data-table-row grid-cols-[minmax(13rem,1.2fr)_7rem_7rem_minmax(15rem,1.5fr)_6rem] border-b border-neutral-200 last:border-b-0 dark:border-white/[0.07]">
+                      <div class="truncate text-[12px] font-medium text-black dark:text-fg">{row.email}</div>
+                      <div class="text-[12px] capitalize text-neutral-500 dark:text-fg-dim">{row.via}</div>
+                      <div class="text-[12px] capitalize text-neutral-500 dark:text-fg-dim">{row.role}</div>
+                      <div class="flex min-w-0 items-center gap-2">
+                        <span class="min-w-0 truncate font-mono text-[12px] text-neutral-500 dark:text-fg-dim" title={row.link}>{row.link}</span>
+                        <button type="button" title="Copy invitation link" aria-label="Copy invitation link" class="icon-button group shrink-0" onclick={() => copyLink(row.id, row.link)}>
+                          <span class="inline-flex transition-transform duration-150 ease-out group-active:scale-75">
+                            {#if copiedId === row.id}<Reicon name="check" class="size-3.5 text-success" />{:else}<Reicon name="copy" class="size-3.5" />{/if}
+                          </span>
+                        </button>
+                      </div>
+                      <div class="text-right">
+                        <button type="button" class="button h-7! px-2.5! text-[11px]! text-error! hover:text-error!" onclick={() => revoke(row.id)}>Revoke</button>
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            </SettingsSection>
+          {/if}
+        </div>
+      {/if}
     </div>
   </TeamLayout>
 </div>

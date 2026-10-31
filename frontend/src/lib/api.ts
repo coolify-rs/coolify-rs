@@ -79,12 +79,13 @@ export const sessionApi = {
 export type Role = 'owner' | 'admin' | 'member';
 
 export interface SessionInfo {
-  user: { id: number; name: string; email: string; two_factor_enabled: boolean };
-  teams: { id: number; name: string; role: Role }[];
+  user: { id: number; name: string; email: string; two_factor_enabled: boolean; avatar_url: string | null };
+  teams: { id: number; name: string; role: Role; avatar_url: string | null }[];
   current_team: {
     id: number;
     name: string;
     role: Role;
+    avatar_url: string | null;
     two_factor_required: boolean;
     two_factor_blocked: boolean;
   } | null;
@@ -204,8 +205,9 @@ export interface TeamPageData {
     is_mcp_server_enabled: boolean;
     is_build_server_fallback_enabled: boolean;
     is_two_factor_required: boolean;
+    avatar_url: string | null;
   };
-  members: { id: number; name: string; email: string; role: Role; two_factor: boolean | null }[];
+  members: { id: number; name: string; email: string; role: Role; two_factor: boolean | null; avatar_url: string | null }[];
   me: number;
   my_role: Role;
   can_update: boolean;
@@ -214,7 +216,7 @@ export interface TeamPageData {
 
 export const teamUi = {
   get: () => request<TeamPageData>('GET', '/ui/team'),
-  update: (body: Omit<TeamPageData['team'], 'id'>) => request<{ message: string }>('PATCH', '/ui/team', body),
+  update: (body: Omit<TeamPageData['team'], 'id' | 'avatar_url'>) => request<{ message: string }>('PATCH', '/ui/team', body),
   setRole: (id: number, role: Role) => request<{ message: string }>('POST', `/ui/team/members/${id}/role`, { role }),
   remove: (id: number) => request<{ message: string }>('DELETE', `/ui/team/members/${id}`),
 };

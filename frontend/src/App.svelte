@@ -13,6 +13,14 @@
   import Team from './pages/Team.svelte';
   import Members from './pages/Members.svelte';
   import Appearance from './pages/Appearance.svelte';
+  import TeamDanger from './pages/TeamDanger.svelte';
+  import TeamAudit from './pages/TeamAudit.svelte';
+  import TeamAdmin from './pages/TeamAdmin.svelte';
+  import SelectTeam from './pages/SelectTeam.svelte';
+  import Invitation from './pages/Invitation.svelte';
+  import ConfirmPassword from './pages/ConfirmPassword.svelte';
+  import Profile from './pages/Profile.svelte';
+  import PasskeyConfirm from './pages/PasskeyConfirm.svelte';
   import Servers from './pages/Servers.svelte';
   import ServerNew from './pages/ServerNew.svelte';
   import Server from './pages/Server.svelte';
@@ -47,12 +55,24 @@
     router.go('/login', true);
   });
 
+  // `redirect()->guest()`: an invitation comes back after signing in.
+  let intended: string | null = null;
+
   // Route guard: signed-out users see the login page; signed-in users skip it.
   $effect(() => {
     if (!session.loaded) return;
     const name = router.current.name;
-    if (!session.info && name !== 'login') router.go('/login', true);
-    else if (session.info && name === 'login') router.go('/', true);
+    if (name === 'auth-link') return;
+    if (!session.info && name !== 'login') {
+      if (name === 'invitation') intended = router.path;
+      router.go('/login', true);
+    } else if (session.info && intended) {
+      const to = intended;
+      intended = null;
+      router.go(to, true);
+    } else if (session.info && name === 'login') router.go('/', true);
+    // `DecideWhatToDoWithUser`: no active team and several to choose from.
+    else if (session.info && !session.info.current_team && !['select-team', 'invitation', 'confirm-password', 'profile', 'profile-passkey-confirm'].includes(name)) router.go('/select-team', true);
   });
 
   // Breadcrumb switchers belong to the page that set them.
@@ -72,6 +92,12 @@
     keys: 'Keys & Tokens',
     team: 'Teams',
     members: 'Team Members',
+    'team-danger': 'Team Danger Zone',
+    'team-audit': 'Team Audit Log',
+    'team-admin': 'Team Admin',
+    'select-team': 'Select a team',
+    'confirm-password': 'Confirm Password',
+    profile: 'Profile',
     appearance: 'Appearance',
     servers: 'Servers',
     'server-new': 'New Server',
@@ -88,11 +114,23 @@
 
 {#if !session.loaded}
   <main class="h-full bg-neutral-50 dark:bg-base"></main>
+{:else if router.current.name === 'auth-link'}
+  <Invitation token={router.query('token') ?? ''} />
 {:else if !session.info || router.current.name === 'login'}
   <Login />
+{:else if router.current.name === 'select-team'}
+  <SelectTeam />
+{:else if router.current.name === 'invitation'}
+  {#key params.uuid}<Invitation uuid={params.uuid} />{/key}
+{:else if router.current.name === 'confirm-password'}
+  <ConfirmPassword />
+{:else if router.current.name === 'profile-passkey-confirm'}
+  <PasskeyConfirm />
 {:else}
   <Shell>
-    {#if session.info.current_team?.two_factor_blocked}
+    {#if router.current.name === 'profile'}
+      <Profile />
+    {:else if session.info.current_team?.two_factor_blocked}
       <Unported
         title="Two-factor authentication required"
         description="This team requires two-factor authentication. Enable it for your account in Coolify, then sign in again."
@@ -126,6 +164,12 @@
       <Team />
     {:else if router.current.name === 'members'}
       <Members />
+    {:else if router.current.name === 'team-danger'}
+      <TeamDanger />
+    {:else if router.current.name === 'team-audit'}
+      <TeamAudit />
+    {:else if router.current.name === 'team-admin'}
+      <TeamAdmin />
     {:else if router.current.name === 'appearance'}
       <Appearance />
     {:else if router.current.name === 'notification-email'}

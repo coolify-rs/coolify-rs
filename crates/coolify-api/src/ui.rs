@@ -295,6 +295,7 @@ async fn inspect_key(body: axum::body::Bytes) -> ApiResult {
 async fn update_team(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: crate::audit::Meta,
     body: axum::body::Bytes,
 ) -> ApiResult {
     use crate::validation::{Field, Rule, patterns, validate};
@@ -345,6 +346,7 @@ async fn update_team(
             ));
         }
     }
+    let before = coolify_db::team_pages::team_row(&state.db, ctx.team_id).await?;
     coolify_db::teams::update_settings(
         &state.db,
         ctx.team_id,
@@ -358,6 +360,17 @@ async fn update_team(
         state.now(),
     )
     .await?;
+    let after = coolify_db::team_pages::team_row(&state.db, ctx.team_id).await?;
+    let actor = crate::audit::actor(&state, &ctx, &meta).await;
+    crate::audit::team_mutation(
+        &state,
+        &actor,
+        ctx.team_id,
+        "updated",
+        before.as_ref(),
+        after.as_ref(),
+    )
+    .await;
     Ok(ok(json!({"message": "Team updated."})).into_response())
 }
 
@@ -369,6 +382,7 @@ async fn team_data(State(state): State<AppState>, Extension(ctx): Extension<Auth
     let flag = |k: &str, default: bool| team.get(k).and_then(Value::as_bool).unwrap_or(default);
     let members = coolify_db::teams::member_rows(&state.db, ctx.team_id).await?;
     let manage = ctx.is_team_admin();
+    let facts = coolify_db::team_pages::facts(&state.db, ctx.team_id).await?;
     Ok(ok(json!({
         "team": {
             "id": ctx.team_id,
@@ -377,12 +391,23 @@ async fn team_data(State(state): State<AppState>, Extension(ctx): Extension<Auth
             "is_mcp_server_enabled": flag("is_mcp_server_enabled", true),
             "is_build_server_fallback_enabled": flag("is_build_server_fallback_enabled", true),
             "is_two_factor_required": flag("is_two_factor_required", false),
+            "avatar_url": facts.as_ref().and_then(|f| f.avatar_path.as_ref().map(|_| {
+                format!("/team/{}/avatar?v={}", ctx.team_id, coolify_db::users::timestamp(f.updated_at))
+            })),
         },
         "members": members.iter().map(|m| json!({
             "id": m.id,
             "name": m.name,
             "email": m.email,
             "role": m.role,
+            "avatar_url": m.avatar_path.as_ref().map(|_| {
+                let v = coolify_db::users::timestamp(m.updated_at);
+                if m.id == ctx.user_id {
+                    format!("/profile/avatar?v={v}")
+                } else {
+                    format!("/team/members/{}/avatar?v={v}", m.id)
+                }
+            }),
             "two_factor": if manage { Value::Bool(m.two_factor) } else { Value::Null },
         })).collect::<Vec<_>>(),
         "me": ctx.user_id,
@@ -423,6 +448,7 @@ async fn member_guard(
 async fn set_member_role(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: crate::audit::Meta,
     Path(id): Path<i64>,
     body: axum::body::Bytes,
 ) -> ApiResult {
@@ -441,16 +467,52 @@ async fn set_member_role(
     };
     member_guard(&state, &ctx, id, min).await?;
     coolify_db::teams::set_member_role(&state.db, ctx.team_id, id, role.as_str()).await?;
+    let member = coolify_db::team_pages::user_email(&state.db, id)
+        .await?
+        .unwrap_or_default();
+    crate::audit::log(
+        &state,
+        &ctx,
+        &meta,
+        "ui.team_member.role_updated",
+        json!({
+            "team_id": ctx.team_id,
+            "member_id": id,
+            "member_name": member.0,
+            "member_email": member.1,
+            "role": role.as_str(),
+        }),
+        "info",
+    )
+    .await;
     Ok(ok(json!({"message": "Member updated."})).into_response())
 }
 
 async fn remove_member(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: crate::audit::Meta,
     Path(id): Path<i64>,
 ) -> ApiResult {
     member_guard(&state, &ctx, id, coolify_domain::Role::Admin).await?;
     coolify_db::teams::remove_member(&state.db, ctx.team_id, id).await?;
+    let member = coolify_db::team_pages::user_email(&state.db, id)
+        .await?
+        .unwrap_or_default();
+    crate::audit::log(
+        &state,
+        &ctx,
+        &meta,
+        "ui.team_member.removed",
+        json!({
+            "team_id": ctx.team_id,
+            "member_id": id,
+            "member_name": member.0,
+            "member_email": member.1,
+        }),
+        "info",
+    )
+    .await;
     Ok(ok(json!({"message": "Member removed."})).into_response())
 }
 
