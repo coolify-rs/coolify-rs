@@ -897,7 +897,16 @@ impl Jobs {
             .await
             .ok()
             .flatten();
-            if let Some(uuid) = uuid
+            // `recoverIncompleteBackup` runs only for what is pending.
+            let (stop_pending, cleanup_pending): (bool, bool) = sqlx::query_as(
+                "SELECT stop_recovery_pending, s3_cleanup_pending FROM scheduled_volume_backup_executions WHERE id = $1",
+            )
+            .bind(execution)
+            .fetch_one(db.pool())
+            .await
+            .unwrap_or((false, false));
+            if stop_pending
+                && let Some(uuid) = uuid
                 && let Err(e) = self.recover_volume_containers(run, &uuid).await
             {
                 recovery.push_str(&format!(" Container recovery failed: {e}"));
@@ -907,7 +916,8 @@ impl Jobs {
                     .await;
                 archive_deleted = true;
             }
-            if let Err(e) = self.cleanup_volume_upload(execution, location).await {
+            if cleanup_pending && let Err(e) = self.cleanup_volume_upload(execution, location).await
+            {
                 recovery.push_str(&format!(" Container recovery failed: {e}"));
             }
         }

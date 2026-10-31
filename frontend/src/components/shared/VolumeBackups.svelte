@@ -20,6 +20,7 @@
   import { link, router } from '../../lib/router.svelte';
   import { notify } from '../../lib/toast.svelte';
   import {
+    downloadBackup,
     formatBytes,
     volumeBackupsUi,
     type BackupOwner,
@@ -113,6 +114,7 @@
   let page = $state(1);
   let perPage = $state(10);
   let timezone = $state<string | null>(null);
+  let s3Downloads = $state(false);
   let loaded = $state(false);
   let deletingExecution = $state<VolumeExecution | null>(null);
   let cleaning = $state(false);
@@ -122,6 +124,7 @@
     executions = r.executions;
     total = r.total;
     timezone = r.server_timezone;
+    s3Downloads = r.s3_downloads;
     loaded = true;
   }
 
@@ -283,7 +286,7 @@
                   </span>
                   <span class="flex items-center justify-end gap-1">
                     {#if e.status === 'success' && isDownloadable(e)}
-                      <button type="button" class="icon-button shrink-0" onclick={() => window.open(`/download/volume-backup/${e.id}`, '_blank')} title="Download backup" aria-label="Download backup">
+                      <button type="button" class="icon-button shrink-0" onclick={() => downloadBackup('storage', e.id, s3Downloads)} title="Download backup" aria-label="Download backup">
                         <Reicon name="upload" class="size-3.5 rotate-180" />
                       </button>
                     {/if}

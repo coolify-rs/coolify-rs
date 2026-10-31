@@ -1049,7 +1049,7 @@ fn file_has_program_execution(path: &Path) -> bool {
 }
 
 /// `Str::uuid()`: version 4.
-fn uuid4() -> String {
+pub(super) fn uuid4() -> String {
     let mut b: [u8; 16] = rand::thread_rng().r#gen();
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;

@@ -54,16 +54,23 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Validation jobs run inside the coolify-rs process: a restart drops a running validation (upstream's queue keeps it).
 - Databases (all 9 engines; API, proxy, SSL, backups, imports and the `Project/Database/*` pages): sections that only
   render `Project/Shared/*` are placeholders until the shared branch is merged. Starting a ClickHouse database with an
-  unnamed data volume is not blocked (the page warns as upstream does). `Project/Service/*` database backup and import
-  pages and `/storage-backups*` are not part of this area.
+  unnamed data volume is not blocked (the page warns as upstream does).
+- Service database backups and imports run the standalone code through a `ServiceDatabase` row (`dbs::service_database_row`).
+  A database whose image or custom type names no known engine has no such row, so its pages answer 404 and its schedule
+  ends without a run. Reading MongoDB credentials from the container and the MySQL and MariaDB branches are ported but
+  only PostgreSQL ran on the VM.
 - Storage backups (`PUT`, `DELETE`, `POST .../run` on `/{applications,databases,services}/{uuid}/storages/{storage_uuid}/backups`):
-  `VolumeBackupJob` runs for a manual run. The scheduler does not start it yet, the `VolumeBackup/*` notifications are
-  not sent, and recovery runs once instead of `VolumeBackupRecoveryJob` retrying. A run that finds another run of the
-  same schedule in progress is dropped using the executions table, not a cache lock.
+  `VolumeBackupJob` runs for a manual run or "Back up now". The scheduler does not start it yet (needs
+  `Jobs::spawn_volume_backup(backup_id)` per due `scheduled_volume_backups` row, plus `BackupMissing` and the recovery
+  sweep). Recovery runs once in the job, or on "Retry recovery" (`Jobs::retry_volume_recovery`), not on a timer. A run
+  that finds another run of the same schedule in progress is dropped using the executions table, not a cache lock.
+  The `VolumeBackup/*` notifications are sent, but their delivery was not compared: the test team has no channel enabled.
 - `/download/backup/{id}` and `/download/volume-backup/{id}` read over `cat` on the ssh connection instead of SFTP. Through
   the `scripts/ssh-via-orb.sh` wrapper `orb` truncates large output (about 4 to 5 MB) with exit code 0, so large downloads
-  were not verified; small ones were byte-identical. The S3 download storage of `PreparesBackupDownloads` is not ported:
-  the download icon always opens the route.
+  were not verified; small ones were byte-identical. The S3 download storage of `PreparesBackupDownloads`
+  (`databases/backup_download.rs`) is ported but has never run: selecting it needs `instance_settings`, which test runs
+  leave alone, and the local S3 fake is a private endpoint both sides refuse. Its pending list and the results are kept
+  in memory, and a restart forgets a pending download and its delayed object delete.
 - `S3 endpoint is not allowed` messages link to the relative `/settings/advanced`; upstream writes the absolute URL.
 - S3 uploads and restores could not run against the local MinIO in the page comparison: both sides refuse a private
   endpoint unless `webhook_allowed_internal_hosts` names it, and that setting stayed unchanged. The refusal itself matches.
@@ -74,8 +81,8 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   volume" check is not ported. `Str::slug` in container labels does not transliterate non-ASCII names.
 - Notifications (`crates/coolify-jobs/src/notifications`): delivery runs on tokio tasks, so queued retries are lost when
   the process restarts. Not sent yet, because their job is not ported: `RestartLimitReached` for applications, previews
-  and databases, `ContainerRestarted` and the disk usage check of `PushServerUpdateJob`, `BackupMissing` and the
-  `VolumeBackup/*` notifications, tasks of applications and the missed runs of `ScheduledJobDeliveryService`,
+  and databases, `ContainerRestarted` and the disk usage check of `PushServerUpdateJob`, `BackupMissing`,
+  tasks of applications and the missed runs of `ScheduledJobDeliveryService`,
   `ApiTokenExpiringNotification`, `SslExpirationNotification`, `ForceDisabled` and `ForceEnabled` (`ServerLimitCheckJob`,
   cloud), the `GeneralNotification` of `DeleteResourceJob` and server transfers, the combined result of a deployment to
   several servers and previews. `StatusChanged` is ported but upstream never sends it. Its mail view reads a variable
@@ -252,15 +259,12 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 
 | Upstream | coolify-rs | Why |
 | --- | --- | --- |
-| Pages `Project/Service/{Analytics,ImportBackup,DatabaseBackups,BackupExecutions,VolumeBackup/*}` | the page says it is not available | later task |
+| Page `Project/Service/Analytics` | the page says it is not available | later task |
 | `Project/Shared/*` sections on service pages (variables, tags, danger, logs, volumes and others) | placeholder named after the section | connected when the shared components merge |
 | DNS checks and Cloudflare automation on the service Domains page (`CheckDomainDnsJob`, `checkDomainDns`, `cloudflare-autoconfigure`) | rows stay "Not checked", `domain_dns_statuses` is not written, the buttons say it is not available | they contact external services |
 | `addSuggestedDomain` and `ManagedDnsRecordCleanup` on the Domains page | not ported | they need the DNS checks |
 | Configuration warning on service pages, with the diff of changes | the warning without the diff | no configuration diff yet |
-| `POST /services/{uuid}/databases/{database_uuid}/imports`, `.../uploads`, `GET .../imports/{activity_id}` | not ported | later task |
-| `PUT`/`DELETE /services/{uuid}/storages/{storage_uuid}/backups`, `.../backups/run` | `501` | S3 volume backups are not ported |
 | Livewire pages `Project/Service/*`, `one-click-service-*` in `Project/Resource/Create` | not available | later task |
-| `POST /services/{uuid}/databases/{database_uuid}/imports`, `.../imports/uploads`, `GET .../imports/{activity_id}` | `501` | database imports are not ported |
 | `POST /services/{uuid}/clone` with `clone_volumes: true` | `501` | `VolumeCloneJob` is not ported |
 | `PATCH /services/{uuid}/databases/{database_uuid}` that changes `is_public` | `501` | `StartDatabaseProxy` / `StopDatabaseProxy` are not ported |
 | `POST /services/{uuid}/migrate` in a dev instance | `404`, as upstream outside dev | `MigrateResourceToDestination` only runs in dev upstream |

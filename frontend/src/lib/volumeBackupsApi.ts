@@ -148,7 +148,7 @@ export const volumeBackupsUi = {
   remove: (kind: BackupOwner, uuid: string, backup: string, password: string, selected: string[]) =>
     post<Toasted & { deleted?: boolean }>(`${base(kind, uuid)}/${backup}/delete`, { password, selected }),
   executions: (kind: BackupOwner, uuid: string, backup: string, page: number, perPage: number) =>
-    request<{ executions: VolumeExecution[]; total: number; page: number; per_page: number; server_timezone: string | null }>(
+    request<{ executions: VolumeExecution[]; total: number; page: number; per_page: number; server_timezone: string | null; s3_downloads: boolean }>(
       'GET',
       `${base(kind, uuid)}/${backup}/executions?page=${page}&per_page=${perPage}`,
     ),
@@ -160,12 +160,34 @@ export const volumeBackupsUi = {
     post<Toasted & { deleted?: boolean }>(`${base(kind, uuid)}/${backup}/executions/${id}/delete`, { password, selected }),
   backupNow: (service: string, type: 'database' | 'storage', backup: string) => post(`/ui/services/${encodeURIComponent(service)}/backup-now`, { type, backup }),
   serviceExecutions: (service: string, page: number, perPage: number) =>
-    request<{ executions: ServiceExecution[]; total: number; page: number; per_page: number; last_page: number; server_timezone: string | null }>(
+    request<{ executions: ServiceExecution[]; total: number; page: number; per_page: number; last_page: number; server_timezone: string | null; s3_downloads: boolean }>(
       'GET',
       `/ui/services/${encodeURIComponent(service)}/backup-executions?page=${page}&per_page=${perPage}`,
     ),
   importDatabases: (service: string) => request<{ databases: { uuid: string; name: string }[] }>('GET', `/ui/services/${encodeURIComponent(service)}/import-databases`),
 };
+
+/**
+ * `download_volume_backup_file` and `prepareBackupDownload`: with the instance download storage the server uploads
+ * the backup first and the browser follows the link when it is ready (`checkDownloads` polls every 3 seconds).
+ */
+export async function downloadBackup(type: 'database' | 'storage', execution: number, s3Downloads: boolean) {
+  const stream = `/download/${type === 'database' ? 'backup' : 'volume-backup'}/${execution}`;
+  if (!s3Downloads) {
+    window.open(stream, '_blank');
+    return;
+  }
+  const r = await post<Toasted & { open?: string; pending?: string }>('/ui/backup-downloads', { type, execution });
+  if (r.open) window.location.href = r.open;
+  if (!r.pending) return;
+  const poll = setInterval(async () => {
+    const s = await request<{ status: string; url?: string; message?: string }>('GET', `/ui/backup-downloads/${r.pending}`);
+    if (s.status === 'pending') return;
+    clearInterval(poll);
+    if (s.status === 'ready' && s.url) window.location.href = s.url;
+    else if (s.message) notify.failure(s.message);
+  }, 3000);
+}
 
 /** `formatBytes`. */
 export function formatBytes(value: string | number | null): string {

@@ -56,6 +56,8 @@ pub fn routes(state: AppState) -> Router<AppState> {
             "/ui/databases/{uuid}/backups/{backup}/executions/{execution}/delete",
             post(delete_execution),
         )
+        .route("/ui/backup-downloads", post(prepare_download))
+        .route("/ui/backup-downloads/{id}", get(check_download))
         .route("/download/backup/{execution}", get(download))
         .route("/download/volume-backup/{execution}", get(download_volume))
         .route_layer(from_fn_with_state(state, crate::session::ui_guard))
@@ -555,7 +557,7 @@ async fn executions(
         "executions": list,
         "total": total,
         "server_timezone": server_of(&state, &d).await?.and_then(|s| s.settings.get("server_timezone").and_then(Value::as_str).map(str::to_owned)),
-        "s3_downloads": false,
+        "s3_downloads": s3_downloads_enabled(&state).await,
     }))
     .into_response())
 }
@@ -651,6 +653,116 @@ async fn delete_execution(
 }
 
 /// `Route::get('/download/backup/{executionId}')`.
+/// `s3BackupDownloadsEnabled()`.
+pub(crate) async fn s3_downloads_enabled(state: &AppState) -> bool {
+    match state.jobs.as_ref() {
+        Some(jobs) => jobs.download_storage().await.is_some(),
+        None => false,
+    }
+}
+
+/// `downloadBackup` and `downloadExecution`, with `prepareBackupDownload`. The routes of both kinds check
+/// the team again when the browser opens them.
+async fn prepare_download(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    body: Bytes,
+) -> ApiResult {
+    use coolify_jobs::databases::backup_download::PreparedDownload as P;
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Unauthorized);
+    }
+    let input: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let id = input
+        .get("execution")
+        .and_then(Value::as_i64)
+        .ok_or(NOT_FOUND)?;
+    let volume = input.get("type").and_then(Value::as_str) == Some("storage");
+    let (row, team, server_id, stream) = if volume {
+        let (row, backup) = vb::execution_by_id(&state.db, id).await?.ok_or(NOT_FOUND)?;
+        let team = backup.get("team_id").and_then(Value::as_i64).unwrap_or(-1);
+        let server = match vb::target_of(&state.db, &backup).await? {
+            Some(t) => {
+                vb::resource_server(
+                    &state.db,
+                    parts::str_of(&t.row, "resource_type").unwrap_or_default(),
+                    t.row
+                        .get("resource_id")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(-1),
+                )
+                .await?
+            }
+            None => None,
+        };
+        (row, team, server, format!("/download/volume-backup/{id}"))
+    } else {
+        let (row, backup) = pages::execution_by_id(&state.db, id)
+            .await?
+            .ok_or(NOT_FOUND)?;
+        let morph = parts::str_of(&backup, "database_type").unwrap_or_default();
+        let database_id = backup
+            .get("database_id")
+            .and_then(Value::as_i64)
+            .unwrap_or(-1);
+        let database = if morph == dbs::SERVICE_DATABASE_MORPH {
+            dbs::service_database_by_id(&state.db, database_id).await?
+        } else {
+            match Kind::ALL.into_iter().find(|k| k.morph() == morph) {
+                Some(kind) => dbs::find_of_kind(&state.db, kind, database_id).await?,
+                None => None,
+            }
+        };
+        let d = database.ok_or(NOT_FOUND)?;
+        (
+            row,
+            d.team_id,
+            d.server_id(),
+            format!("/download/backup/{id}"),
+        )
+    };
+    if team != ctx.team_id {
+        return Err(NOT_FOUND);
+    }
+    let server = match server_id.filter(|_| !parts::bool_of(&row, "local_storage_deleted")) {
+        Some(s) => coolify_db::servers::find_by_id(&state.db, s)
+            .await?
+            .map(|r| coolify_jobs::server::ServerInfo::from_row(&r)),
+        None => None,
+    };
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    let outcome = jobs
+        .prepare_backup_download(
+            ctx.user_id,
+            server.as_ref(),
+            parts::str_of(&row, "filename"),
+        )
+        .await;
+    let answer = match outcome {
+        Ok(P::Stream) => json!({"open": stream}),
+        Ok(P::TooMany) => toasts(&[(
+            "error",
+            "Too many downloads are in progress. Wait for them to finish, then try again.",
+        )]),
+        Ok(P::Pending { id, file }) => {
+            let mut out = toasts(&[(
+                "info",
+                &format!("Preparing {file}. The download starts when it is ready."),
+            )]);
+            out["pending"] = json!(id);
+            out
+        }
+        Err(e) => toasts(&[("error", &e)]),
+    };
+    Ok(ok(answer).into_response())
+}
+
+/// `checkDownloads`.
+async fn check_download(Extension(ctx): Extension<AuthCtx>, Path(id): Path<String>) -> ApiResult {
+    let result = coolify_jobs::databases::backup_download::take_download_result(&id, ctx.user_id);
+    Ok(ok(result.unwrap_or_else(|| json!({"status": "pending"}))).into_response())
+}
+
 async fn download(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,

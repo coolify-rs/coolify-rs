@@ -8,7 +8,7 @@
   import SettingsSection from './SettingsSection.svelte';
   import StatusBadge from './StatusBadge.svelte';
   import { diffForHumans, parseTimestamp } from '../lib/format';
-  import { formatBytes, volumeBackupsUi, type ServiceExecution } from '../lib/volumeBackupsApi';
+  import { downloadBackup, formatBytes, volumeBackupsUi, type ServiceExecution } from '../lib/volumeBackupsApi';
 
   let { service }: { service: string } = $props();
 
@@ -17,6 +17,7 @@
   let page = $state(1);
   let perPage = $state(10);
   let timezone = $state<string | null>(null);
+  let s3Downloads = $state(false);
   let loaded = $state(false);
   let selected = $state<ServiceExecution | null>(null);
 
@@ -26,6 +27,7 @@
     total = r.total;
     page = r.page;
     timezone = r.server_timezone;
+    s3Downloads = r.s3_downloads;
     loaded = true;
   }
   $effect(() => {
@@ -116,7 +118,20 @@
             </span>
             <span>{formatBytes(e.size)}</span>
             <span class="flex justify-end">
-              {#if e.download_url}
+              {#if e.download_url && s3Downloads}
+                <button
+                  type="button"
+                  onclick={(ev) => {
+                    ev.stopPropagation();
+                    downloadBackup(e.type === 'Database' ? 'database' : 'storage', Number(e.id.split(':')[1]), true);
+                  }}
+                  class="icon-button shrink-0"
+                  title="Download backup"
+                  aria-label="Download backup"
+                >
+                  <Reicon name="upload" class="size-3.5 rotate-180" />
+                </button>
+              {:else if e.download_url}
                 <a href={e.download_url} target="_blank" rel="noopener" onclick={(ev) => ev.stopPropagation()} class="icon-button shrink-0" title="Download backup" aria-label="Download backup">
                   <Reicon name="upload" class="size-3.5 rotate-180" />
                 </a>

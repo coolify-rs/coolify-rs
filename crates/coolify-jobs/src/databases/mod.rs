@@ -18,6 +18,7 @@ use crate::Jobs;
 use crate::server::ServerInfo;
 
 pub mod backup;
+pub mod backup_download;
 pub mod cleanup;
 mod clickhouse;
 pub(crate) mod common;

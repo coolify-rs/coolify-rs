@@ -1162,6 +1162,7 @@ async fn executions(
         "page": page,
         "per_page": per_page,
         "server_timezone": timezone,
+        "s3_downloads": crate::ui_database_backups::s3_downloads_enabled(&state).await,
     }))
     .into_response())
 }
@@ -1332,7 +1333,6 @@ async fn delete_execution(
 async fn service_backup_now(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
-    meta: Meta,
     Path(uuid): Path<String>,
     body: Bytes,
 ) -> ApiResult {
@@ -1377,7 +1377,6 @@ async fn service_backup_now(
         "storage" => {
             let b = find_schedule(&state, &res, backup).await?;
             jobs.spawn_volume_backup(parts::id_of(&b));
-            let _ = meta;
             Ok(ok(toasts(&[("success", "Backup queued.")])).into_response())
         }
         _ => Err(ApiError::RouteNotFound),
@@ -1555,6 +1554,7 @@ async fn service_executions(
         "per_page": per_page,
         "last_page": last_page,
         "server_timezone": timezone,
+        "s3_downloads": crate::ui_database_backups::s3_downloads_enabled(&state).await,
     }))
     .into_response())
 }
