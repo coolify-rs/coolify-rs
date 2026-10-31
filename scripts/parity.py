@@ -5,8 +5,8 @@
     scripts/parity.py --missing  also lists everything missing
     scripts/parity.py --json
 
-An API operation counts when `routes/mod.rs` has a RouteSpec for it. A web route counts when the
-frontend router has its path. A Livewire component counts when some Svelte or Rust file names its
+An API operation counts when `routes/mod.rs` has a RouteSpec for it. A web route, with its
+`Route::prefix` groups applied, counts when the frontend router has its path. A Livewire component counts when some Svelte or Rust file names its
 view or class in a "port of" comment, so this is a coverage guide, not a behaviour proof; the
 differential scripts in compat/diff and the screenshots are the proof.
 """
@@ -41,17 +41,72 @@ def api():
     return out
 
 
+def web_routes():
+    """Every `Route::get` in routes/web.php with its enclosing `Route::prefix` groups applied."""
+    routes = set()
+    stack = []  # (brace depth inside the group, prefix)
+    depth = 0
+    pending = None
+    for line in read(f"{U}/routes/web.php").splitlines():
+        if line.lstrip().startswith("//"):
+            continue
+        m = re.search(r"Route::prefix\('([^']*)'\)", line)
+        if m:
+            pending = m.group(1)
+        for g in re.findall(r"Route::get\('([^']+)'", line):
+            parts = [x.strip("/") for _, x in stack] + [g.strip("/")]
+            routes.add("/".join(x for x in parts if x))
+        code = re.sub(r"'[^']*'", "''", line)
+        opens_group = "group(function" in code
+        for ch in code:
+            if ch == "{":
+                depth += 1
+                if opens_group:
+                    stack.append((depth, pending or ""))
+                    pending, opens_group = None, False
+            elif ch == "}":
+                while stack and stack[-1][0] == depth:
+                    stack.pop()
+                depth -= 1
+    return sorted(routes)
+
+
+# Router params that take any literal: the page behind them decides what renders.
+CATCH_ALL = {":section", ":sub", ":tab", ":backupSection", ":channel"}
+
+
 def web():
-    src = read(f"{U}/routes/web.php")
-    routes = sorted(set(re.findall(r"Route::get\('([^']+)'", src)))
+    """A web route counts when the frontend router has a pattern for it. A literal segment that only
+    lands in a catch-all section param counts only when the frontend also names that literal."""
     front = read(f"{ROOT}/frontend/src/lib/router.svelte.ts")
-    have = set()
-    for p in re.findall(r"pattern: '([^']+)'", front):
-        have.add(re.sub(r":\w+", "{}", p))
+    patterns = [[s for s in p.split("/") if s] for p in re.findall(r"pattern: '([^']+)'", front)]
+    corpus = "\n".join(read(f) for f in glob.glob(f"{ROOT}/frontend/src/**/*.svelte", recursive=True))
+
+    def named(lit):
+        return re.search(r"""['"`/]""" + re.escape(lit) + r"""['"`]""", corpus) is not None
+
+    def covered(segs):
+        for pat in patterns:
+            if len(pat) != len(segs):
+                continue
+            ok = True
+            for want, got in zip(segs, pat):
+                if want == "{}":
+                    ok = got.startswith(":")
+                elif got.startswith(":"):
+                    ok = got in CATCH_ALL and named(want)
+                else:
+                    ok = want == got
+                if not ok:
+                    break
+            if ok:
+                return True
+        return False
+
     out = []
-    for r in routes:
+    for r in web_routes():
         norm = "/" + re.sub(r"\{[^}]+\}", "{}", r).strip("/")
-        out.append((norm, norm in have or (norm == "/" and "/" in have)))
+        out.append((norm, covered([s for s in norm.split("/") if s])))
     return out
 
 
