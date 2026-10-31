@@ -67,8 +67,8 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Application operations are ported in the API (`compat/diff/applications_ops_diff.py`): previews, clone, rollback,
   logs, move, destinations. What they do not do yet:
   - Preview deployments build and run for every build pack (`preview-*` in `compat/diff/git_deploy_diff.py`). Not ported
-    around them: `ApplicationPullRequestUpdateJob` (no GitHub App to comment on), preview restart limits
-    (`trackRestartCount`, `StopApplicationPreview` from the status poller), deployment notifications. An application with
+    around them: `ApplicationPullRequestUpdateJob` (no GitHub App to comment on), the preview restart limit
+    (the status poller counts restarts but does not stop the preview), deployment notifications. `POST /deploy` by tag answers 501. An application with
     an additional destination answers 501 to start, restart and rollback (`unported_parts`).
   - `POST /migrate` answers 404 like upstream outside a Coolify development instance (`isDev()`), so
     `MigrateResourceToDestination` is not ported.

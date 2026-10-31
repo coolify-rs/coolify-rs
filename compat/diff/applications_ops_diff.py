@@ -314,7 +314,8 @@ def preview_cases():
     out = both("deploy pr: a tag creates the preview", "POST", "/deploy?uuid=<pv>&pr=11&docker_tag=1.27-alpine", {})
     same_rows("deploy pr: the created preview", PREVIEW_ROWS, *PREVIEW_DROP)
     for side in SIDES:
-        wait_deployment(out[side]["deployments"][0]["deployment_uuid"])
+        ctx[side]["dep_pr"] = out[side]["deployments"][0]["deployment_uuid"]
+        wait_deployment(ctx[side]["dep_pr"])
     queue_rows("deploy pr: queue row", "application_id='<pv_id>' AND pull_request_id=11")
     # Preview logs: the container the reference ran, through both implementations.
     pr_logs = fill("ref", "/api/v1/applications/<pv>/previews/7/logs")
