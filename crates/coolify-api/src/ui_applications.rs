@@ -853,6 +853,30 @@ pub async fn cancel(
     Ok(ok(json!({"status": "cancelled-by-user"})).into_response())
 }
 
+/// `DeploymentNavbar::force_start`.
+pub async fn force_start(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path((uuid, dep)): Path<(String, String)>,
+) -> ApiResult {
+    let a = find(&state, &ctx, &uuid).await?;
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Unauthorized);
+    }
+    let d = apps::deployment_by_uuid(&state.db, &dep)
+        .await?
+        .filter(|d| d.application_id == a.id)
+        .ok_or(ApiError::Message(
+            StatusCode::NOT_FOUND,
+            "Deployment not found.",
+        ))?;
+    let started = match &state.jobs {
+        Some(jobs) => jobs.force_start_deployment(d.id).await,
+        None => false,
+    };
+    Ok(ok(json!({"started": started})).into_response())
+}
+
 /// `InternalAccess::loadCurrentInternalHostname`: the name of the running (else first) container.
 pub async fn internal_hostname(
     State(state): State<AppState>,

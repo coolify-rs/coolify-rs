@@ -599,6 +599,7 @@ export const appUi = {
   deployment: (uuid: string, dep: string, all = false) =>
     request<DeploymentDetail>('GET', `${appPath(uuid)}/deployments/${encodeURIComponent(dep)}${all ? '?all=1' : ''}`),
   cancel: (uuid: string, dep: string) => request<{ status: string }>('POST', `${appPath(uuid)}/deployments/${encodeURIComponent(dep)}/cancel`, {}),
+  forceStart: (uuid: string, dep: string) => request<{ started: boolean }>('POST', `${appPath(uuid)}/deployments/${encodeURIComponent(dep)}/force-start`, {}),
   remove: (uuid: string, body: { password: string; delete_volumes: boolean; delete_configurations: boolean; delete_connected_networks: boolean; docker_cleanup: boolean }) =>
     request<{ message: string }>('POST', `${appPath(uuid)}/delete`, body),
 };

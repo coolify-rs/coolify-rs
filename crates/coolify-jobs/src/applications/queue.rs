@@ -240,6 +240,37 @@ impl Jobs {
         });
     }
 
+    /// `force_start_deployment($deployment)`: starts a queued deployment right away, ignoring the
+    /// per-application and per-server limits. False when it is no longer queued, so a repeated
+    /// force start never runs the same deployment twice.
+    pub async fn force_start_deployment(&self, queue_id: i64) -> bool {
+        {
+            let _guard = QUEUE_LOCK.lock().await;
+            let Ok(Some(current)) = apps::deployment_by_id(&self.0.db, queue_id).await else {
+                return false;
+            };
+            if current.status != "queued" {
+                return false;
+            }
+            if apps::update_deployment(
+                &self.0.db,
+                queue_id,
+                &[(
+                    "status",
+                    coolify_db::servers::ColumnValue::Text(Some("in_progress".into())),
+                )],
+                Utc::now().naive_utc(),
+            )
+            .await
+            .is_err()
+            {
+                return false;
+            }
+        }
+        self.dispatch_deployment(queue_id);
+        true
+    }
+
     /// `ApplicationDeploymentJob::dispatch(...)`: runs on the deployment workers.
     fn dispatch_deployment(&self, queue_id: i64) {
         let jobs = self.clone();
