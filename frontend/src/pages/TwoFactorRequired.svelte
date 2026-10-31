@@ -18,6 +18,8 @@
   let showCode = $state(false);
   let busy = $state(false);
   const highlighted = { ishighlighted: '' };
+  // The view passes `{{ $teamName }}` in an attribute: the name arrives escaped once.
+  const escaped = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 
   async function load() {
     const d = await authUi.twoFactorRequired();
@@ -57,7 +59,7 @@
 </script>
 
 {#if data}
-  <AuthShell title="Two-factor authentication required" description="{data.team_name ?? 'Your team'} requires two-factor authentication. Configure it to continue." footer={data.confirmed ? undefined : footer}>
+  <AuthShell title="Two-factor authentication required" description="{data.team_name ? escaped(data.team_name) : 'Your team'} requires two-factor authentication. Configure it to continue." footer={data.confirmed ? undefined : footer}>
     <div class="flex flex-col gap-4">
       {#if data.confirmed}
         <p class="text-sm text-neutral-500 dark:text-fg-dim">Two-factor authentication is on. Save these recovery codes in a safe place.</p>

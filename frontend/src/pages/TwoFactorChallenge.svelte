@@ -3,6 +3,8 @@
   import { onMount, tick } from 'svelte';
   import AuthAlert from '../components/AuthAlert.svelte';
   import AuthShell from '../components/AuthShell.svelte';
+  import ErrorPage from '../components/ErrorPage.svelte';
+  import { ApiError } from '../lib/api';
   import FormInput from '../components/FormInput.svelte';
   import Reicon from '../components/Reicon.svelte';
   import { authUi, errorList } from '../lib/authApi';
@@ -12,6 +14,7 @@
   let ready = $state(false);
   let showRecovery = $state(false);
   let submitting = $state(false);
+  let throttled = $state(false);
   let code = $state('');
   let recovery = $state('');
   let errors = $state<string[]>([]);
@@ -59,17 +62,24 @@
       session.set(res);
       router.go('/', true);
     } catch (err) {
+      // The redirect back shows the page as new: the code form, with the error.
+      if (err instanceof ApiError && err.status === 429) throttled = true;
       errors = errorList(err);
       code = '';
       recovery = '';
+      showRecovery = false;
       if (codeInput) codeInput.value = '';
+      await tick();
+      codeInput?.focus();
     } finally {
       submitting = false;
     }
   }
 </script>
 
-{#if ready}
+{#if throttled}
+  <ErrorPage code={429} />
+{:else if ready}
   <AuthShell title="coolify-rs" description="Verify your identity to finish signing in.">
     <div class="flex flex-col gap-4">
       {#if status}<AuthAlert type="success">{status}</AuthAlert>{/if}

@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import AuthAlert from '../components/AuthAlert.svelte';
   import AuthShell from '../components/AuthShell.svelte';
+  import ErrorPage from '../components/ErrorPage.svelte';
   import PasswordInput from '../components/PasswordInput.svelte';
   import PasskeyVerify from '../components/PasskeyVerify.svelte';
   import { ApiError, sessionApi, type SessionInfo } from '../lib/api';
@@ -18,6 +19,7 @@
   let errors = $state<string[]>([]);
   let flashError = $state<string | null>(takeLoginError());
   let status = $state<string | null>(null);
+  let throttled = $state(false);
   let tooltip = $state(false);
   let tipTimer: ReturnType<typeof setTimeout> | undefined;
   let tip: HTMLElement | undefined = $state();
@@ -58,8 +60,12 @@
       session.set(res as SessionInfo);
       router.go('/', true);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 429) errors = ['Too Many Requests'];
-      else errors = errorList(err);
+      if (err instanceof ApiError && err.status === 429) throttled = true;
+      errors = errorList(err);
+      // The redirect back shows the form empty.
+      email = '';
+      password = '';
+      document.getElementById('email')?.focus();
     } finally {
       busy = false;
     }
@@ -90,6 +96,9 @@
   }
 </script>
 
+{#if throttled}
+  <ErrorPage code={429} />
+{:else}
 <AuthShell title="coolify-rs" description="Sign in to manage your applications and infrastructure.">
   <div class="flex flex-col gap-4">
     {#if status}<AuthAlert type="success">{status}</AuthAlert>{/if}
@@ -182,3 +191,4 @@
     {/if}
   {/snippet}
 </AuthShell>
+{/if}

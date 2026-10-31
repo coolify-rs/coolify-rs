@@ -163,7 +163,7 @@
 {:else if router.current.name === 'auth-link'}
   <Invitation token={router.query('token') ?? ''} />
 {:else if router.current.name === 'oauth-denied'}
-  <ErrorPage code={403} description="OAuth provider is not enabled" />
+  <ErrorPage code={403} />
 {:else if !session.info && router.current.name === 'register'}
   <Register />
 {:else if !session.info && router.current.name === 'forgot-password'}

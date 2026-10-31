@@ -63,10 +63,9 @@
   }
 
   function failed(err: unknown, toast: boolean) {
-    if (err instanceof ApiError && Object.keys(err.errors).length) {
-      errors = err.errors;
-      if (toast) notify.failure(err.message);
-    } else notify.failure(err instanceof Error ? err.message : String(err));
+    // `handleError` shows a toast; only `submit` lets a validation error reach the fields.
+    if (!toast && err instanceof ApiError && Object.keys(err.errors).length) errors = err.errors;
+    else notify.failure(err instanceof Error ? err.message : String(err));
   }
 
   /** `submit`. */

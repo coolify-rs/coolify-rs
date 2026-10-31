@@ -3,6 +3,8 @@
   import { onMount } from 'svelte';
   import AuthAlert from '../components/AuthAlert.svelte';
   import AuthShell from '../components/AuthShell.svelte';
+  import ErrorPage from '../components/ErrorPage.svelte';
+  import { ApiError } from '../lib/api';
   import FormInput from '../components/FormInput.svelte';
   import { authUi, errorList, type GuestState } from '../lib/authApi';
   import { link } from '../lib/router.svelte';
@@ -11,6 +13,7 @@
   let email = $state('');
   let status = $state<string | null>(null);
   let errors = $state<string[]>([]);
+  let throttled = $state(false);
   let busy = $state(false);
   const highlighted = { ishighlighted: '' };
 
@@ -30,14 +33,20 @@
     try {
       status = (await authUi.forgotPassword(email)).status;
     } catch (err) {
+      if (err instanceof ApiError && err.status === 429) throttled = true;
       errors = errorList(err);
     } finally {
+      // The redirect back shows the form empty.
+      email = '';
+      document.getElementById('email')?.focus();
       busy = false;
     }
   }
 </script>
 
-{#if guest}
+{#if throttled}
+  <ErrorPage code={429} />
+{:else if guest}
   <AuthShell title="coolify-rs" description="Enter your account email and we’ll send you a secure reset link.">
     <div class="flex flex-col gap-4">
       {#if status}<AuthAlert type="success">{status}</AuthAlert>{/if}

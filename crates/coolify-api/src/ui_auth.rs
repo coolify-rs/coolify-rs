@@ -284,7 +284,7 @@ async fn register(State(state): State<AppState>, meta: Meta, Json(body): Json<Va
         db::mark_email_verified(&state.db, id, now).await?;
         (id, team)
     };
-    session::audit_auth(
+    session::audit_guest(
         &state,
         Some(team),
         (id, name, &email),
@@ -451,7 +451,7 @@ async fn reset_password(
     let hash = password::hash(pass).ok_or(ApiError::Internal)?;
     db::reset_password(&state.db, user.id, &hash, &random_text(60), now).await?;
     state.sessions.remove_user(user.id);
-    session::audit_auth(
+    session::audit_guest(
         &state,
         None,
         (user.id, &user.name, &user.email),
@@ -903,7 +903,7 @@ async fn passkey_login(
         return Ok(one_error("credential", NOT_RECOGNIZED));
     };
     // `PasskeyVerified` and `Login` come before anything put a team in the session.
-    session::audit_auth(
+    session::audit_guest(
         &state,
         None,
         (user.id, &user.name, &user.email),

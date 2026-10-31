@@ -786,6 +786,20 @@ async fn confirm_password(
 
 // ---- Fortify two-factor routes ----
 
+/// `auditLog($event, $this->authContext($event->user))` of `EventServiceProvider`.
+async fn audit_auth_event(state: &AppState, session: &SessionUser, meta: &Meta, event: &str) {
+    if let Ok(Some(user)) = coolify_db::users::get(&state.db, session.user_id).await {
+        crate::session::audit_auth(
+            state,
+            (session.team_id != NO_TEAM).then_some(session.team_id),
+            (user.id, &user.name, &user.email),
+            meta,
+            event,
+        )
+        .await;
+    }
+}
+
 fn set_status(state: &AppState, session: &SessionUser, status: &str) {
     state.sessions.set_flash(
         &session.id,
@@ -805,6 +819,7 @@ fn generate_recovery_codes(encrypter: &coolify_compat::Encrypter) -> String {
 async fn enable_two_factor(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    meta: Meta,
     headers: HeaderMap,
 ) -> ApiResult {
     let user = load(&state, session.user_id).await?;
@@ -821,6 +836,7 @@ async fn enable_two_factor(
             state.now(),
         )
         .await?;
+        audit_auth_event(&state, &session, &meta, "auth.user.two_factor_enabled").await;
     }
     set_status(&state, &session, "two-factor-authentication-enabled");
     Ok(ok(json!({"message": "ok"})).into_response())
@@ -830,6 +846,7 @@ async fn enable_two_factor(
 async fn confirm_two_factor(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    meta: Meta,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> ApiResult {
@@ -857,6 +874,7 @@ async fn confirm_two_factor(
         return Ok(ok(json!({"message": "invalid"})).into_response());
     }
     db::confirm_two_factor(&state.db, user.id, state.now()).await?;
+    audit_auth_event(&state, &session, &meta, "auth.user.two_factor_confirmed").await;
     set_status(&state, &session, "two-factor-authentication-confirmed");
     Ok(ok(json!({"message": "ok"})).into_response())
 }
@@ -865,6 +883,7 @@ async fn confirm_two_factor(
 async fn disable_two_factor(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    meta: Meta,
     headers: HeaderMap,
 ) -> ApiResult {
     let user = load(&state, session.user_id).await?;
@@ -872,6 +891,7 @@ async fn disable_two_factor(
         return Ok(confirmation_required());
     }
     db::disable_two_factor(&state.db, user.id, state.now()).await?;
+    audit_auth_event(&state, &session, &meta, "auth.user.two_factor_disabled").await;
     set_status(&state, &session, "two-factor-authentication-disabled");
     Ok(ok(json!({"message": "ok"})).into_response())
 }
@@ -880,6 +900,7 @@ async fn disable_two_factor(
 async fn recovery_codes(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    meta: Meta,
     headers: HeaderMap,
 ) -> ApiResult {
     let user = load(&state, session.user_id).await?;
@@ -894,6 +915,13 @@ async fn recovery_codes(
         state.now(),
     )
     .await?;
+    audit_auth_event(
+        &state,
+        &session,
+        &meta,
+        "auth.user.recovery_codes_regenerated",
+    )
+    .await;
     set_status(&state, &session, "recovery-codes-generated");
     Ok(ok(json!({"message": "ok"})).into_response())
 }
@@ -992,6 +1020,7 @@ async fn passkey_options(
 async fn passkey_store(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    meta: Meta,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> ApiResult {
@@ -1046,6 +1075,7 @@ async fn passkey_store(
         state.now(),
     )
     .await?;
+    audit_auth_event(&state, &session, &meta, "auth.user.passkey_registered").await;
     Ok(
         ok(json!({"status": "passkey-registered", "id": id.to_string(), "name": name}))
             .into_response(),
@@ -1082,6 +1112,7 @@ async fn passkey_rename(
 async fn passkey_delete(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    meta: Meta,
     headers: HeaderMap,
     Path(id): Path<i64>,
     Json(body): Json<Value>,
@@ -1094,6 +1125,7 @@ async fn passkey_delete(
         return Ok(password_incorrect());
     }
     db::delete_passkey(&state.db, session.user_id, id).await?;
+    audit_auth_event(&state, &session, &meta, "auth.user.passkey_deleted").await;
     Ok(success("Passkey deleted."))
 }
 

@@ -10,9 +10,11 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   implemented in coolify-rs yet."}`.
 - The web UI covers the dashboard, projects, environments, private keys, API, cloud and integration tokens, cloud-init scripts,
   notifications, tags, shared variables, S3 storage, teams, members, invitations, profile, 2FA enrollment, passkey
-  management and appearance.
-  Not available yet: registration and the root setup window, password reset and forced password change, OAuth/SSO,
-  instance settings, and every page for servers, resources, sources, storages, notifications and tags (they open a "not
+  management and appearance, and every sign-in screen: registration and the root setup window, password reset, forced
+  password change, email verification, the two-factor challenge and requirement, passkey sign-in, OAuth/SSO and
+  `/settings/oauth`.
+  Not available yet: the onboarding wizard (`/onboarding` only has its "Skip setup" button), the other
+  instance settings pages, and every page for servers, resources, sources, storages, notifications and tags (they open a "not
   available in coolify-rs yet" page).
 - Within the ported pages: no canvas views, global search, project icons or custom color themes;
   applications and services in an environment are counted, not listed; the dashboard's server status does not include
@@ -152,15 +154,31 @@ change, password, two-factor enrollment and recovery codes, passkey management, 
   servers or projects. Upstream force-deletes them; their deletion hooks are not all ported.
 - Deleting a team or account removes keys, tags, shared variables, S3 storages and sources with their rows, but writes
   no audit events for those rows and does not remove a key's file (upstream's model events do).
-- The confirm-password page has no "Confirm with a passkey" button, and passkey sign-in and the use of a passkey at
-  login are not part of this page set. Passkey `last_used_at` therefore stays empty unless upstream signs in with it.
 - A password confirmation is remembered per session and skips the password step only on the pages listed above. Older
   pages (server, application and database deletion) still ask for the password within upstream's three hours.
 - What's New reads `{COOLIFY_RS_DATA_DIR}/changelogs/*.json`. `PullChangelog` is not ported, because it fetches them
   from upstream's CDN, so a new install shows no updates. Unread counts are not cached.
 - The user menu's Feedback entry is not ported: `Livewire\Help` sends to upstream's support address or Cloud API.
-- Forced password change after a magic link is the job of the `/force-password-reset` page. Until that page exists a
-  new invitee lands on the dashboard after accepting.
+- A new user is sent to `/onboarding` as upstream does, but the wizard is not ported: the page offers "Skip setup".
+- `Password::defaults()` in coolify-rs has no `uncompromised()` rule: it would send a hash prefix of the password to
+  Have I Been Pwned. Upstream in production refuses a password found there; coolify-rs accepts it.
+- Sign-in state before login (the two-factor challenge's `login.id`, OAuth state, passkey challenge, flash messages)
+  lives in memory under its own cookie, like the sessions: a restart ends a challenge in progress. Rate limits are also
+  per process.
+- "Remember me" is not offered by upstream's forms and is not implemented, so `remember_token` is only rotated.
+- OIDC reads the discovery document and the JWKS on every sign-in; upstream caches them for an hour and six hours.
+- OIDC requires HTTPS issuers, as upstream does, so the local fake provider could not be used for it: the id_token
+  checks have unit tests and the provider has not done a full round trip. GitHub, Google, GitLab, Azure, Discord,
+  Bitbucket, Infomaniak, Clerk and Zitadel were compared up to the redirect to the provider, without contacting them;
+  only Authentik did the full round trip (against a local fake). Their user mappings come from the provider classes and
+  have unit tests only.
+- A resend of a reset link within a minute answers upstream's plain text page as an error in the form, and the 400 of
+  `forgot_password` when mail is off cannot be reached from the page in either. A failed `/auth/oidc/redirect`
+  (discovery failed) answers a bare 500 rather than the styled error page.
+- `auth.oauth.callback_failed` names exception classes from a short list; other failures name the closest one.
+- Email verification is only enforced on Coolify Cloud upstream, so it is not enforced here; `/verify` and the signed
+  link work for any signed-in user.
+- The subscription checks of `DecideWhatToDoWithUser` only apply to Coolify Cloud and are not ported.
 
 ## API divergences (implemented routes)
 

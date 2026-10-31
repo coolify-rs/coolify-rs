@@ -17,6 +17,8 @@ const routes: { name: string; pattern: string }[] = [
   { name: 'verify', pattern: '/verify' },
   { name: 'email-verify', pattern: '/email/verify/:id/:hash' },
   { name: 'oauth-denied', pattern: '/auth/:provider/redirect' },
+  // Answered by the server (`OauthController::callback`); this only keeps the route on the list.
+  { name: 'oauth-denied', pattern: '/auth/:provider/callback' },
   { name: 'onboarding', pattern: '/onboarding' },
   { name: 'settings-oauth', pattern: '/settings/oauth' },
   { name: 'settings-oauth', pattern: '/settings/oauth/:provider' },

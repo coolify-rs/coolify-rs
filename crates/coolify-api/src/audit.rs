@@ -89,6 +89,7 @@ pub async fn actor(state: &AppState, ctx: &AuthCtx, meta: &Meta) -> Actor {
         token_name,
         ip: meta.ip.clone(),
         user_agent: meta.user_agent.clone(),
+        from_context: false,
     }
 }
 

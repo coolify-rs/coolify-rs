@@ -703,11 +703,34 @@ pub(crate) fn auth_context(team_id: Option<TeamId>, id: i64, name: &str, email: 
 pub(crate) async fn audit_auth(
     state: &AppState,
     team_id: Option<TeamId>,
-    (id, name, email): (i64, &str, &str),
+    who: (i64, &str, &str),
     meta: &Meta,
     event: &str,
 ) {
+    audit_user_event(state, team_id, who, meta, event, false).await;
+}
+
+/// The same for an event from before `Auth::login`: `actor_type` is `system`.
+pub(crate) async fn audit_guest(
+    state: &AppState,
+    team_id: Option<TeamId>,
+    who: (i64, &str, &str),
+    meta: &Meta,
+    event: &str,
+) {
+    audit_user_event(state, team_id, who, meta, event, true).await;
+}
+
+async fn audit_user_event(
+    state: &AppState,
+    team_id: Option<TeamId>,
+    (id, name, email): (i64, &str, &str),
+    meta: &Meta,
+    event: &str,
+    from_context: bool,
+) {
     let actor = Actor {
+        from_context,
         user_id: Some(id),
         name: Some(name.to_string()),
         email: Some(email.to_string()),

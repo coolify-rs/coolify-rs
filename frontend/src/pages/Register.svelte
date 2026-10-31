@@ -3,8 +3,10 @@
   import { onMount } from 'svelte';
   import AuthAlert from '../components/AuthAlert.svelte';
   import AuthShell from '../components/AuthShell.svelte';
+  import ErrorPage from '../components/ErrorPage.svelte';
   import FormInput from '../components/FormInput.svelte';
   import Reicon from '../components/Reicon.svelte';
+  import { ApiError } from '../lib/api';
   import { authUi, errorList, type GuestState } from '../lib/authApi';
   import { link, router } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
@@ -15,6 +17,8 @@
   let password = $state('');
   let password_confirmation = $state('');
   let errors = $state<string[]>([]);
+  let failure = $state<ApiError | null>(null);
+  let throttled = $state(false);
   let busy = $state(false);
   const highlighted = { ishighlighted: '' };
 
@@ -33,22 +37,29 @@
     if (busy) return;
     busy = true;
     errors = [];
+    failure = null;
     try {
       const res = await authUi.register({ name, email, password, password_confirmation });
       session.set(res);
       router.go(res.redirect, true);
     } catch (err) {
+      // The redirect back: the old name and email, and the first message of each field below it.
+      if (err instanceof ApiError && err.status === 429) throttled = true;
       errors = errorList(err);
+      failure = err instanceof ApiError ? err : null;
       password = '';
       password_confirmation = '';
       if (guest) guest = await authUi.state();
+      document.getElementById('name')?.focus();
     } finally {
       busy = false;
     }
   }
 </script>
 
-{#if guest}
+{#if throttled}
+  <ErrorPage code={429} />
+{:else if guest}
   <AuthShell title="coolify-rs" description={guest.is_first_user ? 'Create the root account for this instance.' : 'Create your account to get started.'} footer={guest.is_first_user ? undefined : footer}>
     <div class="flex flex-col gap-4">
       {#if guest.is_root_setup_window_closed}
@@ -72,9 +83,9 @@
 
       {#if !guest.is_root_setup_window_closed}
         <form onsubmit={submit} class="flex flex-col gap-4">
-          <FormInput id="name" required type="text" autocomplete="name" label="Name" bind:value={name} />
-          <FormInput id="email" required type="email" autocomplete="email" label="Email" bind:value={email} />
-          <FormInput id="password" required type="password" copyable={false} autocomplete="new-password" label="Password" bind:value={password} />
+          <FormInput id="name" required type="text" autocomplete="name" label="Name" bind:value={name} error={failure?.field('name')} />
+          <FormInput id="email" required type="email" autocomplete="email" label="Email" bind:value={email} error={failure?.field('email')} />
+          <FormInput id="password" required type="password" copyable={false} autocomplete="new-password" label="Password" bind:value={password} error={failure?.field('password')} />
           <FormInput id="password_confirmation" required type="password" copyable={false} autocomplete="new-password" label="Password again" bind:value={password_confirmation} />
 
           <div class="auth-guidance">

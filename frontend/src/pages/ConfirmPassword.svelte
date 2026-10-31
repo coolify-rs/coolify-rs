@@ -1,6 +1,6 @@
 <script lang="ts">
   // Port of upstream auth/confirm-password.blade.php (Fortify's password.confirm screen). Coming
-  // back from it goes to the `intended` page, /profile unless a page asked for another.
+  // back from it goes to the `intended` page, the dashboard unless a page asked for another.
   import AuthShell from '../components/AuthShell.svelte';
   import Reicon from '../components/Reicon.svelte';
   import FormInput from '../components/FormInput.svelte';
@@ -16,7 +16,7 @@
     document.getElementById('password')?.focus();
     canUsePasskey = (await authUi.confirmState().catch(() => ({ can_confirm_with_passkey: false }))).can_confirm_with_passkey;
   });
-  const afterConfirm = () => router.go(router.query('intended') ?? '/profile', true);
+  const afterConfirm = () => router.go(router.query('intended') ?? '/', true);
 
   let password = $state('');
   let errors = $state<string[]>([]);
@@ -30,7 +30,7 @@
     errors = [];
     try {
       await profileUi.confirmPassword(password);
-      router.go(router.query('intended') ?? '/profile', true);
+      router.go(router.query('intended') ?? '/', true);
     } catch (err) {
       errors = err instanceof ApiError ? Object.values(err.errors).flat() : [String(err)];
       if (!errors.length) errors = [err instanceof Error ? err.message : String(err)];

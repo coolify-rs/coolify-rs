@@ -20,6 +20,8 @@ pub struct Actor {
     pub token_name: Option<String>,
     pub ip: Option<String>,
     pub user_agent: Option<String>,
+    /// The context names the actor, but nobody is signed in yet: `actor_type` stays `system`.
+    pub from_context: bool,
 }
 
 /// `Str::headline` for the identifiers audit events use.
@@ -231,7 +233,7 @@ pub fn attributes_for(event: &str, context: &Map<String, Value>, actor: &Actor) 
         source.clone()
     } else if actor.token_id.is_some() {
         "api_token".to_string()
-    } else if actor.user_id.is_some() {
+    } else if actor.user_id.is_some() && !actor.from_context {
         "user".to_string()
     } else {
         "system".to_string()

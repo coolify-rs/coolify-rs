@@ -8,7 +8,7 @@ use axum::Extension;
 use axum::Json;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Response};
 use coolify_compat::{password, webauthn};
 use coolify_db::auth_pages::{self as db, OauthRow};
 use coolify_db::users;
@@ -846,6 +846,11 @@ async fn enabled_provider(state: &AppState, provider: &str) -> Result<Option<Oau
         .filter(|r| r.enabled && could_be_enabled(r)))
 }
 
+/// `redirect()`: Laravel answers 302.
+fn found(to: &str) -> Response {
+    (StatusCode::FOUND, [(header::LOCATION, to.to_string())]).into_response()
+}
+
 /// The page of `abort(403)`: the application renders it for the path.
 async fn denied(state: AppState, req: Request) -> Response {
     let mut res = crate::fallback::fallback(State(state), req).await;
@@ -905,10 +910,7 @@ pub(super) async fn redirect(
         authorization_url(&r, &spec, &redirect_to, &flow)
     };
     state.sessions.guest(&guest, |g| g.oauth_state = Some(flow));
-    Ok(session::with_guest_cookie(
-        Redirect::to(&url).into_response(),
-        cookie,
-    ))
+    Ok(session::with_guest_cookie(found(&url), cookie))
 }
 
 /// The provider's user for a callback: `get_socialite_provider($provider)->user()`.
@@ -1031,6 +1033,7 @@ async fn log_user_event(
     context: Value,
 ) {
     let actor = coolify_db::audit::Actor {
+        from_context: event != "auth.user.oauth_login_succeeded",
         user_id: Some(id),
         name: Some(name.to_string()),
         email: Some(email.to_string()),
@@ -1276,7 +1279,7 @@ pub(super) async fn callback(
             if user.has_two_factor() {
                 state.sessions.guest(&guest, |g| g.login_id = Some(id));
                 return Ok(session::with_guest_cookie(
-                    Redirect::to("/two-factor-challenge").into_response(),
+                    found("/two-factor-challenge"),
                     cookie,
                 ));
             }
@@ -1296,7 +1299,7 @@ pub(super) async fn callback(
                 context,
             )
             .await;
-            let mut res = Redirect::to("/").into_response();
+            let mut res = found("/");
             res.headers_mut().insert(header::SET_COOKIE, session_cookie);
             Ok(session::with_guest_cookie(res, cookie))
         }
@@ -1306,7 +1309,8 @@ pub(super) async fn callback(
                     "Symfony\\Component\\HttpKernel\\Exception\\HttpException",
                     "access_denied",
                 ),
-                Fail::Login(_) => ("App\\Exceptions\\OauthLoginException", "callback_error"),
+                // `OauthLoginException` is an `HttpException`.
+                Fail::Login(_) => ("App\\Exceptions\\OauthLoginException", "access_denied"),
                 Fail::Other(c) => (*c, "callback_error"),
             };
             crate::audit::log_system(
@@ -1322,10 +1326,7 @@ pub(super) async fn callback(
             state.sessions.guest(&guest, |g| {
                 g.errors = vec![message_for(&fail).to_string()];
             });
-            Ok(session::with_guest_cookie(
-                Redirect::to("/login").into_response(),
-                cookie,
-            ))
+            Ok(session::with_guest_cookie(found("/login"), cookie))
         }
     }
 }
@@ -1951,6 +1952,81 @@ mod tests {
         assert!(!in_google_workspace(Some("x.co"), None));
         assert!(in_google_workspace(Some("*"), Some("y.co")));
         assert!(!in_google_workspace(Some("x.co"), Some("y.co")));
+    }
+
+    /// `OidcTokenValidator`: a signed token and what it has to match.
+    #[test]
+    fn id_tokens() {
+        use rsa::traits::PublicKeyParts;
+        use sha2::{Digest, Sha256};
+        const PREFIX: [u8; 19] = [
+            0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+            0x01, 0x05, 0x00, 0x04, 0x20,
+        ];
+        let key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
+        let jwks = json!({"keys": [{
+            "kid": "k1", "use": "sig",
+            "n": webauthn::b64(&key.n().to_bytes_be()),
+            "e": webauthn::b64(&key.e().to_bytes_be()),
+        }]});
+        let sign = |head: &Value, claims: &Value| {
+            let message = format!(
+                "{}.{}",
+                webauthn::b64(head.to_string().as_bytes()),
+                webauthn::b64(claims.to_string().as_bytes())
+            );
+            let scheme = rsa::Pkcs1v15Sign {
+                hash_len: Some(32),
+                prefix: PREFIX.to_vec().into_boxed_slice(),
+            };
+            let signature = key
+                .sign(scheme, &Sha256::digest(message.as_bytes()))
+                .unwrap();
+            format!("{message}.{}", webauthn::b64(&signature))
+        };
+        let head = json!({"alg": "RS256", "kid": "k1"});
+        let good = json!({"iss": "https://i", "aud": "cid", "sub": "s", "nonce": "n", "exp": 1000, "iat": 900});
+        let check = |token: &str, now: i64| {
+            validate_id_token(token, &jwks, "https://i", "cid", "n", 60, now)
+        };
+        assert_eq!(check(&sign(&head, &good), 950).unwrap()["sub"], "s");
+        // Within the skew, and past it.
+        assert!(check(&sign(&head, &good), 1059).is_ok());
+        assert!(check(&sign(&head, &good), 1060).is_err());
+        assert!(check(&sign(&head, &good), 800).is_err());
+        for (field, value) in [
+            ("iss", json!("https://other")),
+            ("aud", json!("other")),
+            ("aud", json!(["cid", "other"])),
+            ("azp", json!("other")),
+            ("nonce", json!("other")),
+            ("sub", json!("")),
+        ] {
+            let mut claims = good.clone();
+            claims[field] = value;
+            assert!(check(&sign(&head, &claims), 950).is_err(), "{field}");
+        }
+        // Several audiences need the matching azp.
+        let mut claims = good.clone();
+        claims["aud"] = json!(["cid", "other"]);
+        claims["azp"] = json!("cid");
+        assert!(check(&sign(&head, &claims), 950).is_ok());
+        // Another algorithm, an unknown key, a changed payload.
+        assert!(check(&sign(&json!({"alg": "none", "kid": "k1"}), &good), 950).is_err());
+        assert!(check(&sign(&json!({"alg": "RS256", "kid": "k2"}), &good), 950).is_err());
+        let token = sign(&head, &good);
+        let parts: Vec<&str> = token.split('.').collect();
+        let forged = format!(
+            "{}.{}.{}",
+            parts[0],
+            webauthn::b64(
+                json!({"iss": "https://i", "aud": "cid", "sub": "root", "nonce": "n", "exp": 1000})
+                    .to_string()
+                    .as_bytes()
+            ),
+            parts[2]
+        );
+        assert!(check(&forged, 950).is_err());
     }
 
     #[test]

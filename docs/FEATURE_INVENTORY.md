@@ -50,7 +50,13 @@ Upstream references are relative to the upstream repository root.
 | Structured JSON logging, request ids, graceful shutdown, body limit, timeouts | — | implemented | `apps/coolify-rs` |
 | Rate limiting (`throttle:api`, 200/min) | `RouteServiceProvider.php:47` | not started (login throttle implemented) | KNOWN_LIMITATIONS |
 | SSH private key parsing (OpenSSH Ed25519/ECDSA/RSA, RSA PKCS#1/PKCS#8), public key + fingerprint | phpseclib in `PrivateKey` | verified against upstream output | `sshkey_interop.rs` |
-| Browser login (bcrypt, TOTP 2FA, throttle), sessions, CSRF, team switching | Fortify, `UseSessionTeamApiToken`, `RequireTeamTwoFactor` | implemented | `ui_session.rs` (8 tests), manual browser test |
+| Browser login (bcrypt, throttle), sessions, CSRF, team switching, the web middleware order | Fortify, `UseSessionTeamApiToken`, `CheckForcePasswordReset`, `DecideWhatToDoWithUser`, `RequireTeamTwoFactor` | verified | `ui_session.rs`, `compat/ui/flow_auth.mjs`, `flow_auth5.mjs` |
+| Registration and root setup | `CreateNewUser`, `RootSetupWindow`, `auth/register.blade.php` | verified: rows and audit against `CreateNewUser` run by tinker, errors and screens on both sides; root setup on an empty database against the rendered Blade | `flow_auth2.mjs`, `first_user.mjs` |
+| Password reset, forced password change | `Controller::forgot_password`, password broker, `ResetUserPassword`, `ForcePasswordReset` | verified with a local mailpit; tokens and passwords written by coolify-rs are accepted by the reference and the other way around | `flow_auth2.mjs`, `flow_auth5.mjs` |
+| Email verification | `VerifyEmail`, `Controller::email_verify` | verified: signatures cross-checked with the reference's key | `flow_auth2.mjs` |
+| Two-factor challenge and requirement | Fortify, `TwoFactorRequired` | verified by flows on both sides | `flow_auth.mjs` |
+| Passkey sign-in and confirmation | `laravel/passkeys` | verified with Chrome's virtual authenticator on both sides | `flow_auth3.mjs` |
+| OAuth/SSO and `/settings/oauth` | `SettingsOauth`, `OauthController`, `OauthLoginService`, Socialite providers, `OidcProvider` | Authentik round trip against a local fake on both sides; other providers' redirects compared; OIDC by unit tests (KNOWN_LIMITATIONS) | `flow_auth4.mjs` |
 | Web UI: upstream layout and navigation, dashboard, projects, environments, private keys, team settings, members, appearance | Blade views and Livewire components listed in `compat/mapping/registry.toml` (`ui.frontend`) | implemented | screenshot comparison with the reference 2026-10-27; `ui_pages.rs` (5 tests) |
 | Audit events (`audit_events`) | `bootstrap/helpers/audit.php` | not started | KNOWN_LIMITATIONS |
 
@@ -58,7 +64,7 @@ Upstream references are relative to the upstream repository root.
 
 | Area | Upstream entry points | Notes |
 |---|---|---|
-| Web UI beyond the ported areas; registration/root setup window, password reset, 2FA enrollment, passkeys, OAuth | Livewire (272 components), Fortify, Socialite | started (ADR 0007, 0008): login, dashboard, projects, environments, keys, team, members, profile, 2FA enrollment, passkey management, appearance |
+| Web UI beyond the ported areas | Livewire (272 components) | started (ADR 0007, 0008): sign-in screens, dashboard, projects, environments, keys, team, members, profile, 2FA enrollment, passkey management, appearance |
 | Teams, invitations, roles | `app/Livewire/Team`, `TeamPolicy`, `Controller::{showInvitation,acceptInvitation,link,acceptLink}` | verified by UI flows on both sides (`compat/ui/flow_teams.mjs`, `flow_teams2.mjs`): new team, danger zone, member actions, invitations, audit log, instance users, avatar |
 | Profile, two-factor, passkeys, select-team | `app/Livewire/Profile`, `SelectTeam`, `SettingsDropdown`, Fortify, `laravel/passkeys` | verified by UI flows on both sides (`compat/ui/flow_profile.mjs`, `flow_whatsnew.mjs`); see KNOWN_LIMITATIONS for what is left |
 | Servers: validation, SSH, proxy, Sentinel, Cloudflare tunnel, transfers | `ServersController`, `SshMultiplexingHelper`, `app/Actions/Server` | records verified (API + UI: list, new server by IP, General, Danger Zone); SSH execution and validation verified (API + UI dialog, `validate_diff.py`); install, proxy, Sentinel, Docker cleanup, log drains, CA certificate, patch check, Traefik version check, cloud providers ported in the backend (`servers_diff.py`; their UI pages later); transfers not started |

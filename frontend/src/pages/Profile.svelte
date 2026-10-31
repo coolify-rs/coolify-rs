@@ -163,7 +163,7 @@
       await load();
       await session.refresh();
     } catch (e) {
-      if (needsPasswordConfirmation(e)) router.go('/user/confirm-password');
+      if (needsPasswordConfirmation(e)) router.go('/user/confirm-password?intended=/profile');
       else toastError(e);
     }
   }

@@ -5,6 +5,7 @@
   import AuthShell from '../components/AuthShell.svelte';
   import FormInput from '../components/FormInput.svelte';
   import Reicon from '../components/Reicon.svelte';
+  import { ApiError } from '../lib/api';
   import { authUi, errorList } from '../lib/authApi';
   import { link, router } from '../lib/router.svelte';
 
@@ -13,6 +14,7 @@
   let password = $state('');
   let password_confirmation = $state('');
   let errors = $state<string[]>([]);
+  let failure = $state<ApiError | null>(null);
   let busy = $state(false);
   const highlighted = { ishighlighted: '' };
 
@@ -23,13 +25,16 @@
     if (busy) return;
     busy = true;
     errors = [];
+    failure = null;
     try {
       await authUi.resetPassword({ token, email, password, password_confirmation });
       router.go('/login', true);
     } catch (err) {
       errors = errorList(err);
+      failure = err instanceof ApiError ? err : null;
       password = '';
       password_confirmation = '';
+      document.getElementById('password')?.focus();
     } finally {
       busy = false;
     }
@@ -42,7 +47,7 @@
     <form onsubmit={submit} class="flex flex-col gap-4">
       <input hidden id="token" name="token" value={token} />
       <input hidden value={email} type="email" name="email" />
-      <FormInput id="password" required type="password" copyable={false} autocomplete="new-password" label="Password" bind:value={password} />
+      <FormInput id="password" required type="password" copyable={false} autocomplete="new-password" label="Password" bind:value={password} error={failure?.field('password')} />
       <FormInput id="password_confirmation" required type="password" copyable={false} autocomplete="new-password" label="Password again" bind:value={password_confirmation} />
 
       <div class="auth-guidance">

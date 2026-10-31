@@ -35,6 +35,7 @@ tracing.workspace = true
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
 [dev-dependencies]
+rsa.workspace = true
 coolify-db = { workspace = true, features = ["testing"] }
 http-body-util.workspace = true
 tempfile.workspace = true

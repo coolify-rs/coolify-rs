@@ -1,8 +1,8 @@
 <script lang="ts">
-  // Port of upstream components/error-page.blade.php with errors/{400,403,404}.blade.php.
+  // Port of upstream components/error-page.blade.php with errors/{400,403,404,429}.blade.php.
   import { link } from '../lib/router.svelte';
 
-  let { code, description }: { code: 400 | 403 | 404; description?: string } = $props();
+  let { code, description }: { code: 400 | 403 | 404 | 429; description?: string } = $props();
 
   // `<body class="error-page-body">` of upstream's error views.
   $effect(() => {
@@ -10,11 +10,12 @@
     return () => document.body.classList.remove('error-page-body');
   });
 
-  const titles = { 400: 'Bad request', 403: 'You shall not pass!', 404: 'How did you get here?' };
+  const titles = { 400: 'Bad request', 403: 'You shall not pass!', 404: 'How did you get here?', 429: 'Woah, slow down there!' };
   const descriptions = {
     400: 'The request could not be understood by the server due to malformed syntax.',
     403: "You don't have permission to access this page.",
     404: "Sorry, we couldn't find the page you're looking for.",
+    429: "You're making too many requests. Please wait a few seconds before trying again.",
   };
 </script>
 
