@@ -39,10 +39,25 @@ pub fn routes() -> Router<AppState> {
 
 type Point = (i64, f64);
 
-/// `round($value, $places)`.
-fn round_to(value: f64, places: i32) -> f64 {
+/// PHP 8.4's `round($value, $places)`: a value on or past the decimal edge rounds away from zero,
+/// so 31.835 is 31.84 although the nearest double is below it.
+pub(crate) fn round_to(value: f64, places: i32) -> f64 {
+    if !value.is_finite() || value == 0.0 {
+        return value;
+    }
     let factor = 10f64.powi(places);
-    (value * factor).round() / factor
+    let scaled = value * factor;
+    if scaled.abs() >= 1e16 {
+        return value;
+    }
+    let integral = scaled.trunc();
+    let edge = (integral + 0.5f64.copysign(integral)) / factor;
+    let rounded = if value.abs() >= edge.abs() {
+        integral + 1f64.copysign(integral)
+    } else {
+        integral
+    };
+    rounded / factor
 }
 
 fn number(value: &Value) -> Option<f64> {
@@ -404,8 +419,8 @@ fn fleet_kpis(rows: &[Row]) -> Value {
         "diskUsed": disk_used,
         "diskTotal": disk_total,
         "diskPercent": percent(disk_used, disk_total),
-        "netRx": reporting.iter().filter_map(|r| r.net_rx).sum::<f64>(),
-        "netTx": reporting.iter().filter_map(|r| r.net_tx).sum::<f64>(),
+        "netRx": reporting.iter().filter_map(|r| r.net_rx).fold(0.0, |a, b| a + b),
+        "netTx": reporting.iter().filter_map(|r| r.net_tx).fold(0.0, |a, b| a + b),
         "loadBusiest": load1.iter().copied().fold(0.0, f64::max),
         "loadAvg": if load1.is_empty() { 0.0 } else { round_to(load1.iter().sum::<f64>() / load1.len() as f64, 2) },
         "containers": reporting.iter().filter_map(|r| r.containers).sum::<i64>(),
@@ -656,12 +671,8 @@ async fn page(
     } else {
         Vec::new()
     };
+    // `#[Url]` keeps what the address says; `rangeFrom` and `bucketMs` read anything else as a day.
     let range = filters.range.unwrap_or_else(|| "24h".to_string());
-    let range = if matches!(range.as_str(), "24h" | "7d" | "30d") {
-        range
-    } else {
-        "24h".to_string()
-    };
     let mut server_uuid = filters.server.unwrap_or_default();
     if !servers.iter().any(|s| s.uuid == server_uuid) {
         server_uuid.clear();
@@ -936,6 +947,16 @@ mod tests {
             series_rows(&rows, "usedPercent", "24h", true),
             vec![(300_000, 15.0), (600_000, 30.0)]
         );
+    }
+
+    #[test]
+    fn rounds_as_php() {
+        assert_eq!(round_to(31.835, 2), 31.84);
+        assert_eq!(round_to(1.005, 2), 1.01);
+        assert_eq!(round_to(-1.005, 2), -1.01);
+        assert_eq!(round_to(2.384_999, 2), 2.38);
+        assert_eq!(round_to(2.0, 2), 2.0);
+        assert_eq!(round_to(0.0, 2), 0.0);
     }
 
     #[test]

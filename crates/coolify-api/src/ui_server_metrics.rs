@@ -19,6 +19,7 @@ use crate::response::{ApiError, ApiResult, ok};
 use crate::routes::server_settings::{Setting, find_server, save_settings};
 use crate::serialize::php_truthy;
 use crate::state::AppState;
+use crate::ui_fleet_metrics::round_to;
 use crate::ui_server_destinations::toast_error;
 use crate::ui_server_general::SERVER_PAGE;
 use crate::validation::{Field, Rule, validate};
@@ -251,6 +252,34 @@ async fn prefetch(
     )
 }
 
+/// `HasMetrics::fetchMetricRows`: the prefetched answer, or one fetch of its own when the prefetch
+/// failed (a large range can exceed what one round trip carries).
+async fn fetch_rows(
+    srv: &Srv,
+    answers: &Option<HashMap<&'static str, String>>,
+    kind: &str,
+    container: Option<&str>,
+    mins: i64,
+) -> Result<Vec<Value>, String> {
+    if let Some(answers) = answers {
+        return rows(answers.get(kind));
+    }
+    let from = (chrono::Utc::now() - chrono::Duration::minutes(mins))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let token = sentinel::ensure_valid_token(srv).await?;
+    let url = endpoint(container, kind, &from);
+    let response = srv
+        .run_quiet(
+            &[format!(
+                "docker exec coolify-sentinel sh -c 'curl -H \"Authorization: Bearer {token}\" {url}'"
+            )],
+            "server.metrics",
+        )
+        .await;
+    rows(response.as_ref())
+}
+
 /// `HasMetrics::fetchMetricRows`: an error in the answer is an error, an empty answer has no rows.
 fn rows(response: Option<&String>) -> Result<Vec<Value>, String> {
     let response = response.map_or("", String::as_str);
@@ -365,29 +394,35 @@ async fn data(
         .unwrap_or(5);
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let srv = Srv::from_row(jobs, s);
-    let answers = prefetch(&srv, &TYPES, None, mins).await.unwrap_or_default();
+    let answers = prefetch(&srv, &TYPES, None, mins).await;
     let series = |f: &str, rows_: &[Value]| series_json(&map_rows(rows_, f, mins));
-    let cpu = match rows(answers.get("cpu")) {
+    let cpu = match fetch_rows(&srv, &answers, "cpu", None, mins).await {
         Ok(r) => series("percent", &r),
         Err(e) => return toast_error(e),
     };
-    let memory = match rows(answers.get("memory")) {
+    let memory = match fetch_rows(&srv, &answers, "memory", None, mins).await {
         Ok(r) => series("usedPercent", &r),
         Err(e) => return toast_error(e),
     };
     // Disk, network and load arrived in a later Sentinel: an older one answers 404 and still shows CPU and memory.
-    let disk = rows(answers.get("disk")).ok().map(|r| {
-        let root: Vec<Value> = if r.iter().any(|row| row.get("mount").is_some()) {
-            r.into_iter()
-                .filter(|row| row.get("mount").and_then(Value::as_str) == Some("/"))
-                .collect()
-        } else {
-            r
-        };
-        series("usedPercent", &root)
-    });
-    let load = rows(answers.get("load")).ok().map(|r| series("load1", &r));
-    let network = rows(answers.get("network")).ok();
+    let disk = fetch_rows(&srv, &answers, "disk", None, mins)
+        .await
+        .ok()
+        .map(|r| {
+            let root: Vec<Value> = if r.iter().any(|row| row.get("mount").is_some()) {
+                r.into_iter()
+                    .filter(|row| row.get("mount").and_then(Value::as_str) == Some("/"))
+                    .collect()
+            } else {
+                r
+            };
+            series("usedPercent", &root)
+        });
+    let load = fetch_rows(&srv, &answers, "load", None, mins)
+        .await
+        .ok()
+        .map(|r| series("load1", &r));
+    let network = fetch_rows(&srv, &answers, "network", None, mins).await.ok();
     let (rx, tx) = network.map_or((json!([]), json!([])), |r| {
         (series("rxBytesPerSec", &r), series("txBytesPerSec", &r))
     });
@@ -415,7 +450,7 @@ fn series_json(points: &[(i64, f64)]) -> Value {
 fn bytes_to_megabytes(points: &[(i64, f64)]) -> Vec<(i64, f64)> {
     points
         .iter()
-        .map(|(time, value)| (*time, (value / 1024.0 / 1024.0 * 100.0).round() / 100.0))
+        .map(|(time, value)| (*time, round_to(value / 1024.0 / 1024.0, 2)))
         .collect()
 }
 
@@ -440,14 +475,12 @@ async fn resource_data(
         .unwrap_or(5);
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let srv = Srv::from_row(jobs, server);
-    let answers = prefetch(&srv, &["cpu", "memory"], Some(&res.uuid), mins)
-        .await
-        .unwrap_or_default();
-    let cpu = match rows(answers.get("cpu")) {
+    let answers = prefetch(&srv, &["cpu", "memory"], Some(&res.uuid), mins).await;
+    let cpu = match fetch_rows(&srv, &answers, "cpu", Some(&res.uuid), mins).await {
         Ok(r) => map_rows(&r, "percent", mins),
         Err(e) => return toast_error(e),
     };
-    let memory = match rows(answers.get("memory")) {
+    let memory = match fetch_rows(&srv, &answers, "memory", Some(&res.uuid), mins).await {
         Ok(r) => bytes_to_megabytes(&map_rows(&r, "used", mins)),
         Err(e) => return toast_error(e),
     };
@@ -469,10 +502,11 @@ async fn dashboard_chart(
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let srv = Srv::from_row(jobs, s);
-    let answers = prefetch(&srv, &["cpu", "memory"], None, 10)
-        .await
-        .unwrap_or_default();
-    match (rows(answers.get("cpu")), rows(answers.get("memory"))) {
+    let answers = prefetch(&srv, &["cpu", "memory"], None, 10).await;
+    match (
+        fetch_rows(&srv, &answers, "cpu", None, 10).await,
+        fetch_rows(&srv, &answers, "memory", None, 10).await,
+    ) {
         (Ok(cpu), Ok(memory)) => Ok(ok(json!({
             "cpu": series_json(&map_rows(&cpu, "percent", 10)),
             "memory": series_json(&map_rows(&memory, "usedPercent", 10)),

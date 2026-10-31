@@ -113,8 +113,18 @@ pub async fn resource(
             "application-analytics"
         }),
     );
+    // The public properties before `loadData`.
     out.insert("overview".into(), Value::Null);
     out.insert("ipMode".into(), json!("full"));
+    out.insert("latencyApproximate".into(), json!(false));
+    out.insert("uniquesApproximate".into(), json!(false));
+    out.insert("topPaths".into(), json!([]));
+    out.insert("breakdowns".into(), json!([]));
+    out.insert("attribution".into(), Value::Null);
+    out.insert("series".into(), json!([]));
+    out.insert("errorRate".into(), json!(0.0));
+    out.insert("bandwidthBytes".into(), json!(0));
+    out.insert("device".into(), json!({"labels": [], "series": []}));
     let Some(server) = server.filter(|_| enabled) else {
         return Ok(ok(Value::Object(out)).into_response());
     };
