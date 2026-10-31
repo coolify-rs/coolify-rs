@@ -10,6 +10,7 @@ pub mod cloud;
 pub mod compose_parser;
 pub mod databases;
 pub mod github;
+pub mod notifications;
 pub mod server;
 pub mod server_ops;
 pub mod services;
@@ -71,6 +72,7 @@ impl Jobs {
 
     /// Sets the instance version (`COOLIFY_VERSION`) once at startup.
     pub fn set_version(&self, version: String) {
+        notifications::set_version(&version);
         let _ = self.0.version.set(version);
     }
 

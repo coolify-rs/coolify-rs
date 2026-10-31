@@ -357,6 +357,44 @@ pub async fn endpoint_error(
     None
 }
 
+/// `SafeWebhookUrl::httpClientOptions` without the DNS servers of the instance: the host, its
+/// validated addresses (none for an IP host) and the port, for pinning the request.
+pub async fn safe_url_pin(
+    url: &str,
+    policy: &UrlPolicy,
+) -> Result<(String, Vec<IpAddr>, u16), String> {
+    let parsed = parse_url(url).ok_or("Webhook URL is invalid.")?;
+    if parsed.host.ends_with('.') {
+        return Err("Webhook URL host must not end with a trailing dot.".to_owned());
+    }
+    if parsed.scheme != "http" && parsed.scheme != "https" {
+        return Err("Webhook URL scheme is unsafe.".to_owned());
+    }
+    let host = parsed.host.to_lowercase();
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(&host)
+        .to_owned();
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if !policy.allowed_ip(ip, &host) {
+            return Err("Webhook URL resolved to an unsafe IP address.".to_owned());
+        }
+        return Ok((host, Vec::new(), parsed.port));
+    }
+    let ips = resolve(&host, parsed.port).await;
+    if ips.is_empty() {
+        return Err("Webhook URL host could not be resolved.".to_owned());
+    }
+    if ips.iter().any(|ip| !policy.allowed_ip(*ip, &host)) {
+        return Err("Webhook URL resolved to an unsafe IP address.".to_owned());
+    }
+    if blocked_hostname(&host) && !policy.allowed_host(&host) {
+        return Err("Webhook URL host is unsafe.".to_owned());
+    }
+    Ok((host, ips, parsed.port))
+}
+
 /// `SafeWebhookUrl::minioClientResolveOptions`: `host:port=ip`, IPv4 first; none for an IP host.
 pub async fn minio_resolve_options(url: &str) -> Vec<String> {
     let Some(parsed) = parse_url(url) else {

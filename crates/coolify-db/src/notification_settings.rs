@@ -251,7 +251,8 @@ pub async fn first_or_create(db: &Db, ch: &Channel, team_id: i64) -> DbResult<(R
     Ok((r, true))
 }
 
-/// `$settings->fill($values)->save()`.
+/// `$settings->fill($values)->save()`. The `saving` hook of `TracksDeliveryFailures` sets
+/// `failure_count` back to zero when anything else changes.
 pub async fn update(
     db: &Db,
     ch: &Channel,
@@ -262,8 +263,13 @@ pub async fn update(
         return Ok(());
     }
     db.ensure_writable()?;
+    let reset = if values.iter().any(|(k, _)| *k == "failure_count") {
+        ""
+    } else {
+        ", failure_count = 0"
+    };
     let sql = format!(
-        "UPDATE {} SET {} WHERE team_id = $1",
+        "UPDATE {} SET {}{reset} WHERE team_id = $1",
         ch.table,
         set_clause(values, 2)
     );
@@ -273,37 +279,65 @@ pub async fn update(
     Ok(())
 }
 
-/// `TracksDeliveryFailures`: counts a failed delivery; disables the channel at the limit.
+/// What `recordDeliveryFailure` did to the row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeliveryFailure {
+    /// `failure_count` after the increment.
+    pub failure_count: i32,
+    /// The channel was enabled and has been turned off.
+    pub disabled: bool,
+}
+
+/// `TracksDeliveryFailures::recordDeliveryFailure`: counts a failed delivery; disables an
+/// enabled channel at the limit. Turning it off is a save, so the `saving` hook sets
+/// `failure_count` back to zero.
 pub async fn record_delivery_failure(
     db: &Db,
     ch: &Channel,
     team_id: i64,
     limit: i32,
-) -> DbResult<Option<i32>> {
+) -> DbResult<DeliveryFailure> {
     db.ensure_writable()?;
+    let (enabled, off) = match ch.name {
+        "email" => (
+            "(smtp_enabled OR resend_enabled OR use_instance_email_settings)",
+            "smtp_enabled = false, resend_enabled = false",
+        ),
+        "discord" => ("discord_enabled", "discord_enabled = false"),
+        "slack" => ("slack_enabled", "slack_enabled = false"),
+        "telegram" => ("telegram_enabled", "telegram_enabled = false"),
+        "pushover" => ("pushover_enabled", "pushover_enabled = false"),
+        _ => ("webhook_enabled", "webhook_enabled = false"),
+    };
     let sql = format!(
-        "UPDATE {} SET failure_count = failure_count + 1 WHERE team_id = $1 RETURNING failure_count",
+        "UPDATE {} SET failure_count = failure_count + 1 WHERE team_id = $1 RETURNING failure_count, {enabled}",
         ch.table
     );
-    let count: Option<i32> = sqlx::query_scalar(&sql)
+    let row: Option<(i32, bool)> = sqlx::query_as(&sql)
         .bind(team_id)
         .fetch_optional(db.pool())
         .await?;
-    if let Some(c) = count
-        && c >= limit
-    {
-        let off = match ch.name {
-            "email" => "smtp_enabled = false, resend_enabled = false",
-            "discord" => "discord_enabled = false",
-            "slack" => "slack_enabled = false",
-            "telegram" => "telegram_enabled = false",
-            "pushover" => "pushover_enabled = false",
-            _ => "webhook_enabled = false",
-        };
-        let sql = format!("UPDATE {} SET {off} WHERE team_id = $1", ch.table);
-        sqlx::query(&sql).bind(team_id).execute(db.pool()).await?;
+    let Some((failure_count, is_enabled)) = row else {
+        return Ok(DeliveryFailure {
+            failure_count: 0,
+            disabled: false,
+        });
+    };
+    if failure_count < limit || !is_enabled {
+        return Ok(DeliveryFailure {
+            failure_count,
+            disabled: false,
+        });
     }
-    Ok(count)
+    let sql = format!(
+        "UPDATE {} SET {off}, failure_count = 0 WHERE team_id = $1",
+        ch.table
+    );
+    sqlx::query(&sql).bind(team_id).execute(db.pool()).await?;
+    Ok(DeliveryFailure {
+        failure_count,
+        disabled: true,
+    })
 }
 
 /// `TracksDeliveryFailures::resetDeliveryFailures`.
