@@ -682,7 +682,6 @@
                               class="h-full w-full object-contain p-2"
                               src={service.logo}
                               alt=""
-                              loading="lazy"
                               onerror={(e) => {
                                 const img = e.currentTarget as HTMLImageElement;
                                 if (!img.dataset.cdnTried) {

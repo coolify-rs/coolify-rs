@@ -1,9 +1,9 @@
 // Port of upstream components/service/configuration-sidebar.blade.php: the
 // service menu the main sidebar shows on service pages, grouped as upstream
-// groups it, and of the compose resource menu of livewire/project/service/index.blade.php.
+// groups it.
 import type { NavContext, NavContextItem } from './page.svelte';
 
-/** URL sections of `/service/{uuid}/{section}`; anything else is a compose resource uuid. */
+/** URL sections of `/service/{uuid}/{section}`. */
 export const SERVICE_SECTIONS = [
   'domains',
   'environment-variables',
@@ -55,14 +55,4 @@ export function serviceNavContext(
     [item('Danger Zone', 'danger', 'danger')],
   ];
   return { label: 'Dashboard', backTitle: 'Back to the main menu', ariaLabel: 'Service settings', groups };
-}
-
-/** `<x-main-nav-menu :depth="1" back-label="Service">` of the compose resource page. */
-export function serviceResourceNavContext(href: string): NavContext {
-  return {
-    label: 'Service',
-    backTitle: 'Back to the service menu',
-    ariaLabel: 'Compose resource settings',
-    groups: [[{ label: 'General', icon: 'settings', href, active: true }]],
-  };
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Port of upstream livewire/project/service/index.blade.php and
+  // Port of upstream livewire/project/service/index.blade.php (embedded) and
   // advanced-settings.blade.php: the settings of a compose application or database.
   import { untrack } from 'svelte';
   import Callout from './Callout.svelte';
@@ -11,7 +11,7 @@
   import StatusBadge from './StatusBadge.svelte';
   import { ApiError } from '../lib/api';
   import { headline, servicesApi, type ServiceResourceDetails } from '../lib/servicesApi';
-  import { link, router } from '../lib/router.svelte';
+  import { link } from '../lib/router.svelte';
   import { notify } from '../lib/toast.svelte';
 
   let {
@@ -19,15 +19,16 @@
     resource,
     canUpdate,
     serviceBase,
-    embedded = false,
     onsaved,
+    ondone,
   }: {
     serviceUuid: string;
     resource: ServiceResourceDetails;
     canUpdate: boolean;
     serviceBase: string;
-    embedded?: boolean;
     onsaved: () => Promise<void>;
+    /** The resource is gone (deleted or converted): `redirectRoute` to the configuration page. */
+    ondone: () => Promise<void>;
   } = $props();
 
   const isApplication = $derived(resource.kind === 'application');
@@ -130,7 +131,7 @@
       const r = await servicesApi.deleteResource(serviceUuid, resource.uuid, password);
       if (r.warning) notify.warning(r.message);
       else notify.success(r.message);
-      router.go(serviceBase);
+      await ondone();
     } catch (e) {
       if (e instanceof ApiError && e.status === 422) return e.message;
       notify.error(message(e));
@@ -140,8 +141,7 @@
   async function convert() {
     try {
       await servicesApi.convertResource(serviceUuid, resource.uuid);
-      router.go(serviceBase);
-      if (embedded) await onsaved();
+      await ondone();
     } catch (e) {
       notify.error(message(e));
     }

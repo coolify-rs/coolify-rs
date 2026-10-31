@@ -26,7 +26,7 @@
     data: ServicePage;
     base: string;
     resources: { label: string; href: string; active: boolean }[];
-    /** The compose resource of the page (`stack_service_uuid`). */
+    /** The compose resource of a backups page (`stack_service_uuid`). */
     selected?: ServicePart | null;
     onrefresh: () => Promise<void>;
   } = $props();

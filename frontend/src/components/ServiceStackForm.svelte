@@ -36,7 +36,6 @@
   let saved = $state<Form>(untrack(snapshot));
   let connect = $state(untrack(() => data.service.connect_to_docker_network));
   let saving = $state(false);
-  let error = $state<ApiError | null>(null);
 
   const dirty = $derived(JSON.stringify(form) !== JSON.stringify(saved));
 
@@ -51,7 +50,6 @@
 
   async function submit(compose?: string) {
     saving = true;
-    error = null;
     try {
       const r = await servicesApi.submit(uuid, {
         name: form.name,
@@ -66,8 +64,10 @@
       form = snapshot();
       return true;
     } catch (e) {
-      error = e instanceof ApiError ? e : new ApiError(0, String(e));
-      if (!Object.keys(error.errors).length) notify.error(error.message);
+      // `catch`: refresh and `syncData(false)`, then the `handleError` toast.
+      form.name = saved.name;
+      form.description = saved.description;
+      notify.error(e instanceof ApiError ? e.message : String(e));
       return false;
     } finally {
       saving = false;
@@ -76,7 +76,6 @@
 
   function reset() {
     form = JSON.parse(JSON.stringify(saved));
-    error = null;
   }
 
   async function saveNetwork(v: boolean) {
@@ -142,8 +141,8 @@
     {/snippet}
 
     <div class="grid gap-4 lg:grid-cols-2">
-      <FormInput id="name" label="Service name" required placeholder="My WordPress site" disabled={!canUpdate} bind:value={form.name} error={error?.field('name')} />
-      <FormInput id="description" label="Description" disabled={!canUpdate} bind:value={form.description} error={error?.field('description')} />
+      <FormInput id="name" label="Service name" required placeholder="My WordPress site" disabled={!canUpdate} bind:value={form.name} />
+      <FormInput id="description" label="Description" disabled={!canUpdate} bind:value={form.description} />
     </div>
     <SettingsSubsection id="service-network-section" title="Network" helper="Control whether this Compose stack joins Coolify's predefined network.">
       <Listbox
@@ -183,7 +182,6 @@
                 required={field.rules.includes('required')}
                 disabled={!canUpdate}
                 bind:value={form.fields[field.key]}
-                error={error?.field(`fields.${field.key}.value`)}
               />
             {/if}
           </div>

@@ -1,13 +1,12 @@
 <script lang="ts">
   // Port of upstream livewire/project/service/configuration.blade.php (+
-  // Project\Service\Configuration) and of the page form of
-  // livewire/project/service/index.blade.php. `Project/Shared/*` sections are
-  // placeholders until the shared components are connected.
+  // Project\Service\Configuration). `Index::mount` redirects `/{stack_service_uuid}`
+  // to this page: a compose resource is edited in the modal of its card.
+  // `Project/Shared/*` sections are placeholders until the shared components are connected.
   import Empty from '../components/Empty.svelte';
   import Reicon from '../components/Reicon.svelte';
   import ServiceHeading from '../components/ServiceHeading.svelte';
   import ServiceResourceCard from '../components/ServiceResourceCard.svelte';
-  import ServiceResourceForm from '../components/ServiceResourceForm.svelte';
   import ServiceSharedPlaceholder from '../components/ServiceSharedPlaceholder.svelte';
   import ServiceStackForm from '../components/ServiceStackForm.svelte';
   import ServiceStorage from '../components/ServiceStorage.svelte';
@@ -15,12 +14,12 @@
   import ViewToggle from '../components/ViewToggle.svelte';
   import Unported from './Unported.svelte';
   import { ApiError, uiApi, dbUi } from '../lib/api';
-  import { headline, servicesApi, type ServicePage, type ServicePart, type ServiceResourceDetails, type ServiceStoragePart } from '../lib/servicesApi';
-  import { SERVICE_SECTIONS, serviceNavContext, serviceResourceNavContext } from '../lib/serviceMenu';
+  import { headline, servicesApi, type ServicePage, type ServiceStoragePart } from '../lib/servicesApi';
+  import { SERVICE_SECTIONS, serviceNavContext } from '../lib/serviceMenu';
   import { setProjectCrumbs } from '../lib/crumbs';
   import { strnatcmp } from '../lib/natsort';
   import { page } from '../lib/page.svelte';
-  import { link } from '../lib/router.svelte';
+  import { router } from '../lib/router.svelte';
 
   let { uuid, env, service, section }: { uuid: string; env: string; service: string; section: string } = $props();
 
@@ -28,7 +27,6 @@
   const isSection = $derived(section === 'general' || SERVICE_SECTIONS.includes(section));
 
   let data = $state<ServicePage | null>(null);
-  let details = $state<{ resource: ServiceResourceDetails; can_update: boolean } | null>(null);
   let storages = $state<ServiceStoragePart[] | null>(null);
   let resources = $state<{ label: string; href: string; active: boolean }[]>([]);
   let missing = $state(false);
@@ -50,18 +48,18 @@
     }
   });
 
-  const selected = $derived<ServicePart | null>(
-    data && !isSection ? ([...data.applications, ...data.databases].find((p) => p.uuid === section) ?? null) : null,
-  );
   const hasParts = $derived(!!data && data.applications.length + data.databases.length > 0);
 
   async function refresh() {
     data = await servicesApi.page(service);
     if (section === 'storages') storages = (await servicesApi.storages(service)).parts;
-    if (!isSection) details = await servicesApi.resource(service, section);
   }
 
   async function load() {
+    if (!isSection) {
+      router.go(base);
+      return;
+    }
     let d: ServicePage;
     try {
       d = await servicesApi.page(service);
@@ -73,26 +71,15 @@
       throw e;
     }
     data = d;
-    if (isSection) {
-      document.title = `${d.service.name.slice(0, 10)} > Configuration | coolify-rs`;
-      page.navContext = serviceNavContext(base, section, {
-        isDeployable: d.is_deployable,
-        canAccessTerminal: d.can_access_terminal,
-        storageSections:
-          section === 'storages'
-            ? [...d.applications, ...d.databases].map((p) => ({ id: `storage-service-${p.uuid}`, label: headline(p.name) }))
-            : [],
-      });
-    } else {
-      const part = [...d.applications, ...d.databases].find((p) => p.uuid === section);
-      if (!part) {
-        missing = true;
-        return;
-      }
-      document.title = `${d.service.name.slice(0, 10)} > ${part.name.slice(0, 10)} | coolify-rs`;
-      page.navContext = serviceResourceNavContext(`${base}/${section}`);
-      details = await servicesApi.resource(service, section);
-    }
+    document.title = `${d.service.name.slice(0, 10)} > Configuration | coolify-rs`;
+    page.navContext = serviceNavContext(base, section, {
+      isDeployable: d.is_deployable,
+      canAccessTerminal: d.can_access_terminal,
+      storageSections:
+        section === 'storages'
+          ? [...d.applications, ...d.databases].map((p) => ({ id: `storage-service-${p.uuid}`, label: headline(p.name) }))
+          : [],
+    });
     if (section === 'storages') storages = (await servicesApi.storages(service)).parts;
     uiApi.project(uuid).then((p) => setProjectCrumbs(p, env));
     dbUi
@@ -124,20 +111,13 @@
   </div>
 {:else if data}
   <div>
-    <ServiceHeading {data} {base} {resources} {selected} onrefresh={refreshQuiet} />
+    <ServiceHeading {data} {base} {resources} onrefresh={refreshQuiet} />
 
     <section class="application-settings-workspace mt-4 w-full max-w-none lg:mt-0">
       <div class="grid min-w-0 gap-8 xl:grid-cols-[210px_minmax(0,1fr)] xl:gap-8">
         <aside class="application-settings-navigation in-main-nav min-w-0"></aside>
         <div class="min-w-0">
-          {#if !isSection}
-            <a class="sr-only" use:link href={base}>Back to service</a>
-            {#if details}
-              {#key details.resource.uuid}
-                <ServiceResourceForm serviceUuid={service} resource={details.resource} canUpdate={details.can_update} serviceBase={base} onsaved={refreshQuiet} />
-              {/key}
-            {/if}
-          {:else if section === 'general'}
+          {#if section === 'general'}
             {#key data.service.uuid}
               <ServiceStackForm {data} onsaved={refreshQuiet} />
             {/key}

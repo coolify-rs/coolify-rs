@@ -169,8 +169,11 @@
         resource={details.resource}
         canUpdate={details.can_update}
         serviceBase={base}
-        embedded
         onsaved={async () => {
+          await onrefresh();
+        }}
+        ondone={async () => {
+          modalOpen = false;
           await onrefresh();
         }}
       />

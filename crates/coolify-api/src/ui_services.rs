@@ -458,16 +458,14 @@ pub async fn page(
 
 const STACK_MESSAGES: Messages = &[
     ("name.required", "The Name field is required."),
+    ("name.string", "The Name field must be a string."),
     (
         "name.regex",
-        "The name may only contain letters (including Unicode), numbers, spaces, and these characters: - _ . : / () ' \" , ! ? @ # % & + = [] {} | ~ ` *",
+        "The name may only contain letters (including Unicode), numbers, spaces, and these characters: - _ . / @ & ( ) # , : +",
     ),
     ("name.min", "The name must be at least :min characters."),
-    (
-        "name.max",
-        "The name may not be greater than :max characters.",
-    ),
-    ("name.string", "The name must be a string."),
+    ("name.max", "The name may not be greater than :max characters."),
+    ("description.string", "The Description field must be a string."),
     (
         "description.regex",
         "The description may only contain letters (including Unicode), numbers, spaces, and common punctuation: - _ . , ! ? ( ) ' \" + = * / @ &",
@@ -476,8 +474,25 @@ const STACK_MESSAGES: Messages = &[
         "description.max",
         "The description may not be greater than :max characters.",
     ),
-    ("description.string", "The description must be a string."),
 ];
+
+/// `handleError($e, $this)` of a `ValidationException`: the summary as a toast, no field messages.
+pub(crate) fn validation_toast(result: ApiResult) -> ApiResult {
+    match result {
+        Err(ApiError::Validation(m)) => {
+            let list: Vec<String> = m
+                .values()
+                .flat_map(|v| v.as_array().cloned().unwrap_or_default())
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect();
+            Ok(toast(
+                crate::ui_notifications::summarize(&list).unwrap_or_default(),
+            ))
+        }
+        other => other,
+    }
+}
+
 
 /// The rules of a template field (`'required|email'` ...), with `validationAttributes` as the name.
 fn field_error(field: &StackField, value: Option<&str>) -> Option<String> {
@@ -589,7 +604,11 @@ pub async fn submit(
 ) -> ApiResult {
     let s = find_service(&state, &ctx, &uuid).await?;
     require_admin(&ctx)?;
-    let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let mut body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    // `wire:model` holds null for an untouched empty field.
+    if body.get("description").and_then(Value::as_str) == Some("") {
+        body["description"] = Value::Null;
+    }
     let input = Input(body.as_object().cloned().unwrap_or_default());
     let compose = body
         .get("docker_compose_raw")
@@ -633,7 +652,7 @@ pub async fn submit(
         to_save.push((field.key.clone(), value));
     }
     if !errors.is_empty() {
-        return Err(ApiError::Validation(errors));
+        return validation_toast(Err(ApiError::Validation(errors)));
     }
     let compose = compose.unwrap_or_default();
     // `validateDockerComposeForInjection` before any database operation.

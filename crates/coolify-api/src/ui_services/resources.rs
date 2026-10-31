@@ -231,11 +231,11 @@ pub async fn submit(
     let part = find_part(&state, s.id, &resource).await?;
     require_admin(&ctx)?;
     let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    if part.is_application() {
+    super::validation_toast(if part.is_application() {
         submit_application(&state, &ctx, &s, &part, &body).await
     } else {
         submit_database(&state, &s, &part, &body).await
-    }
+    })
 }
 
 fn text(body: &Value, key: &str) -> Option<String> {
