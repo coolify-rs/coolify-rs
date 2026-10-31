@@ -189,6 +189,7 @@ async fn create_env(
     Ok(created(json!({"id": id})).into_response())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn update_env(
     state: &AppState,
     ctx: &AuthCtx,
