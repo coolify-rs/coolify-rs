@@ -26,7 +26,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TOKENS = json.load(open(os.path.join(ROOT, "compat/reference/secrets/tokens.json")))
+TOKENS = json.load(open(os.environ.get("COOLIFY_RS_TOKENS_FILE") or os.path.join(ROOT, "compat/reference/secrets/tokens.json")))
 BASES = {"ref": "http://127.0.0.1:18000", "rs": os.environ.get("COOLIFY_RS_BASE", "http://127.0.0.1:18084")}
 FAKE_PORT = int(os.environ.get("FAKE_PORT", "18184"))
 KEY_UUID = "hv41morfjv9x0av5kakzdmv8"  # "orbstack e2e" key of the Acme team
@@ -443,7 +443,7 @@ def api():
 
 
 def resources_on_carol():
-    """`/resources` on a team without services (services are not ported): one per side is not needed, it is a read."""
+    """`/resources` on a team with an application, a database and a service: one per side is not needed, it is a read."""
     tok = "carol_root"
     st, b = call("ref", "POST", "/api/v1/security/keys", {"name": "diff-carol", "private_key": PEM}, tok=tok)
     key = json.loads(b)["uuid"]
@@ -459,6 +459,12 @@ def resources_on_carol():
         st, b = call("ref", "POST", "/api/v1/databases/redis",
                      {"project_uuid": project, "server_uuid": server, "environment_name": "production", "name": "diff-db"}, tok=tok)
         record("carol database created", st == 201, b)
+        compose = base64.b64encode(b"services:\n  web:\n    image: nginx\n    environment:\n      - SERVICE_FQDN_WEB_80\n  db:\n    image: postgres:16\n").decode()
+        st, b = call("ref", "POST", "/api/v1/services",
+                     {"project_uuid": project, "server_uuid": server, "environment_name": "production",
+                      "docker_compose_raw": compose, "name": "diff-svc"}, tok=tok)
+        record("carol service created", st == 201, b)
+        service = json.loads(b)["uuid"]
         S.vars["ref"]["cs"] = S.vars["rs"]["cs"] = server
         same("GET resources", "GET", "/api/v1/resources", tok=tok)
         same("GET server resources", "GET", "/api/v1/servers/{cs}/resources", tok=tok)
@@ -467,10 +473,15 @@ def resources_on_carol():
         same("GET registries with images", "GET", "/api/v1/servers/{cs}/registries", tok=tok)
         same("DELETE destination attached", "DELETE", "/api/v1/destinations/" + sql(
             f"select uuid from standalone_dockers where server_id=(select id from servers where uuid='{server}')"), tok=tok)
+        st, b = call("ref", "DELETE", f"/api/v1/services/{service}?delete_connected_networks=false&docker_cleanup=false", tok=tok)
+        record("carol service deleted", st == 200, b)
     finally:
         sid = sql(f"select id from servers where uuid='{server}'")
         pid = sql(f"select id from projects where uuid='{project}'")
-        for q in (f"delete from standalone_redis where environment_id in (select id from environments where project_id={pid})",
+        for q in (f"delete from service_applications where service_id in (select id from services where environment_id in (select id from environments where project_id={pid}))",
+                  f"delete from service_databases where service_id in (select id from services where environment_id in (select id from environments where project_id={pid}))",
+                  f"delete from services where environment_id in (select id from environments where project_id={pid})",
+                  f"delete from standalone_redis where environment_id in (select id from environments where project_id={pid})",
                   f"delete from environment_variables where resourceable_type='App\\Models\\Application' and resourceable_id in "
                   f"(select id from applications where environment_id in (select id from environments where project_id={pid}))",
                   f"delete from application_settings where application_id in (select id from applications where environment_id in (select id from environments where project_id={pid}))",

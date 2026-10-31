@@ -13,6 +13,9 @@
   import Team from './pages/Team.svelte';
   import Members from './pages/Members.svelte';
   import Appearance from './pages/Appearance.svelte';
+  import DockerRegistries from './pages/DockerRegistries.svelte';
+  import Destinations from './pages/Destinations.svelte';
+  import Destination from './pages/Destination.svelte';
   import Servers from './pages/Servers.svelte';
   import ServerNew from './pages/ServerNew.svelte';
   import Server from './pages/Server.svelte';
@@ -58,6 +61,8 @@
     team: 'Teams',
     members: 'Team Members',
     appearance: 'Appearance',
+    destinations: 'Destinations',
+    registries: 'Docker Registries',
     servers: 'Servers',
     'server-new': 'New Server',
     'server-new-type': 'New Server',
@@ -113,6 +118,12 @@
       <Members />
     {:else if router.current.name === 'appearance'}
       <Appearance />
+    {:else if router.current.name === 'registries'}
+      <DockerRegistries />
+    {:else if router.current.name === 'destinations'}
+      <Destinations />
+    {:else if router.current.name === 'destination'}
+      {#key router.path}<Destination uuid={params.uuid} section={params.section ?? 'general'} />{/key}
     {:else if router.current.name === 'servers'}
       <Servers />
     {:else if router.current.name === 'server-new' || router.current.name === 'server-new-type'}
@@ -122,7 +133,7 @@
     {:else if router.current.name === 'server-section' && params.section === 'danger'}
       {#key params.uuid}<ServerDanger uuid={params.uuid} />{/key}
     {:else if router.current.name === 'server-section'}
-      {#key router.path}<ServerSection uuid={params.uuid} section={params.section} />{/key}
+      {#key router.path}<ServerSection uuid={params.uuid} section={params.section} sub={params.sub} />{/key}
     {:else}
       <Unported />
     {/if}

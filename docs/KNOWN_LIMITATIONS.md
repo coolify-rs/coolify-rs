@@ -24,8 +24,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   with the "install them manually" messages). Not ported: `POST /servers/import`, `GET /servers/import/check`,
   `POST /servers/{uuid}/migrate`, `POST /servers/{uuid}/transfer/complete` (the 7,000 line transfer services; also deleting
   a transferred server), `DELETE ?force=true` on a server with resources, `/servers/{uuid}/cloudflare-tunnel` account
-  features outside the API, `/resources`, `/servers/{uuid}/resources` and `/domains` for a team or server with services
-  (501 until services are ported), registry users of build servers and services, `delete_from_provider` for Hostinger
+  features outside the API, `delete_from_provider` for Hostinger
   (upstream only disables auto renewal there). Throttling of validations exists only on Cloud upstream.
 - Server jobs differ from upstream as follows: `remote_process` activities have no `callEventOnFinish` queue, the proxy
   file upload goes through the shell instead of scp, maintenance pages are written for "no resource in maintenance"
@@ -36,6 +35,16 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   with upstream must not check servers twice, and evaluates cron expressions in UTC. Compose merge tags (`!reset`,
   `!override`) in a proxy configuration are ignored when reading it, but traffic analytics does not rewrite a stored
   configuration.
+- Server and destination pages: ported are destinations (index, new, show, resources, danger), Advanced, Private Key, CA
+  Certificate, Swarm, server Destinations, Resources (no canvas toggle), Proxy (configuration, dynamic configurations, TLS
+  list, logs, start/stop/restart), Sentinel (configuration, logs), Docker Cleanup with executions, Images, Log Drains,
+  Registries (server and `/registries`), Terminal Access and the settings of Traffic Analytics. Not ported yet (the page
+  says "not available"): Metrics/Charts, Cloudflare Tunnel, GitHub Runners, Security Patches, Transfer, the
+  `By{DigitalOcean,Hetzner,Hostinger,Vultr}` forms, Cloud Token, the Terminal page. Within the ported pages: deleting TLS
+  certificates and acme.json backups, enabling traffic analytics (`ConfigureTrafficAnalytics`) and the analytics charts, the
+  "Proxy Startup Logs" dialog, the Docker cleanup "may be stalled" warning, and the toolbar of the shared log viewer (search,
+  filter, copy, download) are missing. Saving a CA certificate checks it against P-521 keys only and does not run
+  `RegenerateSslCertJob`.
 - Validation jobs run inside the coolify-rs process: a restart drops a running validation (upstream's queue keeps it).
 - Databases (all 9 engines; API, proxy, SSL, backups, imports; the pages for them are a later task): the API routes of
   `/databases/{uuid}/storages/{storage_uuid}/backups` (volume backups, `VolumeBackupJob`) are not ported (501).

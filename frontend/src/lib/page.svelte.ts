@@ -14,6 +14,8 @@ export interface Switcher {
   title: string;
   label: string;
   items: SwitcherItem[];
+  /** The status chip after the button (`x-slot:meta`). */
+  meta?: { label: string; dot: string };
 }
 
 /** An entry of a resource menu (e.g. upstream components/server/sidebar.blade.php). */
@@ -27,6 +29,9 @@ export interface NavContextItem {
   beta?: boolean;
   /** Sections of the active page the entry lists below itself (`.nav-children`), by element id. */
   children?: { id: string; label: string }[];
+  /** Sub pages the active entry lists below itself (the `children` of components/server/sidebar.blade.php). */
+  links?: { label: string; icon: string; href: string; active?: boolean; beta?: boolean }[];
+  warning?: boolean;
 }
 
 /** A resource menu the main sidebar shows instead of the main menu

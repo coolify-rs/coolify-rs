@@ -32,7 +32,7 @@ export function setUnauthenticatedHandler(fn: () => void): void {
   onUnauthenticated = fn;
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (method !== 'GET') headers['X-CSRF-Token'] = csrfToken;
@@ -221,6 +221,8 @@ export const teamUi = {
 
 /** One server as `GET /ui/servers` describes it (facts the server pages need). */
 export interface ServerFacts {
+  proxy_type?: string | null;
+  outdated_warning?: [boolean, boolean];
   uuid: string;
   name: string;
   description: string | null;

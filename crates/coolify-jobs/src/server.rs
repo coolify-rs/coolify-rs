@@ -100,6 +100,11 @@ impl ServerInfo {
         self.user != "root"
     }
 
+    /// `dockerStopCommand($timeout, $containers, $this)`.
+    pub fn docker_stop_command(&self, timeout: u32, containers: &str) -> String {
+        crate::databases::common::docker_stop_command(timeout, containers, self.docker_version())
+    }
+
     pub fn docker_version(&self) -> Option<&str> {
         self.settings.get("docker_version").and_then(Value::as_str)
     }

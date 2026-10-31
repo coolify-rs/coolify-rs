@@ -141,8 +141,19 @@
                       <a class="menu-item {item.active ? 'menu-item-active' : ''}" use:link href={item.href}>
                         <Reicon name={item.icon} class="menu-item-icon" />
                         <span class="menu-item-label">{item.label}</span>
-                        {#if item.beta}<BetaBadge class="ml-auto shrink-0" />{/if}
+                        {#if item.warning}<Reicon name="alert-triangle" class="ml-auto size-3.5 shrink-0 text-orange-500 dark:text-warning" />{:else if item.beta}<BetaBadge class="ml-auto shrink-0" />{/if}
                       </a>
+                      {#if item.active && item.links?.length}
+                        <div class="col-span-full grid grid-cols-1 gap-0.5 border-l border-neutral-200 pl-2 dark:border-white/[0.08]">
+                          {#each item.links as child (child.href)}
+                            <a class="menu-item {child.active ? 'menu-item-active' : ''}" use:link href={child.href}>
+                              <Reicon name={child.icon} class="menu-item-icon" />
+                              <span class="menu-item-label">{child.label}</span>
+                              {#if child.beta}<BetaBadge class="ml-auto shrink-0" />{/if}
+                            </a>
+                          {/each}
+                        </div>
+                      {/if}
                       {#if item.active && item.children?.length}
                         <div class="nav-children flex flex-col gap-0.5 py-1">
                           {#each item.children as child (child.id)}

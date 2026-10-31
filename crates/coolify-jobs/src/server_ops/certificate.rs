@@ -83,6 +83,131 @@ fn pem(label: &str, data: &[u8]) -> String {
     out
 }
 
+/// `TraefikAcmeService::expirationDate`: `notAfter` of the base64 PEM in acme.json.
+pub fn acme_expiration(encoded: &str) -> Option<String> {
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let text = String::from_utf8(decoded).ok()?;
+    let body = text
+        .split("-----BEGIN CERTIFICATE-----")
+        .nth(1)?
+        .split("-----END CERTIFICATE-----")
+        .next()?;
+    let compact: String = body.split_whitespace().collect();
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(compact)
+        .ok()?;
+    let (0x30, start, _) = der_element(&data, 0)? else {
+        return None;
+    };
+    let (0x30, tbs, _) = der_element(&data, start)? else {
+        return None;
+    };
+    let mut at = tbs;
+    if der_element(&data, at)?.0 == 0xa0 {
+        at = der_element(&data, at)?.2;
+    }
+    for _ in 0..3 {
+        at = der_element(&data, at)?.2;
+    }
+    let (0x30, validity, _) = der_element(&data, at)? else {
+        return None;
+    };
+    let not_before_end = der_element(&data, validity)?.2;
+    let (tag, s, e) = der_element(&data, not_before_end)?;
+    let raw = std::str::from_utf8(&data[s..e]).ok()?;
+    let format = if tag == 0x17 {
+        "%y%m%d%H%M%SZ"
+    } else {
+        "%Y%m%d%H%M%SZ"
+    };
+    let t = NaiveDateTime::parse_from_str(raw, format).ok()?;
+    Some(t.format("%Y-%m-%d %H:%M:%S").to_string())
+}
+
+/// `openssl_x509_read` + `openssl_x509_export`: the first certificate of the text in canonical PEM.
+pub fn export_certificate(text: &str) -> Option<String> {
+    let body = text
+        .split("-----BEGIN CERTIFICATE-----")
+        .nth(1)?
+        .split("-----END CERTIFICATE-----")
+        .next()?;
+    let compact: String = body.split_whitespace().collect();
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(compact)
+        .ok()?;
+    subject_public_key_info(&data)?;
+    Some(pem("CERTIFICATE", &data))
+}
+
+/// One DER element at `at`: `(tag, content start, end)`.
+fn der_element(data: &[u8], at: usize) -> Option<(u8, usize, usize)> {
+    let tag = *data.get(at)?;
+    let first = *data.get(at + 1)? as usize;
+    let (len, start) = if first < 0x80 {
+        (first, at + 2)
+    } else {
+        let n = first & 0x7f;
+        if n == 0 || n > 4 {
+            return None;
+        }
+        let mut len = 0usize;
+        for i in 0..n {
+            len = (len << 8) | *data.get(at + 2 + i)? as usize;
+        }
+        (len, at + 2 + n)
+    };
+    let end = start.checked_add(len)?;
+    (end <= data.len()).then_some((tag, start, end))
+}
+
+/// The `subjectPublicKeyInfo` element of a DER certificate.
+fn subject_public_key_info(cert: &[u8]) -> Option<&[u8]> {
+    let (0x30, cert_start, _) = der_element(cert, 0)? else {
+        return None;
+    };
+    let (0x30, tbs_start, tbs_end) = der_element(cert, cert_start)? else {
+        return None;
+    };
+    let mut at = tbs_start;
+    // version (optional, [0]), serial, signature, issuer, validity, subject.
+    if der_element(cert, at)?.0 == 0xa0 {
+        at = der_element(cert, at)?.2;
+    }
+    for _ in 0..5 {
+        at = der_element(cert, at)?.2;
+    }
+    let (tag, _, end) = der_element(cert, at)?;
+    (tag == 0x30 && end <= tbs_end).then(|| &cert[at..end])
+}
+
+/// `openssl_x509_check_private_key` for the keys Coolify generates (ECDSA P-521).
+pub fn certificate_matches_key(certificate_pem: &str, key_pem: &str) -> bool {
+    use p521::pkcs8::{DecodePrivateKey, EncodePublicKey};
+    let Some(body) = certificate_pem
+        .split("-----BEGIN CERTIFICATE-----")
+        .nth(1)
+        .and_then(|b| b.split("-----END CERTIFICATE-----").next())
+    else {
+        return false;
+    };
+    let compact: String = body.split_whitespace().collect();
+    let Ok(der_cert) = base64::engine::general_purpose::STANDARD.decode(compact) else {
+        return false;
+    };
+    let Some(spki) = subject_public_key_info(&der_cert) else {
+        return false;
+    };
+    let Ok(secret) = p521::SecretKey::from_pkcs8_pem(key_pem) else {
+        return false;
+    };
+    secret
+        .public_key()
+        .to_public_key_der()
+        .is_ok_and(|d| d.as_bytes() == spki)
+}
+
 /// A new self-signed CA certificate: `(certificate PEM, private key PEM, valid until)`.
 pub fn new_ca_certificate(
     common_name: &str,
