@@ -920,9 +920,14 @@ impl Run {
                 self.b.github_token = Some(self.github_installation_token().await?);
             }
             let token = self.b.github_token.clone().unwrap_or_default();
-            let id = crate::github::repository_id(&source.row, &token, &self.b.repository)
-                .await
-                .map_err(Fail::new)?;
+            let id = crate::github::repository_id(
+                &self.jobs.0.db,
+                &source.row,
+                &token,
+                &self.b.repository,
+            )
+            .await
+            .map_err(Fail::new)?;
             if let Some(id) = id
                 && self.app.int("repository_project_id") != Some(id)
             {

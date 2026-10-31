@@ -22,6 +22,7 @@ pub mod teams;
 pub mod cloud_providers;
 pub mod cloud_tokens;
 pub mod destinations;
+pub mod git_apps;
 pub mod server_proxy;
 pub mod server_settings;
 use axum::Router;
@@ -284,6 +285,66 @@ pub const ROUTES: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         uri: "api/v1/applications/public",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/github-apps",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/github-apps",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/github-apps/{github_app_id}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/github-apps/{github_app_id}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/github-apps/{github_app_id}/repositories",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/github-apps/{github_app_id}/repositories/{owner}/{repo}/branches",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/gitlab-apps",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/gitlab-apps",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/gitlab-apps/{gitlab_app_id}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/gitlab-apps/{gitlab_app_id}",
         group: Group::Main,
         abilities: W,
     },
@@ -1508,6 +1569,48 @@ pub fn router(state: AppState) -> Router {
             "POST",
             "api/v1/applications/public",
             on_post(applications::create_public),
+        ),
+        ("GET", "api/v1/github-apps", on_get(git_apps::github_index)),
+        (
+            "POST",
+            "api/v1/github-apps",
+            on_post(git_apps::github_store),
+        ),
+        (
+            "PATCH",
+            "api/v1/github-apps/{github_app_id}",
+            patch(git_apps::github_update),
+        ),
+        (
+            "DELETE",
+            "api/v1/github-apps/{github_app_id}",
+            del(git_apps::github_destroy),
+        ),
+        (
+            "GET",
+            "api/v1/github-apps/{github_app_id}/repositories",
+            on_get(git_apps::github_repositories),
+        ),
+        (
+            "GET",
+            "api/v1/github-apps/{github_app_id}/repositories/{owner}/{repo}/branches",
+            on_get(git_apps::github_branches),
+        ),
+        ("GET", "api/v1/gitlab-apps", on_get(git_apps::gitlab_index)),
+        (
+            "POST",
+            "api/v1/gitlab-apps",
+            on_post(git_apps::gitlab_store),
+        ),
+        (
+            "PATCH",
+            "api/v1/gitlab-apps/{gitlab_app_id}",
+            patch(git_apps::gitlab_update),
+        ),
+        (
+            "DELETE",
+            "api/v1/gitlab-apps/{gitlab_app_id}",
+            del(git_apps::gitlab_destroy),
         ),
         (
             "POST",

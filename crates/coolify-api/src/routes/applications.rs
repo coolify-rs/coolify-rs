@@ -1625,13 +1625,17 @@ async fn create_git(
                 SERVER_ERROR
             })?;
             git_repository = git_repository_slug(&repository);
-            let (status, found) =
-                coolify_jobs::github::repository_access(&github_app, &token, &git_repository)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!(error = %e, "github repository check failed");
-                        SERVER_ERROR
-                    })?;
+            let (status, found) = coolify_jobs::github::repository_access(
+                Some(&state.db),
+                &github_app,
+                &token,
+                &git_repository,
+            )
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "github repository check failed");
+                SERVER_ERROR
+            })?;
             if status == 404 || status == 403 {
                 return Err(ApiError::Message(
                     StatusCode::NOT_FOUND,

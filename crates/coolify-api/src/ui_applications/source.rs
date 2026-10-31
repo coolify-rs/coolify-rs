@@ -386,7 +386,7 @@ pub async fn change(
             Some(&record),
         )
         .await?;
-        coolify_jobs::github::repository_id(&record, &token, &repository).await
+        coolify_jobs::github::repository_id(&state.db, &record, &token, &repository).await
     }
     .await;
     match project_id {

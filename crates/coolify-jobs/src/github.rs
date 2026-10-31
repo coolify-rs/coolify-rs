@@ -17,21 +17,14 @@ use rsa::signature::{SignatureEncoding, Signer};
 use serde_json::Value;
 use sha2::Sha256;
 
+use crate::git_http;
+
 fn field<'a>(source: &'a Record, k: &str) -> Option<&'a str> {
     source.get(k).and_then(Value::as_str)
 }
 
-fn client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .user_agent("coolify-rs")
-        .build()
-        .map_err(|e| e.to_string())
-}
-
 /// `githubAppPrivateKey($source)`: the App's key when it belongs to the App's team.
-async fn app_private_key(db: &Db, enc: &Encrypter, source: &Record) -> Result<String, String> {
+pub async fn app_private_key(db: &Db, enc: &Encrypter, source: &Record) -> Result<String, String> {
     const MISSING: &str = "Private key not found for this GitHub App.";
     let id = source
         .get("private_key_id")
@@ -90,6 +83,22 @@ async fn assert_clock_in_sync(http: &reqwest::Client, api_url: &str) -> Result<(
     Ok(())
 }
 
+fn id_text(source: &Record, k: &str) -> String {
+    source
+        .get(k)
+        .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned))
+        .unwrap_or_default()
+}
+
+/// `generateGithubToken($source, 'jwt')`.
+pub async fn jwt(db: &Db, enc: &Encrypter, source: &Record) -> Result<String, String> {
+    let key = app_private_key(db, enc, source).await?;
+    let api = field(source, "api_url").unwrap_or_default().to_owned();
+    let http = git_http::client(Some(db), &api, Duration::from_secs(30)).await?;
+    assert_clock_in_sync(&http, &api).await?;
+    app_jwt(&key, &id_text(source, "app_id"))
+}
+
 /// `generateGithubToken($source, 'installation')`.
 pub async fn installation_token(
     db: &Db,
@@ -100,17 +109,10 @@ pub async fn installation_token(
     let enc = enc.ok_or("No application encryption key has been specified.")?;
     let key = app_private_key(db, enc, source).await?;
     let api = field(source, "api_url").unwrap_or_default().to_owned();
-    let http = client()?;
+    let http = git_http::client(Some(db), &api, Duration::from_secs(30)).await?;
     assert_clock_in_sync(&http, &api).await?;
-    let app_id = source
-        .get("app_id")
-        .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned))
-        .unwrap_or_default();
-    let jwt = app_jwt(&key, &app_id)?;
-    let installation = source
-        .get("installation_id")
-        .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned))
-        .unwrap_or_default();
+    let jwt = app_jwt(&key, &id_text(source, "app_id"))?;
+    let installation = id_text(source, "installation_id");
     let url = format!("{api}/app/installations/{installation}/access_tokens");
     let name = field(source, "name").unwrap_or_default();
     // Up to three tries on connection errors and 5xx answers, one second apart per attempt.
@@ -167,12 +169,14 @@ pub async fn installation_token(
 
 /// `githubApi($source, "repos/{repo}")['data']['id']` with an installation token.
 pub async fn repository_id(
+    db: &Db,
     source: &Record,
     token: &str,
     repository: &str,
 ) -> Result<Option<i64>, String> {
     let api = field(source, "api_url").unwrap_or_default();
-    let response = client()?
+    let response = git_http::client(Some(db), api, Duration::from_secs(30))
+        .await?
         .get(format!("{api}/repos/{repository}"))
         .header("X-GitHub-Api-Version", "2022-11-28")
         .header("Accept", "application/vnd.github.v3+json")
@@ -214,17 +218,13 @@ pub async fn repository_id(
 /// of the last attempt. A failed answer or connection error is tried three times, 200 ms apart;
 /// `Err` is the connection error of the last try (upstream throws, so the API answers 500).
 pub async fn repository_access(
+    db: Option<&Db>,
     source: &Record,
     token: &str,
     repository: &str,
 ) -> Result<(u16, Value), String> {
     let api = field(source, "api_url").unwrap_or_default();
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::none())
-        .user_agent("coolify-rs")
-        .build()
-        .map_err(|e| e.to_string())?;
+    let http = git_http::client(db, api, Duration::from_secs(20)).await?;
     let mut attempt = 1;
     loop {
         let r = http
@@ -245,6 +245,365 @@ pub async fn repository_access(
         attempt += 1;
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+}
+
+fn authed(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
+    request
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header("Accept", "application/vnd.github.v3+json")
+        .header("Authorization", format!("Bearer {token}"))
+}
+
+/// `GithubController::load_repositories()`: every page of `/installation/repositories`; the
+/// status and error body of a failed page in `Err`-free form.
+pub async fn installation_repositories(
+    db: &Db,
+    source: &Record,
+    token: &str,
+) -> Result<Result<Vec<Value>, (u16, Value)>, String> {
+    let api = field(source, "api_url").unwrap_or_default().to_owned();
+    let http = git_http::client(Some(db), &api, Duration::from_secs(20)).await?;
+    let url = format!("{api}/installation/repositories");
+    let mut all = Vec::new();
+    for page in 1..=100 {
+        let page_text = page.to_string();
+        let response = git_http::retry(|| {
+            authed(http.get(&url), token)
+                .query(&[("per_page", "100"), ("page", page_text.as_str())])
+        })
+        .await?;
+        let status = response.status().as_u16();
+        let body: Value = response.json().await.unwrap_or(Value::Null);
+        if status != 200 {
+            return Ok(Err((status, body)));
+        }
+        let repos = body
+            .get("repositories")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if repos.is_empty() {
+            break;
+        }
+        all.extend(repos);
+    }
+    Ok(Ok(all))
+}
+
+/// `Http::GitHub(...)->timeout(20)->retry(3, 200, throw: false)->get($endpoint)`.
+pub async fn get_with_token(
+    db: &Db,
+    source: &Record,
+    token: &str,
+    endpoint: &str,
+    query: &[(&str, &str)],
+) -> Result<(u16, Value), String> {
+    let api = field(source, "api_url").unwrap_or_default().to_owned();
+    let http = git_http::client(Some(db), &api, Duration::from_secs(20)).await?;
+    let url = format!("{api}/{}", endpoint.trim_start_matches('/'));
+    let response = git_http::retry(|| authed(http.get(&url), token).query(query)).await?;
+    let status = response.status().as_u16();
+    Ok((status, response.json().await.unwrap_or(Value::Null)))
+}
+
+/// `loadRepositoryByPage($source, $token, $page)`.
+pub async fn repository_page(
+    db: &Db,
+    source: &Record,
+    token: &str,
+    page: i64,
+) -> Result<Value, String> {
+    let page_text = page.to_string();
+    let (status, body) = get_with_token(
+        db,
+        source,
+        token,
+        "/installation/repositories",
+        &[("per_page", "100"), ("page", page_text.as_str())],
+    )
+    .await?;
+    let total = body.get("total_count").and_then(Value::as_i64).unwrap_or(0);
+    if status != 200 || total == 0 {
+        return Ok(serde_json::json!({"total_count": 0, "repositories": []}));
+    }
+    Ok(serde_json::json!({"total_count": total, "repositories": body.get("repositories")}))
+}
+
+/// `githubApi($source, $endpoint, $method, $data)` for a private App: the status, the JSON data
+/// and the rate limit headers. `Err` when the token or the connection fails.
+pub async fn api(
+    db: &Db,
+    enc: &Encrypter,
+    source: &Record,
+    method: reqwest::Method,
+    endpoint: &str,
+    data: Option<&Value>,
+) -> Result<(u16, Value), String> {
+    let token = installation_token(db, Some(enc), Some(source)).await?;
+    let api = field(source, "api_url").unwrap_or_default().to_owned();
+    let http = git_http::client(Some(db), &api, Duration::from_secs(30)).await?;
+    let url = format!("{api}/{}", endpoint.trim_start_matches('/'));
+    let mut request = authed(http.request(method, &url), &token);
+    if let Some(d) = data {
+        request = request.json(d);
+    }
+    let response = request.send().await.map_err(|e| e.to_string())?;
+    let status = response.status().as_u16();
+    Ok((status, response.json().await.unwrap_or(Value::Null)))
+}
+
+/// `getGithubCommitRangeFiles()`: `None` when the list is unknown.
+pub async fn commit_range_files(
+    db: &Db,
+    enc: &Encrypter,
+    source: &Record,
+    full_name: &str,
+    before: &str,
+    after: &str,
+) -> Option<Vec<String>> {
+    let endpoint = format!("/repos/{full_name}/compare/{before}...{after}");
+    let (status, body) = api(db, enc, source, reqwest::Method::GET, &endpoint, None)
+        .await
+        .ok()?;
+    if !(200..300).contains(&status) {
+        return None;
+    }
+    let files = body
+        .get("files")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if files.len() >= 300 {
+        return None;
+    }
+    let mut out: Vec<String> = Vec::new();
+    for file in &files {
+        for k in ["filename", "previous_filename"] {
+            if let Some(name) = file.get(k).and_then(Value::as_str)
+                && !name.is_empty()
+                && !out.iter().any(|x| x == name)
+            {
+                out.push(name.to_owned());
+            }
+        }
+    }
+    Some(out)
+}
+
+/// `getGithubCommitMessage()`.
+pub async fn commit_message(
+    db: &Db,
+    enc: &Encrypter,
+    source: &Record,
+    full_name: &str,
+    sha: &str,
+) -> Option<String> {
+    if sha.is_empty() || sha == "HEAD" {
+        return None;
+    }
+    let endpoint = format!("/repos/{full_name}/commits/{sha}");
+    let (_, body) = api(db, enc, source, reqwest::Method::GET, &endpoint, None)
+        .await
+        .ok()?;
+    git_http::path_str(&body, "commit.message").map(str::to_owned)
+}
+
+/// `getGithubPullRequestFiles()`: `None` when the list is unknown.
+pub async fn pull_request_files(
+    db: &Db,
+    enc: &Encrypter,
+    source: &Record,
+    full_name: &str,
+    pull_request_id: i64,
+) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    for page in 1..=30 {
+        let endpoint =
+            format!("/repos/{full_name}/pulls/{pull_request_id}/files?per_page=100&page={page}");
+        let (status, body) = api(db, enc, source, reqwest::Method::GET, &endpoint, None)
+            .await
+            .ok()?;
+        if !(200..300).contains(&status) {
+            return None;
+        }
+        let files = body.as_array().cloned().unwrap_or_default();
+        out.extend(
+            files
+                .iter()
+                .filter_map(|f| f.get("filename").and_then(Value::as_str))
+                .filter(|n| !n.is_empty())
+                .map(str::to_owned),
+        );
+        if files.len() < 100 {
+            return Some(out);
+        }
+    }
+    None
+}
+
+/// `GET {api_url}/app` with the App's JWT: the status and JSON.
+pub async fn app_info(db: &Db, source: &Record, jwt: &str) -> Result<(u16, Value), String> {
+    let api = field(source, "api_url").unwrap_or_default().to_owned();
+    let http = git_http::client(Some(db), &api, Duration::from_secs(10)).await?;
+    let response = http
+        .get(format!("{api}/app"))
+        .header("Authorization", format!("Bearer {jwt}"))
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = response.status().as_u16();
+    Ok((status, response.json().await.unwrap_or(Value::Null)))
+}
+
+/// `GithubAppPermissionJob`: the permissions and events to store on the row, as columns.
+pub async fn fetch_permissions(db: &Db, enc: &Encrypter, source: &Record) -> Result<Value, String> {
+    let jwt = jwt(db, enc, source).await?;
+    let (status, body) = app_info(db, source, &jwt).await?;
+    if !(200..300).contains(&status) {
+        return Err(format!("Failed to fetch GitHub app permissions: {}", body));
+    }
+    Ok(body)
+}
+
+/// `syncGithubAppName()`: the App slug, `None` when the App has no id or key or GitHub sends no
+/// slug.
+pub async fn app_slug(db: &Db, enc: &Encrypter, source: &Record) -> Result<Option<String>, String> {
+    if source.get("app_id").is_none_or(Value::is_null)
+        || source.get("private_key_id").is_none_or(Value::is_null)
+    {
+        return Ok(None);
+    }
+    let Ok(key) = app_private_key(db, enc, source).await else {
+        return Ok(None);
+    };
+    let api = field(source, "api_url").unwrap_or_default().to_owned();
+    let http = git_http::client(Some(db), &api, Duration::from_secs(30)).await?;
+    assert_clock_in_sync(&http, &api).await?;
+    let jwt = app_jwt(&key, &id_text(source, "app_id"))?;
+    let response = http
+        .get(format!("{api}/app"))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header("Authorization", format!("Bearer {jwt}"))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let ok = response.status().is_success();
+    let body: Value = response.json().await.unwrap_or(Value::Null);
+    if !ok {
+        return Err(body
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("Failed to fetch GitHub App information.")
+            .to_owned());
+    }
+    Ok(body
+        .get("slug")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned))
+}
+
+/// `Github::redirect()`'s manifest conversion.
+pub async fn manifest_conversion(db: &Db, api_url: &str, code: &str) -> Result<Value, String> {
+    let http = git_http::client(Some(db), api_url, Duration::from_secs(10)).await?;
+    let response = http
+        .post(format!("{api_url}/app-manifests/{code}/conversions"))
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "HTTP request returned status code {}",
+            response.status().as_u16()
+        ));
+    }
+    response.json().await.map_err(|e| e.to_string())
+}
+
+/// `githubInstallationVerificationError()`: why the installation does not belong to this App.
+pub async fn installation_verification_error(
+    db: &Db,
+    enc: &Encrypter,
+    source: &Record,
+    installation_id: &str,
+) -> Option<String> {
+    let has_key = app_private_key(db, enc, source)
+        .await
+        .is_ok_and(|k| !k.is_empty());
+    let app_id = id_text(source, "app_id");
+    if app_id.is_empty() || app_id == "null" || !has_key {
+        return Some("The GitHub App ID or private key is missing.".into());
+    }
+    let answer = async {
+        let jwt = jwt(db, enc, source).await?;
+        let api = field(source, "api_url").unwrap_or_default().to_owned();
+        let http = git_http::client(Some(db), &api, Duration::from_secs(10)).await?;
+        http.get(format!("{api}/app/installations/{installation_id}"))
+            .header("Authorization", format!("Bearer {jwt}"))
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+            .map_err(|e| e.to_string())
+    }
+    .await;
+    let response = match answer {
+        Ok(r) => r,
+        Err(e) => return Some(e.replace("<br>", " ")),
+    };
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(Value::Null);
+    if !status.is_success() {
+        return Some(format!(
+            "GitHub API returned HTTP {}: {}",
+            status.as_u16(),
+            body.get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("no error message found")
+        ));
+    }
+    let answered = body
+        .get("app_id")
+        .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned))
+        .unwrap_or_default();
+    (answered != app_id).then(|| "The installation belongs to a different GitHub App.".to_owned())
+}
+
+/// `githubApiUrlFromHtmlUrl($htmlUrl)`.
+pub fn api_url_from_html_url(html: &str) -> String {
+    let (scheme, rest) = html.split_once("://").unwrap_or(("", html));
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .rsplit('@')
+        .next()
+        .unwrap_or_default();
+    let (host, port) = authority.split_once(':').unwrap_or((authority, ""));
+    let host = host.to_lowercase();
+    if host == "github.com" {
+        return "https://api.github.com".into();
+    }
+    if host.ends_with(".ghe.com") && !host.starts_with("api.") {
+        return format!("https://api.{host}");
+    }
+    let port = if port.is_empty() {
+        String::new()
+    } else {
+        format!(":{port}")
+    };
+    format!("{scheme}://{host}{port}/api/v3")
+}
+
+/// `normalizeGithubOrganization()`.
+pub fn normalize_organization(v: Option<&str>) -> Option<String> {
+    let v = v.filter(|o| !o.trim().is_empty())?;
+    Some(
+        v.trim_matches(|c: char| matches!(c, '/' | ' ' | '\t' | '\n' | '\r' | '\0' | '\x0B'))
+            .to_owned(),
+    )
 }
 
 #[cfg(test)]
@@ -290,14 +649,16 @@ mod tests {
         let (api, hits) = fake_api().await;
         let mut source = Record::new();
         source.insert("api_url".into(), Value::String(api));
-        let (status, body) = repository_access(&source, "tok", "o/r").await.unwrap();
+        let (status, body) = repository_access(None, &source, "tok", "o/r")
+            .await
+            .unwrap();
         assert_eq!(
             (status, body.get("id").and_then(Value::as_i64)),
             (200, Some(42))
         );
         assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
         // A failed answer is tried three times and the last one is returned.
-        let (status, body) = repository_access(&source, "tok", "o/missing")
+        let (status, body) = repository_access(None, &source, "tok", "o/missing")
             .await
             .unwrap();
         assert_eq!(status, 404);

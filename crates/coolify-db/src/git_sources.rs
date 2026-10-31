@@ -18,6 +18,45 @@ pub async fn github_app(db: &Db, id: i64) -> DbResult<Option<Record>> {
         .transpose()
 }
 
+/// A row of `github_apps`, `gitlab_apps` or `gitea_apps` (raw attributes).
+pub async fn source_row(db: &Db, table: &str, id: i64) -> DbResult<Option<Record>> {
+    debug_assert!(matches!(
+        table,
+        "github_apps" | "gitlab_apps" | "gitea_apps"
+    ));
+    let row: Option<String> = sqlx::query_scalar(&format!(
+        "SELECT row_to_json(g)::text FROM {table} g WHERE id = $1"
+    ))
+    .bind(id)
+    .fetch_optional(db.pool())
+    .await?;
+    row.map(|t| parse_row(&t).map_err(|e| DbError::Schema(format!("decoding git source: {e}"))))
+        .transpose()
+}
+
+/// `$source->update([...])` after `refreshGitlabToken()` / `refreshGiteaToken()` or the OAuth
+/// callback: the encrypted tokens and the expiry.
+pub async fn store_oauth_tokens(
+    db: &Db,
+    table: &str,
+    id: i64,
+    access_token: &str,
+    refresh_token: &str,
+    expires_at: i64,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query(&format!(
+        "UPDATE {table} SET access_token = $1, refresh_token = $2, expires_at = $3, updated_at = NOW() AT TIME ZONE 'UTC' WHERE id = $4"
+    ))
+    .bind(access_token)
+    .bind(refresh_token)
+    .bind(expires_at as i32)
+    .bind(id)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
 /// `private_keys.private_key` (still encrypted) of a key id, any team.
 pub async fn private_key_ciphertext(db: &Db, id: i64) -> DbResult<Option<String>> {
     let row: Option<Option<String>> =
