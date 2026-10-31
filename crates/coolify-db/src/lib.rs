@@ -17,6 +17,7 @@ pub mod auth_pages;
 pub mod cloud;
 pub mod compose;
 pub mod dashboard;
+pub mod database_pages;
 pub mod database_parts;
 pub mod database_specs;
 pub mod databases;

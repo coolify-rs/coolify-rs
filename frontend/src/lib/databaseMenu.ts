@@ -81,6 +81,24 @@ export function databaseNavContext(
   return { label: 'Dashboard', backTitle: 'Back to the main menu', ariaLabel: 'Database settings', groups };
 }
 
+/** Port of upstream components/backup-sidebar.blade.php (context `database`): the database menu is one Back away. */
+export function backupNavContext(base: string, backup: string, section: string, parent: NavContext): NavContext {
+  const url = `${base}/backups/${backup}`;
+  return {
+    label: 'Database',
+    backTitle: 'Back to the database menu',
+    ariaLabel: 'Backup settings',
+    parent,
+    groups: [
+      [
+        { label: 'General', icon: 'settings', href: url, active: section === 'general' },
+        { label: 'Executions', icon: 'browser-terminal', href: `${url}/executions`, active: section === 'executions' },
+      ],
+      [{ label: 'Danger Zone', icon: 'danger', href: `${url}/danger`, active: section === 'danger' }],
+    ],
+  };
+}
+
 /** Menu key for a URL section (`/database/{uuid}/{section}`); backups pages share one entry. */
 export function databaseSection(section: string | undefined): string {
   if (!section || section === 'general') return 'general';

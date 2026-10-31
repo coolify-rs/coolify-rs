@@ -592,6 +592,38 @@ impl S3Target {
         Ok((status, body, length))
     }
 
+    /// `$disk->temporaryUrl($key, ...)`: a presigned GET (SigV4 query signing).
+    pub fn presigned_get(&self, key: &str, expires_seconds: u64) -> Result<String, String> {
+        let parsed = parse_url(&self.endpoint).ok_or("S3 endpoint is invalid.")?;
+        let encoded_key = key.split('/').map(uri_encode).collect::<Vec<_>>().join("/");
+        let path = format!("/{}/{encoded_key}", uri_encode(&self.bucket));
+        let now = Utc::now();
+        let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+        let date = now.format("%Y%m%d").to_string();
+        let scope = format!("{date}/{}/s3/aws4_request", self.region);
+        let query = format!(
+            "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential={}&X-Amz-Date={amz_date}&X-Amz-Expires={expires_seconds}&X-Amz-SignedHeaders=host",
+            uri_encode(&format!("{}/{scope}", self.key))
+        );
+        let canonical = format!(
+            "GET\n{path}\n{query}\nhost:{}\n\nhost\nUNSIGNED-PAYLOAD",
+            parsed.authority
+        );
+        let to_sign = format!(
+            "AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}",
+            hex(&Sha256::digest(canonical.as_bytes()))
+        );
+        let k_date = hmac(format!("AWS4{}", self.secret).as_bytes(), date.as_bytes());
+        let k_region = hmac(&k_date, self.region.as_bytes());
+        let k_service = hmac(&k_region, b"s3");
+        let k_signing = hmac(&k_service, b"aws4_request");
+        let signature = hex(&hmac(&k_signing, to_sign.as_bytes()));
+        Ok(format!(
+            "{}://{}{path}?{query}&X-Amz-Signature={signature}",
+            parsed.scheme, parsed.authority
+        ))
+    }
+
     /// `$disk->files()`: `ListObjectsV2` on the bucket root.
     pub async fn list_root(&self) -> Result<(), String> {
         let (status, body, _) = self

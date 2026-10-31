@@ -934,7 +934,7 @@ static UUID: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// `Storage::path('')`: where finished uploads wait for the import.
-fn import_data_dir(_state: &AppState) -> std::path::PathBuf {
+pub(crate) fn import_data_dir(_state: &AppState) -> std::path::PathBuf {
     std::env::var_os("COOLIFY_RS_DATA_DIR")
         .map_or_else(std::env::temp_dir, std::path::PathBuf::from)
 }

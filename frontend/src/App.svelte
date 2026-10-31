@@ -225,8 +225,8 @@
       {#key router.path}<EnvironmentEdit uuid={params.uuid} env={params['env']} />{/key}
     {:else if router.current.name === 'resource-new'}
       {#key router.path + router.search}<ResourceNew uuid={params.uuid} env={params['env']} />{/key}
-    {:else if router.current.name === 'database' || router.current.name === 'database-section'}
-      {#key router.path}<Database uuid={params.uuid} env={params['env']} db={params['db']} section={params['section'] ?? 'general'} />{/key}
+    {:else if router.current.name === 'database' || router.current.name === 'database-section' || router.current.name === 'database-backup'}
+      {#key router.path}<Database uuid={params.uuid} env={params['env']} db={params['db']} section={params['section'] ?? (params['backup'] ? 'backups' : 'general')} backup={params['backup']} backupSection={params['backupSection']} />{/key}
     {:else if router.current.name === 'application' || router.current.name === 'application-section'}
       {#key router.path}<Application uuid={params.uuid} env={params['env']} app={params['app']} section={params['section'] ?? 'general'} />{/key}
     {:else if router.current.name === 'application-deployment'}

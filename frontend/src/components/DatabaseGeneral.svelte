@@ -1,17 +1,22 @@
 <script lang="ts">
-  // Port of upstream livewire/project/database/<type>/general.blade.php (+
-  // <Type>\General) for every ported type, with
-  // livewire/project/database/status-info.blade.php (components/database-status-info.blade.php)
-  // as its Connection part and livewire/project/shared/resource-details.blade.php
-  // behind "Details". compat/notes/database-general-forms.md lists how the
-  // types differ. Making the database public, SSL, log drains, proxy logs and
-  // init script edits have no backend in coolify-rs yet: they render as
-  // upstream renders them and say so when used.
+  // Port of upstream livewire/project/database/<type>/general.blade.php: Project/Database/Postgresql/General,
+  // Project/Database/Redis/General, Project/Database/Keydb/General, Project/Database/Dragonfly/General,
+  // Project/Database/Mongodb/General, Project/Database/Mysql/General, Project/Database/Mariadb/General and
+  // Project/Database/Clickhouse/General, with livewire/project/database/status-info.blade.php
+  // (components/database-status-info.blade.php; Project/Database/Postgresql/StatusInfo,
+  // Project/Database/Redis/StatusInfo, Project/Database/Keydb/StatusInfo, Project/Database/Dragonfly/StatusInfo,
+  // Project/Database/Mongodb/StatusInfo, Project/Database/Mysql/StatusInfo, Project/Database/Mariadb/StatusInfo and
+  // Project/Database/Clickhouse/StatusInfo) as its Connection part and
+  // livewire/project/shared/resource-details.blade.php behind "Details". compat/notes/database-general-forms.md
+  // lists how the types differ.
   import { untrack } from 'svelte';
   import Reicon from './Reicon.svelte';
   import Modal from './Modal.svelte';
   import Empty from './Empty.svelte';
   import Callout from './Callout.svelte';
+  import ConfirmModal from './ConfirmModal.svelte';
+  import LogViewer, { type LogRequest } from './LogViewer.svelte';
+  import ProcessDialog from './ProcessDialog.svelte';
   import Listbox from './Listbox.svelte';
   import FormInput from './FormInput.svelte';
   import FormTextarea from './FormTextarea.svelte';
@@ -19,6 +24,7 @@
   import SettingsSection from './SettingsSection.svelte';
   import DatabaseSubsection from './DatabaseSubsection.svelte';
   import { dbUi, ApiError, type DatabaseRecord, type DatabaseFormExtras } from '../lib/api';
+  import { generalUi } from '../lib/databaseApi';
   import { notify } from '../lib/toast.svelte';
 
   let {
@@ -187,7 +193,19 @@
   let error = $state<ApiError | null>(null);
   let details = $state(false);
 
-  // Listboxes whose changes coolify-rs cannot apply yet; they snap back to the record.
+  let confirmRegenerate = $state(false);
+  let confirmKeep = $state(false);
+  let proxyLogs = $state(false);
+  let anonymousVolume = $state<string | null>(null);
+  let addingScript = $state(false);
+  let newFilename = $state('');
+  let newContent = $state('');
+  let scriptError = $state<ApiError | null>(null);
+  let scripts = $state<{ index: number; filename: string; content: string; original: string }[]>(
+    untrack(() => (record.init_scripts ?? []).map((s) => ({ ...s, original: s.filename }))),
+  );
+  let deletingScript = $state<string | null>(null);
+
   let isPublic = $state(untrack(() => !!record.is_public));
   let enableSsl = $state(untrack(() => !!record.enable_ssl));
   let sslMode = $state(untrack(() => str(record.ssl_mode) || (sslModeOptions[kind]?.fallback ?? '')));
@@ -195,14 +213,10 @@
 
   const hidden = $derived(!canUpdate);
   const started = $derived(!!record.started_at);
-  const exited = $derived((record.status ?? '').startsWith('exited'));
+  const exited = $derived((record.status ?? '').includes('exited'));
   const dirty = $derived(JSON.stringify(form) !== JSON.stringify(saved));
   const err = (k: string) => error?.field(k);
   const urlHelper = 'If you change the user/password/port, this could be different. This is with the default values.';
-
-  function unavailable(what: string) {
-    notify.info('Not available in coolify-rs yet', `${what} is not supported by coolify-rs yet.`);
-  }
 
   const orNull = (v: string) => (v.trim() === '' ? null : v);
   // Hidden or locked passwords never reach the form, so they are not sent back.
@@ -211,10 +225,7 @@
     return !column.endsWith('password') || record[column] !== undefined;
   };
 
-  async function submit() {
-    if (!canUpdate) return;
-    saving = true;
-    error = null;
+  function formBody(): Record<string, unknown> {
     if (form.portsMappings) form.portsMappings = form.portsMappings.replaceAll(' ', '').trim();
     const body: Record<string, unknown> = {
       name: form.name,
@@ -231,9 +242,17 @@
       if (!sendable(column)) continue;
       body[column] = ['postgres_initdb_args', 'postgres_host_auth_method'].includes(column) ? orNull(value) : value;
     }
+    return body;
+  }
+
+  async function submit() {
+    if (!canUpdate) return;
+    saving = true;
+    error = null;
+    const body = formBody();
     try {
       await dbUi.update(record.uuid, body);
-      notify.ok('Database updated.');
+      notify.success('Database updated.');
       saved = JSON.parse(JSON.stringify(form));
       await onsaved();
     } catch (e) {
@@ -241,6 +260,93 @@
       if (!Object.keys(error.errors).length) notify.error(error.message);
     } finally {
       saving = false;
+    }
+  }
+
+  function failed(e: unknown) {
+    error = e instanceof ApiError ? e : new ApiError(0, String(e));
+    if (!Object.keys(error.errors).length) notify.failure(error.message);
+  }
+
+  // `General::instantSave`
+  async function savePublic(value: boolean) {
+    try {
+      const r = await generalUi.setPublic(record.uuid, value, formBody());
+      if (!r.ok) isPublic = !!record.is_public;
+      else saved = JSON.parse(JSON.stringify(form));
+      await onsaved();
+    } catch (e) {
+      isPublic = !!record.is_public;
+      failed(e);
+    }
+  }
+
+  // `General::instantSaveAdvanced`
+  async function saveLogDrain(value: boolean) {
+    try {
+      const r = await generalUi.setLogDrain(record.uuid, value, formBody());
+      if (!r.ok) logDrain = !!record.is_log_drain_enabled;
+      else saved = JSON.parse(JSON.stringify(form));
+      await onsaved();
+    } catch (e) {
+      logDrain = !!record.is_log_drain_enabled;
+      failed(e);
+    }
+  }
+
+  // `HasDatabaseStatusInfo::instantSaveSSL`
+  async function saveSsl() {
+    await generalUi.setSsl(record.uuid, enableSsl, sslModes ? sslMode : null);
+    await onsaved();
+  }
+
+  // `Clickhouse\General::mount`
+  $effect(() => {
+    if (kind === 'clickhouse') {
+      generalUi
+        .anonymousVolume(record.uuid)
+        .then((r) => (anonymousVolume = r.volume))
+        .catch(() => {});
+    }
+  });
+
+  async function fetchProxyLogs(req: LogRequest) {
+    return (await generalUi.proxyLogs(record.uuid, req.lines, req.timestamps)).logs;
+  }
+
+  // `save_new_init_script`
+  async function addScript(e: SubmitEvent) {
+    e.preventDefault();
+    scriptError = null;
+    try {
+      const r = await generalUi.initScript(record.uuid, { action: 'add', filename: newFilename, content: newContent });
+      if (r.ok) {
+        scripts = [...scripts, { index: scripts.length, filename: newFilename, content: newContent, original: newFilename }];
+        newFilename = '';
+        newContent = '';
+        addingScript = false;
+        await onsaved();
+      }
+    } catch (err) {
+      scriptError = err instanceof ApiError ? err : new ApiError(0, String(err));
+    }
+  }
+
+  // `InitScript::submit` and `save_init_script`
+  async function saveScript(script: (typeof scripts)[number]) {
+    const r = await generalUi.initScript(record.uuid, { action: 'save', filename: script.filename, content: script.content, original_filename: script.original });
+    if (r.ok) {
+      script.original = script.filename;
+      await onsaved();
+    }
+  }
+
+  // `InitScript::delete` and `delete_init_script`
+  async function deleteScript(filename: string) {
+    const r = await generalUi.initScript(record.uuid, { action: 'delete', filename });
+    if (r.ok) {
+      scripts = scripts.filter((s) => s.original !== filename).map((s, i) => ({ ...s, index: i }));
+      await onsaved();
     }
   }
 </script>
@@ -549,6 +655,22 @@
   >
     <UnsavedBar {dirty} {saving} onsave={submit} onreset={() => ((form = JSON.parse(JSON.stringify(saved))), (error = null))} />
 
+    {#if anonymousVolume}
+      <Callout type="danger" title="Current data is not in the data volume">
+        <p>
+          Because of a bug in older Coolify versions, a file mount removed the data volume. This database keeps its current data in the unnamed Docker volume <code>{anonymousVolume}</code>. Starting or
+          restarting it is blocked, because it would use the data volume and the current data would seem lost.
+        </p>
+        <p class="mt-2">
+          An admin can click "Keep current data" to use this volume as the data volume. The previous data volume is not used anymore, but stays on the server. It can contain data from before the file
+          mount was added.
+        </p>
+        {#if canUpdate}
+          <div class="mt-3"><button type="button" class="button" onclick={() => (confirmKeep = true)}>Keep current data</button></div>
+        {/if}
+      </Callout>
+    {/if}
+
     <SettingsSection id="database-details-section" title="Database details" description="Manage the identity, container image, and credentials of this {label} database.">
       {#snippet actions()}
         <button type="button" class="button" onclick={() => (details = true)}>Details</button>
@@ -566,7 +688,7 @@
     <SettingsSection id="access-section" title="Access" description="How applications and clients connect to this database, and whether it is reachable from the internet.">
       {#snippet actions()}
         {#if isPublic}
-          <button type="button" class="button" onclick={() => unavailable('Viewing the proxy logs')}>View logs</button>
+          <button type="button" class="button" onclick={() => (proxyLogs = true)}>View logs</button>
         {/if}
       {/snippet}
       <DatabaseSubsection id="connection-section" title="Connection" helper="Use these URLs to connect to the database." first>
@@ -598,17 +720,29 @@
                   <h3 class="text-sm font-semibold text-black dark:text-fg">SSL configuration</h3>
                   <p class="mt-1 text-xs text-neutral-500 dark:text-fg-dim">Encryption settings can only be changed while the database is stopped.</p>
                 </div>
+                {#if enableSsl && extras.certificate_valid_until}
+                  <button type="button" class="button" onclick={() => (confirmRegenerate = true)}>Regenerate SSL Certificates</button>
+                {/if}
               </div>
+              {#if enableSsl && extras.certificate_valid_until}
+                <div class="mb-4 text-sm text-neutral-600 dark:text-fg-dim">
+                  Valid until:
+                  {#if extras.certificate_state === 'expired'}
+                    <span class="text-red-500">{extras.certificate_valid_until} - Expired</span>
+                  {:else if extras.certificate_state === 'soon'}
+                    <span class="text-red-500">{extras.certificate_valid_until} - Expiring soon</span>
+                  {:else}
+                    <span>{extras.certificate_valid_until}</span>
+                  {/if}
+                </div>
+              {/if}
               <div class="grid gap-4 sm:grid-cols-2">
                 <Listbox
                   id="enableSsl"
                   label="SSL"
                   disabled={!exited || !canUpdate}
                   bind:value={enableSsl}
-                  onchange={() => {
-                    enableSsl = !!record.enable_ssl;
-                    unavailable('SSL for databases');
-                  }}
+                  onchange={saveSsl}
                   options={[
                     { value: true, label: 'Enabled' },
                     { value: false, label: 'Disabled' },
@@ -621,10 +755,7 @@
                     helper={sslModes.helper}
                     disabled={!enableSsl || !exited || !canUpdate}
                     bind:value={sslMode}
-                    onchange={() => {
-                      sslMode = str(record.ssl_mode) || sslModes.fallback;
-                      unavailable('SSL for databases');
-                    }}
+                    onchange={saveSsl}
                     options={sslModes.options}
                   />
                 {/if}
@@ -640,10 +771,7 @@
             label="Access"
             disabled={!canUpdate}
             bind:value={isPublic}
-            onchange={() => {
-              isPublic = !!record.is_public;
-              unavailable('Making a database public');
-            }}
+            onchange={(v: boolean) => savePublic(v)}
             options={[
               { value: false, label: 'Private' },
               {
@@ -722,10 +850,7 @@
           label="Log drain"
           disabled={!canUpdate}
           bind:value={logDrain}
-          onchange={() => {
-            logDrain = !!record.is_log_drain_enabled;
-            unavailable('Forwarding logs to a log drain');
-          }}
+          onchange={(v: boolean) => saveLogDrain(v)}
           options={[
             { value: false, label: 'Do not forward logs' },
             { value: true, label: 'Forward logs to the server drain' },
@@ -739,22 +864,31 @@
     <SettingsSection id="initialization-scripts-section" title="Initialization scripts" description="Run SQL files in order when PostgreSQL initializes for the first time." flush>
       {#snippet actions()}
         {#if canUpdate}
-          <button type="button" class="button" onclick={() => unavailable('Adding initialization scripts')}>+ Add</button>
+          <button type="button" class="button" onclick={() => (addingScript = true)}>+ Add</button>
         {/if}
       {/snippet}
       <div class="divide-y divide-neutral-200 dark:divide-border-subtle">
         {#if hidden}
           <Empty title="Hidden (only admins can view)" description="Initialization scripts can contain credentials." />
-        {:else if record.init_scripts?.length}
-          {#each record.init_scripts as script (script.filename)}
-            <!-- livewire/project/database/init-script.blade.php, read-only until coolify-rs can edit scripts -->
-            <div class="application-settings-form flex flex-col gap-4 px-4 py-4">
+        {:else if scripts.length}
+          {#each scripts as script, i (script.original)}
+            <!-- livewire/project/database/init-script.blade.php (Project\Database\InitScript) -->
+            <form
+              class="application-settings-form flex flex-col gap-4 px-4 py-4"
+              onsubmit={(e) => {
+                e.preventDefault();
+                saveScript(script);
+              }}
+            >
               <div class="flex items-end gap-2">
-                <FormInput id="init-script-{script.index}" label="Filename" value={script.filename} disabled />
-                <button type="button" class="button button-error" disabled title="Not available in coolify-rs yet">Delete</button>
+                <FormInput id="init-script-{i}" label="Filename" bind:value={script.filename} />
+                <button type="button" class="button button-error" onclick={() => (deletingScript = script.original)}>Delete</button>
               </div>
-              <FormTextarea id="init-script-content-{script.index}" label="Content" rows={12} value={script.content} disabled />
-            </div>
+              <FormTextarea id="init-script-content-{i}" label="Content" rows={12} bind:value={script.content} />
+              {#if script.filename !== script.original || script.content !== (record.init_scripts ?? []).find((s) => s.filename === script.original)?.content}
+                <div class="flex justify-end"><button type="submit" class="button">Save</button></div>
+              {/if}
+            </form>
           {/each}
         {:else}
           <Empty title="No initialization scripts" description="Add a SQL file to run during the first PostgreSQL initialization." />
@@ -803,4 +937,73 @@
       </div>
     </div>
   </Modal>
+{/if}
+
+{#if confirmRegenerate}
+  <ConfirmModal
+    title="Regenerate SSL Certificates"
+    actions={['The SSL certificate of this database will be regenerated.', 'You must restart the database after regenerating the certificate to start using the new certificate.']}
+    confirmWithText={false}
+    confirmWithPassword={false}
+    onconfirm={async () => {
+      await generalUi.regenerateSsl(record.uuid);
+      await onsaved();
+    }}
+    onclose={() => (confirmRegenerate = false)}
+  />
+{/if}
+
+{#if confirmKeep && anonymousVolume}
+  <ConfirmModal
+    title="Keep current data?"
+    actions={[
+      `Use the unnamed volume ${anonymousVolume} as the data volume of this database.`,
+      'Starts and restarts are allowed again and keep the current data.',
+      'The previous data volume stays on the server and is not used anymore.',
+    ]}
+    confirmWithText={false}
+    confirmWithPassword={false}
+    step2ButtonText="Keep current data"
+    onconfirm={async () => {
+      await generalUi.keepAnonymousVolume(record.uuid);
+      anonymousVolume = null;
+      await onsaved();
+    }}
+    onclose={() => (confirmKeep = false)}
+  />
+{/if}
+
+{#if deletingScript !== null}
+  {@const name = deletingScript}
+  <ConfirmModal
+    title="Delete initialization script?"
+    actions={['Permanently delete this initialization script from the database and server.', 'Redeployments that depend on this script may fail.']}
+    confirmationText={name}
+    confirmationLabel="Enter the initialization script name to confirm."
+    shortConfirmationLabel="Script name"
+    confirmWithPassword={false}
+    step2ButtonText="Permanently delete"
+    onconfirm={async () => {
+      await deleteScript(name);
+    }}
+    onclose={() => (deletingScript = null)}
+  />
+{/if}
+
+{#if addingScript}
+  <Modal title="New initialization script" onclose={() => (addingScript = false)}>
+    <form class="flex w-full flex-col gap-4" onsubmit={addScript}>
+      <FormInput placeholder="create_test_db.sql" id="new_filename" label="Filename" required bind:value={newFilename} error={scriptError?.field('new_filename')} />
+      <FormTextarea rows={16} placeholder="CREATE DATABASE test;" id="new_content" label="Content" required bind:value={newContent} error={scriptError?.field('new_content')} />
+      <div class="flex justify-end border-t border-neutral-200 pt-4 dark:border-white/[0.08]">
+        <button type="submit" class="button">Add script</button>
+      </div>
+    </form>
+  </Modal>
+{/if}
+
+{#if proxyLogs}
+  <ProcessDialog title="Proxy logs" closeWithX size="xl" onclose={() => (proxyLogs = false)}>
+    <LogViewer containerName="{record.uuid}-proxy" fetchLogs={fetchProxyLogs} collapsible={false} />
+  </ProcessDialog>
 {/if}

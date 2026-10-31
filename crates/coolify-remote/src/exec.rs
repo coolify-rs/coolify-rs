@@ -93,6 +93,19 @@ impl fmt::Debug for PrivateKey {
     }
 }
 
+/// A remote file being read: dropping it ends the ssh process and removes the key file.
+pub struct RemoteRead {
+    pub stdout: tokio::process::ChildStdout,
+    _child: tokio::process::Child,
+    _key: Box<dyn std::any::Any + Send + Sync>,
+}
+
+impl std::fmt::Debug for RemoteRead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RemoteRead")
+    }
+}
+
 /// Where and how to connect. Mirrors the `Server` fields upstream reads.
 #[derive(Debug)]
 pub struct Target {
@@ -520,6 +533,37 @@ impl Remote {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         cmd
+    }
+
+    /// Streams a file from the server. `streamBackupFromServer` reads over SFTP; this reads with
+    /// `cat` over the same connection, so it also works through `COOLIFY_RS_SSH_BINARY`.
+    pub async fn open_read(
+        &self,
+        t: &Target,
+        remote_path: &str,
+    ) -> Result<RemoteRead, RemoteError> {
+        let known_hosts = self.check_target(t)?;
+        let key = self.write_key(&t.key)?;
+        let mut child = self
+            .command(t, key.path(), &known_hosts)
+            .spawn()
+            .map_err(|e| RemoteError::new(format!("Failed to start ssh: {e}"), None))?;
+        let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+            return Err(RemoteError::new("Failed to start ssh: missing pipes", None));
+        };
+        let mut lines = vec![format!("cat {}", crate::shell::quote(remote_path))];
+        if t.is_non_root() {
+            lines = parse_commands_by_line_for_sudo(&lines, &t.user);
+        }
+        let script = lines.join("\n");
+        let _ = stdin.write_all(script.as_bytes()).await;
+        let _ = stdin.write_all(b"\n").await;
+        drop(stdin);
+        Ok(RemoteRead {
+            stdout,
+            _child: child,
+            _key: Box::new(key),
+        })
     }
 
     async fn run_once(

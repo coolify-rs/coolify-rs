@@ -189,6 +189,15 @@ pub async fn find_in_team(db: &Db, team_id: TeamId, uuid: &str) -> DbResult<Opti
     Ok(None)
 }
 
+/// A database by kind and id, wherever it belongs.
+pub async fn find_of_kind(db: &Db, kind: Kind, id: i64) -> DbResult<Option<DatabaseRow>> {
+    let r: Option<Joined> = sqlx::query_as(&select(kind, "d.id = $1"))
+        .bind(id)
+        .fetch_optional(db.pool())
+        .await?;
+    r.map(|j| to_row(kind, &j)).transpose()
+}
+
 /// `Project::databases()` for each of the team's projects (table order).
 pub async fn list_for_team(db: &Db, team_id: TeamId) -> DbResult<Vec<DatabaseRow>> {
     let projects: Vec<i64> = sqlx::query_scalar("SELECT id FROM projects WHERE team_id = $1")

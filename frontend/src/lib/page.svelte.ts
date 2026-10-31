@@ -41,6 +41,8 @@ export interface NavContext {
   backTitle: string;
   ariaLabel: string;
   groups: NavContextItem[][];
+  /** The menu one Back away (`x-main-nav-menu :depth`, `navOnly`). */
+  parent?: NavContext;
 }
 
 /** Server context in the top bar (switcher and status), see ServerTopbar. */

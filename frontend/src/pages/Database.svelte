@@ -1,29 +1,46 @@
 <script lang="ts">
   // Port of upstream livewire/project/database/configuration.blade.php (+
-  // Project\Database\Configuration): the heading, the database
-  // menu (shown by the main sidebar) and the section. General and Danger zone
-  // are ported; the other sections and the Backups / Runtime Logs / Terminal /
-  // Files pages show the "not available in coolify-rs yet" page in the same frame.
+  // Project\Database\Configuration): the heading, the database menu (shown by the
+  // main sidebar) and the section; backup/index.blade.php and backup/execution.blade.php
+  // (Project/Database/Backup/Execution) for the backup pages. The `Project/Shared/*`
+  // sections render a plain placeholder until the shared components are connected.
   import Empty from '../components/Empty.svelte';
   import DatabaseHeading from '../components/DatabaseHeading.svelte';
   import DatabaseGeneral from '../components/DatabaseGeneral.svelte';
   import DatabaseDanger from '../components/DatabaseDanger.svelte';
+  import DatabaseSqliteGeneral from '../components/DatabaseSqliteGeneral.svelte';
+  import DatabaseHealth from '../components/DatabaseHealth.svelte';
+  import DatabaseImport from '../components/DatabaseImport.svelte';
+  import DatabaseBackups from '../components/DatabaseBackups.svelte';
+  import DatabaseBackupEdit from '../components/DatabaseBackupEdit.svelte';
+  import DatabaseBackupExecutions from '../components/DatabaseBackupExecutions.svelte';
   import Unported from './Unported.svelte';
   import { dbUi, uiApi, ApiError, type DatabaseRecord, type DatabaseState } from '../lib/api';
-  import { databaseNavContext, databaseSection } from '../lib/databaseMenu';
+  import { backupNavContext, databaseNavContext, databaseSection, teleport } from '../lib/databaseMenu';
+  import { backupsUi, type BackupEdit } from '../lib/databaseApi';
+  import { router } from '../lib/router.svelte';
   import { setProjectCrumbs } from '../lib/crumbs';
   import { strnatcmp } from '../lib/natsort';
   import { page } from '../lib/page.svelte';
   import { session } from '../lib/session.svelte';
 
-  let { uuid, env, db, section }: { uuid: string; env: string; db: string; section: string } = $props();
+  let {
+    uuid,
+    env,
+    db,
+    section,
+    backup,
+    backupSection,
+  }: { uuid: string; env: string; db: string; section: string; backup?: string; backupSection?: string } = $props();
 
   let record = $state<DatabaseRecord | null>(null);
   let dbState = $state<DatabaseState | null>(null);
   let resources = $state<{ label: string; href: string; active: boolean }[]>([]);
   let missing = $state(false);
+  let backupEdit = $state<BackupEdit | null>(null);
 
   const active = $derived(databaseSection(section));
+  const currentBackupSection = $derived(backupSection === 'executions' || backupSection === 'danger' ? backupSection : 'general');
   const base = $derived(`/project/${uuid}/environment/${env}/database/${db}`);
   const canUpdate = $derived(dbState?.can_update ?? false);
   const kind = $derived(dbState?.kind ?? '');
@@ -59,14 +76,26 @@
     }
     dbState = await loadState();
     record = r;
-    document.title = `${r.name.slice(0, 10)} > Configuration | coolify-rs`;
-    page.navContext = databaseNavContext(base, active, {
+    document.title = `${r.name.slice(0, 10)} > ${backup ? 'Backup' : active === 'backups' ? 'Backups' : 'Configuration'} | coolify-rs`;
+    const menu = databaseNavContext(base, active, {
       canUpdate: dbState.can_update,
       canAccessTerminal: session.isAdmin,
       // `isBackupSolutionAvailable()`: not for Redis, KeyDB and Dragonfly.
       backups: !['redis', 'keydb', 'dragonfly'].includes(dbState.kind ?? ''),
       initScripts: (dbState.kind ?? 'postgresql') === 'postgresql',
     });
+    page.navContext = menu;
+    if (backup) {
+      // `/backups/{uuid}/s3` and `/retention` redirect to the backup's General page.
+      if (backupSection === 's3' || backupSection === 'retention') return router.go(`${base}/backups/${backup}`, true);
+      page.navContext = backupNavContext(base, backup, currentBackupSection, menu);
+      try {
+        backupEdit = await backupsUi.edit(db, backup);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return router.go('/', true);
+        throw e;
+      }
+    }
     uiApi.project(uuid).then((d) => setProjectCrumbs(d, env));
     dbUi
       .resources(uuid, env)
@@ -86,6 +115,35 @@
     const poll = setInterval(() => record && refresh().catch(() => {}), 10000);
     return () => clearInterval(poll);
   });
+  // Sections that only render `Project/Shared/*` (ported by the shared branch).
+  const sharedSections: Record<string, string> = {
+    'environment-variables': 'Project/Shared/EnvironmentVariable/All',
+    servers: 'Project/Shared/Destination',
+    'persistent-storage': 'Project/Service/Storage',
+    webhooks: 'Project/Shared/Webhooks',
+    'resource-limits': 'Project/Shared/ResourceLimits',
+    'resource-operations': 'Project/Shared/ResourceOperations',
+    metrics: 'Project/Shared/Metrics',
+    tags: 'Project/Shared/Tags',
+    logs: 'Project/Shared/Logs',
+    terminal: 'Project/Shared/ExecuteContainerCommand',
+    files: 'Project/Shared/FileBrowser',
+  };
+
+  const running = $derived((record?.status ?? '').startsWith('running'));
+  const backupEnabled = $derived(!!backupEdit?.form.enabled);
+
+  // `ManagesDatabaseBackup` for the header actions of `Backup\Execution`.
+  async function headerToggle() {
+    if (!backup) return;
+    const r = await backupsUi.action(db, backup, 'toggleEnabled');
+    if (r.backup) backupEdit = r.backup;
+  }
+  async function headerBackupNow() {
+    if (!backup) return;
+    const r = await backupsUi.action(db, backup, 'backupNow');
+    if (r.redirect_executions) router.go(`${base}/backups/${backup}/executions`);
+  }
 </script>
 
 {#if missing}
@@ -96,13 +154,39 @@
   <div>
     <DatabaseHeading {record} {dbState} healthcheckUrl="{base}/healthcheck" {resources} onrefresh={() => refresh().catch(() => {})} />
 
+    {#if backup && canUpdate && backupEdit}
+      <!-- @teleport('#resource-action-hud-slot') of backup/execution.blade.php -->
+      <div class="order-first mr-1 hidden items-center gap-1 xl:flex" use:teleport={'resource-action-hud-slot'}>
+        {#if backupEnabled}
+          <button type="button" class="button" onclick={headerToggle}>Disable backup</button>
+        {:else}
+          <button type="button" class="button button-highlighted" onclick={headerToggle}>Enable backup</button>
+        {/if}
+        <button type="button" class="button" disabled={!running} title={running ? undefined : 'The database must be running to start a backup.'} onclick={headerBackupNow}>Back up now</button>
+      </div>
+    {/if}
+
     <section class="application-settings-workspace mt-4 w-full max-w-none lg:mt-0">
       <div class="grid min-w-0 gap-8 xl:grid-cols-[210px_minmax(0,1fr)] xl:gap-8">
         <aside class="application-settings-navigation in-main-nav min-w-0"></aside>
         <div class="min-w-0">
-          {#if active === 'general'}
-            {#if kind === '' || kind === 'sqlite'}
+          {#if backup}
+            {#if currentBackupSection === 'executions'}
+              <DatabaseBackupExecutions databaseUuid={db} backupUuid={backup} />
+            {:else if backupEdit}
+              <DatabaseBackupEdit {record} backupUuid={backup} section={currentBackupSection} {base} edit={backupEdit} onchanged={(e) => (backupEdit = e)} />
+            {/if}
+          {:else if active === 'backups'}
+            <DatabaseBackups {record} {base} {canUpdate} />
+          {:else if active === 'import-backup'}
+            <DatabaseImport {record} {canUpdate} />
+          {:else if active === 'healthcheck'}
+            <DatabaseHealth {record} {canUpdate} onsaved={() => refresh().catch(() => {})} />
+          {:else if active === 'general'}
+            {#if kind === ''}
               <Unported description="The settings of this database type are not ported to coolify-rs yet." />
+            {:else if kind === 'sqlite'}
+              <DatabaseSqliteGeneral {record} {canUpdate} onsaved={() => refresh().catch(() => {})} />
             {:else if dbState}
               <DatabaseGeneral
                 {record}
@@ -116,6 +200,10 @@
             {#if dbState}
               <DatabaseDanger {record} canDelete={canUpdate} back="/project/{uuid}/environment/{env}" />
             {/if}
+          {:else if sharedSections[active]}
+            <div data-upstream-section={sharedSections[active]}>
+              <Unported description="{sharedSections[active]} is connected from the shared sections." />
+            </div>
           {:else}
             <Unported />
           {/if}
