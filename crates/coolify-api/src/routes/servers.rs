@@ -1077,6 +1077,7 @@ pub(crate) fn deploy_forbidden(ctx: &AuthCtx, reason: &'static str) -> Result<()
 pub async fn delete(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: crate::audit::Meta,
     Path(uuid): Path<String>,
     uri: Uri,
 ) -> ApiResult {
@@ -1100,8 +1101,34 @@ pub async fn delete(
         .and_then(Value::as_str)
         == Some("transferred");
     if transferred {
-        // Deleting the transfer archive is not ported.
-        return Err(ApiError::NotPorted);
+        if from_provider {
+            return Err(ApiError::Message(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "This server is managed by another Coolify instance. Delete its cloud server from that instance.",
+            ));
+        }
+        crate::server_transfer::delete_archive_now(&state, s.id)
+            .await
+            .map_err(|_| ApiError::Internal)?;
+        crate::audit::log(
+            &state,
+            &ctx,
+            &meta,
+            "api.server.deleted",
+            json!({
+                "team_id": ctx.team_id,
+                "server_uuid": s.uuid,
+                "server_name": s.record.get("name"),
+                "ip": s.record.get("ip"),
+                "archive": true,
+            }),
+            "info",
+        )
+        .await;
+        return Ok(
+            crate::response::PhpJson(StatusCode::OK, json!({"message": "Server deleted."}))
+                .into_response(),
+        );
     }
     let resources = servers::resource_count(&state.db, s.id).await?;
     if resources > 0 && !force {

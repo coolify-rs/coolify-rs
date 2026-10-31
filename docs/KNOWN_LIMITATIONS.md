@@ -316,3 +316,20 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
 | Terminal shell | `Project\Shared\Terminal`, xterm.js and a node-pty websocket service | the page lists targets; a selected target shows that no session is available | a shell needs the websocket service, its token flow (`TerminalSessionService`) and security review |
 | `Server\Security\TerminalAccess` | toggle at `/server/{uuid}/security/terminal-access` | not ported | |
 | Shared resource sections | `Project\Shared\*`, `Project\Service\{Storage, FileStorage}` and `Project\Application\{Advanced, Rollback}` for every resource | environment variables, persistent storage, runtime logs, resource limits, healthcheck, tags, webhooks and Advanced are ported and mounted on application pages as `frontend/src/components/shared/*` with `/ui/resources/{kind}/{uuid}/...` | Not ported: Resource operations (clone, move, migrate), Servers (`Destination`), Previews UI, Swarm, Maintenance, Files (`FileBrowser`), resource Metrics charts (only the states before charts), starting a rollback, Refresh GPUs, linking a secret manager source (it contacts a third party; only the empty state), volume backup modals, external Compose volumes, stale Compose volume actions |
+
+## Server transfer
+
+- A transfer between two real instances with a second Docker host has not been run. Export, job and source side ran against a recorded
+  fake target; import and claim ran on the reference and on coolify-rs against the SSH testing host.
+- The import does not take over DNS records at Cloudflare (`adoptRecord`, `reclaimRecord`): an owned record of a bundle is stored as not
+  owned, with the warning upstream gives when the provider refuses. The finish list steps `dns_record`, `github_app_webhook` (GitHub API),
+  `s3_storage` (`testConnection`) and webhook receipts (`recordWebhook`) make no provider call and stay on "Needs action" until marked done.
+- Project icons do not travel: `ProjectIconStorageService` is not ported, so a project with an icon gets upstream's "cannot be read" warning
+  on export, and an icon in a bundle is not stored on import.
+- `clearLocalSshArtifacts` and `remove_iip` have no equivalent: this build keeps no SSH mux or key cache to clear, and messages are not
+  stripped of instance addresses.
+- A database error during import answers with a shorter message than Laravel's, without SQL and bindings.
+- `TransferFinishChanged` is not broadcast: the list refreshes through its 15 second poll.
+- `MigrateServerToInstanceJob::failed` (`recordStoppedMigration`) has no equivalent, because this job has no worker timeout. A restart during a
+  transfer leaves the state "running" until `STALE_MIGRATION_SECONDS` passes.
+

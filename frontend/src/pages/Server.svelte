@@ -3,6 +3,10 @@
   // over SSH (ADR 0009); fetching server details and cloud provider links are
   // not ported yet, nor is the localhost server's page.
   import Reicon from '../components/Reicon.svelte';
+  import Callout from '../components/Callout.svelte';
+  import ServerTransferFinish from '../components/ServerTransferFinish.svelte';
+  import { link } from '../lib/router.svelte';
+  import { post as pagePost, failure as pageFailure } from '../lib/serverApi';
   import Empty from '../components/Empty.svelte';
   import FormInput from '../components/FormInput.svelte';
   import Listbox from '../components/Listbox.svelte';
@@ -199,7 +203,40 @@
   $effect(() => () => clearTimeout(poll));
 
   const err = (k: string) => error?.field(k);
+
+  let takingBack = $state(false);
+  /** `Show::enableManagement`. */
+  async function enableManagement(): Promise<string | void> {
+    try {
+      const r = await pagePost<{ message?: string }>(`/server-page/${encodeURIComponent(uuid)}/transfer/enable-management`);
+      if (r.message) notify.success(r.message);
+      location.reload();
+    } catch (e) {
+      pageFailure(e);
+    } finally {
+      takingBack = false;
+    }
+  }
 </script>
+
+{#if takingBack && facts}
+  <ConfirmModal
+    title="Take back a transferred server?"
+    confirmWithPassword={false}
+    step2ButtonText="I understand, enable management"
+    confirmationText={facts.name}
+    confirmationLabel="Enter the server name to take the server back."
+    shortConfirmationLabel="Server name"
+    actions={[
+      'This instance starts to run deployments, webhooks, scheduled tasks, backups, proxy updates, and monitoring for this server again.',
+      'The server records that this instance owns it. The next time the other instance connects to the server, it stops managing it automatically.',
+      'Sentinel on the server is reconfigured to send its data to this instance.',
+      'This instance takes back its DNS records and shows the steps that finish the take back: webhooks, DNS, Sentinel, backups, and runners.',
+    ]}
+    onconfirm={enableManagement}
+    onclose={() => (takingBack = false)}
+  />
+{/if}
 
 {#snippet serverDetails()}
   {#if hasMetadata && details?.metadata}
@@ -331,17 +368,35 @@
             {/if}
           {/snippet}
           {#snippet actions()}
-            <button
-              type="button"
-              class="button"
-              {...facts?.functional ? {} : { ishighlighted: '' }}
-              disabled={!canEdit}
-              onclick={validate}
-            >
-              <Reicon name={facts?.functional ? 'refresh' : 'alert-circle'} class="size-3.5" />
-              {facts?.functional ? 'Revalidate connection' : 'Validate connection'}
-            </button>
+            {#if !facts?.transferred}
+              <button
+                type="button"
+                class="button"
+                {...facts?.functional ? {} : { ishighlighted: '' }}
+                disabled={!canEdit}
+                onclick={validate}
+              >
+                <Reicon name={facts?.functional ? 'refresh' : 'alert-circle'} class="size-3.5" />
+                {facts?.functional ? 'Revalidate connection' : 'Validate connection'}
+              </button>
+            {/if}
+            {#if facts?.transferred && !facts.is_coolify_host}
+              <button type="button" class="button button-error" disabled={!canEdit} onclick={() => (takingBack = true)}>
+                <Reicon name="alert-triangle" class="size-3.5" />
+                Enable management
+              </button>
+            {/if}
           {/snippet}
+          {#if facts?.transferred}
+            <Callout type="danger" title="Transferred to another instance" class="mb-4">
+              This server was transferred to
+              <strong>{facts.transfer_target_url || 'another Coolify instance'}</strong>,
+              which manages it now. Use that instance. To undo the transfer, use
+              <a href={`/server/${uuid}/transfer`} use:link class="underline">Transfer back</a>. Keep this archive until you are sure: it is the
+              copy that an undo uses.
+            </Callout>
+          {/if}
+          <ServerTransferFinish {uuid} />
 
           <div class="grid gap-4 sm:grid-cols-2">
             <FormInput id="name" label="Name" required disabled={!canEdit} bind:value={form.name} error={err('name')} />

@@ -16,6 +16,7 @@ pub mod gitlab;
 pub mod notifications;
 pub mod server;
 pub mod server_ops;
+pub mod server_transfer;
 pub mod services;
 mod validate;
 
@@ -86,6 +87,10 @@ impl Jobs {
             .get()
             .cloned()
             .unwrap_or_else(|| "4.5.1".into())
+    }
+
+    pub fn encrypter(&self) -> Option<&Encrypter> {
+        self.0.encrypter.as_ref()
     }
 
     pub fn remote(&self) -> &Remote {

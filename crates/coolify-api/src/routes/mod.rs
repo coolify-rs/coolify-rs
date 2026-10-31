@@ -19,6 +19,7 @@ pub mod notifications;
 pub mod private_keys;
 pub mod projects;
 pub mod s3_storages;
+pub mod server_transfer;
 pub mod servers;
 pub mod services;
 pub mod shared_envs;
@@ -450,6 +451,30 @@ pub const ROUTES: &[RouteSpec] = &[
     RouteSpec {
         method: "DELETE",
         uri: "api/v1/security/keys/{uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/import/check",
+        group: Group::Main,
+        abilities: WD,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/import",
+        group: Group::Main,
+        abilities: WD,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/{uuid}/transfer/complete",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/{uuid}/migrate",
         group: Group::Main,
         abilities: W,
     },
@@ -2377,6 +2402,27 @@ pub fn router(state: AppState) -> Router {
             "POST",
             "api/v1/databases/{uuid}/stop",
             on_post(databases::stop),
+        ),
+        (
+            "GET",
+            "api/v1/servers/import/check",
+            on_get(server_transfer::check),
+        ),
+        (
+            "POST",
+            "api/v1/servers/import",
+            on_post(server_transfer::import)
+                .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024)),
+        ),
+        (
+            "POST",
+            "api/v1/servers/{uuid}/transfer/complete",
+            on_post(server_transfer::complete),
+        ),
+        (
+            "POST",
+            "api/v1/servers/{uuid}/migrate",
+            on_post(server_transfer::migrate),
         ),
         ("GET", "api/v1/servers", on_get(servers::list)),
         ("POST", "api/v1/servers", on_post(servers::create)),

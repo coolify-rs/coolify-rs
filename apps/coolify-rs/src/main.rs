@@ -22,7 +22,6 @@ use coolify_db::{Db, DbConfig};
 use coolify_remote::{HostKeyPolicy, Remote, RemoteConfig};
 use std::path::PathBuf;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
-use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::{DefaultOnFailure, DefaultOnResponse, TraceLayer};
 
 /// The upstream release whose API contract and schema this build implements.
@@ -225,7 +224,7 @@ fn app(state: AppState) -> Router {
         )
         .layer(PropagateRequestIdLayer::new(request_id.clone()))
         .layer(SetRequestIdLayer::new(request_id, MakeRequestUuid))
-        .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(30)))
+        .layer(axum::middleware::from_fn(request_timeout))
         .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
 }
 
@@ -358,5 +357,23 @@ async fn main() -> Result<()> {
             .await?;
             Ok(())
         }
+    }
+}
+
+/// 30 seconds, as `TimeoutLayer` gave every request. A server transfer connects to the server over
+/// SSH and imports a whole bundle, so it gets `ServerTransferMigrator::IMPORT_TIMEOUT_SECONDS`.
+async fn request_timeout(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let path = request.uri().path();
+    let transfer = path == "/api/v1/servers/import"
+        || (path.starts_with("/api/v1/servers/") && path.ends_with("/migrate"))
+        || path.contains("/transfer/");
+    let limit = Duration::from_secs(if transfer { 300 } else { 30 });
+    match tokio::time::timeout(limit, next.run(request)).await {
+        Ok(response) => response,
+        Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
     }
 }

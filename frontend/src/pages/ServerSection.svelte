@@ -14,6 +14,7 @@
   import ServerSentinel from './ServerSentinel.svelte';
   import ServerSentinelLogs from './ServerSentinelLogs.svelte';
   import ServerProxy from './ServerProxy.svelte';
+  import ServerTransfer from './ServerTransfer.svelte';
   import ServerProxyDynamic from './ServerProxyDynamic.svelte';
   import ServerProxyCertificates from './ServerProxyCertificates.svelte';
   import ServerLogsPage from './ServerLogsPage.svelte';
@@ -42,6 +43,7 @@
     sentinel: ServerSentinel,
     'sentinel/logs': ServerSentinelLogs,
     proxy: ServerProxy,
+    transfer: ServerTransfer,
     'proxy/dynamic': ServerProxyDynamic,
     'proxy/certificates': ServerProxyCertificates,
     'proxy/logs': ServerLogsPage,

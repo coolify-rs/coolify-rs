@@ -238,6 +238,7 @@ export interface ServerFacts {
   status_type: 'success' | 'warning' | 'error';
   functional: boolean;
   transferred: boolean;
+  transfer_target_url?: string | null;
   is_coolify_host: boolean;
   is_localhost: boolean;
   is_build: boolean;

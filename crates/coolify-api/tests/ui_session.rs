@@ -68,7 +68,7 @@ async fn login_logout_and_bridge() {
     assert_eq!(
         h.request(
             "GET",
-            "/ui/api/v1/servers/import/check",
+            "/ui/api/v1/services/x/databases/y/imports/1",
             &[("cookie", &cookie)],
             None
         )

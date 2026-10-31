@@ -122,3 +122,12 @@ Upstream references are relative to the upstream repository root.
 | Resume interrupted runs | implemented (stage file) | `run.rs` |
 | Layer B templates (e.g. optional column registration) | not started | roadmap |
 | Classification calibration against labelled history | not started | roadmap |
+
+## Server transfer
+
+`ServerTransferController` (`GET /servers/import/check`, `POST /servers/import`, `POST /servers/{uuid}/migrate`,
+`POST /servers/{uuid}/transfer/complete`, `GET /servers/{uuid}/transfer`), `ServerTransferExporter`, `ServerTransferImporter`,
+`ServerTransferClaimer` (claim, mark transferred, owner marker in `ServerConnectionCheckJob`, delete archive, take back),
+`ServerTransferMigrator` with `MigrateServerToInstanceJob`, `TransferFinishChecklist` with `CheckTransferFinishStepsJob`, and the
+pages `Server/Transfer` and `Server/TransferFinish`. Differential: `compat/diff/transfer_diff.py`.
+

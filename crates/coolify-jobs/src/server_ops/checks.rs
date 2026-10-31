@@ -19,7 +19,7 @@ const SSH_ATTEMPTS: u32 = 2;
 const SSH_TIMEOUT_SECONDS: u64 = 10;
 const DOCKER_TIMEOUT_SECONDS: u64 = 15;
 /// `ServerTransferClaimer::OWNER_MARKER_PATH`.
-const OWNER_MARKER_PATH: &str = "/data/coolify/.owner";
+use crate::server_transfer::OWNER_MARKER_PATH;
 
 /// `ServerConnectionCheckJob::handle`.
 pub async fn server_connection_check(jobs: &Jobs, server_id: i64) -> Result<(), String> {
@@ -54,11 +54,12 @@ async fn connection_check(srv: &Srv) -> Result<(), String> {
     let target = srv.target().await?;
     let probe = format!("cat {OWNER_MARKER_PATH} 2>/dev/null || true; ls -la / > /dev/null");
     let mut reachable = false;
+    let mut owner_marker = None;
     for attempt in 0..SSH_ATTEMPTS {
         if attempt > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         }
-        if srv
+        if let Ok(output) = srv
             .jobs
             .remote()
             .run(
@@ -69,11 +70,22 @@ async fn connection_check(srv: &Srv) -> Result<(), String> {
                     .timeout(std::time::Duration::from_secs(SSH_TIMEOUT_SECONDS)),
             )
             .await
-            .is_ok()
         {
+            owner_marker = output;
             reachable = true;
             break;
         }
+    }
+    // `releasedToAnotherInstance`.
+    if reachable
+        && crate::server_transfer::release_if_claimed_elsewhere(
+            &srv.jobs,
+            srv,
+            owner_marker.as_deref(),
+        )
+        .await?
+    {
+        return Ok(());
     }
     let unreachable_count = srv
         .row
