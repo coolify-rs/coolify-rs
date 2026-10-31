@@ -54,8 +54,8 @@ $team = $server->team_id;
 $key = App\\Models\\PrivateKey::where('name', '{PREFIX}-key')->first() ?? App\\Models\\PrivateKey::create(['name' => '{PREFIX}-key', 'team_id' => $team, 'private_key' => App\\Models\\PrivateKey::generateNewKeyPair('rsa')['private_key']]);
 $src = match ('{case.split("-")[0]}') {{
     'github' => App\\Models\\GithubApp::create(['name' => '{PREFIX}-gh', 'team_id' => $team, 'api_url' => '{FAKE}/github', 'html_url' => 'http://{PROXY}', 'app_id' => 4242, 'installation_id' => 99, 'client_id' => 'c', 'client_secret' => 's', 'webhook_secret' => 'w', 'private_key_id' => $key->id]),
-    'gitlab' => App\\Models\\GitlabApp::create(['name' => '{PREFIX}-gl', 'team_id' => $team, 'api_url' => '{FAKE}/gitlab/api/v4', 'html_url' => '{FAKE}/gl', 'client_id' => 'c', 'client_secret' => 's', 'access_token' => 'fixed+token', 'refresh_token' => 'r', 'expires_at' => time() + 90000, 'webhook_token' => 'w']),
-    'gitea' => App\\Models\\GiteaApp::create(['name' => '{PREFIX}-gt', 'team_id' => $team, 'api_url' => '{FAKE}/gitea/api/v1', 'html_url' => '{FAKE}/gt', 'client_id' => 'c', 'client_secret' => 's', 'access_token' => 'fixed+token', 'refresh_token' => 'r', 'expires_at' => time() + 90000, 'webhook_secret' => 'w']),
+    'gitlab' => App\\Models\\GitlabApp::create(['name' => '{PREFIX}-gl', 'team_id' => $team, 'api_url' => '{FAKE}/gitlab/api/v4', 'html_url' => '{FAKE}/gl', 'client_id' => 'c', 'client_secret' => 's', 'access_token' => 'fixed+token', 'refresh_token' => 'r', 'expires_at' => time() + {-100 if case.endswith('-expired') else 90000}, 'webhook_token' => 'w', 'redirect_uri' => 'http://example.test/cb']),
+    'gitea' => App\\Models\\GiteaApp::create(['name' => '{PREFIX}-gt', 'team_id' => $team, 'api_url' => '{FAKE}/gitea/api/v1', 'html_url' => '{FAKE}/gt', 'client_id' => 'c', 'client_secret' => 's', 'access_token' => 'fixed+token', 'refresh_token' => 'r', 'expires_at' => time() + {-100 if case.endswith('-expired') else 90000}, 'webhook_secret' => 'w']),
     default => null,
 }};
 $env = App\\Models\\Environment::where('uuid', '{ENV}')->first();
@@ -146,6 +146,10 @@ def run(case):
         record(f"[{case}] docker-compose.yaml identical", fr == fs and fr != "", "\n".join(difflib.unified_diff(fr.splitlines(), fs.splitlines(), lineterm="")))
         if case.endswith("-compose"):
             return
+        if case.endswith("-expired"):
+            table = f"{case.split('-')[0]}_apps"
+            left = sql(f"SELECT expires_at - extract(epoch from now())::int FROM {table} WHERE name LIKE '{PREFIX}-%'")
+            record(f"[{case}] the refresh stored a new expiry", int(left or -1) > 3000, left)
         codes = []
         for u in (ur, us):
             host = f"{u}.{sql(f'SELECT ip FROM servers WHERE uuid = {chr(39)}{SERVER}{chr(39)}')}.sslip.io"

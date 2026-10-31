@@ -1,10 +1,11 @@
 <script lang="ts">
   // Port of upstream components/git-icon.blade.php.
-  let { git, class: cls = 'size-4' }: { git: string; class?: string } = $props();
+  // `$attributes->merge(['class' => 'w-6 h-6'])`.
+  let { git, class: cls = '' }: { git: string; class?: string } = $props();
   const kind = $derived(git.toLowerCase().replace('app\\models\\', '').replace('app', ''));
 </script>
 
-<svg xmlns="http://www.w3.org/2000/svg" class={cls} viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 {cls}" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
   <path stroke="none" d="M0 0h24v24H0z" fill="none" />
   {#if kind === 'github'}
     <path

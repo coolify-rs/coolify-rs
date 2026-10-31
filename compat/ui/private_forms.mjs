@@ -66,6 +66,22 @@ async function editorForm(page, base, name, type, text, button) {
   await page.locator(`button:has-text("${button}")`).first().click();
 }
 
+// The Git Source page: moves an application to another provider's App.
+async function changeSource(page, base, uuid, target, label) {
+  await page.goto(`${base}/project/${PROJECT}/environment/${ENV}/application/${uuid}/source`);
+  await page.waitForTimeout(2000);
+  await dismiss(page);
+  await page.screenshot({ path: `${out}pf-source-${label}.png`, fullPage: true });
+  await page.locator(`button:has-text("${target}")`).locator('visible=true').first().click({ force: true });
+  await page.waitForTimeout(600);
+  await page.locator('input[placeholder*="Change Git Source"], input[type=text]').locator('visible=true').last().fill('Change Git Source');
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: `${out}pf-source-${label}-confirm.png` });
+  await page.locator('button:has-text("Continue")').locator('visible=true').last().click({ force: true });
+  await page.waitForTimeout(2500);
+  await page.screenshot({ path: `${out}pf-source-${label}-after.png`, fullPage: true });
+}
+
 const COLUMNS = `name, git_repository, git_branch, git_commit_sha, repository_project_id, source_type, build_pack, ports_exposes, publish_directory,
   base_directory, health_check_enabled, dockerfile, dockerfile_location, docker_compose_location, private_key_id, status`;
 function row(uuid) {
@@ -111,6 +127,33 @@ for (const [name, run] of cases.filter(([n]) => !only.length || only.includes(n)
   }
   const same = !rows.ref?.error && !rows.rs?.error && JSON.stringify(rows.ref) === JSON.stringify(rows.rs);
   console.log(`${same ? 'PASS' : 'FAIL'} ${name}`);
+  if (!same) {
+    failed++;
+    console.log('  ref', JSON.stringify(rows.ref));
+    console.log('  rs ', JSON.stringify(rows.rs));
+  }
+}
+if (!only.length || only.includes('source')) {
+  const glId = sql("SELECT id FROM gitlab_apps WHERE name = 'uisrc-gl-on'");
+  const rows = {};
+  for (const [label, base] of sides) {
+    const uuid = `gitsrc${label}source0000000`;
+    const env = sql(`SELECT id FROM environments WHERE uuid = '${ENV}'`);
+    const destId = sql(`SELECT id FROM standalone_dockers WHERE uuid = '${dest}'`);
+    const id = sql(`INSERT INTO applications (uuid, name, git_repository, git_branch, build_pack, ports_exposes, environment_id, destination_id, destination_type, source_id, source_type, repository_project_id, created_at, updated_at) VALUES ('${uuid}', 'gitsrc-source', 'o/r', 'main', 'dockerfile', '80', ${env}, ${destId}, 'App\\Models\\StandaloneDocker', ${glId}, 'App\\Models\\GitlabApp', 77, now(), now()) RETURNING id`).split('\n')[0];
+    sql(`INSERT INTO application_settings (application_id, created_at, updated_at) VALUES (${id}, now(), now())`);
+    try {
+      await changeSource(pages[label], base, uuid, 'uisrc-gt-on', label);
+      rows[label] = JSON.parse(sql(`SELECT row_to_json(t) FROM (SELECT source_type, repository_project_id, a.git_repository FROM applications a WHERE id = ${id}) t`));
+    } catch (e) {
+      await pages[label].screenshot({ path: `${out}pf-source-${label}-error.png`, fullPage: true }).catch(() => {});
+      rows[label] = { error: String(e).slice(0, 300) };
+    }
+    sql(`DELETE FROM application_settings WHERE application_id = ${id}`);
+    sql(`DELETE FROM applications WHERE id = ${id}`);
+  }
+  const same = !rows.ref?.error && !rows.rs?.error && JSON.stringify(rows.ref) === JSON.stringify(rows.rs) && rows.rs.source_type?.includes('Gitea');
+  console.log(`${same ? 'PASS' : 'FAIL'} source change`);
   if (!same) {
     failed++;
     console.log('  ref', JSON.stringify(rows.ref));

@@ -61,8 +61,8 @@
   let submitting = $state(false);
   let copied = $state(false);
 
-  // "Continue" on step 2 becomes "Confirm" when there is no password step.
-  const effectiveStep2 = $derived(!confirmWithPassword && step2ButtonText === 'Continue' ? 'Confirm' : step2ButtonText);
+  // Upstream only swaps "Continue" for "Confirm" when `shouldSkipPasswordConfirmation()` holds.
+  const effectiveStep2 = $derived(step2ButtonText);
 
   async function submit() {
     submitting = true;

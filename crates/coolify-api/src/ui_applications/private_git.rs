@@ -342,11 +342,16 @@ pub async fn scan(
     let Some(jobs) = state.jobs.as_ref() else {
         return Err(ApiError::NotPorted);
     };
-    let repository = s(&m, "repository");
+    let mut repository = s(&m, "repository");
     let pem;
     let port;
     let row;
     let credentials = if provider == "deploy-key" {
+        // applicationForDetection(): get_git_source() first.
+        match deploy_key_source(&state, &repository).await? {
+            Ok((converted, _)) => repository = converted,
+            Err(e) => return failure(e),
+        }
         let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
         let id = int_of(&m, "private_key_id").unwrap_or(-1);
         if !coolify_db::private_keys::exists_in_team(&state.db, ctx.team_id, id).await? {
@@ -904,10 +909,7 @@ pub async fn create_dockerfile(
         ),
         ("git_branch", ColumnValue::Text(Some("main".into()))),
         ("build_pack", ColumnValue::Text(Some("dockerfile".into()))),
-        (
-            "dockerfile",
-            ColumnValue::Text(Some(dockerfile.clone())),
-        ),
+        ("dockerfile", ColumnValue::Text(Some(dockerfile.clone()))),
         ("ports_exposes", ColumnValue::Text(Some(port.to_string()))),
         ("health_check_enabled", ColumnValue::Bool(false)),
         ("source_id", ColumnValue::Int(0)),

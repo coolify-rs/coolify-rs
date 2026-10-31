@@ -11,7 +11,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - The web UI covers the dashboard, projects, environments, private keys, team settings, members and appearance.
   Not available yet: registration and the root setup window, password reset and forced password change, 2FA
   enrollment and recovery codes, passkeys, OAuth/SSO, team creation and invitations, instance settings, API token
-  management, and every page for servers, resources, sources, storages, notifications and tags (they open a "not
+  management, and every page for servers, resources, storages, notifications and tags (they open a "not
   available in coolify-rs yet" page).
 - Within the ported pages: no canvas views, global search, project icons, team avatars or custom color themes;
   applications and services in an environment are counted, not listed; the dashboard's server status does not include
@@ -68,7 +68,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   GitHub App or a deploy key), the Docker Compose sections of the General page (a Compose application shows the "not
   available" page; it can be created but not deployed), HTTP Basic Authentication, custom Docker run options,
   pre/post-deployment commands, building on a build server (selecting it says so), a Dockerfile stored on the
-  application (no repository), switching the Git source to a GitLab or Gitea App, "Force start" of a queued
+  application (no repository), "Force start" of a queued
   deployment and the other application pages (Domains, Environment Variables, Storage, Advanced, Healthcheck,
   Runtime Logs, Terminal, …). The General page's instant saves (site type, labels) store only the setting they
   change, while upstream's `syncData()` also persists unsaved form edits when it regenerates the Nginx
@@ -81,8 +81,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   `docker_compose_domains`, `watch_paths`, `custom_nginx_configuration`, `use_build_server`,
   `connect_to_docker_network`, HTTP basic auth, custom labels, Docker run options, pre/post-deployment commands,
   manual webhook secrets, GPU and container-name settings and tags answer 501 when sent with a value. The GitHub App
-  repository check does not apply upstream's `SafeExternalUrl` private-network policy to the GitHub API URL, and the
-  GitHub App path is not yet verified against a real GitHub App (only up to the lookup of the App).
+  path is not yet verified against a real GitHub App.
 - Docker Compose applications deploy (build, pull, `docker compose up`, build fingerprint reuse, raw mode). Not ported:
   custom Compose start/build commands, "preserve repository", preview deployments, configuration files with content
   (file storages Coolify writes), build secrets. The startup cleanup scopes interrupted deployments by host name, so
@@ -160,3 +159,27 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 | `PullTemplatesFromCDN`, `get_service_templates(force: true)` | the shipped file, or `COOLIFY_RS_TEMPLATES_DIR` | no scheduler |
 | `CleanupDocker` after a stop, maintenance pages, secret managers (`{{vault.*}}` stops a start), managed DNS cleanup on a changed domain, restart limit notifications, `parseDockerComposeFile` for parsing versions below 3 | not run | their subsystems are not ported |
 | Order of `environment_variables`, `applications`, `databases` | ordered by id | upstream has no `ORDER BY`: Postgres returns heap order, which changes after updates |
+
+## Git sources and webhooks
+
+Verified against `compat/diff/fake_git_provider.py` and the reference, not against a real GitHub App, GitLab or Gitea:
+the API (`git_sources_diff.py`), signed webhooks (`webhooks_diff.py`), deployments (`git_source_deploy_diff.py`), the
+manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private repository forms
+(`compat/ui/private_forms.mjs`). Deploy keys ran against a real SSH mirror on the test VM.
+
+- Preview deployments: webhooks create the `application_previews` row and queue the deployment like upstream, but the
+  deployment job has no preview pipeline yet: it fails the queued preview with "Preview deployments are not supported
+  by coolify-rs yet." and comments on the pull request. Closing a pull request cancels, removes containers and deletes
+  the row. Compose previews only copy `docker_compose_domains` (`generate_preview_fqdn_compose()` needs the preview
+  parser).
+- `workflow_job` deliveries (GitHub Actions runners) answer without doing anything: runners are not ported.
+- `TransferFinishChecklist::recordWebhook()` is not ported.
+- GitHub App setup states, OAuth states and the manual webhook failure counters live in the process: a restart drops
+  them (start the flow again).
+- Failure pages of the webhooks are JSON, upstream renders its HTML 500 page (same status).
+- `SimpleDockerfile` does not run `parseHealthcheckFromDockerfile(isInit: true)`.
+- A failed deployment does not log "Deployment failed. Removing the new version of your application." or remove the
+  new container (all build packs).
+- New Docker Compose services are created through the `POST /services` code; the service page they open is another
+  area.
+- The CSP allows forms to post to any http(s) host, because the manifest flow posts to the GitHub (Enterprise) site.

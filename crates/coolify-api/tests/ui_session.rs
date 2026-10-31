@@ -68,7 +68,7 @@ async fn login_logout_and_bridge() {
     assert_eq!(
         h.request(
             "GET",
-            "/ui/api/v1/github-apps",
+            "/ui/api/v1/notifications/webhook",
             &[("cookie", &cookie)],
             None
         )
