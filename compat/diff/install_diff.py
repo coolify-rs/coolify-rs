@@ -36,7 +36,13 @@ def schema(folder):
     return LITERAL_TS.sub("DEFAULT '<migration time>'::timestamp without time zone", text)
 
 
-same("schema (pg_dump -s, literal migration-time defaults normalized)", schema(up_dir), schema(rs_dir))
+def first_lines(text_a, text_b):
+    import difflib
+    return "\n".join(list(difflib.unified_diff(text_a.splitlines(), text_b.splitlines(), lineterm="", n=0))[:40])
+
+
+if not same("schema (pg_dump -s, literal migration-time defaults normalized)", schema(up_dir), schema(rs_dir)):
+    print(first_lines(schema(up_dir), schema(rs_dir)))
 same("migrations rows", (up_dir / "migrations.txt").read_text(), (rs_dir / "migrations.txt").read_text())
 same("migrations sequence", (up_dir / "migrations_seq.txt").read_text(), (rs_dir / "migrations_seq.txt").read_text())
 
@@ -49,7 +55,7 @@ VOLATILE = {
     "server_settings": {"docker_version", "compose_version", "docker_version_checked_at", "compose_version_checked_at",
                         "patch_check_result", "patch_checked_at", "patch_check_error"},
     "servers": {"sentinel_updated_at", "unreachable_count", "unreachable_notification_sent", "high_disk_usage_notification_sent",
-                "traefik_outdated_info", "log_drain_notification_sent", "swarm_cluster", "detected_traefik_version", "validation_logs",
+                "traefik_outdated_info", "sentinel_waiting_since", "log_drain_notification_sent", "swarm_cluster", "detected_traefik_version", "validation_logs",
                 "server_metadata"},
     "instance_settings": {"public_ipv4", "public_ipv6"},
 }
@@ -120,6 +126,8 @@ TREE_EXPLAINED = {
     "/data/coolify/ssh/keys/ssh_key@<cuid>": "upstream keeps each key on disk (PopulateSshKeysDirectorySeeder); coolify-rs writes a key only for the length of a command (ADR 0009)",
     "/data/coolify/ssh/keys/ssh_key@<cuid>.lock": "same: upstream's lock file for that key",
     "/data/coolify/ssh/mux/mux_<cuid>": "upstream's ssh control socket; coolify-rs does not hold connections open (ADR 0009)",
+    "/data/coolify/ssh/keys": "group only: upstream's container (root) recreates the folder; coolify-rs runs as 9999 and keeps the installer's folder",
+    "/data/coolify/ssh/mux": "group only, as ssh/keys",
     "/data/coolify/ssh/home": "coolify-rs: HOME of the ssh client (ADR 0009)",
     "/data/coolify/ssh/known_hosts": "coolify-rs: pinned host keys (ADR 0009)",
 }
@@ -132,6 +140,9 @@ def tree(folder):
         path = DATE.sub("<date>", path)
         path = re.sub(r"(ssh_key@|mux_)[a-z0-9]{24}", r"\1<cuid>", path)
         path = re.sub(r"known_hosts/[a-z0-9]{24}", "known_hosts/<cuid>", path)
+        # A key file exists while a command runs (ADR 0009), so the dump can catch one.
+        if re.search(r"/ssh/keys/key-", path):
+            continue
         if "sentinel/metrics.sqlite" in path:
             mode = "<sentinel's own>"
         out[path] = f"{kind} {mode} {owner}"
@@ -140,7 +151,9 @@ def tree(folder):
 
 up_tree, rs_tree = tree(up_dir), tree(rs_dir)
 for path in sorted(set(up_tree) | set(rs_tree)):
-    reason = next((r for p, r in TREE_EXPLAINED.items() if path == p or path.startswith(p + "/")), None)
+    reason = TREE_EXPLAINED.get(path) or next(
+        (r for p, r in TREE_EXPLAINED.items() if path.startswith(p + "/") and p not in ("/data/coolify/ssh/keys", "/data/coolify/ssh/mux")), None
+    )
     same(f"tree {path}", up_tree.get(path), rs_tree.get(path), reason)
 
 for name in ("root_ssh.txt", "authorized_keys.txt", "daemon.json", "networks.txt", "volumes.txt"):
@@ -149,7 +162,7 @@ for name in ("root_ssh.txt", "authorized_keys.txt", "daemon.json", "networks.txt
 
 # ---------------------------------------------------------------- containers
 def ps(folder):
-    return [re.sub(r"\|.*coolify:.*", "|<coolify image>", l) for l in (folder / "ps.txt").read_text().splitlines()]
+    return [re.sub(r"^coolify\|.*", "coolify|<coolify image>", l) for l in (folder / "ps.txt").read_text().splitlines()]
 
 
 def sentinel_free(names):

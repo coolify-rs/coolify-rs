@@ -314,7 +314,7 @@ pub async fn production_seed(db: &Db, encrypter: &Encrypter, keys_dir: &Path) ->
 
 /// The server work of `ProductionSeeder` and `app:init`, once the API answers: both reach back to
 /// this server (Sentinel pushes), so they cannot run before it listens.
-pub fn spawn_after_start(jobs: &Jobs, seeded: Seeded) {
+pub fn spawn_after_start(jobs: &Jobs, seeded: Seeded, start_server_scheduler: bool) {
     let jobs = jobs.clone();
     tokio::spawn(async move {
         let mut srv = match Srv::load(&jobs, 0).await {
@@ -341,6 +341,12 @@ pub fn spawn_after_start(jobs: &Jobs, seeded: Seeded) {
         if let Err(e) = proxy::setup_dynamic_proxy_configuration(&srv).await {
             tracing::warn!(error = %e, "could not set up the dynamic proxy configuration");
         }
-        jobs.spawn_check_sentinel(0);
+        if let Err(e) = crate::server_ops::sentinel::check_and_start_sentinel(&jobs, 0).await {
+            tracing::warn!(error = %e, "could not start Sentinel on localhost");
+        }
+        // Its first tick runs at once and starts what is not running, so it waits for the two above.
+        if start_server_scheduler {
+            jobs.start_server_scheduler();
+        }
     });
 }

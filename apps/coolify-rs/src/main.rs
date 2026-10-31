@@ -432,7 +432,7 @@ async fn run() -> Result<()> {
                 // Container statuses of databases, every minute (upstream's ServerManagerJob).
                 jobs.spawn_status_poller();
                 // Off when upstream shares the database: its scheduler already checks the servers.
-                if env("COOLIFY_RS_SERVER_SCHEDULER").is_some() {
+                if env("COOLIFY_RS_SERVER_SCHEDULER").is_some() && seeded.is_none() {
                     jobs.start_server_scheduler();
                 }
                 // Several dev instances on one host must not fail each other's deployments.
@@ -457,7 +457,11 @@ async fn run() -> Result<()> {
                         tracing::warn!(error = ?e, "could not save the public IPs");
                     }
                 });
-                coolify_jobs::first_run::spawn_after_start(jobs, seeded);
+                coolify_jobs::first_run::spawn_after_start(
+                    jobs,
+                    seeded,
+                    env("COOLIFY_RS_SERVER_SCHEDULER").is_some(),
+                );
                 coolify_jobs::updates::spawn_schedule(jobs, state.version.to_string());
             }
             axum::serve(

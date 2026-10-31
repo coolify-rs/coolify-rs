@@ -49,6 +49,13 @@ impl Empty {
     }
 }
 
+#[test]
+fn check_constraints_are_written_as_upstream_does() {
+    let sql = bootstrap::schema_sql();
+    assert!(!sql.contains("::text = ANY ((ARRAY['"));
+    assert!(sql.contains(r#"CHECK ("redirect" IN ('www', 'non-www', 'both'))"#));
+}
+
 #[tokio::test]
 async fn empty_database_gets_the_baseline() {
     let db = Empty::new().await;
@@ -57,6 +64,14 @@ async fn empty_database_gets_the_baseline() {
         Prepared::Created
     );
     assert_eq!(db.count("SELECT count(*) FROM migrations").await, 473);
+    assert_eq!(
+        db.count(
+            "SELECT count(*) FROM pg_constraint WHERE contype = 'c' AND conrelid <> 0 AND pg_get_constraintdef(oid) LIKE '%ANY ((ARRAY[%::text[]%'"
+        )
+        .await,
+        10,
+        "the check constraints deparse as upstream's do"
+    );
     assert_eq!(
         db.count("SELECT last_value FROM migrations_id_seq").await,
         473

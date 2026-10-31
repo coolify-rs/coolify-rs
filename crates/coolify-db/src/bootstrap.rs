@@ -15,6 +15,31 @@ pub const SCHEMA_SQL: &str =
 pub const MIGRATIONS_SQL: &str =
     include_str!("../../../compat/baseline/upstream-main-b5823c7-migrations.sql");
 
+/// [`SCHEMA_SQL`] with its `CHECK ... IN` constraints as upstream's migrations write them.
+///
+/// The dump renders them as `ANY ((ARRAY['a'::character varying, ...])::text[])`. Postgres parses
+/// that text into a different expression than `col IN ('a', ...)` on a `varchar` column, so loading
+/// it as it is makes `pg_dump` of the result differ from upstream's. The rules are the same.
+pub fn schema_sql() -> String {
+    let check = regex::Regex::new(
+        r"CHECK \(\(\((\w+)\)::text = ANY \(\(ARRAY\[((?:'[^']*'::character varying(?:, )?)+)\]\)::text\[\]\)\)\)",
+    )
+    .ok();
+    let item = regex::Regex::new(r"'([^']*)'::character varying").ok();
+    let (Some(check), Some(item)) = (check, item) else {
+        return SCHEMA_SQL.to_owned();
+    };
+    check
+        .replace_all(SCHEMA_SQL, |c: &regex::Captures<'_>| {
+            let values: Vec<String> = item
+                .captures_iter(&c[2])
+                .map(|v| format!("'{}'", &v[1]))
+                .collect();
+            format!("CHECK (\"{}\" IN ({}))", &c[1], values.join(", "))
+        })
+        .into_owned()
+}
+
 /// Held for the length of the transaction: two starting containers must not both create the schema.
 const LOCK_KEY: i64 = 0x0063_6f6f_6c69_6679;
 
@@ -56,7 +81,7 @@ pub async fn create_schema(url: &str) -> Result<(), BootstrapError> {
         tx.rollback().await?;
         return Err(BootstrapError::NotEmpty { relations });
     }
-    sqlx::raw_sql(SCHEMA_SQL).execute(&mut *tx).await?;
+    sqlx::raw_sql(&schema_sql()).execute(&mut *tx).await?;
     sqlx::raw_sql(MIGRATIONS_SQL).execute(&mut *tx).await?;
     tx.commit().await?;
     conn.close().await.ok();
