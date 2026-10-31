@@ -23,7 +23,10 @@ pub mod ui_server_destinations;
 pub mod ui_server_general;
 pub mod ui_server_ops;
 pub mod ui_server_proxy;
+pub mod ui_sources;
+pub mod ui_sources_routes;
 pub mod validation;
+pub mod webhooks;
 
 pub use routes::router;
 pub use state::AppState;

@@ -57,6 +57,9 @@ export async function request<T>(method: string, path: string, body?: unknown): 
   return data as T;
 }
 
+/** The request helper, for the per-area clients in their own modules. */
+export const rawRequest = request;
+
 const v1 = (p: string) => `/ui/api/v1${p}`;
 
 export const api = {

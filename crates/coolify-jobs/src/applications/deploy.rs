@@ -643,6 +643,36 @@ fn redact_base64_payloads(text: &str) -> String {
 
 impl Jobs {
     /// Runs the queued deployment `queue_id` (the `ApplicationDeploymentJob` queue worker).
+    /// Fails a queued preview deployment, which `ApplicationDeploymentJob` would build.
+    async fn refuse_preview_deployment(
+        &self,
+        app: &apps::ApplicationRow,
+        queue_id: i64,
+        deployment_uuid: &str,
+        pull_request_id: i64,
+    ) {
+        let db = &self.0.db;
+        let entry = apps::LogEntry {
+            command: None,
+            output: "Preview deployments are not supported by coolify-rs yet.".into(),
+            kind: "stderr",
+            timestamp: now().format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string(),
+            hidden: false,
+            batch: 1,
+        };
+        let _ = apps::append_log(db, queue_id, &[entry], now()).await;
+        let _ = apps::transition_status(db, queue_id, "failed", now()).await;
+        if let Ok(Some(preview)) = self.find_preview(app.id, pull_request_id).await {
+            self.update_pull_request(
+                app,
+                &preview,
+                super::previews::PullRequestStatus::Error,
+                Some(deployment_uuid),
+            )
+            .await;
+        }
+    }
+
     pub async fn run_application_deployment(&self, queue_id: i64) {
         let Ok(Some(q)) = apps::deployment_by_id(&self.0.db, queue_id).await else {
             return;
@@ -654,6 +684,13 @@ impl Jobs {
         let Ok(Some(server_row)) = servers::find_by_id(&self.0.db, server_id).await else {
             return;
         };
+        // A preview deployment needs the preview pipeline; never deploy the main branch for it.
+        let pull_request_id = q.int("pull_request_id").unwrap_or_default();
+        if pull_request_id != 0 {
+            self.refuse_preview_deployment(&app, queue_id, &q.uuid, pull_request_id)
+                .await;
+            return;
+        }
         let server = ServerInfo::from_row(&server_row);
         let server_name = server_row
             .record

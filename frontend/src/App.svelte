@@ -22,6 +22,9 @@
   import ServerDanger from './pages/ServerDanger.svelte';
   import ServerSection from './pages/ServerSection.svelte';
   import ResourceNew from './pages/ResourceNew.svelte';
+  import Sources from './pages/Sources.svelte';
+  import SourceGithub from './pages/SourceGithub.svelte';
+  import SourceOauth from './pages/SourceOauth.svelte';
   import Database from './pages/Database.svelte';
   import Application from './pages/Application.svelte';
   import Unported from './pages/Unported.svelte';
@@ -50,6 +53,7 @@
     page.switchers = [];
     page.navContext = null;
     page.server = null;
+    page.sourceConnected = null;
   });
 
   // Pages that show a named record set their own title once it loads.
@@ -63,6 +67,7 @@
     appearance: 'Appearance',
     destinations: 'Destinations',
     registries: 'Docker Registries',
+    sources: 'Sources',
     servers: 'Servers',
     'server-new': 'New Server',
     'server-new-type': 'New Server',
@@ -124,6 +129,12 @@
       <Destinations />
     {:else if router.current.name === 'destination'}
       {#key router.path}<Destination uuid={params.uuid} section={params.section ?? 'general'} />{/key}
+    {:else if router.current.name === 'sources'}
+      <Sources />
+    {:else if router.current.name === 'source-github'}
+      {#key router.path}<SourceGithub uuid={params.uuid} tab={params.tab ?? 'general'} />{/key}
+    {:else if router.current.name === 'source-gitlab' || router.current.name === 'source-gitea'}
+      {#key router.path}<SourceOauth provider={router.current.name === 'source-gitlab' ? 'gitlab' : 'gitea'} uuid={params.uuid} />{/key}
     {:else if router.current.name === 'servers'}
       <Servers />
     {:else if router.current.name === 'server-new' || router.current.name === 'server-new-type'}

@@ -43,6 +43,8 @@ pub struct UrlPolicy {
     /// `webhook_allowed_internal_hosts`, normalized.
     pub allowed: Vec<String>,
     pub allow_localhost: bool,
+    /// `allowPrivateNetworks` (`SafeWebhookUrl::forGitSource()`).
+    pub allow_private: bool,
 }
 
 impl UrlPolicy {
@@ -71,7 +73,49 @@ impl UrlPolicy {
                 .filter(|e| !e.is_empty())
                 .collect(),
             allow_localhost: allow_localhost.unwrap_or(false),
+            allow_private: false,
         }
+    }
+
+    /// `SafeWebhookUrl::resolveUrlForRequest()`: the addresses to pin the request to (none for
+    /// an IP host) or the exception message.
+    pub async fn request_target(&self, url: &str) -> Result<(String, u16, Vec<IpAddr>), String> {
+        let parsed = parse_url(url).ok_or("Webhook URL is invalid.")?;
+        if parsed.host.ends_with('.') {
+            return Err("Webhook URL host must not end with a trailing dot.".into());
+        }
+        if parsed.scheme != "http" && parsed.scheme != "https" {
+            return Err("Webhook URL scheme is unsafe.".into());
+        }
+        let host = parsed.host.to_lowercase();
+        let host = host
+            .strip_prefix('[')
+            .and_then(|h| h.strip_suffix(']'))
+            .unwrap_or(&host)
+            .trim_end_matches('.')
+            .to_owned();
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            if !self.allowed_ip(ip, &host) {
+                return Err("Webhook URL resolved to an unsafe IP address.".into());
+            }
+            return Ok((host, parsed.port, Vec::new()));
+        }
+        let ips = resolve(&host, parsed.port).await;
+        if ips.is_empty() {
+            return Err("Webhook URL host could not be resolved.".into());
+        }
+        if ips.iter().any(|ip| !self.allowed_ip(*ip, &host)) {
+            return Err("Webhook URL resolved to an unsafe IP address.".into());
+        }
+        if self.blocked_host(&host) && !self.allowed_host(&host) {
+            return Err("Webhook URL host is unsafe.".into());
+        }
+        Ok((host, parsed.port, ips))
+    }
+
+    /// `isBlockedHostname`.
+    fn blocked_host(&self, host: &str) -> bool {
+        host == "localhost" || (!self.allow_private && blocked_hostname(host))
     }
 
     fn allowed_host(&self, host: &str) -> bool {
@@ -104,7 +148,10 @@ impl UrlPolicy {
             return self.allow_localhost && (self.allowed_host(host) || self.allowlisted_ip(ip));
         }
         if private_ip(ip) {
-            return self.allowed_host(host) || self.allowlisted_ip(ip);
+            return self.allow_private || self.allowed_host(host) || self.allowlisted_ip(ip);
+        }
+        if self.allow_private && v4_in(ip, ("100.64.0.0", 10)) {
+            return true;
         }
         self.allowlisted_ip(ip)
     }
@@ -328,7 +375,7 @@ pub async fn endpoint_error(
         .and_then(|h| h.strip_suffix(']'))
         .unwrap_or(&host)
         .to_owned();
-    if blocked_hostname(&for_ip) && !policy.allowed_host(&for_ip) {
+    if policy.blocked_host(&for_ip) && !policy.allowed_host(&for_ip) {
         return Some(private_message());
     }
     if let Ok(ip) = for_ip.parse::<IpAddr>() {
@@ -668,6 +715,7 @@ mod tests {
         let p = UrlPolicy {
             allowed: vec!["192.168.139.0/24".into()],
             allow_localhost: false,
+            allow_private: false,
         };
         assert!(p.allowed_ip("192.168.139.220".parse().unwrap(), "x"));
     }

@@ -57,6 +57,8 @@ class PageState {
   switchers = $state<Switcher[]>([]);
   navContext = $state<NavContext | null>(null);
   server = $state<ServerTopbar | null>(null);
+  /** The source switcher's status badge (`$sourceConnected`); `null` outside source pages. */
+  sourceConnected = $state<boolean | null>(null);
 }
 
 export const page = new PageState();

@@ -104,6 +104,8 @@ fn is_localhost(ip: IpAddr) -> bool {
 struct Policy {
     entries: Vec<String>,
     allow_localhost: bool,
+    /// `allowPrivateNetworks` (`SafeExternalUrl::forGitSource()`).
+    allow_private: bool,
 }
 
 impl Policy {
@@ -139,7 +141,10 @@ impl Policy {
             return self.allow_localhost && (self.allowed_host(host) || self.allowlisted_ip(ip));
         }
         if is_private(ip) {
-            return self.allowed_host(host) || self.allowlisted_ip(ip);
+            return self.allow_private || self.allowed_host(host) || self.allowlisted_ip(ip);
+        }
+        if self.allow_private && matches!(ip, IpAddr::V4(v) if in_v4(v, ("100.64.0.0", 10))) {
+            return true;
         }
         self.allowlisted_ip(ip)
     }
@@ -172,6 +177,18 @@ pub async fn check(
     attribute: &str,
     value: &str,
     headers: &HeaderMap,
+) -> Result<Option<String>, ApiError> {
+    check_with(state, attribute, value, headers, false).await
+}
+
+/// [`check`], with `allow_private` for `SafeExternalUrl::forGitSource()` on a self-hosted
+/// instance.
+pub async fn check_with(
+    state: &AppState,
+    attribute: &str,
+    value: &str,
+    headers: &HeaderMap,
+    allow_private: bool,
 ) -> Result<Option<String>, ApiError> {
     let name = attribute.replace('_', " ");
     if !crate::laravel_url::is_url(value) {
@@ -210,6 +227,7 @@ pub async fn check(
     let policy = Policy {
         entries,
         allow_localhost,
+        allow_private,
     };
     // `privateTargetMessage` uses the attribute name unchanged.
     let private = format!(
@@ -217,9 +235,10 @@ pub async fn check(
         settings_url(headers)
     );
     let blocked_name = for_dns == "localhost"
-        || for_dns.ends_with(".local")
-        || for_dns.ends_with(".internal")
-        || for_dns.ends_with(".cluster.local");
+        || (!allow_private
+            && (for_dns.ends_with(".local")
+                || for_dns.ends_with(".internal")
+                || for_dns.ends_with(".cluster.local")));
     if blocked_name && !policy.allowed_host(&for_dns) {
         return Ok(Some(private));
     }

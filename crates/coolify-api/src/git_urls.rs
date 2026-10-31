@@ -404,7 +404,11 @@ pub fn kebab(value: &str) -> String {
 
 /// `generate_application_name($git_repository, $git_branch)`.
 pub fn generate_application_name(git_repository: &str, git_branch: &str) -> String {
-    let cuid = coolify_domain::new_public_id();
+    application_name_with(git_repository, git_branch, &coolify_domain::new_public_id())
+}
+
+/// `generate_application_name($git_repository, $git_branch, $cuid)`.
+pub fn application_name_with(git_repository: &str, git_branch: &str, cuid: &str) -> String {
     let repo_name = git_repository.rsplit('/').next().unwrap_or(git_repository);
     let name = kebab(&format!("{repo_name}:{git_branch}-{cuid}"));
     let name = NAME_STRIP.replace_all(&name, "").into_owned();

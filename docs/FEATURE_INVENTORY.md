@@ -21,7 +21,7 @@ Upstream references are relative to the upstream repository root.
 | `teams` / `team` | 12 | 8 | verified for reads and `PATCH /team`; team invitations not started |
 | `notifications` | 12 | 0 | not started |
 | `cloud-tokens`, `hetzner`, `digitalocean`, `vultr`, `hostinger`, `cloud-init-scripts` | 30 | 0 | not started |
-| `github-apps`, `gitlab-apps` | 10 | 0 | not started |
+| `github-apps`, `gitlab-apps` | 10 | 10 | all, verified by `compat/diff/git_sources_diff.py` (130/130) with provider answers from `compat/diff/fake_git_provider.py`, not a real provider |
 | `s3-storages` | 6 | 6 | list, show, create, update, delete, validate |
 | `security` (private keys, integration tokens) | 6 | 5 | private keys verified (CRUD, differential); integration tokens not started |
 | `destinations`, `tags`, `resources`, `settings`, `audit-events` | 12 | 0 | not started |

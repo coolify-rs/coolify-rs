@@ -82,6 +82,17 @@ pub fn scan_commands(
     branch: &str,
     base_directory: &str,
 ) -> Result<Vec<String>, String> {
+    scan_commands_with(uuid, clone_url, branch, base_directory, None)
+}
+
+/// `scanCommands()`, with the checkout command of a repository that needs credentials.
+fn scan_commands_with(
+    uuid: &str,
+    clone_url: &str,
+    branch: &str,
+    base_directory: &str,
+    checkout_override: Option<&str>,
+) -> Result<Vec<String>, String> {
     let checkout_dir = format!("/tmp/{uuid}/checkout");
     let base = base_directory.trim_matches('/');
     let dots = regex::Regex::new(r"(^|/)\.\.?(/|$)").map_err(|e| e.to_string())?;
@@ -106,17 +117,30 @@ pub fn scan_commands(
         exposed = quote(EXPOSED_PORT),
         summary = quote(SUMMARY),
     );
+    let checkout = checkout_override.map_or_else(
+        || checkout_command(clone_url, branch, &checkout_dir),
+        str::to_owned,
+    );
     Ok(vec![
         format!("rm -rf /tmp/{uuid}"),
         format!("mkdir -p /tmp/{uuid}"),
         format!("cd /tmp/{uuid}"),
-        format!(
-            "sh -c {}",
-            quote(&checkout_command(clone_url, branch, &checkout_dir))
-        ),
+        format!("sh -c {}", quote(&checkout)),
         format!("cd {checkout_dir}"),
         format!("sh -c {}", quote(&scan)),
     ])
+}
+
+/// How `detect_private_repository()` reaches a repository.
+#[derive(Debug)]
+pub enum CheckoutCredentials<'a> {
+    Github(&'a coolify_db::records::Record),
+    /// A GitLab (`false`) or Gitea (`true`) source.
+    Oauth(&'a coolify_db::records::Record, bool),
+    DeployKey {
+        pem: &'a str,
+        port: &'a str,
+    },
 }
 
 /// `sortByPreference()`: nearest to the base directory first, then the default name.
@@ -206,8 +230,147 @@ impl Jobs {
         branch: &str,
         base_directory: &str,
     ) -> Result<Detection, String> {
+        self.detect_with_checkout(server_id, clone_url, branch, base_directory, None)
+            .await
+    }
+
+    /// `RepositoryDetector::detect()` of an unsaved private application
+    /// (`unsavedApplicationForDetection()`): a shallow clone without submodules.
+    pub async fn detect_private_repository(
+        &self,
+        server_id: i64,
+        credentials: CheckoutCredentials<'_>,
+        repository: &str,
+        branch: &str,
+        base_directory: &str,
+    ) -> Result<Detection, String> {
         let uuid = coolify_domain::new_public_id();
-        let commands = scan_commands(&uuid, clone_url, branch, base_directory)?;
+        let checkout = self
+            .private_checkout(&credentials, repository, branch, &uuid)
+            .await?;
+        self.detect_with_uuid(
+            &uuid,
+            server_id,
+            repository,
+            branch,
+            base_directory,
+            Some(&checkout),
+        )
+        .await
+    }
+
+    /// `generateGitImportCommands(only_checkout: true, exec_in_docker: false)` with
+    /// `str_replace(' clone ', ' clone --quiet ')`.
+    async fn private_checkout(
+        &self,
+        c: &CheckoutCredentials<'_>,
+        repository: &str,
+        branch: &str,
+        uuid: &str,
+    ) -> Result<String, String> {
+        use base64::Engine as _;
+        let db = &self.0.db;
+        let enc = self
+            .0
+            .encrypter
+            .as_ref()
+            .ok_or("No application encryption key has been specified.")?;
+        let checkout_dir = quote(&format!("/tmp/{uuid}/checkout"));
+        let clone = format!("git clone --depth=1 --no-checkout -b {}", quote(branch));
+        let command = match c {
+            CheckoutCredentials::Github(source) => {
+                let token = crate::github::installation_token(db, Some(enc), Some(source)).await?;
+                let encoded = crate::gitea::raw_url_encode(&token);
+                let html = source
+                    .get("html_url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let scheme = html.split_once("://").map_or("https", |(s, _)| s);
+                let rest = html.split_once("://").map_or(html, |(_, r)| r);
+                let host = rest.split(['/', ':', '?', '#']).next().unwrap_or_default();
+                let option = format!(
+                    "-c {}",
+                    quote(&format!(
+                        "url.{scheme}://x-access-token:{encoded}@{host}/.insteadOf={scheme}://{host}/"
+                    ))
+                );
+                let url = format!("{scheme}://x-access-token:{encoded}@{host}/{repository}");
+                format!(
+                    "{} {} {checkout_dir}",
+                    clone.replacen("git clone", &format!("git {option} clone"), 1),
+                    quote(&url)
+                )
+            }
+            CheckoutCredentials::Oauth(source, gitea) => {
+                let token = if *gitea {
+                    crate::gitea::clone_token(db, enc, source).await?
+                } else {
+                    crate::gitlab::clone_token(db, enc, source).await?
+                };
+                let encoded = crate::gitea::raw_url_encode(&token);
+                let html = source
+                    .get("html_url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let (scheme, host, prefix) = crate::git_http::oauth_url_parts(html);
+                let option = format!(
+                    "-c {}",
+                    quote(&format!(
+                        "url.{scheme}://oauth2:{encoded}@{host}{prefix}/.insteadOf={scheme}://{host}{prefix}/"
+                    ))
+                );
+                let url = format!("{scheme}://oauth2:{encoded}@{host}{prefix}/{repository}.git");
+                format!(
+                    "{} {} {checkout_dir}",
+                    clone.replacen("git clone", &format!("git {option} clone"), 1),
+                    quote(&url)
+                )
+            }
+            CheckoutCredentials::DeployKey { pem, port } => {
+                let location = format!("/root/.ssh/id_rsa_coolify_{uuid}");
+                let key_b64 = base64::engine::general_purpose::STANDARD.encode(pem.as_bytes());
+                let ssh = format!(
+                    "ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -p {port} -o Port={port} -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i {location} -o IdentitiesOnly=yes"
+                );
+                format!(
+                    "mkdir -p /root/.ssh && echo '{key_b64}' | base64 -d | tee {location} > /dev/null && chmod 600 {location} && GIT_SSH_COMMAND=\"{ssh}\" {clone} {} {checkout_dir}",
+                    quote(repository)
+                )
+            }
+        };
+        Ok(command.replace(" clone ", " clone --quiet "))
+    }
+
+    async fn detect_with_checkout(
+        &self,
+        server_id: i64,
+        clone_url: &str,
+        branch: &str,
+        base_directory: &str,
+        checkout: Option<&str>,
+    ) -> Result<Detection, String> {
+        let uuid = coolify_domain::new_public_id();
+        self.detect_with_uuid(
+            &uuid,
+            server_id,
+            clone_url,
+            branch,
+            base_directory,
+            checkout,
+        )
+        .await
+    }
+
+    async fn detect_with_uuid(
+        &self,
+        uuid: &str,
+        server_id: i64,
+        clone_url: &str,
+        branch: &str,
+        base_directory: &str,
+        checkout: Option<&str>,
+    ) -> Result<Detection, String> {
+        let commands = scan_commands_with(uuid, clone_url, branch, base_directory, checkout)?;
         let row = servers::find_by_id(&self.0.db, server_id)
             .await
             .map_err(|e| e.to_string())?

@@ -1625,13 +1625,17 @@ async fn create_git(
                 SERVER_ERROR
             })?;
             git_repository = git_repository_slug(&repository);
-            let (status, found) =
-                coolify_jobs::github::repository_access(&github_app, &token, &git_repository)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!(error = %e, "github repository check failed");
-                        SERVER_ERROR
-                    })?;
+            let (status, found) = coolify_jobs::github::repository_access(
+                Some(&state.db),
+                &github_app,
+                &token,
+                &git_repository,
+            )
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "github repository check failed");
+                SERVER_ERROR
+            })?;
             if status == 404 || status == 403 {
                 return Err(ApiError::Message(
                     StatusCode::NOT_FOUND,
@@ -1839,12 +1843,11 @@ async fn domain_conflicts(
 /// What a start, restart, stop or delete of this application needs that coolify-rs lacks.
 async fn deployable(state: &AppState, a: &ApplicationRow) -> Result<(), ApiError> {
     // The deploy job builds Docker images and the dockerfile, static, nixpacks and railpack
-    // git build packs; dockercompose and an inline Dockerfile are not ported.
+    // git build packs.
     let unsupported = !matches!(
         a.str("build_pack"),
         Some("dockerimage" | "dockerfile" | "static" | "nixpacks" | "railpack" | "dockercompose")
-    ) || a.str("dockerfile").is_some_and(|d| !d.is_empty())
-        || a.destination.is_none()
+    ) || a.destination.is_none()
         || a.bool("is_http_basic_auth_enabled")
         || a.str("custom_docker_run_options")
             .is_some_and(|o| !o.trim().is_empty())

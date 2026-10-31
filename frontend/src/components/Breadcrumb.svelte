@@ -9,7 +9,7 @@
   const context = $derived(dashboardContext(router.path));
   // Pages inside a project (its environments and their resources) show the switchers they set.
   const inProject = (name: string) =>
-    ['project', 'environment', 'resource', 'database', 'application', 'destination'].some((prefix) => name.startsWith(prefix));
+    ['project', 'environment', 'resource', 'database', 'application', 'destination', 'source-'].some((prefix) => name.startsWith(prefix));
   const switchers = $derived(inProject(router.current.name) ? page.switchers : []);
 
   // Hide the section name when the page heading right below already says it.
@@ -40,7 +40,7 @@
     <TeamSwitcher />
   </div>
 
-  {#if (switchers.length === 0 || router.current.name === 'destination') && context && !titleRepeats}
+  {#if (switchers.length === 0 || router.current.name === 'destination' || page.sourceConnected !== null) && context && !titleRepeats}
     <span class="shrink-0 px-0.5 text-neutral-300 dark:text-fg-faint">/</span>
     <span class="flex h-8 min-w-0 items-center truncate px-2 font-semibold text-black opacity-70 dark:text-fg">{context}</span>
   {/if}
@@ -82,4 +82,13 @@
       </span>
     {/if}
   {/each}
+
+  {#if page.sourceConnected !== null && switchers.length > 0}
+    <span
+      class="inline-flex h-[22px] shrink-0 items-center gap-1.5 rounded-full border border-neutral-200 bg-neutral-100 px-2.5 text-xs font-medium text-black dark:border-white/[0.12] dark:bg-white/[0.07] dark:text-white"
+    >
+      <span class="size-1.5 rounded-full {page.sourceConnected ? 'bg-[#3fb950]' : 'bg-warning'}"></span>
+      {page.sourceConnected ? 'Connected' : 'Setup incomplete'}
+    </span>
+  {/if}
 </div>
