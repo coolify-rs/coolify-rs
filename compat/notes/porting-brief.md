@@ -17,6 +17,9 @@ Git-ignored things are missing in a new worktree. Link them once (M = the main c
 - Spec notes from earlier work: `compat/notes/`. They can be wrong; the PHP wins. Add a note there only for a large area.
 - Remaining work per area: `scripts/parity.py --missing`.
 
+These links must never be committed: check `git status` before `git add`, and add paths explicitly rather than
+`git add -A`. A committed link once replaced the real folders in the main checkout when the branch was merged.
+
 ## Environment
 
 - Reference Coolify: http://127.0.0.1:18000. It shares one Postgres with coolify-rs (container

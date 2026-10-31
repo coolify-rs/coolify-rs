@@ -1,10 +1,10 @@
 /target
-/.upstream/
-/compat/reference/secrets/
+/.upstream
+/compat/reference/secrets
 /.migration-runs/
 *.local.toml
 /compat/diff/last-report.json
 /compat/testing-host/secrets/
 __pycache__/
-/compat/ui/node_modules/
+/compat/ui/node_modules
 /compat/ui/shots/
