@@ -7,6 +7,7 @@ pub mod advanced;
 pub mod application_extras;
 pub mod config;
 pub mod destination;
+pub mod dns;
 pub mod domains;
 pub mod envs;
 pub mod files;
@@ -42,6 +43,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .merge(operations::routes())
         .merge(config::routes())
         .merge(secret_manager::routes())
+        .merge(dns::routes())
         .merge(storages::routes())
         .route_layer(from_fn_with_state(state, crate::session::ui_guard))
 }

@@ -839,6 +839,11 @@ pub async fn delete(
         jobs.cleanup_preview_deployment(&a, id, id_of(&preview))
             .await;
     }
+    crate::ui_shared::dns::spawn_release_resource(
+        &state,
+        "App\\Models\\ApplicationPreview",
+        id_of(&preview),
+    );
     tracing::info!(target: "audit", event = "api.application.preview_deleted", team_id = ctx.team_id, application_uuid = %a.uuid, pull_request_id = id, "preview deleted");
     Ok(ok(json!({"message": "Preview deletion request queued."})).into_response())
 }

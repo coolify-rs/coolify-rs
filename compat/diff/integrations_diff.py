@@ -33,7 +33,7 @@ PROJECT = "j8xm2emlllhfnyebjzgyzp7z"
 ENVIRONMENT = "uj3st9yvtvzxh7rul3c3opcz"
 SERVER = "hml20fsj5eles0xfiqidq8j5"
 results = []
-created = {"integration_tokens": [], "applications": []}
+created = {"integration_tokens": [], "applications": [], "servers": []}
 
 
 def record(name, same, detail=""):
@@ -159,11 +159,17 @@ def cleanup():
         sql(f"DELETE FROM environment_variables WHERE resourceable_type = 'App\\Models\\Application' AND resourceable_id = {app}")
         sql(f"DELETE FROM application_settings WHERE application_id = {app}")
         sql(f"DELETE FROM applications WHERE id = {app}")
+    for sid in created["servers"]:
+        sql(f"UPDATE server_settings SET cloudflare_tunnel_id = NULL, cloudflare_tunnel_integration_token_id = NULL WHERE server_id = {sid}")
     for tid in created["integration_tokens"]:
         sql(f"DELETE FROM managed_dns_record_references WHERE managed_dns_record_id IN (SELECT id FROM managed_dns_records WHERE integration_token_id = {tid})")
         sql(f"DELETE FROM managed_dns_records WHERE integration_token_id = {tid}")
         sql(f"DELETE FROM dns_provider_zones WHERE integration_token_id = {tid}")
         sql(f"DELETE FROM integration_tokens WHERE id = {tid}")
+    for sid in created["servers"]:
+        sql(f"DELETE FROM standalone_dockers WHERE server_id = {sid}")
+        sql(f"DELETE FROM server_settings WHERE server_id = {sid}")
+        sql(f"DELETE FROM servers WHERE id = {sid}")
 
 
 def create_app(name):
@@ -227,11 +233,198 @@ echo '<<<'.json_encode(['valid' => $valid, 'result' => $res]).'>>>';"""
     return tinker(php)
 
 
+def norm_comment(rows):
+    out = []
+    for r in rows:
+        r = dict(r)
+        if r.get("comment"):
+            r["comment"] = re.sub(r"managed-by: coolify \S+/\S+", "managed-by: coolify ID/UUID", r["comment"])
+        r.pop("id", None)
+        out.append(r)
+    return out
+
+
+def norm_requests(items):
+    out = []
+    for e in items:
+        e = json.loads(json.dumps(e))
+        e["path"] = re.sub(r"(tunnel|rec)-\d+", r"\1-N", e["path"])
+        if isinstance(e.get("body"), dict):
+            for k in ("comment",):
+                if e["body"].get(k):
+                    e["body"][k] = re.sub(r"managed-by: coolify \S+/\S+", "managed-by: coolify ID/UUID", e["body"][k])
+            if e["body"].get("content"):
+                e["body"]["content"] = re.sub(r"tunnel-\d+", "tunnel-N", e["body"]["content"])
+            if "name" in e["body"]:
+                e["body"]["name"] = re.sub(r"coolify-[a-z0-9]{20,}", "coolify-SERVER", e["body"]["name"])
+        if e["query"].get("name"):
+            e["query"]["name"] = re.sub(r"coolify-[a-z0-9]{20,}", "coolify-SERVER", e["query"]["name"])
+        out.append(e)
+    return out
+
+
+def tunnel_rows(sid, tid):
+    row = sql(f"SELECT json_build_object('tunnel', cloudflare_tunnel_id IS NOT NULL, 'account', cloudflare_tunnel_account_id, 'token', cloudflare_tunnel_integration_token_id) FROM server_settings WHERE server_id = {sid}")
+    recs = sql(f"SELECT coalesce(json_agg(json_build_object('type', type, 'name', name, 'content', regexp_replace(content, 'tunnel-[0-9]+', 'tunnel-N'), 'owned', owned, 'refs', (SELECT count(*) FROM managed_dns_record_references x WHERE x.managed_dns_record_id = r.id)) ORDER BY name), '[]') FROM managed_dns_records r WHERE integration_token_id = {tid}")
+    return {"settings": json.loads(row), "records": json.loads(recs)}
+
+
+def ref_tunnel(sid, tid, confirmed=None):
+    conf = "null" if confirmed is None else json.dumps(json.dumps(confirmed))
+    php = f"""
+$s = \\App\\Models\\Server::find({sid}); $t = \\App\\Models\\IntegrationToken::find({tid}); $c = {conf} === null ? null : json_decode({conf}, true);
+try {{ app(\\App\\Services\\CloudflareTunnelService::class)->setUp($s, $t, 'ssh.example.com', $c); $r = ['started' => true]; }}
+catch (\\App\\Exceptions\\DnsRecordConflictException $e) {{ $r = ['record_id' => $e->providerRecordId, 'current' => $e->currentValue]; }}
+catch (\\Throwable $e) {{ $r = ['error' => $e->getMessage()]; }}
+echo '<<<'.json_encode($r).'>>>';"""
+    return tinker(php)
+
+
+def ref_teardown(sid):
+    php = f"$s = \\App\\Models\\Server::find({sid}); echo '<<<'.json_encode(app(\\App\\Services\\CloudflareTunnelService::class)->tearDown($s)).'>>>';"
+    return tinker(php)
+
+
+def reset_tunnel(sid, tid):
+    subprocess.run(["orb", "-m", "coolify-rs-e2e", "-u", "root", "bash", "-c", "docker rm -f coolify-cloudflared >/dev/null 2>&1"], capture_output=True)
+    sql(f"UPDATE server_settings SET cloudflare_tunnel_id = NULL, cloudflare_tunnel_account_id = NULL, cloudflare_tunnel_integration_token_id = NULL WHERE server_id = {sid}")
+    sql(f"DELETE FROM managed_dns_record_references WHERE managed_dns_record_id IN (SELECT id FROM managed_dns_records WHERE integration_token_id = {tid})")
+    sql(f"DELETE FROM managed_dns_records WHERE integration_token_id = {tid}")
+
+
+def tunnel_section(ui, tid):
+    """`CloudflareTunnelService` on a server row of its own: the shared test server is never edited."""
+    php = f"""
+$o = \\App\\Models\\Server::where('uuid', '{SERVER}')->first();
+$s = \\App\\Models\\Server::create(['name' => 'diff-tunnel', 'ip' => $o->ip, 'user' => $o->user, 'port' => $o->port, 'team_id' => $o->team_id, 'private_key_id' => $o->private_key_id, 'proxy' => $o->proxy]);
+$s->settings()->update(['is_reachable' => true, 'is_usable' => true]);
+echo '<<<'.json_encode(['id' => $s->id, 'uuid' => $s->uuid]).'>>>';"""
+    created_server = tinker(php, fake=False)
+    created["servers"].append(created_server["id"])
+    sid, suuid = created_server["id"], created_server["uuid"]
+    url = f"/ui/server-page/{suuid}/cloudflare-tunnel"
+    body = {"cloudflare_integration_token_id": tid, "api_ssh_domain": "ssh.example.com"}
+
+    def side(name, ref_fn, rs_fn):
+        reset_tunnel(sid, tid)
+        fake("/__reset", "POST")
+        pre = setup_conflict.get(name)
+        if pre:
+            pre()
+        before = len(fake_log())
+        ref = ref_fn()
+        ref_req = fake_log()[before:]
+        ref_rows = tunnel_rows(sid, tid)
+        ref_records = fake("/__records")
+        reset_tunnel(sid, tid)
+        fake("/__reset", "POST")
+        if pre:
+            pre()
+        before = len(fake_log())
+        rs = rs_fn()
+        rs_req = fake_log()[before:]
+        rs_rows = tunnel_rows(sid, tid)
+        rs_records = fake("/__records")
+        return ref, ref_req, ref_rows, ref_records, rs, rs_req, rs_rows, rs_records
+
+    def add_conflict():
+        req = urllib.request.Request(FAKE + "/cloudflare/client/v4/zones/zone-example/dns_records", method="POST",
+                                     data=json.dumps({"type": "A", "name": "ssh.example.com", "content": "9.9.9.9"}).encode())
+        req.add_header("Authorization", "Bearer cf-good")
+        req.add_header("Content-Type", "application/json")
+        urllib.request.urlopen(req).read()
+
+    setup_conflict = {"conflict": add_conflict, "replace": add_conflict}
+
+    # A new tunnel.
+    ref, rq, rr, rd, rs, sq, sr, sd = side("new", lambda: ref_tunnel(sid, tid), lambda: ui("POST", url + "/api", body))
+    compare("setUp: started", ref.get("started"), rs[0] == 200 and "activity_id" in rs[1])
+    compare("setUp: requests", norm_requests(rq), norm_requests(sq))
+    compare("setUp: rows", rr, sr)
+    compare("setUp: records at the provider", norm_comment(rd), norm_comment(sd))
+
+    # A conflicting record.
+    ref, rq, rr, rd, rs, sq, sr, sd = side("conflict", lambda: ref_tunnel(sid, tid), lambda: ui("POST", url + "/api", body))
+    compare("setUp conflict: answer", ref.get("current"), rs[1].get("dns_conflict", {}).get("current") if rs[0] == 200 else rs)
+    compare("setUp conflict: requests", norm_requests(rq), norm_requests(sq))
+    compare("setUp conflict: rows", rr, sr)
+
+    # Confirmed: replaces the record.
+    rec = lambda: [r for r in fake("/__records") if r["name"] == "ssh.example.com"][0]["id"]
+    ref, rq, rr, rd, rs, sq, sr, sd = side(
+        "replace",
+        lambda: ref_tunnel(sid, tid, {"record_id": rec(), "current": "9.9.9.9"}),
+        lambda: ui("POST", url + "/api", {**body, "confirmed_conflict": {"record_id": rec(), "current": "9.9.9.9"}}),
+    )
+    compare("setUp replace: started", ref.get("started"), rs[0] == 200 and "activity_id" in rs[1])
+    compare("setUp replace: requests", norm_requests(rq), norm_requests(sq))
+    compare("setUp replace: rows", rr, sr)
+    compare("setUp replace: records at the provider", norm_comment(rd), norm_comment(sd))
+
+    # tearDown after a setUp.
+    def teardown_of(setup, down):
+        reset_tunnel(sid, tid)
+        fake("/__reset", "POST")
+        setup()
+        time.sleep(1)
+        before = len(fake_log())
+        out = down()
+        return out, fake_log()[before:], tunnel_rows(sid, tid), fake("/__records")
+
+    ref, rq, rr, rd = teardown_of(lambda: ref_tunnel(sid, tid), lambda: ref_teardown(sid))
+    rs, sq, sr, sd = teardown_of(lambda: ui("POST", url + "/api", body), lambda: ui("POST", url + "/disable"))
+    compare("tearDown: warnings", ref, rs[1].get("warnings") if rs[0] == 200 else rs)
+    compare("tearDown: requests", norm_requests(rq), norm_requests(sq))
+    compare("tearDown: rows", rr, sr)
+    compare("tearDown: records at the provider", rd, sd)
+    reset_tunnel(sid, tid)
+
+    # Refused by the token.
+    r = ref_create_token("cloudflare", "diff-cf-tunnel-denied", "cf-dnsonly", ["dns", "tunnel"], {})
+    sql(f"INSERT INTO dns_provider_zones (uuid, integration_token_id, provider_zone_id, name, account_id, account_name, created_at, updated_at) VALUES ('zdenied{r['id']}', {r['id']}, 'zone-example', 'example.com', 'acct-1', 'Acme', now(), now())")
+    fake("/__reset", "POST")
+    ref_answer = ref_tunnel(sid, r["id"])
+    code, body2 = ui("POST", url + "/api", {"cloudflare_integration_token_id": r["id"], "api_ssh_domain": "ssh.example.com"})
+    compare("setUp 403: message", ref_answer.get("error"), body2.get("message") if isinstance(body2, dict) else body2)
+    reset_tunnel(sid, r["id"])
+
+
+def uncompromised_section(ui):
+    """`uncompromised()` through the fake: a leaked password (`password`'s hash suffix is in the fake's range)
+    needs the rule's own text. The reference's validator runs under tinker with `Http::fake`."""
+    php = r"""
+\Illuminate\Support\Facades\Http::preventStrayRequests();
+\Illuminate\Support\Facades\Http::fake(['api.pwnedpasswords.com/*' => function ($req) {
+    $r = (new \GuzzleHttp\Client(['http_errors' => false]))->request('GET', 'http://host.docker.internal:18191/hibp/range/'.basename($req->url()));
+    return \Illuminate\Support\Facades\Http::response((string) $r->getBody(), $r->getStatusCode());
+}]);
+$out = [];
+foreach (['password', 'Abcdefg1!x', 'Pa55word!Leak'] as $p) {
+  $rule = \Illuminate\Validation\Rules\Password::min(8)->mixedCase()->letters()->numbers()->symbols()->uncompromised();
+  $v = \Illuminate\Support\Facades\Validator::make(['password' => $p], ['password' => [$rule]]);
+  $out[$p] = $v->errors()->get('password');
+}
+echo '<<<'.json_encode($out).'>>>';"""
+    ref = tinker(php, fake=False)
+    # On coolify-rs through a password reset form validation is not reachable without a token, so the rule
+    # runs through the profile page, which answers before it changes anything when the current password is wrong.
+    rs = {}
+    for p in ["password", "Abcdefg1!x", "Pa55word!Leak"]:
+        code, body = ui("POST", "/ui/profile/password", {"current_password": "not-the-password", "new_password": p, "new_password_confirmation": p})
+        errors = body.get("errors", {}) if isinstance(body, dict) else {}
+        rs[p] = [e.replace("new password", "password") for e in errors.get("new_password", [])]
+    compare("uncompromised: messages", ref, rs)
+    fake("/__reset", "POST")
+    ui("POST", "/ui/profile/password", {"current_password": "not-the-password", "new_password": "Abcdefg1!x", "new_password_confirmation": "Abcdefg1!x"})
+    log = fake_log()
+    compare("uncompromised: the request has only the hash prefix", [(e["method"], e["path"]) for e in log], [("GET", "/hibp/range/" + __import__("hashlib").sha1(b"Abcdefg1!x").hexdigest()[:5].upper())])
+
+
 def main():
     ui = login()
     # The formatters: PHP against the Rust unit tests' table, through a deployment-free path.
     php = r"""
-$vals = ["plain", "a$b", "it's", "tail\\", 'q"\'z', "multi\nline", '#x', ''];
+$vals = ["plain", 'a$b', "it's", "tail\\", 'q"\'z', "multi\nline", '#x', ''];
 $out = [];
 foreach ($vals as $v) { $out[] = [\App\Support\RemoteSecretValueFormatter::dotenv($v), \App\Support\RemoteSecretValueFormatter::composeFile($v)]; }
 echo '<<<'.json_encode($out).'>>>';"""
@@ -338,6 +531,9 @@ echo '<<<'.json_encode(['value' => $e->value, 'runtime' => (bool) $e->is_runtime
     code, body = ui("POST", f"/ui/security/integration-tokens/{r['uuid']}/refresh-zones")
     php = f"$t = \\App\\Models\\IntegrationToken::find({r['id']}); try {{ app(\\App\\Services\\Dns\\CloudflareDnsProvider::class)->syncZones($t); $m = 'none'; }} catch (\\Throwable $e) {{ $m = $e->getMessage(); }} echo '<<<'.json_encode($m).'>>>';"
     compare("syncZones: 403", tinker(php), body.get("message"))
+
+    tunnel_section(ui, tid)
+    uncompromised_section(ui)
 
     same = sum(1 for _, s in results if s)
     print(f"\n{same}/{len(results)} same")

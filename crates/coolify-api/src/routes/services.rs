@@ -1234,6 +1234,19 @@ pub async fn delete(
         query_bool(&uri, &input, "delete_connected_networks", true),
         query_bool(&uri, &input, "delete_configurations", true),
     );
+    let sub_ids: Vec<i64> =
+        sqlx::query_scalar("SELECT id FROM service_applications WHERE service_id = $1")
+            .bind(s.id)
+            .fetch_all(state.db.pool())
+            .await
+            .unwrap_or_default();
+    for id in sub_ids {
+        crate::ui_shared::dns::spawn_release_resource(
+            &state,
+            "App\\Models\\ServiceApplication",
+            id,
+        );
+    }
     tracing::info!(target: "audit", event = "api.service.deleted", team_id = ctx.team_id, service_uuid = %s.uuid, "service deleted");
     Ok(ok(json!({"message": "Service deletion request queued."})).into_response())
 }

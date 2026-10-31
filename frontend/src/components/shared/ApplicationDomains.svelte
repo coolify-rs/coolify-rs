@@ -1,10 +1,10 @@
 <script lang="ts">
   // Port of upstream livewire/project/application/domains.blade.php and
-  // partials/domain-row.blade.php (Project\Application\Domains). DNS checks and the
-  // Cloudflare automation are not ported: they contact external services.
+  // partials/domain-row.blade.php (Project\Application\Domains).
   import Callout from '../Callout.svelte';
   import ConfirmModal from '../ConfirmModal.svelte';
   import Empty from '../Empty.svelte';
+  import DnsMenu from './DnsMenu.svelte';
   import Listbox from '../Listbox.svelte';
   import Modal from '../Modal.svelte';
   import Reicon from '../Reicon.svelte';
@@ -103,7 +103,37 @@
   const dnsType = (s: string) => (s === 'ok' ? 'success' : s === 'failed' ? 'error' : s === 'skipped' ? 'warning' : 'neutral');
   const dnsLabel = (s: string) =>
     s === 'ok' ? 'DNS matches' : s === 'failed' ? 'DNS mismatch' : s === 'skipped' ? 'DNS skipped' : s === 'checking' ? 'Checking DNS...' : s === 'pending' ? 'Not checked' : 'DNS unknown';
-  const dnsUnavailable = () => notify.info('DNS checks are not available in coolify-rs yet.');
+  async function checkDns(row: { url: string; service: string | null }) {
+    try {
+      await request('POST', `${resPath('application', uuid)}/dns/check`, { url: row.url, service: row.service });
+      await load();
+    } catch (e) {
+      notify.failure(e instanceof ApiError ? e.message : String(e));
+    }
+  }
+  // `pollDnsChecks`: while a check runs, and its toast when it ends.
+  let checkingNow = new Set<string>();
+  $effect(() => {
+    const rows = data?.rows ?? [];
+    if (!rows.some((r: { dns_status: string }) => r.dns_status === 'checking')) return;
+    const timer = setTimeout(load, 2000);
+    return () => clearTimeout(timer);
+  });
+  $effect(() => {
+    const now = new Set<string>();
+    for (const r of data?.rows ?? []) {
+      const key = `${r.service ?? ''}|${r.url}`;
+      if (r.dns_status === 'checking') now.add(key);
+      else if (checkingNow.has(key)) {
+        let host = r.url;
+        try { host = new URL(r.url).hostname; } catch { /* keep the URL */ }
+        if (r.dns_status === 'ok') notify.success(`DNS is configured correctly for ${host}.`);
+        else if (r.dns_status === 'failed') notify.failure(`DNS is not configured for ${host}. Review the required DNS record. If you changed it recently, DNS propagation can take some time, so please try again later.`);
+        else notify.info(`DNS check skipped for ${host}.`);
+      }
+    }
+    checkingNow = now;
+  });
 
   async function handle(call: () => Promise<Answer>, done: () => void, setError: (m: string) => void, retry: (force: Force) => Promise<void>) {
     setError('');
@@ -209,9 +239,9 @@
     onchange?.();
   }
 
-  async function remove(row: Row) {
+  async function remove(row: Row, deleteManagedDns = false) {
     try {
-      const r = await request<Answer>('POST', `${path}/remove`, { url: row.url, service: row.service });
+      const r = await request<Answer>('POST', `${path}/remove`, { url: row.url, service: row.service, delete_managed_dns: deleteManagedDns });
       for (const w of r.warnings ?? []) notify.warning(w);
       if (r.message) notify.success(r.message);
     } catch (e) {
@@ -320,7 +350,7 @@
       </div>
       <div class="service-domain-actions flex items-center justify-end gap-1">
         {#if canUpdate}
-          <button type="button" class="icon-button shrink-0" title="Check DNS" aria-label="Check DNS" onclick={dnsUnavailable}>
+          <button type="button" class="icon-button shrink-0" title="Check DNS" aria-label="Check DNS" onclick={() => checkDns(row)}>
             <Reicon name="refresh" class="size-3.5" />
           </button>
           {#if !data?.labels_are_writable}
@@ -373,12 +403,7 @@
         <div class="flex flex-wrap items-center gap-2">
           {#if canUpdate}
             <div class="relative shrink-0">
-              <!-- The trigger of livewire/project/shared/cloudflare-autoconfigure.blade.php. -->
-              <button type="button" class="button" onclick={dnsUnavailable}>
-                <Reicon name="globe" class="size-3.5" />
-                DNS
-                <span class="inline-flex transition-transform"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="size-3.5 shrink-0 opacity-60"><path stroke-linecap="round" stroke-linejoin="round" d="m8 9 4-4 4 4m0 6-4 4-4-4" /></svg></span>
-              </button>
+              <DnsMenu kind="application" {uuid} showCheckAll={true} onchange={load} />
             </div>
             {#if !data?.labels_are_writable && (!data?.is_compose || (data?.compose_services.length ?? 0) > 0)}
               <button
@@ -605,8 +630,8 @@
     confirmWithText={false}
     confirmWithPassword={false}
     step2ButtonText="Remove domain"
-    onconfirm={async () => {
-      await remove(row);
+    onconfirm={async (_password: string, selected: string[]) => {
+      await remove(row, selected.includes('deleteManagedDns'));
     }}
     onclose={() => (removing = null)}
   />

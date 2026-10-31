@@ -2059,6 +2059,7 @@ pub async fn delete(
     let configurations = query_bool(&uri, &input, "delete_configurations", true);
     apps::soft_delete(&state.db, a.id, state.now()).await?;
     jobs.spawn_application_delete(a.clone(), volumes, configurations, networks);
+    crate::ui_shared::dns::spawn_release_resource(&state, "App\\Models\\Application", a.id);
     tracing::info!(target: "audit", event = "api.application.deleted", team_id = ctx.team_id, application_uuid = %a.uuid, "deletion queued");
     Ok(ok(json!({"message": "Application deletion request queued."})).into_response())
 }

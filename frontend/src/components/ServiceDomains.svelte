@@ -9,6 +9,9 @@
   import Listbox from './Listbox.svelte';
   import Modal from './Modal.svelte';
   import Reicon from './Reicon.svelte';
+  import DnsMenu from './shared/DnsMenu.svelte';
+  import { request } from '../lib/api';
+  import { resPath } from '../lib/sharedApi';
   import ServiceDomainConflict from './ServiceDomainConflict.svelte';
   import StatusBadge from './StatusBadge.svelte';
   import { ApiError } from '../lib/api';
@@ -165,9 +168,9 @@
     await load();
   }
 
-  async function remove(row: ServiceDomainRow) {
+  async function remove(row: ServiceDomainRow, deleteManagedDns = false) {
     try {
-      const r = await servicesApi.removeDomain(serviceUuid, { app_id: row.service_application_id, url: row.url });
+      const r = await servicesApi.removeDomain(serviceUuid, { app_id: row.service_application_id, url: row.url, delete_managed_dns: deleteManagedDns });
       for (const w of r.warnings ?? []) notify.warning(w);
       if (r.message) notify.success(r.message);
     } catch (e) {
@@ -176,7 +179,35 @@
     await load();
   }
 
-  const dnsUnavailable = () => notify.info('DNS checks are not available in coolify-rs yet.');
+  async function checkDns(row: ServiceDomainRow) {
+    try {
+      await request('POST', `${resPath('service', serviceUuid)}/dns/check`, { url: row.url });
+      await load();
+    } catch (e) {
+      notify.error(message(e));
+    }
+  }
+  // `pollDnsChecks`: while a check runs, and its toast when it ends.
+  let checkingNow = new Set<string>();
+  $effect(() => {
+    if (!rows.some((r) => r.dns_status === 'checking')) return;
+    const timer = setTimeout(load, 2000);
+    return () => clearTimeout(timer);
+  });
+  $effect(() => {
+    const now = new Set<string>();
+    for (const r of rows) {
+      if (r.dns_status === 'checking') now.add(r.url);
+      else if (checkingNow.has(r.url)) {
+        let host = r.url;
+        try { host = new URL(r.url).hostname; } catch { /* keep the URL */ }
+        if (r.dns_status === 'ok') notify.success(`DNS is configured correctly for ${host}.`);
+        else if (r.dns_status === 'failed') notify.error(`DNS is not configured for ${host}. Review the required DNS record. If you changed it recently, DNS propagation can take some time, so please try again later.`);
+        else notify.info(`DNS check skipped for ${host}.`);
+      }
+    }
+    checkingNow = now;
+  });
 </script>
 
 {#snippet domainInput(prefix: string, parts: DomainParts, error: string)}
@@ -231,12 +262,7 @@
       {/if}
       <div class="ml-auto flex flex-wrap items-center gap-2">
         {#if canUpdate && apps.length > 0}
-          <!-- The trigger of livewire/project/shared/cloudflare-autoconfigure.blade.php (shared section). -->
-          <button type="button" class="button" onclick={dnsUnavailable}>
-            <Reicon name="globe" class="size-3.5" />
-            DNS
-            <span class="inline-flex transition-transform"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="size-3.5 shrink-0 opacity-60"><path stroke-linecap="round" stroke-linejoin="round" d="m8 9 4-4 4 4m0 6-4 4-4-4" /></svg></span>
-          </button>
+          <DnsMenu kind="service" uuid={serviceUuid} showCheckAll={true} onchange={load} />
           <button
             type="button"
             class="button button-highlighted"
@@ -360,7 +386,7 @@
                     </div>
                     <div class="service-domain-actions flex items-center justify-end gap-1">
                       {#if canUpdate}
-                        <button type="button" class="icon-button shrink-0" title="Check DNS" aria-label="Check DNS" onclick={dnsUnavailable}>
+                        <button type="button" class="icon-button shrink-0" title="Check DNS" aria-label="Check DNS" onclick={() => checkDns(row)}>
                           <Reicon name="refresh" class="size-3.5" />
                         </button>
                         <button type="button" class="icon-button shrink-0" title="Domain settings" aria-label="Settings for {row.public_url}" onclick={() => openEdit(row, group.app)}>
@@ -516,8 +542,8 @@
     confirmWithText={false}
     confirmWithPassword={false}
     step2ButtonText="Remove domain"
-    onconfirm={async () => {
-      await remove(row);
+    onconfirm={async (_password: string, selected: string[]) => {
+      await remove(row, selected.includes('deleteManagedDns'));
     }}
     onclose={() => (removing = null)}
   />

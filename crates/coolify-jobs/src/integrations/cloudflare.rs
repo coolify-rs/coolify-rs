@@ -20,7 +20,7 @@ use crate::server_ops::{Srv, tunnel};
 
 pub const NO_PUBLIC_ADDRESS_MESSAGE: &str =
     "The server has no public IP address; add the DNS record manually.";
-const OWNERSHIP_COMMENT_PREFIX: &str = "managed-by-coolify";
+const OWNERSHIP_COMMENT_PREFIX: &str = "managed-by: coolify";
 const TUNNEL_PERMISSION: &str = "Account → Cloudflare Tunnel → Edit";
 const DELETE_ATTEMPTS: usize = 5;
 /// `ManagedDnsHostnameLock::WAIT_SECONDS`.
@@ -905,7 +905,7 @@ impl Dns<'_> {
         let Some(comment) = body.pointer("/result/comment").and_then(Value::as_str) else {
             return false;
         };
-        // `^managed-by-coolify \S+/{uuid}$`
+        // `^managed-by: coolify \S+/{uuid}$`
         let matches = comment
             .strip_prefix(OWNERSHIP_COMMENT_PREFIX)
             .and_then(|r| r.strip_prefix(' '))

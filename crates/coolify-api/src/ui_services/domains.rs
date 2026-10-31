@@ -518,6 +518,15 @@ pub async fn update(
     if indexing == "noindex" {
         noindex.push(new_url.clone());
     }
+    let owner = crate::ui_shared::dns::Owner {
+        morph: "App\\Models\\ServiceApplication",
+        id: app.id,
+        uuid: &app.uuid,
+        name: &app.name,
+        type_name: "service_application",
+        team_id: s.team_id,
+    };
+    let previous_hostnames = crate::ui_shared::dns::hostnames_before(&state, &owner).await;
     let (answer, warnings) = save_list(
         &state,
         &s,
@@ -536,6 +545,10 @@ pub async fn update(
     if let Some(answer) = answer {
         return Ok(answer);
     }
+    let mut warnings: Vec<String> = warnings.iter().map(ToString::to_string).collect();
+    warnings.extend(
+        crate::ui_shared::dns::release_after_edit(&state, &owner, &previous_hostnames).await,
+    );
     Ok(ok(json!({"message": "Domain updated.", "warnings": warnings})).into_response())
 }
 
@@ -559,6 +572,14 @@ pub async fn remove(
         .into_iter()
         .filter(|d| d != url)
         .collect();
+    let owner = crate::ui_shared::dns::Owner {
+        morph: "App\\Models\\ServiceApplication",
+        id: app.id,
+        uuid: &app.uuid,
+        name: &app.name,
+        type_name: "service_application",
+        team_id: s.team_id,
+    };
     let (answer, warnings) = save_list(
         &state,
         &s,
@@ -577,6 +598,14 @@ pub async fn remove(
     if let Some(answer) = answer {
         return Ok(answer);
     }
+    let mut warnings: Vec<String> = warnings.iter().map(ToString::to_string).collect();
+    let delete_record = body
+        .get("delete_managed_dns")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    warnings.extend(
+        crate::ui_shared::dns::release_after_remove(&state, &owner, url, delete_record).await,
+    );
     Ok(ok(json!({"message": "Domain removed.", "warnings": warnings})).into_response())
 }
 
