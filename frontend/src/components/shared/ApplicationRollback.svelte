@@ -96,7 +96,13 @@
               <p class="mt-1 text-xs text-neutral-500 dark:text-fg-dim">Built {diffForHumans(String(image.created_at).replace(' ', 'T').replace(/ ([+-]\d{2})(\d{2}).*$/, '$1:$2'))} <span class="mx-1 text-neutral-300 dark:text-fg-faint">·</span> {image.created_at}</p>
             </div>
             {#if data.can_update}
-              <button type="button" class="button" disabled={image.is_current || !rollbackable} title={image.is_current ? 'This image is currently running.' : !rollbackable ? 'Only commit and pull-request image tags support rollback.' : undefined} onclick={() => rollback(image.tag)}>Rollback</button>
+              {#if image.is_current}
+                <button type="button" class="button" disabled title="This image is currently running.">Rollback</button>
+              {:else if !rollbackable}
+                <button type="button" class="button" disabled title="Only commit and pull-request image tags support rollback.">Rollback</button>
+              {:else}
+                <button type="button" class="button" onclick={() => rollback(image.tag)}>Roll back to this image</button>
+              {/if}
             {/if}
           </div>
         {:else}

@@ -253,7 +253,6 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 | Upstream | coolify-rs | Why |
 | --- | --- | --- |
 | Pages `Project/Service/{Analytics,ImportBackup,DatabaseBackups,BackupExecutions,VolumeBackup/*}` | the page says it is not available | later task |
-| `Project/Shared/*` sections on service pages (variables, tags, danger, logs, volumes and others) | placeholder named after the section | connected when the shared components merge |
 | DNS checks and Cloudflare automation on the service Domains page (`CheckDomainDnsJob`, `checkDomainDns`, `cloudflare-autoconfigure`) | rows stay "Not checked", `domain_dns_statuses` is not written, the buttons say it is not available | they contact external services |
 | `addSuggestedDomain` and `ManagedDnsRecordCleanup` on the Domains page | not ported | they need the DNS checks |
 | Configuration warning on service pages, with the diff of changes | the warning without the diff | no configuration diff yet |
@@ -316,3 +315,22 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
 | Terminal shell | `Project\Shared\Terminal`, xterm.js and a node-pty websocket service | the page lists targets; a selected target shows that no session is available | a shell needs the websocket service, its token flow (`TerminalSessionService`) and security review |
 | `Server\Security\TerminalAccess` | toggle at `/server/{uuid}/security/terminal-access` | not ported | |
 | Shared resource sections | `Project\Shared\*`, `Project\Service\{Storage, FileStorage}` and `Project\Application\{Advanced, Rollback}` for every resource | environment variables, persistent storage, runtime logs, resource limits, healthcheck, tags, webhooks and Advanced are ported and mounted on application pages as `frontend/src/components/shared/*` with `/ui/resources/{kind}/{uuid}/...` | Not ported: Resource operations (clone, move, migrate), Servers (`Destination`), Previews UI, Swarm, Maintenance, Files (`FileBrowser`), resource Metrics charts (only the states before charts), starting a rollback, Refresh GPUs, linking a secret manager source (it contacts a third party; only the empty state), volume backup modals, external Compose volumes, stale Compose volume actions |
+
+## Resource operations and application sections
+
+- Migrate to another server (`MigrateResourceToDestination`) is not ported. Upstream renders the section only in a development
+  instance (`isDev()`) and its API answers 404 elsewhere, so the section is not shown here either.
+- Clone and clone-me copy no volume data: neither Blade view has a control for it. `POST /services/{uuid}/clone` with
+  `clone_volumes` still answers 501, and a database clone across servers skips the data.
+- Clones of an application made through the UI copy its previews without domains until the preview helpers of the application
+  API are on this branch. Clone-me is not one transaction here: a failure partway leaves what was already cloned.
+- DNS checks (`CheckDomainDns`, `CheckDomainDnsJob`) and the Cloudflare automation on the application Domains page are not
+  ported, as they contact external services. Rows stay "Not checked" and the toast after adding is "Domain added.". The www
+  redirect is set from the domain dialog; suggested www rows are not offered.
+- Deploying to one additional server (`only_this_server`) answers 501: the deploy job has no multi-server path. Adding, removing,
+  promoting and stopping work. A Swarm application shows "Server unavailable" in its heading, because `ApplicationRow` only loads
+  standalone destinations; deploying to Swarm is not ported.
+- File browser: downloads through an S3 file storage (`FileDownloadStorageService`) are not ported, so files always stream from
+  the server. The helper container path for images without a shell is ported but was not run on the VM.
+- Maintenance mode: the Caddy configuration is ported but ran only against Traefik on the VM.
+- Flush all data on the Danger page of Redis, KeyDB and Dragonfly is not ported.
