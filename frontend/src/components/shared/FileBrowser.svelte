@@ -503,7 +503,7 @@
         {/if}
       </div>
       <div class="min-w-0 file-editor-monaco">
-        <MonacoEditor bind:value={editorContent} language={editorLanguage} />
+        <MonacoEditor bind:value={editorContent} language={editorLanguage} placeholder="" />
       </div>
       <div class="flex justify-end gap-2">
         <button type="button" class="button" onclick={() => (editorOpen = false)}>Cancel</button>

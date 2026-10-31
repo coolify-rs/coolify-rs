@@ -27,6 +27,8 @@
   import Destination from '../components/shared/Destination.svelte';
   import FileBrowser from '../components/shared/FileBrowser.svelte';
   import ApplicationSwarm from '../components/shared/ApplicationSwarm.svelte';
+  import ApplicationDomains from '../components/shared/ApplicationDomains.svelte';
+  import Maintenance from '../components/shared/Maintenance.svelte';
   import Unported from './Unported.svelte';
   import { appUi, dbUi, uiApi, ApiError, type ApplicationRecord, type ApplicationState, type DeploymentDetail } from '../lib/api';
   import { applicationNavContext, applicationSection } from '../lib/applicationMenu';
@@ -187,6 +189,9 @@
               {/if}
             {:else if active === 'source' && !record.dockerfile && record.build_pack !== 'dockerimage'}
               <ApplicationSource uuid={app} onsaved={() => refresh().catch(() => {})} />
+            {:else if active === 'domains'}
+              <ApplicationDomains uuid={app} {base} onchange={() => refresh().catch(() => {})} />
+              <div class="mt-4"><Maintenance kind="application" uuid={app} /></div>
             {:else if active === 'environment-variables'}
               <EnvironmentVariables kind="application" uuid={app} onconfigurationchanged={() => refresh().catch(() => {})} />
               <SecretManagerLinks kind="application" uuid={app} />

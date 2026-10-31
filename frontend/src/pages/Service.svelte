@@ -169,7 +169,7 @@
             </div>
           {:else if section === 'domains'}
             <ServiceDomains serviceUuid={service} />
-            <div class="mt-6"><Maintenance kind="service" uuid={service} /></div>
+            <div class="mt-4"><Maintenance kind="service" uuid={service} /></div>
           {:else if section === 'storages'}
             <div class="space-y-6">
               <div

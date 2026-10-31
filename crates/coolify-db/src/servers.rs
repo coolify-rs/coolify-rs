@@ -395,6 +395,12 @@ pub(crate) fn set_clause(values: &[(&'static str, ColumnValue)], first_param: us
             let cast = match v {
                 ColumnValue::Int(_) if *col == "backup_compression_cpu_percentage" => "::smallint",
                 ColumnValue::Int(_) if *col != "private_key_id" => "::integer",
+                // The JSON columns of `applications`.
+                ColumnValue::Text(Some(_))
+                    if matches!(*col, "noindex_domains" | "domain_port_overrides") =>
+                {
+                    "::json"
+                }
                 _ => "",
             };
             // A NULL is written as a literal: a text-typed NULL parameter does not fit integer columns.

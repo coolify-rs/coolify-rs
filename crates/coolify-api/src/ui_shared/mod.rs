@@ -7,6 +7,7 @@ pub mod advanced;
 pub mod application_extras;
 pub mod config;
 pub mod destination;
+pub mod domains;
 pub mod envs;
 pub mod files;
 pub mod logs;
@@ -35,6 +36,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .merge(application_extras::routes())
         .merge(logs::routes())
         .merge(destination::routes())
+        .merge(domains::routes())
         .merge(files::routes())
         .merge(maintenance::routes())
         .merge(operations::routes())
