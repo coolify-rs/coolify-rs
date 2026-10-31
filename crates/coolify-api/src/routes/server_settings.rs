@@ -600,7 +600,7 @@ const DRAIN_FIELDS: &[&str] = &[
     "logdrain_cloudwatch_stream_prefix",
 ];
 
-fn drain_transform(state: &AppState, ctx: &AuthCtx, s: &ServerRow) -> Value {
+pub(crate) fn drain_transform(state: &AppState, ctx: &AuthCtx, s: &ServerRow) -> Value {
     let r = raw_settings(s);
     let mut m = Map::new();
     m.insert(
@@ -993,7 +993,7 @@ pub async fn tunnel_show(
     Ok(ok(Value::Object(tunnel_transform(&s))).into_response())
 }
 
-async fn restore_previous_ip(state: &AppState, s: &ServerRow) -> Result<bool, ApiError> {
+pub(crate) async fn restore_previous_ip(state: &AppState, s: &ServerRow) -> Result<bool, ApiError> {
     let previous = s
         .record
         .get("ip_previous")

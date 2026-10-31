@@ -1,12 +1,13 @@
 //! Session endpoints behind `Server\Sentinel`, `Server\DockerCleanup`, `Server\DockerImages` and
 //! the settings part of `Server\TrafficAnalyticsSettings`.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use axum::Extension;
 use axum::Json;
 use axum::Router;
-use axum::extract::{ConnectInfo, Path, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -36,6 +37,7 @@ pub fn routes() -> Router<AppState> {
     let p = |s: &str| format!("{SERVER_PAGE}/{s}");
     Router::new()
         .route(&p("sentinel"), get(sentinel_show).post(sentinel_submit))
+        .route(&p("log-drains"), get(log_drains))
         .route(&p("sentinel/restart"), post(sentinel_restart))
         .route(&p("sentinel/regenerate"), post(sentinel_regenerate))
         .route(&p("sentinel/restore"), post(sentinel_restore))
@@ -44,6 +46,7 @@ pub fn routes() -> Router<AppState> {
         .route(&p("images"), get(images))
         .route(&p("images/delete"), post(delete_image))
         .route(&p("analytics"), get(analytics).post(analytics_save))
+        .route(&p("analytics/toggle"), post(analytics_toggle))
 }
 
 fn setting(s: &ServerRow, k: &str) -> Value {
@@ -81,6 +84,31 @@ fn is_sentinel_enabled(s: &ServerRow) -> bool {
 }
 
 /// `Sentinel::syncData` and `refreshSentinelStatus`.
+/// `LogDrains::mount` for the page. The fields of a secret stay empty for who cannot edit them,
+/// where upstream's Livewire snapshot carries them to every team member.
+async fn log_drains(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    let mut c = ctx.clone();
+    c.can_read_sensitive = ctx.is_team_admin();
+    let s = find_server(&state, &c, &uuid).await?;
+    let mut drains = crate::routes::server_settings::drain_transform(&state, &c, &s);
+    // The form binds every field.
+    for k in [
+        "logdrain_newrelic_license_key",
+        "logdrain_axiom_api_key",
+        "logdrain_custom_config",
+        "logdrain_custom_config_parser",
+    ] {
+        if drains.get(k).is_none() {
+            drains[k] = json!("");
+        }
+    }
+    Ok(ok(drains).into_response())
+}
+
 async fn sentinel_show(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -240,10 +268,23 @@ async fn cleanup_show(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
     Path(uuid): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> ApiResult {
     let s = find_server(&state, &ctx, &uuid).await?;
     let executions = coolify_db::server_ops::cleanup_executions(&state.db, s.id).await?;
+    // The executions poll needs only the list.
+    let stale = !query.contains_key("poll") && {
+        let last = executions
+            .first()
+            .and_then(|e| e.get("created_at"))
+            .and_then(Value::as_str);
+        let frequency = setting(&s, "docker_cleanup_frequency");
+        cleanup_is_stale(last, frequency.as_str().unwrap_or("0 0 * * *"))
+    };
     Ok(ok(json!({
+        "is_cleanup_stale": stale,
+        // `Cache::get('scheduled-job-manager:heartbeat')`: this process has its scheduler switched on or it does not.
+        "is_scheduler_healthy": std::env::var("COOLIFY_RS_SERVER_SCHEDULER").is_ok_and(|v| v == "1"),
         "docker_cleanup_frequency": setting(&s, "docker_cleanup_frequency"),
         "docker_cleanup_threshold": setting(&s, "docker_cleanup_threshold"),
         "force_docker_cleanup": setting(&s, "force_docker_cleanup"),
@@ -254,6 +295,51 @@ async fn cleanup_show(
         "executions": executions,
     }))
     .into_response())
+}
+
+/// `DockerCleanup::isCleanupStale`: the last execution is older than two intervals of the schedule (at least 10 minutes).
+fn cleanup_is_stale(last: Option<&str>, frequency: &str) -> bool {
+    let Some(last) = last.and_then(|l| {
+        chrono::DateTime::parse_from_rfc3339(l)
+            .map(|d| d.with_timezone(&chrono::Utc))
+            .ok()
+            .or_else(|| {
+                chrono::NaiveDateTime::parse_from_str(&l[..l.len().min(19)], "%Y-%m-%dT%H:%M:%S")
+                    .or_else(|_| {
+                        chrono::NaiveDateTime::parse_from_str(
+                            &l[..l.len().min(19)],
+                            "%Y-%m-%d %H:%M:%S",
+                        )
+                    })
+                    .ok()
+                    .map(|d| d.and_utc())
+            })
+    }) else {
+        return false;
+    };
+    let now = chrono::Utc::now();
+    let age = (now - last).num_minutes();
+    if age <= 10 {
+        return false;
+    }
+    use coolify_jobs::server_ops::scheduler::cron_is_due;
+    // `getNextRunDate` twice. An interval of half the age or more means "not stale", so the walk stops there.
+    const MINUTES_IN_400_DAYS: i64 = 400 * 24 * 60;
+    let mut next = None;
+    for minute in 1..=MINUTES_IN_400_DAYS {
+        let at = now + chrono::Duration::minutes(minute);
+        if !cron_is_due(frequency, at) {
+            continue;
+        }
+        match next {
+            None => next = Some(minute),
+            Some(first) => return age > ((minute - first) * 2).max(10),
+        }
+        if next.is_some_and(|first| minute - first >= age) {
+            return false;
+        }
+    }
+    false
 }
 
 /// `DockerCleanup::submit` and `instantSave`.
@@ -503,6 +589,49 @@ async fn analytics(
         "traffic_ip_mode": setting(&s, "traffic_ip_mode").as_str().unwrap_or("full"),
     }))
     .into_response())
+}
+
+/// `TrafficAnalyticsSettings::toggleTrafficAnalytics`.
+async fn analytics_toggle(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    let s = find_server(&state, &ctx, &uuid).await?;
+    if !ctx.is_team_admin() {
+        return toast_error(UNAUTHORIZED);
+    }
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    let enable = !setting(&s, "is_traffic_analytics_enabled")
+        .as_bool()
+        .unwrap_or(false);
+    let proxy = s
+        .record
+        .get("proxy")
+        .and_then(|p| p.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let restarted = match coolify_jobs::server_ops::traffic::configure(jobs, s.id, enable).await {
+        Ok(r) => r,
+        Err(e) => return toast_error(e),
+    };
+    tracing::info!(target: "audit", event = if enable { "ui.server.traffic_analytics.enabled" } else { "ui.server.traffic_analytics.disabled" }, team_id = ctx.team_id, server_uuid = %uuid, "traffic analytics toggled");
+    let state_word = if enable { "enabled" } else { "disabled" };
+    // `proxyToggleMessage`.
+    let mut message = if restarted {
+        format!("Traffic analytics {state_word}. Restarting proxy and Sentinel.")
+    } else if ["TRAEFIK", "CADDY"].contains(&proxy.as_str()) {
+        format!(
+            "Traffic analytics {state_word}. The proxy is stopped, so the new configuration applies the next time you start it."
+        )
+    } else {
+        format!("Traffic analytics {state_word}.")
+    };
+    if enable && proxy == "CADDY" {
+        message.push_str(" Caddy logs a resource only after you redeploy it.");
+    }
+    Ok(ok(json!({"message": message})).into_response())
 }
 
 /// `TrafficAnalyticsSettings::saveTrafficAnalyticsSettings`.

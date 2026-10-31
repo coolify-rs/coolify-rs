@@ -222,6 +222,21 @@ pub fn validate_cron_expression(expression: &str) -> bool {
     is_valid(expression) || VALID_CRON_STRINGS.iter().any(|(k, _)| *k == expression)
 }
 
+/// `Patches::isValidPatchCheckFrequency`: a valid expression that runs at most once per hour. Two runs in one
+/// hour need two minutes in the minute segment: a single minute keeps runs at least an hour apart, and the next
+/// five runs of a segment with two minutes always hold such a pair.
+pub fn runs_at_most_hourly(expression: &str) -> bool {
+    if !validate_cron_expression(expression) {
+        return false;
+    }
+    let translated = translate_cron_expression(expression);
+    let Some(minutes) = translated.split_whitespace().next() else {
+        return false;
+    };
+    let mut register = Register::new();
+    parse_segment(&mut register, 0, minutes).is_ok() && register.len() == 1
+}
+
 /// Upstream `translate_cron_expression()`.
 pub fn translate_cron_expression(expression: &str) -> &str {
     VALID_CRON_STRINGS
@@ -234,6 +249,22 @@ pub fn translate_cron_expression(expression: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn at_most_hourly() {
+        for ok in ["weekly", "@daily", "hourly", "0 * * * *", "5 3 * * 1"] {
+            assert!(runs_at_most_hourly(ok), "{ok}");
+        }
+        for no in [
+            "every_minute",
+            "* * * * *",
+            "*/30 * * * *",
+            "0,30 3 * * *",
+            "nope",
+        ] {
+            assert!(!runs_at_most_hourly(no), "{no}");
+        }
+    }
 
     #[test]
     fn matches_poliander() {

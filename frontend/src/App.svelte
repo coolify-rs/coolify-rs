@@ -2,6 +2,7 @@
   import Shell from './components/Shell.svelte';
   import Toasts from './components/Toasts.svelte';
   import Login from './pages/Login.svelte';
+  import Analytics from './pages/Analytics.svelte';
   import Dashboard from './pages/Dashboard.svelte';
   import Projects from './pages/Projects.svelte';
   import Project from './pages/Project.svelte';
@@ -60,6 +61,7 @@
   const titles: Record<string, string> = {
     login: 'Login',
     dashboard: 'Dashboard',
+    analytics: 'Analytics',
     projects: 'Projects',
     keys: 'Keys & Tokens',
     team: 'Teams',
@@ -95,6 +97,8 @@
       />
     {:else if router.current.name === 'dashboard'}
       <Dashboard />
+    {:else if router.current.name === 'analytics'}
+      <Analytics />
     {:else if router.current.name === 'projects'}
       <Projects />
     {:else if router.current.name === 'project'}
@@ -138,7 +142,7 @@
     {:else if router.current.name === 'servers'}
       <Servers />
     {:else if router.current.name === 'server-new' || router.current.name === 'server-new-type'}
-      {#key router.path}<ServerNew type={params.type} />{/key}
+      {#key router.path}<ServerNew type={params.type} token={params.token} />{/key}
     {:else if router.current.name === 'server'}
       {#key params.uuid}<Server uuid={params.uuid} />{/key}
     {:else if router.current.name === 'server-section' && params.section === 'danger'}

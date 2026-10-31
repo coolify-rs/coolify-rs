@@ -162,6 +162,10 @@ def rows_same(name, table, where_ref, where_rs, ignore=()):
     drop = {"id", "uuid", "created_at", "updated_at", "server_id", "name", *ignore}
     x = {k: v for k, v in (a or {}).items() if k not in drop}
     y = {k: v for k, v in (b or {}).items() if k not in drop}
+    # A time on both sides, or on neither: `StartSentinel` runs asynchronously on each.
+    for t in (x, y):
+        if "sentinel_waiting_since" in t:
+            t["sentinel_waiting_since"] = t["sentinel_waiting_since"] is not None
     bad = {k: (x.get(k), y.get(k)) for k in set(x) | set(y) if x.get(k) != y.get(k)}
     record(f"row {name}", not bad and a is not None, json.dumps(bad)[:1500])
 
@@ -239,7 +243,11 @@ def api():
               "traffic_sample_threshold": 2, "traffic_retention_1h_days": 5, "traffic_retention_1d_days": 6,
               "is_geoip_enabled": False, "geoip_refresh_days": 9, "geoip_maxmind_license_key": "lic",
               "traffic_ip_mode": "off"})
-        time.sleep(6)
+        # The queued `StartSentinel` reaches `sentinel_waiting_since` only after `StopSentinel`'s ssh attempts to the
+        # unreachable address: about 70 seconds on the reference, at once where ssh-via-orb refuses the host. The rows are
+        # compared after both.
+        for side in ("ref", "rs"):
+            wait_for(f"{side} sentinel start", lambda: sql(f"select sentinel_waiting_since is not null from servers where id={S.vars[side]['sid']}") == "t", timeout=180, step=3)
         rows_same("settings after sentinel", "server_settings", f"server_id={S.vars['ref']['sid']}",
                   f"server_id={S.vars['rs']['sid']}", ignore=("sentinel_token", "geoip_maxmind_license_key"))
         # Docker cleanup.
@@ -872,8 +880,11 @@ def jobs(vm_a, vm_b):
                 env[k] = subprocess.run(["docker", "exec", c, "printenv", n], capture_output=True, text=True).stdout.strip()
             pw = subprocess.run(["docker", "exec", "coolify-rs-reference-postgres-1", "printenv", "POSTGRES_PASSWORD"], capture_output=True, text=True).stdout.strip()
             env["DATABASE_URL"] = f"postgres://coolify:{pw}@127.0.0.1:15432/coolify"
-            env["COOLIFY_RS_DATA_DIR"] = os.path.expanduser("~/.cache/coolify-rs-dev/18084/data")
-            binary = os.path.expanduser("~/.cache/coolify-rs-dev/18084/coolify-rs")
+            port = BASES["rs"].rsplit(":", 1)[1]
+            env["COOLIFY_RS_DATA_DIR"] = os.path.expanduser(f"~/.cache/coolify-rs-dev/{port}/data")
+            binary = os.path.expanduser(f"~/.cache/coolify-rs-dev/{port}/coolify-rs")
+            if subprocess.run(["nc", "-G", "2", "-z", f"{vm_b}.orb.local", "22"], capture_output=True).returncode:
+                env["COOLIFY_RS_SSH_BINARY"] = os.path.join(ROOT, "scripts/ssh-via-orb.sh")
             r = subprocess.run([binary, "server-job", job, uuid], capture_output=True, text=True, env=env)
             return r.returncode, r.stdout.strip().split("\n")[-1] if r.stdout.strip() else "", r.stderr[-400:]
 

@@ -240,6 +240,10 @@ export interface ServerFacts {
   is_swarm_worker: boolean;
   proxy_set: boolean;
   proxy_status: string | null;
+  proxy_pending: boolean;
+  traefik_outdated: boolean;
+  sentinel_status: 'waiting' | 'in_sync' | 'out_of_sync';
+  sentinel_enabled: boolean;
   cloud: boolean;
   resources: number;
 }

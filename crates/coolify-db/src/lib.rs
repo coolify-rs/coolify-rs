@@ -21,6 +21,7 @@ pub mod databases;
 pub mod destinations;
 pub mod environment_variables;
 pub mod git_sources;
+pub mod github_runners;
 pub mod instance;
 pub mod private_keys;
 pub mod projects;
@@ -32,6 +33,7 @@ pub mod services;
 pub mod teams;
 #[cfg(feature = "testing")]
 pub mod testing;
+pub mod traffic;
 pub mod ui_servers;
 pub mod users;
 

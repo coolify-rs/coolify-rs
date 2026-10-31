@@ -1,7 +1,7 @@
 <script lang="ts">
   // Port of upstream livewire/server/analytics/show.blade.php with the settings
-  // of traffic-analytics-settings.blade.php. Turning traffic analytics on or off
-  // (`ConfigureTrafficAnalytics`) and the `livewire:analytics` charts are not ported.
+  // of traffic-analytics-settings.blade.php and `livewire:analytics` below them.
+  import Analytics from '../components/analytics/Analytics.svelte';
   import Callout from '../components/Callout.svelte';
   import Empty from '../components/Empty.svelte';
   import FormInput from '../components/FormInput.svelte';
@@ -9,6 +9,7 @@
   import ServerFrame from '../components/ServerFrame.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
   import UnsavedBar from '../components/UnsavedBar.svelte';
+  import ConfirmModal from '../components/ConfirmModal.svelte';
   import { ApiError } from '../lib/api';
   import { get, post, failure } from '../lib/serverApi';
   import { session } from '../lib/session.svelte';
@@ -26,6 +27,9 @@
     traffic_ip_mode: string;
   };
   let enabled = $state(false);
+  let loaded = $state(false);
+  /** `trafficAnalyticsStateChanged`. */
+  let stateVersion = $state(0);
   let reason = $state<string | null>(null);
   let caddyNote = $state<string | null>(null);
   let form = $state<Form | null>(null);
@@ -39,6 +43,7 @@
   async function load() {
     const d = await get<Record<string, unknown>>(url);
     enabled = d.enabled as boolean;
+    loaded = true;
     reason = d.unsupported_reason as string | null;
     caddyNote = d.caddy_note as string | null;
     const f: Form = {
@@ -53,6 +58,23 @@
     };
     form = { ...f };
     saved = { ...f };
+  }
+  let toggling = $state(false);
+  let confirmDisable = $state(false);
+  let confirmEnable = $state(false);
+  /** `toggleTrafficAnalytics`. */
+  async function toggle() {
+    toggling = true;
+    try {
+      const r = await post<{ message: string }>(`${url}/toggle`);
+      notify.success(r.message);
+      await load();
+      stateVersion++;
+    } catch (e) {
+      failure(e);
+    } finally {
+      toggling = false;
+    }
   }
   async function save() {
     if (!form) return;
@@ -87,6 +109,13 @@
               <UnsavedBar {dirty} {saving} onsave={save} onreset={() => ((form = { ...saved! }), (error = null))} />
             {/if}
             <SettingsSection id="server-traffic-analytics-settings-section" title="Traffic analytics" description="Control proxy traffic collection, retention, and visitor geolocation for this server.">
+              {#snippet actions()}
+                {#if enabled}
+                  <div class="flex items-center gap-3">
+                    <button type="button" class="button" disabled={!canEdit} onclick={() => (confirmDisable = true)}>Disable traffic analytics</button>
+                  </div>
+                {/if}
+              {/snippet}
               {#if enabled}
                 {#if caddyNote}
                   <Callout type="info" title="Redeploy to start logging">{caddyNote}</Callout>
@@ -105,7 +134,7 @@
                 <Empty size="sm" title="Traffic analytics is disabled" description={reason ?? 'Enable traffic analytics to collect proxy access logs and geolocate visitor traffic.'} iconName="dashboard">
                   {#snippet contents()}
                     <div class="flex items-center gap-3">
-                      <button type="button" class="button" disabled title={reason ?? undefined}>Enable traffic analytics</button>
+                      <button type="button" class="button" {...{ ishighlighted: '' }} disabled={!canEdit || !!reason || toggling} title={reason ?? undefined} onclick={() => (confirmEnable = true)}>Enable traffic analytics</button>
                     </div>
                   {/snippet}
                 </Empty>
@@ -114,6 +143,33 @@
           </form>
         </div>
       {/if}
+      {#if loaded}
+        <Analytics scopedServerUuid={uuid} {stateVersion} hideSkeleton={!enabled} />
+      {/if}
     </div>
   {/snippet}
 </ServerFrame>
+
+{#if confirmEnable}
+  <ConfirmModal
+    title="Enable traffic analytics?"
+    actions={['Enabling traffic analytics will restart Sentinel and the proxy. Your applications will experience a brief interruption.']}
+    warningMessage="Application traffic may be interrupted while Sentinel and the proxy restart."
+    confirmWithText={false}
+    step2ButtonText="Enable traffic analytics"
+    onconfirm={toggle}
+    onclose={() => (confirmEnable = false)}
+  />
+{/if}
+
+{#if confirmDisable}
+  <ConfirmModal
+    title="Disable traffic analytics?"
+    actions={['Disabling traffic analytics will restart Sentinel and the proxy. Your applications will experience a brief interruption.']}
+    warningMessage="Application traffic may be interrupted while Sentinel and the proxy restart."
+    confirmWithText={false}
+    step2ButtonText="Disable traffic analytics"
+    onconfirm={toggle}
+    onclose={() => (confirmDisable = false)}
+  />
+{/if}

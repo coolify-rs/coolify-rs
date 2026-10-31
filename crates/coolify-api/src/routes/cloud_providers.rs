@@ -337,7 +337,7 @@ hostinger_route!(
 // ── Creating servers ────────────────────────────────────────────────────
 
 /// `ValidHostname`.
-fn hostname_rule(v: &Value) -> Option<String> {
+pub(crate) fn hostname_rule(v: &Value) -> Option<String> {
     let text = v.as_str()?;
     if text.is_empty() || text == "0" {
         return None;
@@ -375,7 +375,7 @@ fn hostname_rule(v: &Value) -> Option<String> {
     None
 }
 
-fn integer_items(input: &Input, field: &str, errors: &mut Map<String, Value>) {
+pub(crate) fn integer_items(input: &Input, field: &str, errors: &mut Map<String, Value>) {
     if let Some(Value::Array(items)) = input.get(field) {
         for (i, v) in items.iter().enumerate() {
             let ok = v.is_i64() || v.as_str().is_some_and(|s| s.parse::<i64>().is_ok());
@@ -392,7 +392,7 @@ fn integer_items(input: &Input, field: &str, errors: &mut Map<String, Value>) {
     }
 }
 
-fn string_items(input: &Input, field: &str, errors: &mut Map<String, Value>) {
+pub(crate) fn string_items(input: &Input, field: &str, errors: &mut Map<String, Value>) {
     if let Some(Value::Array(items)) = input.get(field) {
         for (i, v) in items.iter().enumerate() {
             if !v.is_string() {
@@ -470,7 +470,7 @@ fn cloud_init_rule(v: &Value) -> Option<String> {
     })
 }
 
-fn cloud_init_field() -> Field {
+pub(crate) fn cloud_init_field() -> Field {
     Field {
         name: "cloud_init_script",
         rules: vec![
@@ -541,21 +541,24 @@ async fn private_key(
     .await
     .map_err(|e| ApiError::from(e).into_response())?
     .ok_or_else(not_found)?;
-    let enc = state
-        .encrypter
-        .as_ref()
-        .ok_or_else(|| ApiError::Internal.into_response())?;
-    let pem = enc
-        .decrypt_string(&key.private_key_encrypted)
-        .map_err(|_| ApiError::Internal.into_response())?;
-    let public = coolify_compat::sshkey::inspect(&pem)
-        .map_or_else(|| "Error loading private key".to_string(), |i| i.public_key);
-    let fingerprint = md5_fingerprint(&public);
+    let (public, fingerprint) = key_material(state, &key).map_err(IntoResponse::into_response)?;
     Ok((key, public, fingerprint))
 }
 
+/// `$privateKey->getPublicKey()` and `PrivateKey::generateMd5Fingerprint`.
+pub(crate) fn key_material(state: &AppState, key: &KeyRow) -> Result<(String, String), ApiError> {
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    let pem = enc
+        .decrypt_string(&key.private_key_encrypted)
+        .map_err(|_| ApiError::Internal)?;
+    let public = coolify_compat::sshkey::inspect(&pem)
+        .map_or_else(|| "Error loading private key".to_string(), |i| i.public_key);
+    let fingerprint = md5_fingerprint(&public);
+    Ok((public, fingerprint))
+}
+
 /// `PrivateKey::generateMd5Fingerprint`.
-fn md5_fingerprint(public_key: &str) -> String {
+pub(crate) fn md5_fingerprint(public_key: &str) -> String {
     use md5::{Digest, Md5};
     let blob = public_key
         .split_whitespace()
@@ -569,14 +572,14 @@ fn md5_fingerprint(public_key: &str) -> String {
         .join(":")
 }
 
-struct Created {
-    id: i64,
-    uuid: String,
+pub(crate) struct Created {
+    pub(crate) id: i64,
+    pub(crate) uuid: String,
 }
 
 /// `Team::createServerWithinLimit` + the proxy attribute of a provider server.
 #[allow(clippy::too_many_arguments)]
-async fn create_row(
+pub(crate) async fn create_row(
     state: &AppState,
     ctx: &AuthCtx,
     peer: Option<Extension<ConnectInfo<SocketAddr>>>,

@@ -1,6 +1,7 @@
 <script lang="ts">
   // Port of upstream livewire/server/private-key/show.blade.php.
   import Reicon from '../components/Reicon.svelte';
+  import AddPrivateKeyModal from '../components/AddPrivateKeyModal.svelte';
   import Empty from '../components/Empty.svelte';
   import ServerFrame from '../components/ServerFrame.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
@@ -17,6 +18,7 @@
   let keys = $state<Key[] | null>(null);
   let transferred = $state(false);
   let menu = $state(false);
+  let adding = $state(false);
   let root: HTMLDivElement | undefined = $state();
   const base = $derived(`/server-page/${encodeURIComponent(uuid)}/private-key`);
   const canEdit = $derived(session.isAdmin);
@@ -99,7 +101,7 @@
                       <Reicon name="keys" class="size-3.5 shrink-0 opacity-70" />
                       Generate RSA
                     </button>
-                    <button type="button" class="listbox-option justify-start! gap-2.5! w-full" role="menuitem" onclick={() => router.go('/security/private-key')}>
+                    <button type="button" class="listbox-option justify-start! gap-2.5! w-full" role="menuitem" onclick={() => ((menu = false), (adding = true))}>
                       <Reicon name="plus" class="size-3.5 shrink-0 opacity-70" />
                       Add manually
                     </button>
@@ -144,3 +146,7 @@
     </div>
   {/snippet}
 </ServerFrame>
+
+{#if adding}
+  <AddPrivateKeyModal onclose={() => (adding = false)} oncreated={(key) => router.go(`/security/private-key/${key.uuid}`)} />
+{/if}

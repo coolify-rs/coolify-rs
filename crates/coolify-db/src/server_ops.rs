@@ -84,6 +84,26 @@ pub async fn insert_server_activity(
     .await?)
 }
 
+/// The Cloudflare `IntegrationToken`s of a team by name: `(id, name, can manage tunnels)`.
+pub async fn cloudflare_tokens(db: &Db, team_id: i64) -> DbResult<Vec<(i64, String, bool)>> {
+    let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, name, capabilities::text FROM integration_tokens \
+         WHERE team_id = $1 AND provider = 'cloudflare' ORDER BY name",
+    )
+    .bind(team_id)
+    .fetch_all(db.pool())
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, capabilities)| {
+            let list: Vec<String> = capabilities
+                .and_then(|c| serde_json::from_str(&c).ok())
+                .unwrap_or_default();
+            (id, name, list.iter().any(|c| c == "tunnel"))
+        })
+        .collect())
+}
+
 /// `$server->save()` for `sentinel_updated_at`.
 pub async fn save_sentinel_updated_at(
     db: &Db,
@@ -518,4 +538,31 @@ pub async fn environment_project(db: &Db, environment_id: i64) -> DbResult<Optio
             .fetch_optional(db.pool())
             .await?,
     )
+}
+
+/// The newest proxy activity of a server after `after` (`activityMonitor` of the "Proxy Startup Logs" dialog):
+/// `(id, properties, description)`.
+pub async fn latest_proxy_activity(
+    db: &Db,
+    server_uuid: &str,
+    after: i64,
+) -> DbResult<Option<(i64, Value, String)>> {
+    let r: Option<(i64, String, String)> = sqlx::query_as(
+        "SELECT id, COALESCE(properties::text, '{}'), COALESCE(description, '[]') FROM activity_log \
+         WHERE id > $1 AND properties->>'server_uuid' = $2 AND properties->>'operation' LIKE 'proxy.%' \
+         ORDER BY id DESC LIMIT 1",
+    )
+    .bind(after)
+    .bind(server_uuid)
+    .fetch_optional(db.pool())
+    .await?;
+    Ok(r.map(|(id, p, d)| (id, serde_json::from_str(&p).unwrap_or_default(), d)))
+}
+
+/// The highest activity id, so that a dialog can wait for the activity an action starts.
+pub async fn max_activity_id(db: &Db) -> DbResult<i64> {
+    let r: Option<i64> = sqlx::query_scalar("SELECT MAX(id) FROM activity_log")
+        .fetch_one(db.pool())
+        .await?;
+    Ok(r.unwrap_or(0))
 }

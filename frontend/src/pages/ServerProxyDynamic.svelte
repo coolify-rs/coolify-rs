@@ -111,7 +111,7 @@
 </ServerFrame>
 
 {#if editing}
-  <Modal title={editing.title} onclose={() => (editing = null)} isLarge>
+  <Modal title={editing.title} onclose={() => (editing = null)} isLarge={editing.title !== 'New Dynamic Configuration'}>
     <form class="flex flex-col w-full gap-4" onsubmit={save}>
       <FormInput id="fileName" label="Filename" required bind:value={editing.fileName} error={error?.field('file_name')} />
       <div>

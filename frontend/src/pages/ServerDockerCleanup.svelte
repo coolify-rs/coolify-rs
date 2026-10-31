@@ -26,6 +26,8 @@
     delete_unused_networks: boolean;
     disable_application_image_retention: boolean;
     server_timezone: string | null;
+    is_cleanup_stale: boolean;
+    is_scheduler_healthy: boolean;
     executions: Execution[];
   };
   let data = $state<Data | null>(null);
@@ -44,7 +46,7 @@
   let poll: ReturnType<typeof setInterval> | undefined;
 
   async function refresh() {
-    const d = await get<Data>(base);
+    const d = await get<Data>(`${base}?poll=1`);
     if (data) data.executions = d.executions;
     return d;
   }
@@ -148,6 +150,15 @@
                 <button type="button" class="button button-highlighted" onclick={() => (confirming = true)}>Run cleanup</button>
               {/if}
             {/snippet}
+            {#if data.is_cleanup_stale}
+              <Callout type="warning" title="Docker cleanup may be stalled">
+                The last cleanup ran {data.executions[0] ? ago(data.executions[0].created_at) : 'at an unknown time'}.
+                {#if !data.is_scheduler_healthy}The scheduled job manager also appears inactive.{/if}
+                Run
+                <code class="rounded bg-black/10 px-1 dark:bg-white/10">php artisan cleanup:redis --clear-locks</code>
+                on the Coolify instance to clear stale locks.
+              </Callout>
+            {:else}
             <div class="flex items-start gap-3">
                 <div class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-neutral-500 dark:bg-white/[0.06] dark:text-fg-dim">
                   <Reicon name="storages" class="size-4" />
@@ -157,6 +168,7 @@
                   <p class="mt-1 text-xs leading-5 text-neutral-500 dark:text-fg-dim">Cleanup runs automatically using the schedule and threshold configured below.</p>
                 </div>
               </div>
+            {/if}
             <section id="docker-cleanup-configuration-section" class="mt-5 border-t border-neutral-200 pt-5 dark:border-white/[0.07]">
               <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
                 <h3 class="flex items-center gap-1.5 text-sm! font-semibold! text-black dark:text-fg">

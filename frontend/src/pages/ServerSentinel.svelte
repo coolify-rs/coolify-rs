@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Forbidden from '../components/Forbidden.svelte';
   // Port of upstream livewire/server/sentinel/show.blade.php and livewire/server/sentinel.blade.php.
   import Reicon from '../components/Reicon.svelte';
   import Callout from '../components/Callout.svelte';
@@ -52,7 +53,7 @@
   async function call(path: string, success: string, kind: 'success' | 'info' = 'success') {
     try {
       await post(`${base}/${path}`);
-      if (kind === 'info') notify.info(success);
+      if (kind === 'info') notify.info('Info', success);
       else notify.success(success);
       await load();
     } catch (e) {
@@ -181,4 +182,8 @@
     onconfirm={() => call('restore', 'Default Sentinel configuration restored. Restarting Sentinel.')}
     onclose={() => (restoring = false)}
   />
+{/if}
+
+{#if !session.isAdmin}
+  <Forbidden />
 {/if}

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Forbidden from '../components/Forbidden.svelte';
+  import { session } from '../lib/session.svelte';
   // Port of upstream livewire/server/registries.blade.php.
   import RegistryCard from '../components/RegistryCard.svelte';
   import ServerFrame from '../components/ServerFrame.svelte';
@@ -16,3 +18,7 @@
     </div>
   {/snippet}
 </ServerFrame>
+
+{#if !session.isAdmin}
+  <Forbidden />
+{/if}

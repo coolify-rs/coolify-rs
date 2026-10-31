@@ -11,6 +11,7 @@
   import { api, ApiError } from '../lib/api';
   import type { ServerFacts } from '../lib/api';
   import { failure } from '../lib/serverApi';
+  import { get } from '../lib/serverApi';
   import { session } from '../lib/session.svelte';
   import { notify } from '../lib/toast.svelte';
 
@@ -45,7 +46,8 @@
 
   async function load(f: ServerFacts) {
     if (!f.functional) return;
-    const d = await api.get<Record<string, unknown>>(url);
+    // Through the session route: a member reads the page, without the secrets.
+    const d = await get<Record<string, unknown>>(`/server-page/${encodeURIComponent(uuid)}/log-drains`);
     const next = Object.fromEntries(Object.entries(d).map(([k, v]) => [k, typeof v === 'boolean' ? v : String(v ?? '')])) as unknown as Form;
     form = { ...next };
     saved = { ...next };

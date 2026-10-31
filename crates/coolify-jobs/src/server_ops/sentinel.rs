@@ -37,7 +37,7 @@ pub fn is_valid_sentinel_token(token: &str) -> bool {
 }
 
 /// `ensureValidSentinelToken`.
-async fn ensure_valid_token(srv: &Srv) -> Result<String, String> {
+pub async fn ensure_valid_token(srv: &Srv) -> Result<String, String> {
     let enc = srv
         .jobs
         .0

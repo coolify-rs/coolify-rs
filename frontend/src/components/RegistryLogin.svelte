@@ -28,7 +28,7 @@
   const known = editRegistry ?? presetRegistry;
   const providerFor = (r?: string) => Object.entries(REGISTRY_PROVIDERS).find(([, p]) => r && p.registry === r)?.[0] ?? 'custom';
   let provider = $state(providerFor(known));
-  let selected = $state<string>('');
+  let selected = $state<string[]>([]);
   let registry = $state(known ?? REGISTRY_PROVIDERS[providerFor(known)].registry);
   // svelte-ignore state_referenced_locally
   let username = $state(currentUsername);
@@ -46,16 +46,35 @@
     e.preventDefault();
     saving = true;
     error = null;
-    const targets = picker ? servers.filter((s) => s.uuid === selected) : servers;
+    // `Login::targetServers`.
+    if (picker && selected.length === 0) {
+      error = new ApiError(422, 'The given data was invalid.', { selectedServers: ['Choose at least one server.'] });
+      saving = false;
+      return;
+    }
+    const targets = picker ? servers.filter((s) => selected.includes(s.uuid)) : servers;
+    const failures: [string, string][] = [];
     try {
       for (const s of targets) {
-        await api.post(`/servers/${encodeURIComponent(s.uuid)}/registries`, { registry, username, password });
+        try {
+          await api.post(`/servers/${encodeURIComponent(s.uuid)}/registries`, { registry, username, password });
+        } catch (err) {
+          if (err instanceof ApiError && Object.keys(err.errors).length) throw err;
+          failures.push([s.name, (err instanceof Error ? err.message : String(err)).replace(/^Login failed: /, '')]);
+        }
+      }
+      password = '';
+      if (failures.length) {
+        const escape = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const details = failures.map(([name, m]) => (targets.length > 1 ? `${escape(name)}: ${escape(m)}` : escape(m))).join('<br>');
+        notify.error(failures.length === targets.length ? 'Login failed.' : 'Login failed on some servers.', details);
+        return;
       }
       notify.success(editRegistry ? `Updated the login for ${registry}.` : `Logged in to ${registry}.`);
       ondone();
     } catch (err) {
       if (err instanceof ApiError && Object.keys(err.errors).length) error = err;
-      else notify.error('Login failed.', err instanceof Error ? err.message : String(err));
+      else notify.error('Login failed.', (err instanceof Error ? err.message : String(err)).replace(/^Login failed: /, ''));
     } finally {
       saving = false;
     }
@@ -65,7 +84,7 @@
 <div>
   <form class="flex flex-col gap-3" onsubmit={submit}>
     {#if picker}
-      <Listbox id="selectedServers" label="Servers" required searchable placeholder={servers.length ? 'Select servers' : 'No reachable server to log in to'} searchPlaceholder="Search servers…" disabled={!servers.length} bind:value={selected} options={servers.map((s) => ({ value: s.uuid, label: s.name }))} />
+      <Listbox id="selectedServers" multiple bind:values={selected} error={error?.field('selectedServers')} label="Servers" required searchable placeholder={servers.length ? 'Select servers' : 'No reachable server to log in to'} searchPlaceholder="Search servers…" disabled={!servers.length} options={servers.map((s) => ({ value: s.uuid, label: s.name }))} />
     {/if}
     {#if !editRegistry}
       <Listbox id="provider" label="Provider" bind:value={provider} onchange={changeProvider} options={Object.entries(REGISTRY_PROVIDERS).map(([value, p]) => ({ value, label: p.label }))} />

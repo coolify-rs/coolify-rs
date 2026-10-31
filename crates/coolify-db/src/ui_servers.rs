@@ -73,3 +73,34 @@ pub async fn update_ca_certificate(
         .await?;
     Ok(())
 }
+
+/// One row of `DeploymentsIndicator::deployments`.
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
+pub struct ActiveDeployment {
+    pub id: i64,
+    pub application_uuid: Option<String>,
+    pub application_name: Option<String>,
+    pub deployment_url: Option<String>,
+    pub pull_request_id: i32,
+    pub server_name: Option<String>,
+    pub status: String,
+    pub project_name: Option<String>,
+    pub environment_name: Option<String>,
+}
+
+/// `DeploymentsIndicator::deployments`: `ownedByTeam` goes through the application, also a deleted one.
+pub async fn active_deployments(db: &Db, team_id: i64) -> DbResult<Vec<ActiveDeployment>> {
+    Ok(sqlx::query_as(
+        "SELECT q.id, a.uuid AS application_uuid, q.application_name, q.deployment_url, q.pull_request_id, \
+                q.server_name, q.status, p.name AS project_name, e.name AS environment_name \
+           FROM application_deployment_queues q \
+           JOIN applications a ON a.id::text = q.application_id \
+           JOIN environments e ON e.id = a.environment_id \
+           JOIN projects p ON p.id = e.project_id \
+          WHERE p.team_id = $1 AND q.status IN ('in_progress', 'queued') \
+          ORDER BY q.id",
+    )
+    .bind(team_id)
+    .fetch_all(db.pool())
+    .await?)
+}

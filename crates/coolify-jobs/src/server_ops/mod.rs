@@ -2,9 +2,11 @@
 //! proxy, Sentinel, Docker cleanup, log drains, patches, CA certificate and the
 //! scheduled checks. Each submodule cites what it ports.
 
+pub mod acme;
 pub mod certificate;
 pub mod checks;
 pub mod cleanup;
+pub mod github_runners;
 pub mod install;
 pub mod log_drain;
 pub mod patches;
@@ -13,6 +15,8 @@ pub mod proxy_config;
 pub mod registries;
 pub mod scheduler;
 pub mod sentinel;
+pub mod traffic;
+pub mod tunnel;
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -192,6 +196,22 @@ impl Srv {
             .remote()
             .run_quiet(&t, &refs, RunOptions::op(op))
             .await
+    }
+
+    /// One attempt with a time limit: a failure is an error, as in `SentinelTrafficClient::runRemote`.
+    pub async fn run_once(
+        &self,
+        commands: &[String],
+        op: &'static str,
+        timeout: Duration,
+    ) -> Result<Option<String>, String> {
+        let t = self.target().await?;
+        let refs: Vec<&str> = commands.iter().map(String::as_str).collect();
+        self.jobs
+            .remote()
+            .run(&t, &refs, RunOptions::op(op).attempts(1).timeout(timeout))
+            .await
+            .map_err(|e| e.message)
     }
 
     pub async fn run_timeout(

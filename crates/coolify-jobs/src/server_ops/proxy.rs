@@ -284,19 +284,49 @@ async fn mark_configuration_applied(srv: &mut Srv, configuration: &str) -> Resul
 
 /// `remote_process(...)`: runs the commands as an `activity_log` entry and streams the output.
 async fn remote_process(srv: &Srv, commands: &[String], op: &'static str) -> Result<(), String> {
-    let db = srv.db().clone();
-    let props = json!({
+    let activity = queue_activity(srv, op, None).await?;
+    run_activity(srv, activity, commands, op).await
+}
+
+/// The queued `activity_log` entry of `remote_process(...)`, which the page's activity monitor follows.
+pub(crate) async fn queue_activity(
+    srv: &Srv,
+    op: &'static str,
+    type_uuid: Option<&str>,
+) -> Result<i64, String> {
+    let mut props = json!({
         "server_uuid": srv.row.uuid,
         "type": "inline",
         "status": "queued",
         "team_id": srv.info.team_id,
         "operation": op,
     });
-    let activity: i64 =
-        coolify_db::server_ops::insert_server_activity(&db, srv.id(), &props, Jobs::now())
-            .await
-            .map_err(|e| e.to_string())?;
-    let target = srv.target().await?;
+    if let Some(uuid) = type_uuid {
+        props["type_uuid"] = json!(uuid);
+    }
+    coolify_db::server_ops::insert_server_activity(srv.db(), srv.id(), &props, Jobs::now())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// `CoolifyTask`: runs the commands of a queued activity and streams the output into it.
+pub(crate) async fn run_activity(
+    srv: &Srv,
+    activity: i64,
+    commands: &[String],
+    op: &'static str,
+) -> Result<(), String> {
+    let db = srv.db().clone();
+    let target = match srv.target().await {
+        Ok(t) => t,
+        Err(e) => {
+            let merge = json!({"status": "error", "exitCode": 1, "error": e});
+            let _ =
+                coolify_db::databases::update_activity(&db, activity, &merge, None, Jobs::now())
+                    .await;
+            return Err(e);
+        }
+    };
     let _ = coolify_db::databases::update_activity(
         &db,
         activity,

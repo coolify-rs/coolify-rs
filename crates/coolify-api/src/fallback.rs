@@ -73,8 +73,10 @@ fn is_api_path(path: &str) -> bool {
 /// (components/forms/monaco-editor.blade.php) starts its web worker from a blob URL. Forms may
 /// post elsewhere for the GitHub App manifest flow, which posts to the provider's site (any
 /// GitHub Enterprise host); the page gets there by client-side navigation, so this holds for all.
+/// The new server page (livewire/server/create.blade.php) shows Vultr's logo from vultr.com. The
+/// analytics views show `countryFlagUrl()` from flagcdn.com and `refererFaviconUrl()` from DuckDuckGo.
 const CSP: &str = "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; \
-                   img-src 'self' data:; connect-src 'self'; font-src 'self' data:; \
+                   img-src 'self' data: https://www.vultr.com https://flagcdn.com https://icons.duckduckgo.com; connect-src 'self'; font-src 'self' data:; \
                    frame-ancestors 'none'; base-uri 'self'; form-action 'self' https: http:";
 
 pub async fn fallback(State(state): State<AppState>, req: Request) -> Response {

@@ -82,7 +82,7 @@
     title="Copy to clipboard"
     aria-label="Copy to clipboard"
     class="icon-button group shrink-0 {cls}"
-    disabled={!value}
+    disabled={!isPassword && !value}
     onclick={copy}
   >
     <span class="inline-flex transition-transform duration-150 ease-out group-active:scale-75">
