@@ -88,3 +88,18 @@ pub fn path_str<'a>(v: &'a Value, path: &str) -> Option<&'a str> {
 pub fn path_value<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
     path.split('.').try_fold(v, |cur, key| cur.get(key))
 }
+
+/// `$url['scheme']`, `urlHostWithPort($url)` and `rtrim($url['path'] ?? '', '/')`.
+pub fn oauth_url_parts(html: &str) -> (String, String, String) {
+    let (scheme, rest) = html.split_once("://").unwrap_or(("https", html));
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let path = path.split(['?', '#']).next().unwrap_or_default();
+    let prefix = if path.is_empty() {
+        String::new()
+    } else {
+        format!("/{}", path.trim_end_matches('/'))
+    };
+    let prefix = if prefix == "/" { String::new() } else { prefix };
+    (scheme.to_owned(), authority.to_owned(), prefix)
+}

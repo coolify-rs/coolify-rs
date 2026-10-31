@@ -817,15 +817,19 @@ impl Run {
     pub(super) async fn load_source(&mut self) -> Step {
         let db = &self.jobs.0.db;
         if let (Some(kind), Some(id)) = (self.app.str("source_type"), self.app.int("source_id")) {
-            if kind != git::GITHUB_APP {
-                return Err(Fail::new(
-                    "GitLab and Gitea sources are not supported by coolify-rs yet.",
-                ));
+            let table = match kind {
+                git::GITHUB_APP => Some("github_apps"),
+                git::GITLAB_APP => Some("gitlab_apps"),
+                git::GITEA_APP => Some("gitea_apps"),
+                _ => None,
+            };
+            if let Some(table) = table {
+                let morph = kind.to_owned();
+                let row = git_sources::source_row(db, table, id)
+                    .await
+                    .map_err(|e| Fail::new(e.to_string()))?;
+                self.b.source = row.map(|row| git::Source { row, morph });
             }
-            let row = git_sources::github_app(db, id)
-                .await
-                .map_err(|e| Fail::new(e.to_string()))?;
-            self.b.source = row.map(|row| git::Source { row });
         }
         let kind = git::deployment_type(&self.app, self.b.source.as_ref());
         let (repo, port) = git::convert_git_url(
@@ -868,12 +872,17 @@ impl Run {
         } else {
             None
         };
-        if self.b.source.as_ref().is_some_and(|s| !s.is_public())
+        if self
+            .b
+            .source
+            .as_ref()
+            .is_some_and(|s| s.is_github() && !s.is_public())
             && self.b.kind == DeploymentType::Source
             && self.b.github_token.is_none()
         {
             self.b.github_token = Some(self.github_installation_token().await?);
         }
+        let (oauth_token, source_key) = self.oauth_credentials().await?;
         let branch = self.branch_name();
         let settings = ImportSettings::of(&self.app);
         let import = git::generate_git_import_commands(&ImportInput {
@@ -887,15 +896,57 @@ impl Run {
             commit: &self.commit,
             private_key: key.as_deref(),
             github_token: self.b.github_token.as_deref(),
+            oauth_token: oauth_token.as_deref(),
+            source_key: source_key.as_deref(),
         })
         .map_err(Fail::new)?;
         self.b.branch = import.branch.clone();
         self.b.full_repo_url = import.full_repo_url.clone();
-        // A GitHub App token in the URL is redacted in the logs.
-        if let Some(t) = &self.b.github_token {
-            self.locked.push(t.clone());
+        // A GitHub App or OAuth token in the URL is redacted in the logs.
+        for t in self.b.github_token.iter().chain(oauth_token.iter()) {
+            let encoded = git::urlencoding_raw(t);
+            if encoded != *t && !self.locked.contains(&encoded) {
+                self.locked.push(encoded);
+            }
+            if !self.locked.contains(t) {
+                self.locked.push(t.clone());
+            }
         }
         Ok(import)
+    }
+
+    /// The clone credentials of a GitLab or Gitea source: `generateGitlabCloneToken()` /
+    /// `generateGiteaCloneToken()` when connected, else `gitlabAppPrivateKey()` /
+    /// `giteaAppPrivateKey()`.
+    async fn oauth_credentials(&self) -> Result<(Option<String>, Option<String>), Fail> {
+        let Some(source) = self
+            .b
+            .source
+            .as_ref()
+            .filter(|s| !s.is_github() && self.b.kind == DeploymentType::Source)
+        else {
+            return Ok((None, None));
+        };
+        let db = &self.jobs.0.db;
+        let enc = self
+            .jobs
+            .0
+            .encrypter
+            .as_ref()
+            .ok_or_else(|| Fail::new("No application encryption key has been specified."))?;
+        if source.is_connected() {
+            let token = if source.is_gitea() {
+                crate::gitea::clone_token(db, enc, &source.row).await
+            } else {
+                crate::gitlab::clone_token(db, enc, &source.row).await
+            }
+            .map_err(Fail::new)?;
+            return Ok((Some(token), None));
+        }
+        Ok((
+            None,
+            crate::github::team_private_key(db, enc, &source.row).await,
+        ))
     }
 
     /// `generateGithubInstallationToken($source)`.
@@ -913,6 +964,7 @@ impl Run {
     pub(super) async fn check_git_if_build_needed(&mut self) -> Step {
         if let Some(source) = self.b.source.clone()
             && self.b.kind == DeploymentType::Source
+            && source.is_github()
             && !source.is_public()
         {
             // githubApi(repos/{repo}): keeps `repository_project_id` current.

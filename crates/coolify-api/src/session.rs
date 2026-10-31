@@ -263,6 +263,7 @@ async fn live_session(state: &AppState, headers: &HeaderMap) -> Result<Live, Api
 }
 
 /// The signed-in user of a browser callback (`Route::middleware(['web', 'auth'])`).
+#[derive(Debug)]
 pub struct WebUser {
     session_id: String,
     pub user_id: i64,

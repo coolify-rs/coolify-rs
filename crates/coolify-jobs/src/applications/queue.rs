@@ -42,6 +42,10 @@ pub struct QueueOptions {
     pub no_questions_asked: bool,
     pub rollback: bool,
     pub docker_registry_image_tag: Option<String>,
+    /// `$pull_request_id` (0: the application itself).
+    pub pull_request_id: i64,
+    /// `$git_type`.
+    pub git_type: Option<String>,
 }
 
 /// `validateGitRef($commit, 'deployment commit')`.
@@ -115,7 +119,7 @@ impl Jobs {
                 .map_err(|e| e.to_string())?;
             if let Some(existing) = open.iter().find(|d| {
                 d.str("commit") == Some(commit.as_str())
-                    && d.int("pull_request_id").unwrap_or(0) == 0
+                    && d.int("pull_request_id").unwrap_or(0) == o.pull_request_id
                     && d.str("docker_registry_image_tag") == o.docker_registry_image_tag.as_deref()
             }) && !(o.force_rebuild || o.rollback || o.no_questions_asked)
             {
@@ -139,7 +143,7 @@ impl Jobs {
                     "/project/{project_uuid}/environment/{env_uuid}/application/{}/deployment/{deployment_uuid}",
                     a.uuid
                 ),
-                pull_request_id: 0,
+                pull_request_id: o.pull_request_id,
                 force_rebuild: o.force_rebuild,
                 commit: commit.clone(),
                 status: "queued".into(),
@@ -148,7 +152,7 @@ impl Jobs {
                 restart_only: o.restart_only,
                 rollback: o.rollback,
                 only_this_server: false,
-                git_type: None,
+                git_type: o.git_type.clone(),
                 commit_message: None,
                 docker_registry_image_tag: o.docker_registry_image_tag.clone(),
                 build_server_id: None,

@@ -4,7 +4,7 @@
 //! `reconcileDockerComposeDomains()`.
 //!
 //! Sources: public GitHub Apps, private GitHub Apps (installation token), deploy keys and other
-//! public repositories. GitLab and Gitea sources are not ported.
+//! public repositories, and GitLab and Gitea Apps.
 
 use std::sync::LazyLock;
 
@@ -23,6 +23,8 @@ use crate::Jobs;
 /// `Application::MAX_DOCKER_COMPOSE_SIZE_BYTES`.
 const MAX_COMPOSE_BYTES: usize = 5 * 1024 * 1024;
 const GITHUB_APP: &str = r"App\Models\GithubApp";
+const GITLAB_APP: &str = r"App\Models\GitlabApp";
+const GITEA_APP: &str = r"App\Models\GiteaApp";
 
 /// What `loadComposeFile()` throws.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +59,8 @@ fn rt(m: impl Into<String>) -> LoadError {
 enum Kind {
     DeployKey,
     GithubApp(Record),
+    /// A `GitlabApp` or `GiteaApp` source.
+    Oauth(Record, bool),
     Other,
 }
 
@@ -217,6 +221,74 @@ async fn git_commands(
                     ls_remote: format!("git ls-remote {}", escapeshellarg(&repo_url)),
                     clone: format!("{clone} {} {base}", escapeshellarg(&repo_url)),
                     git: format!("git {option}"),
+                }
+            }
+        }
+        Kind::Oauth(src, gitea) => {
+            let html_url = src
+                .get("html_url")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let filled = |k: &str| {
+                src.get(k)
+                    .and_then(Value::as_str)
+                    .is_some_and(|v| !v.is_empty())
+            };
+            let enc = run.encrypter();
+            if filled("access_token") && filled("refresh_token") {
+                let token = if *gitea {
+                    crate::gitea::clone_token(&jobs.0.db, enc, src).await
+                } else {
+                    crate::gitlab::clone_token(&jobs.0.db, enc, src).await
+                }
+                .map_err(rt)?;
+                let encoded = rawurlencode(&token);
+                let (scheme, host, prefix) = crate::git_http::oauth_url_parts(&html_url);
+                let option = format!(
+                    "-c {}",
+                    escapeshellarg(&format!(
+                        "url.{scheme}://oauth2:{encoded}@{host}{prefix}/.insteadOf={scheme}://{host}{prefix}/"
+                    ))
+                );
+                let repo_url =
+                    format!("{scheme}://oauth2:{encoded}@{host}{prefix}/{repository}.git");
+                clone = clone.replacen("git clone", &format!("git {option} clone"), usize::MAX);
+                GitCommands {
+                    ls_remote: format!("git ls-remote {}", escapeshellarg(&repo_url)),
+                    clone: format!("{clone} {} {base}", escapeshellarg(&repo_url)),
+                    git: format!("git {option}"),
+                }
+            } else if let Some(pem) = crate::github::team_private_key(&jobs.0.db, enc, src).await {
+                use base64::Engine as _;
+                let key_b64 = base64::engine::general_purpose::STANDARD.encode(pem.as_bytes());
+                let source_port = src
+                    .get("custom_port")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(22)
+                    .to_string();
+                let ssh = git_ssh_command(&source_port, Some(&key_loc));
+                let env = format!("GIT_SSH_COMMAND=\"{ssh}\"");
+                let mut ls = ssh_key_setup(uuid, &key_b64);
+                ls.push(format!(
+                    "{env} git ls-remote {}",
+                    escapeshellarg(&repository)
+                ));
+                let mut cl = ssh_key_setup(uuid, &key_b64);
+                cl.push(format!(
+                    "{env} {clone} {} {base}",
+                    escapeshellarg(&repository)
+                ));
+                GitCommands {
+                    ls_remote: ls.join(" && "),
+                    clone: cl.join(" && "),
+                    git: format!("{env} git"),
+                }
+            } else {
+                GitCommands {
+                    ls_remote: format!("git ls-remote {}", escapeshellarg(&repository)),
+                    clone: format!("{clone} {} {base}", escapeshellarg(&repository)),
+                    git: "git".into(),
                 }
             }
         }
@@ -409,17 +481,26 @@ pub async fn plan(jobs: &Jobs, run: &Run<'_>, uuid: &str) -> Result<LoadPlan, Lo
                 .await
                 .map_err(|e| rt(e.to_string()))?
         }
-        Some(_) if !source_type.is_empty() => {
-            return Err(rt(
-                "Loading a Docker Compose file from GitLab or Gitea sources is not ported.",
-            ));
+        Some(id) if source_type == GITLAB_APP || source_type == GITEA_APP => {
+            let table = if source_type == GITLAB_APP {
+                "gitlab_apps"
+            } else {
+                "gitea_apps"
+            };
+            coolify_db::git_sources::source_row(&jobs.0.db, table, id)
+                .await
+                .map_err(|e| rt(e.to_string()))?
         }
         _ => None,
     };
     let kind = if private_key_id.is_some_and(|k| k > 0) {
         Kind::DeployKey
     } else if let Some(s) = source.clone() {
-        Kind::GithubApp(s)
+        if source_type == GITHUB_APP {
+            Kind::GithubApp(s)
+        } else {
+            Kind::Oauth(s, source_type == GITEA_APP)
+        }
     } else if private_key_id == Some(0) {
         Kind::DeployKey
     } else {

@@ -68,16 +68,18 @@ impl Errors {
         }
     }
 
-    fn into_result(self) -> Result<(), Response> {
+    fn into_result(self) -> Result<(), Box<Response>> {
         if self.0.is_empty() {
             return Ok(());
         }
         let message = crate::ui_applications::summary(&self.0);
-        Err(PhpJson(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            json!({"message": message, "errors": self.0}),
-        )
-        .into_response())
+        Err(Box::new(
+            PhpJson(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({"message": message, "errors": self.0}),
+            )
+            .into_response(),
+        ))
     }
 }
 
@@ -431,7 +433,7 @@ pub async fn create_github(
         errors.push("custom_port", "The custom port field is required.");
     }
     if let Err(r) = errors.into_result() {
-        return Ok(r);
+        return Ok(*r);
     }
     let system = flag(&m, "is_system_wide");
     if system && !can_access_system_resources(&state, ctx.user_id).await? {
@@ -518,7 +520,7 @@ async fn create_oauth(
         errors.push("custom_port", "The custom port field is required.");
     }
     if let Err(r) = errors.into_result() {
-        return Ok(r);
+        return Ok(*r);
     }
     let system = flag(&m, "is_system_wide");
     if system && !can_access_system_resources(&state, ctx.user_id).await? {
@@ -709,7 +711,7 @@ pub async fn show_github(
         "applications": applications_of(&state, &ctx, Provider::Github, id_of(&row)).await?,
         "endpoints": endpoints,
         "manifest_state": manifest_state,
-        "installation_path": if update { Some(installation_path(&row)) } else if !has_installation { Some(installation_path(&row)) } else { None },
+        "installation_path": (update || !has_installation).then(|| installation_path(&row)),
         "permissions_path": organization_settings_path(&row, "/permissions"),
         "settings_url": organization_settings_path(&row, ""),
         "can_create": ctx.is_team_admin(),
@@ -807,7 +809,7 @@ pub async fn update_github(
         }
     }
     if let Err(r) = errors.into_result() {
-        return Ok(r);
+        return Ok(*r);
     }
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let opt_int = |v: Option<String>| match v.and_then(|s| s.parse::<i64>().ok()) {
@@ -1266,7 +1268,7 @@ async fn update_oauth(
     }
     let redirect_uri = text(&m, "redirect_uri");
     if let Err(r) = errors.into_result() {
-        return Ok(r);
+        return Ok(*r);
     }
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let mut values: Vec<(&'static str, ColumnValue)> = vec![

@@ -14,11 +14,15 @@ use coolify_remote::shell::quote;
 use super::{Cmd, in_docker};
 
 pub(super) const GITHUB_APP: &str = r"App\Models\GithubApp";
+pub(super) const GITLAB_APP: &str = r"App\Models\GitlabApp";
+pub(super) const GITEA_APP: &str = r"App\Models\GiteaApp";
 
-/// The application's git source (`$this->source`): a `github_apps` row.
+/// The application's git source (`$this->source`): a `github_apps`, `gitlab_apps` or
+/// `gitea_apps` row.
 #[derive(Debug, Clone)]
 pub(super) struct Source {
     pub row: Record,
+    pub morph: String,
 }
 
 impl Source {
@@ -33,6 +37,17 @@ impl Source {
             .get("is_public")
             .and_then(Value::as_bool)
             .unwrap_or(false)
+    }
+    pub fn is_github(&self) -> bool {
+        self.morph == GITHUB_APP
+    }
+    pub fn is_gitea(&self) -> bool {
+        self.morph == GITEA_APP
+    }
+    /// `GitlabApp::isConnected()` / `GiteaApp::isConnected()`.
+    pub fn is_connected(&self) -> bool {
+        let filled = |k: &str| self.str(k).is_some_and(|v| !v.is_empty());
+        filled("access_token") && filled("refresh_token")
     }
 }
 
@@ -250,6 +265,10 @@ pub(super) struct ImportInput<'a> {
     pub private_key: Option<&'a str>,
     /// A GitHub App installation token (private GitHub App sources).
     pub github_token: Option<&'a str>,
+    /// `generateGitlabCloneToken()` / `generateGiteaCloneToken()` for a connected source.
+    pub oauth_token: Option<&'a str>,
+    /// `gitlabAppPrivateKey()` / `giteaAppPrivateKey()` for a source without OAuth tokens.
+    pub source_key: Option<&'a str>,
 }
 
 fn hidden(command: String) -> Cmd {
@@ -288,6 +307,9 @@ pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImp
     match i.kind {
         DeploymentType::Source => {
             let source = i.source.ok_or("The application has no git source.")?;
+            if !source.is_github() {
+                return oauth_import(i, source, clone, &base_dir);
+            }
             if source.is_public() {
                 let full = format!("{}/{}", source.html_url(), i.repository);
                 clone = format!("{clone} {} {dir}", quote(&full));
@@ -370,6 +392,86 @@ pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImp
             })
         }
     }
+}
+
+/// The `GitlabApp` / `GiteaApp` branch of `generateGitImportCommands()` (pull request 0).
+fn oauth_import(
+    i: &ImportInput<'_>,
+    source: &Source,
+    clone: String,
+    base_dir: &str,
+) -> Result<GitImport, String> {
+    use base64::Engine as _;
+    let dir = quote(base_dir);
+    if source.is_connected() {
+        let token = i.oauth_token.ok_or("No access token for the git source.")?;
+        let encoded = urlencoding_raw(token);
+        let (scheme, host, prefix) = crate::git_http::oauth_url_parts(source.html_url());
+        let option = format!(
+            "-c {}",
+            quote(&format!(
+                "url.{scheme}://oauth2:{encoded}@{host}{prefix}/.insteadOf={scheme}://{host}{prefix}/"
+            ))
+        );
+        let clone = clone.replacen("git clone", &format!("git {option} clone"), 1);
+        let repo_url = format!(
+            "{scheme}://oauth2:{encoded}@{host}{prefix}/{}.git",
+            i.repository
+        );
+        let base = format!("{clone} {} {dir}", quote(&repo_url));
+        let command = set_git_import_settings(
+            &base,
+            i.settings,
+            false,
+            i.commit,
+            None,
+            Some(&option),
+            base_dir,
+        );
+        return Ok(GitImport {
+            commands: vec![hidden(in_docker(i.dep, &command))],
+            branch: i.branch.to_owned(),
+            full_repo_url: repo_url,
+        });
+    }
+    if let Some(key) = i.source_key {
+        let key_location = format!("/root/.ssh/id_rsa_coolify_{}", i.dep);
+        let key_b64 = base64::engine::general_purpose::STANDARD.encode(key);
+        let port = source
+            .row
+            .get("custom_port")
+            .and_then(Value::as_i64)
+            .unwrap_or(22)
+            .to_string();
+        let ssh = git_ssh_command(&port, Some(&key_location), true);
+        let base = format!(
+            "GIT_SSH_COMMAND=\"{ssh}\" {clone} {} {dir}",
+            quote(i.repository)
+        );
+        let command = set_git_import_settings(
+            &base,
+            i.settings,
+            false,
+            i.commit,
+            Some(&ssh),
+            None,
+            base_dir,
+        );
+        let mut commands = ssh_key_setup(i.dep, &key_b64);
+        commands.push(hidden(in_docker(i.dep, &command)));
+        return Ok(GitImport {
+            commands,
+            branch: i.branch.to_owned(),
+            full_repo_url: i.repository.to_owned(),
+        });
+    }
+    let clone = format!("{clone} {} {dir}", quote(i.repository));
+    let clone = set_git_import_settings(&clone, i.settings, true, i.commit, None, None, base_dir);
+    Ok(GitImport {
+        commands: vec![hidden(in_docker(i.dep, &clone))],
+        branch: i.branch.to_owned(),
+        full_repo_url: i.repository.to_owned(),
+    })
 }
 
 /// PHP `rawurlencode()`.
@@ -696,6 +798,44 @@ mod tests {
     }
 
     #[test]
+    fn oauth_clone_command() {
+        let source = Source {
+            row: serde_json::from_str(
+                r#"{"html_url":"http://git.example:8080/sub/","access_token":"x","refresh_token":"y"}"#,
+            )
+            .unwrap(),
+            morph: GITLAB_APP.into(),
+        };
+        let s = ImportSettings {
+            shallow: true,
+            submodules: false,
+            lfs: false,
+        };
+        let g = generate_git_import_commands(&ImportInput {
+            dep: "abc",
+            branch: "main",
+            repository: "o/r",
+            port: "22",
+            kind: DeploymentType::Source,
+            source: Some(&source),
+            settings: s,
+            commit: "HEAD",
+            private_key: None,
+            github_token: None,
+            oauth_token: Some("t+k"),
+            source_key: None,
+        })
+        .unwrap();
+        assert_eq!(
+            g.full_repo_url,
+            "http://oauth2:t%2Bk@git.example:8080/sub/o/r.git"
+        );
+        assert!(g.commands[0].command.contains(
+            "url.http://oauth2:t%2Bk@git.example:8080/sub/.insteadOf=http://git.example:8080/sub/"
+        ));
+    }
+
+    #[test]
     fn clone_command() {
         let s = ImportSettings {
             shallow: true,
@@ -705,6 +845,7 @@ mod tests {
         let source = Source {
             row: serde_json::from_str(r#"{"html_url":"https://github.com","is_public":true}"#)
                 .unwrap(),
+            morph: GITHUB_APP.into(),
         };
         let g = generate_git_import_commands(&ImportInput {
             dep: "abc",
@@ -717,6 +858,8 @@ mod tests {
             commit: "deadbeef",
             private_key: None,
             github_token: None,
+            oauth_token: None,
+            source_key: None,
         })
         .unwrap();
         assert_eq!(g.full_repo_url, "https://github.com/o/r");

@@ -42,6 +42,12 @@ pub async fn app_private_key(db: &Db, enc: &Encrypter, source: &Record) -> Resul
         .map_err(|_| "The MAC is invalid.".to_owned())
 }
 
+/// `gitlabAppPrivateKey($source)` / `giteaAppPrivateKey($source)`: the decrypted key when it
+/// belongs to the source's team.
+pub async fn team_private_key(db: &Db, enc: &Encrypter, source: &Record) -> Option<String> {
+    app_private_key(db, enc, source).await.ok()
+}
+
 /// The RS256 JWT `generateGithubAppJwt()` builds: issued a minute ago, valid for eight minutes.
 pub fn app_jwt(private_key_pem: &str, app_id: &str) -> Result<String, String> {
     let key = RsaPrivateKey::from_pkcs1_pem(private_key_pem)
