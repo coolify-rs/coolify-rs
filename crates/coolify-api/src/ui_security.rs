@@ -1002,12 +1002,15 @@ async fn add_integration_token(
             metadata.insert("proxied_dns".into(), json!(true));
         }
     }
-    // Cloudflare's validator and zone sync are not ported, so such a token is refused.
-    if !verify(provider, token, &metadata).await {
-        return Ok(toast_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            error_message(provider),
-        ));
+    match verify_with_capabilities(&state.db, provider, token, &caps, &metadata).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return Ok(toast_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                error_message(provider),
+            ));
+        }
+        Err(message) => return Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, message)),
     }
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let uuid = coolify_domain::new_public_id();
@@ -1039,6 +1042,20 @@ async fn add_integration_token(
     )
     .await;
     Ok(ok(json!({"message": "Integration token added successfully."})).into_response())
+}
+
+/// `IntegrationTokenValidator::validate`.
+async fn verify_with_capabilities(
+    db: &coolify_db::Db,
+    provider: &str,
+    token: &str,
+    caps: &[String],
+    metadata: &Map<String, Value>,
+) -> Result<bool, String> {
+    if provider == "cloudflare" {
+        return Ok(coolify_jobs::integrations::cloudflare::validate_token(token, caps).await);
+    }
+    verify(db, provider, token, metadata).await
 }
 
 /// `baseUrlForAudit`.
@@ -1159,11 +1176,15 @@ async fn update_integration_token(
                 .and_then(|c| enc.decrypt_string(c).ok())
                 .unwrap_or_default()
         };
-        if !verify(&provider, &current, &metadata).await {
-            return Ok(toast_error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                error_message(&provider),
-            ));
+        match verify_with_capabilities(&state.db, &provider, &current, &caps, &metadata).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return Ok(toast_error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    error_message(&provider),
+                ));
+            }
+            Err(message) => return Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, message)),
         }
     }
     let id = coolify_db::database_parts::id_of(&r);
@@ -1267,15 +1288,37 @@ async fn delete_integration_token(
     Ok(ok(json!({"message": "Integration token deleted successfully."})).into_response())
 }
 
-/// `refreshZones`: the Cloudflare client is not ported.
-async fn refresh_zones(Extension(ctx): Extension<AuthCtx>) -> ApiResult {
+/// `IntegrationTokenEditor::refreshZones`.
+async fn refresh_zones(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    let Some(r) = it::find(&state.db, ctx.team_id, &uuid).await? else {
+        return Err(ApiError::Message(StatusCode::NOT_FOUND, "Not found."));
+    };
     if !ctx.is_team_admin() {
         return Ok(unauthorized());
     }
-    Ok(toast_error(
-        StatusCode::NOT_IMPLEMENTED,
-        "Refreshing Cloudflare zones is not available in coolify-rs yet.",
-    ))
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    let token = text(&r, "token")
+        .and_then(|c| enc.decrypt_string(c).ok())
+        .unwrap_or_default();
+    let id = coolify_db::database_parts::id_of(&r);
+    match coolify_jobs::integrations::cloudflare::sync_zones(&state.db, id, &token, state.now())
+        .await
+    {
+        Ok(_) => {
+            let count = coolify_db::managed_dns::zones_of_token(&state.db, id)
+                .await?
+                .len();
+            Ok(ok(json!({
+                "message": format!("Cloudflare zones refreshed. {count} accessible zones found."),
+            }))
+            .into_response())
+        }
+        Err(message) => Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, message)),
+    }
 }
 
 #[cfg(test)]

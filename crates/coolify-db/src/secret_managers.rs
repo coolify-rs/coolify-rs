@@ -80,3 +80,132 @@ pub async fn update_or_create_link(
     .await?;
     Ok(())
 }
+
+/// A `secret_manager_links` row with its `integration_tokens` row.
+#[derive(Clone)]
+#[allow(missing_debug_implementations)]
+pub struct LinkWithToken {
+    pub link_id: i64,
+    pub token_id: i64,
+    pub token_uuid: String,
+    pub token_name: String,
+    pub provider: String,
+    pub token_team_id: i64,
+    pub token_encrypted: String,
+    /// JSON text.
+    pub metadata: Option<String>,
+    /// JSON text.
+    pub settings: Option<String>,
+}
+
+/// `$resource->secretManagerLink()->with('integrationToken')->first()`.
+pub async fn link_with_token(
+    db: &Db,
+    morph: &str,
+    resource_id: i64,
+) -> DbResult<Option<LinkWithToken>> {
+    type Row = (
+        i64,
+        i64,
+        String,
+        String,
+        String,
+        i64,
+        String,
+        Option<String>,
+        Option<String>,
+    );
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT l.id, t.id, t.uuid, t.name, t.provider, t.team_id, t.token, t.metadata::text, l.settings::text \
+         FROM secret_manager_links l JOIN integration_tokens t ON t.id = l.integration_token_id \
+         WHERE l.resourceable_type = $1 AND l.resourceable_id = $2 LIMIT 1",
+    )
+    .bind(morph)
+    .bind(resource_id)
+    .fetch_optional(db.pool())
+    .await?;
+    Ok(row.map(
+        |(
+            link_id,
+            token_id,
+            token_uuid,
+            token_name,
+            provider,
+            token_team_id,
+            token_encrypted,
+            metadata,
+            settings,
+        )| LinkWithToken {
+            link_id,
+            token_id,
+            token_uuid,
+            token_name,
+            provider,
+            token_team_id,
+            token_encrypted,
+            metadata,
+            settings,
+        },
+    ))
+}
+
+/// A secret manager token of a team, as the section lists it.
+#[derive(Debug, Clone)]
+pub struct ListedToken {
+    pub id: i64,
+    pub uuid: String,
+    pub name: String,
+    pub provider: String,
+}
+
+/// `$availableTokens`: the secret manager tokens of a team whose `capabilities` has `secrets`.
+pub async fn tokens_of_team(db: &Db, team_id: i64) -> DbResult<Vec<ListedToken>> {
+    let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
+        "SELECT id, uuid, name, provider FROM integration_tokens \
+         WHERE team_id = $1 AND provider IN ('doppler', 'infisical', 'vault') AND capabilities::jsonb ? 'secrets' ORDER BY id",
+    )
+    .bind(team_id)
+    .fetch_all(db.pool())
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, uuid, name, provider)| ListedToken {
+            id,
+            uuid,
+            name,
+            provider,
+        })
+        .collect())
+}
+
+/// `$link->update(['settings' => ...])`.
+pub async fn update_link_settings(
+    db: &Db,
+    link_id: i64,
+    settings: Option<&str>,
+    now: NaiveDateTime,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query(
+        "UPDATE secret_manager_links SET settings = $2::json, updated_at = $3 WHERE id = $1",
+    )
+    .bind(link_id)
+    .bind(settings)
+    .bind(now)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
+/// `$resource->secretManagerLink()->delete()`.
+pub async fn delete_link(db: &Db, morph: &str, resource_id: i64) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query(
+        "DELETE FROM secret_manager_links WHERE resourceable_type = $1 AND resourceable_id = $2",
+    )
+    .bind(morph)
+    .bind(resource_id)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}

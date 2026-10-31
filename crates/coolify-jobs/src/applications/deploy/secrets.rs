@@ -8,9 +8,13 @@ use serde_json::Value;
 use coolify_compat::yaml::{Key, PhpValue};
 use coolify_remote::shell::quote;
 
+use coolify_db::applications as apps;
+
 use super::build::{php_string, reserved_docker_client_key, valid_env_key};
 use super::{Cmd, Fail, Run, Step, git, in_docker};
 use crate::compose_parser::ParsedCompose;
+use crate::databases::env::Var;
+use crate::integrations::secret_managers;
 
 impl Run {
     /// `generate_docker_env_flags_for_secrets()`: the `-e` flags of the helper container.
@@ -275,4 +279,129 @@ pub(super) fn plan_variables(plan: Option<&Value>) -> Vec<(String, String)> {
         Some(Value::Object(m)) => m.iter().map(|(k, v)| (k.clone(), php_string(v))).collect(),
         _ => Vec::new(),
     }
+}
+
+impl Run {
+    /// `remote_secrets()`: fetches the source once, logs it and hides every fetched value in the
+    /// deployment log.
+    async fn remote_secrets(&mut self) -> Result<secret_managers::Secrets, Fail> {
+        if let Some(s) = &self.b.remote_secrets {
+            return Ok(s.clone());
+        }
+        let db = self.jobs.0.db.clone();
+        let link = secret_managers::link_of(&db, apps::MORPH, self.app.id)
+            .await
+            .map_err(Fail::new)?;
+        let Some(link) = link else {
+            return Err(Fail::new(
+                "Environment variables reference remote secrets ({{vault.KEY}}), but no secret manager source is configured for this application.",
+            ));
+        };
+        let enc = self
+            .jobs
+            .0
+            .encrypter
+            .clone()
+            .ok_or_else(|| Fail::new("No application encryption key has been specified."))?;
+        let provider = link.provider_name();
+        let summary = format!("{}, {}", link.token_name, link.summary());
+        let secrets = match link.fetch(&db, &enc, self.app.team_id, "").await {
+            Ok(s) => s,
+            Err(e) => {
+                self.log(
+                    &format!("Failed to fetch secrets from {provider} ({summary}): {e}"),
+                    "stderr",
+                    false,
+                )
+                .await;
+                return Err(Fail::new(format!(
+                    "Could not fetch secrets from {provider}. The deployment was stopped so the application does not start with missing secrets."
+                )));
+            }
+        };
+        // `redactRemoteSecrets()`
+        for value in secrets.values().filter(|v| !v.is_empty()) {
+            for variant in remote_redaction_values(value) {
+                if !self.locked.contains(&variant) {
+                    self.locked.push(variant);
+                }
+            }
+        }
+        self.info(&format!(
+            "Fetched {} secrets from {provider} ({summary}).",
+            secrets.len()
+        ))
+        .await;
+        self.b.remote_secrets = Some(secrets.clone());
+        Ok(secrets)
+    }
+
+    /// `uses_remote_secret_references()` and `substitute_remote_secrets()` for the variables this
+    /// deployment uses: other variables never fetch secrets.
+    pub(super) async fn resolve_remote_secrets(&mut self, vars: &mut [Var]) -> Result<(), Fail> {
+        let compose = self.build_pack() == "dockercompose";
+        let preview = self.b.is_preview();
+        let db = self.jobs.0.db.clone();
+        let mut has_source = None;
+        for v in vars.iter_mut() {
+            if !preview && v.is_preview {
+                continue;
+            }
+            let stored = secret_managers::contains_reference(v.value.as_deref());
+            let resolved = secret_managers::contains_reference(v.resolved.as_deref());
+            if !(stored || (compose && resolved)) {
+                continue;
+            }
+            if has_source.is_none() {
+                has_source = Some(
+                    secret_managers::link_of(&db, apps::MORPH, self.app.id)
+                        .await
+                        .map_err(Fail::new)?
+                        .is_some(),
+                );
+            }
+            if v.is_literal && has_source != Some(true) {
+                continue;
+            }
+            let value = v.resolved.clone().unwrap_or_default();
+            if !resolved {
+                continue;
+            }
+            let secrets = self.remote_secrets().await?;
+            let missing = secret_managers::missing_keys(&value, &secrets);
+            if !missing.is_empty() {
+                let message = format!(
+                    "Missing secret keys: {} (referenced by {}). Check the secret manager source of this application.",
+                    missing.join(", "),
+                    v.key
+                );
+                self.log(&message, "stderr", false).await;
+                return Err(Fail::new(message));
+            }
+            v.resolved = Some(secret_managers::substitute(&value, &secrets));
+            v.remote = true;
+        }
+        Ok(())
+    }
+}
+
+/// `EnvironmentVariable::remoteSecretLogRedactionValues()` for one value.
+fn remote_redaction_values(value: &str) -> Vec<String> {
+    let mut out = vec![
+        value.to_owned(),
+        git::bash_env_value(Some(value)),
+        value.replace('\'', "'\\''"),
+        value.replace("\r\n", "\\n").replace(['\r', '\n'], "\\n"),
+    ];
+    if value.contains(['\r', '\n']) {
+        out.extend(
+            value
+                .split("\r\n")
+                .flat_map(|l| l.split(['\r', '\n']))
+                .map(str::to_owned),
+        );
+    }
+    out.push(secret_managers::compose_file(value));
+    out.retain(|x| !x.is_empty());
+    out
 }

@@ -85,7 +85,7 @@ export interface EnvValues {
   legacy_escaping_changes_value: boolean;
 }
 
-export type AvailableVars = Record<'team' | 'project' | 'environment' | 'server', string[]>;
+export type AvailableVars = Record<'team' | 'project' | 'environment' | 'server', string[]> & { vault_keys_url?: string | null };
 
 export interface EnvInput {
   key: string;

@@ -263,7 +263,10 @@ pub fn runtime_env(
     };
     let (late, early): (Vec<&Var>, Vec<&Var>) = runtime.into_iter().partition(service_ref);
     for v in early.into_iter().chain(late) {
-        let line = if v.uses_legacy_escaping {
+        let line = if v.remote && v.uses_legacy_escaping {
+            // `format_remote_secret_value()`
+            crate::integrations::secret_managers::dotenv(v.resolved.as_deref().unwrap_or_default())
+        } else if v.uses_legacy_escaping {
             v.container_value().unwrap_or_default()
         } else {
             let resolved = v.resolved.clone().unwrap_or_default();

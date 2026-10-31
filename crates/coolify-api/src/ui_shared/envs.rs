@@ -628,10 +628,19 @@ async fn available(
             re::shared_keys(&state.db, res.team_id, "server", Some(("server_id", id))).await?
         }
     };
-    Ok(
-        ok(json!({"team": team, "project": project, "environment": environment, "server": server}))
-            .into_response(),
-    )
+    let vault_keys_url =
+        coolify_db::secret_managers::link_with_token(&state.db, &res.morph, res.id)
+            .await?
+            .map(|_| format!("/ui/resources/{kind}/{uuid}/secret-manager/autocomplete"));
+    Ok(ok(json!({
+        "team": team,
+        "project": project,
+        "environment": environment,
+        "server": server,
+        // `hasSecretManagerSource()`: the keys are fetched only when a reference is typed.
+        "vault_keys_url": vault_keys_url,
+    }))
+    .into_response())
 }
 
 fn env_changes_for_create(n: &NewEnv<'_>) -> Value {
@@ -916,6 +925,38 @@ fn validate_fields(key: &str, comment: Option<&str>) -> Map<String, Value> {
 
 fn bool_of(body: &Value, key: &str, default: bool) -> bool {
     body.get(key).and_then(Value::as_bool).unwrap_or(default)
+}
+
+/// `$resource->environment_variables()->create(['key' => $key, 'value' => $value])`.
+pub(super) async fn create_plain(
+    state: &AppState,
+    ctx: &AuthCtx,
+    meta: &Meta,
+    res: &Res,
+    key: &str,
+    value: &str,
+) -> Result<(), ApiError> {
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    let cipher = enc.encrypt_serialized(value);
+    let n = NewEnv {
+        morph: &res.morph,
+        resource_id: res.id,
+        key,
+        value_encrypted: Some(&cipher),
+        comment: None,
+        is_multiline: false,
+        is_literal: false,
+        is_runtime: true,
+        is_buildtime: true,
+        is_required: false,
+        is_shown_once: false,
+        is_preview: false,
+        is_shared: false,
+        order: None,
+        version: &state.version,
+    };
+    create_model(state, ctx, meta, res, &n, &["key", "value"]).await?;
+    Ok(())
 }
 
 /// `Add::submit` then `All::submit($data)` (`handleSingleSubmit`).

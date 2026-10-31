@@ -1,9 +1,10 @@
 <script lang="ts">
   // Port of upstream components/forms/env-var-input.blade.php: the password input with the
-  // `{{ scope.KEY }}` autocomplete. The secret manager scope is not offered: Secret manager links
-  // are not ported.
+  // `{{ scope.KEY }}` autocomplete. The vault scope appears when the resource has a secret manager
+  // source (`hasVaultSource`); its keys are fetched when a vault reference is typed.
   import { tick } from 'svelte';
   import Reicon from '../Reicon.svelte';
+  import { request } from '../../lib/api';
   import type { AvailableVars } from '../../lib/sharedApi';
 
   let {
@@ -40,7 +41,25 @@
   let cursor = 0;
   let currentScope = $state<string | null>(null);
 
-  const availableScopes = $derived((['team', 'project', 'environment', 'server'] as const).filter((s) => availableVars[s]?.length > 0));
+  const availableScopes = $derived([
+    ...(['team', 'project', 'environment', 'server'] as const).filter((s) => availableVars[s]?.length > 0),
+    ...(availableVars.vault_keys_url ? (['vault'] as const) : []),
+  ] as string[]);
+  let vaultKeys = $state<string[] | undefined>(undefined);
+  let vaultKeysLoading = $state(false);
+
+  async function loadVaultKeys() {
+    if (vaultKeysLoading || !availableVars.vault_keys_url) return;
+    vaultKeysLoading = true;
+    try {
+      vaultKeys = (await request<{ keys: string[] }>('GET', availableVars.vault_keys_url)).keys;
+    } catch {
+      vaultKeys = [];
+    } finally {
+      vaultKeysLoading = false;
+      handleInput();
+    }
+  }
 
   function handleInput() {
     if (!input) return;
@@ -69,12 +88,13 @@
       showDropdown = true;
     } else if (content.includes('.')) {
       const [scope, partial] = content.split('.');
-      if (!(availableScopes as string[]).includes(scope)) {
+      if (!availableScopes.includes(scope)) {
         showDropdown = false;
         return;
       }
       currentScope = scope;
-      const vars = availableVars[scope as keyof AvailableVars] ?? [];
+      if (scope === 'vault' && vaultKeys === undefined) loadVaultKeys();
+      const vars = scope === 'vault' ? (vaultKeys ?? []) : ((availableVars[scope as 'team'] as string[]) ?? []);
       const filtered = vars.filter((v) => v.toLowerCase().includes((partial || '').toLowerCase()));
       suggestions = filtered.map((v) => ({ type: 'variable', value: v, display: `${scope}.${v}` }));
       selectedIndex = 0;

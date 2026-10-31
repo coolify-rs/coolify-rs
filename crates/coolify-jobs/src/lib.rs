@@ -14,6 +14,7 @@ pub mod git_http;
 pub mod gitea;
 pub mod github;
 pub mod gitlab;
+pub mod integrations;
 pub mod notifications;
 pub mod scheduled_task;
 pub mod scheduler;

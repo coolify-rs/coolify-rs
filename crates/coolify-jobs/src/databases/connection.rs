@@ -82,11 +82,8 @@ pub async fn credentials(db: &Db, enc: &Encrypter, d: &DatabaseRow) -> Result<Cr
             );
         }
     }
-    let variables = match env::load(db, enc, d, d.server_id()).await {
-        Ok(v) => v,
-        Err(e) if e == env::SECRET_MANAGER_NOT_PORTED => env::load_stored(db, enc, d).await?,
-        Err(e) => return Err(e),
-    };
+    let variables =
+        env::load_without_remote_for(db, enc, &env::Owner::database(d), d.server_id()).await?;
     let mut locked = false;
     // Redis, KeyDB and Dragonfly read their server password from REDIS_PASSWORD.
     let password_key =

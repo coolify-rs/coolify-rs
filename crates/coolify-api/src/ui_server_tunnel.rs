@@ -11,6 +11,7 @@ use axum::response::IntoResponse;
 use axum::routing::post;
 use coolify_db::servers::{ColumnValue, ServerRow};
 use coolify_jobs::Jobs;
+use coolify_jobs::integrations::cloudflare::{self as cf, ConfirmedConflict, Dns, DnsError};
 use coolify_jobs::server::ServerInfo;
 use coolify_jobs::server_ops::{Srv, tunnel};
 use serde_json::{Map, Value, json};
@@ -26,7 +27,6 @@ use crate::ui_server_general::SERVER_PAGE;
 
 const UNAUTHORIZED: &str = "This action is unauthorized.";
 const MANAGED_ELSEWHERE: &str = "This server is managed by another Coolify instance.";
-const API_NOT_PORTED: &str = "Managing a tunnel through the Cloudflare API is not available in coolify-rs yet. Use an existing tunnel with its tunnel token.";
 
 pub fn routes() -> Router<AppState> {
     let p = |s: &str| format!("{SERVER_PAGE}/cloudflare-tunnel{s}");
@@ -136,11 +136,18 @@ async fn disable(
     if ServerInfo::from_row(&s).transferred {
         return toast_error(MANAGED_ELSEWHERE);
     }
-    if tunnel_id(&s).is_some() {
-        return toast_error(API_NOT_PORTED);
-    }
     let srv = Srv::from_row(jobs(&state)?, s.clone());
-    if let Err(e) = tunnel::remove_cloudflared(&srv).await {
+    let mut warnings: Vec<String> = Vec::new();
+    if tunnel_id(&s).is_some() {
+        let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+        let dns = Dns {
+            db: &state.db,
+            enc,
+            now: state.now(),
+            source: "ui",
+        };
+        warnings = cf::tunnel_tear_down(&dns, &srv).await;
+    } else if let Err(e) = tunnel::remove_cloudflared(&srv).await {
         return toast_error(e);
     }
     coolify_db::servers::update_settings(
@@ -152,9 +159,9 @@ async fn disable(
     .await?;
     audit(&s, "ui.server.cloudflare_tunnel.disabled");
     if restore_previous_ip(&state, &s).await? {
-        return Ok(ok(json!({"message": "Cloudflare Tunnel disabled.<br><br>Manually updated the server IP address to its previous IP address."})).into_response());
+        return Ok(ok(json!({"message": "Cloudflare Tunnel disabled.<br><br>Manually updated the server IP address to its previous IP address.", "warnings": warnings})).into_response());
     }
-    Ok(ok(json!({"warning": "Cloudflare Tunnel disabled. Action required: Update the server IP address to its real IP address in the Advanced settings."})).into_response())
+    Ok(ok(json!({"warning": "Cloudflare Tunnel disabled. Action required: Update the server IP address to its real IP address in the Advanced settings.", "warnings": warnings})).into_response())
 }
 
 /// `CloudflareTunnel::updateCloudflareTunnel`.
@@ -268,7 +275,87 @@ async fn api_setup(
         );
         return Err(ApiError::Validation(errors));
     }
-    toast_error(API_NOT_PORTED)
+    let Some(id) = id else {
+        return Err(ApiError::Internal);
+    };
+    // `dnsConflict`: the conflict the user confirmed; `replaceRecord` checks it against the provider.
+    let confirmed = body
+        .get("confirmed_conflict")
+        .and_then(Value::as_object)
+        .map(|c| ConfirmedConflict {
+            record_id: c
+                .get("record_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            current: c
+                .get("current")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+        });
+    start_api_setup(&state, &s, id, &domain, confirmed.as_ref()).await
+}
+
+/// `startApiSetup`.
+async fn start_api_setup(
+    state: &AppState,
+    s: &ServerRow,
+    token_id: i64,
+    hostname: &str,
+    confirmed: Option<&ConfirmedConflict>,
+) -> ApiResult {
+    let info = ServerInfo::from_row(s);
+    if info.transferred {
+        return toast_error(MANAGED_ELSEWHERE);
+    }
+    let Some((token_name, cipher)) =
+        coolify_db::managed_dns::token_in_team(&state.db, info.team_id, token_id).await?
+    else {
+        return toast_error("The DNS conflict is no longer available. Set up the tunnel again.");
+    };
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    let token = enc
+        .decrypt_string(&cipher)
+        .map_err(|_| ApiError::Internal)?;
+    let dns = Dns {
+        db: &state.db,
+        enc,
+        now: state.now(),
+        source: "ui",
+    };
+    let srv = Srv::from_row(jobs(state)?, s.clone());
+    match cf::tunnel_set_up(
+        &dns,
+        &srv,
+        token_id,
+        &token_name,
+        &token,
+        hostname,
+        confirmed,
+    )
+    .await
+    {
+        Ok(activity) => {
+            audit(s, "ui.server.cloudflare_tunnel.api_configuration_started");
+            Ok(ok(json!({"activity_id": activity})).into_response())
+        }
+        Err(DnsError::Conflict {
+            record_id, current, ..
+        }) => Ok(ok(json!({
+            "dns_conflict": {
+                "record_id": record_id,
+                "current": current,
+                "hostname": hostname,
+                "token_id": token_id,
+            },
+        }))
+        .into_response()),
+        Err(DnsError::Busy) => toast_error(format!(
+            "Another DNS change for {hostname} is in progress. Try again in a few seconds."
+        )),
+        Err(DnsError::Other(message)) => toast_error(message),
+    }
 }
 
 fn authorize(ctx: &AuthCtx) -> Result<(), ApiError> {

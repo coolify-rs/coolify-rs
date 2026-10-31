@@ -2,7 +2,7 @@
 //! `Service::isConfigurationChanged()`, `DeleteResourceJob` for services,
 //! `ResourceStatusRefresher::refreshService()` and the services part of `GetContainersStatus`.
 //!
-//! Not ported: `CleanupDocker::dispatchAfterStop`, maintenance pages, secret managers and the
+//! Not ported: `CleanupDocker::dispatchAfterStop`, maintenance pages and the
 //! proxies of public service databases.
 
 use std::time::Duration;
@@ -1185,7 +1185,9 @@ fn env_file_line(v: &vars::Var) -> String {
     let Some(value) = v.resolved.as_deref() else {
         return format!("{}=", v.key);
     };
-    let formatted = if v.exact() {
+    let formatted = if v.remote {
+        crate::integrations::secret_managers::dotenv(value)
+    } else if v.exact() {
         crate::applications::compose::escape_env_file_value(
             Some(value),
             v.allows_interpolation(value),
