@@ -974,12 +974,12 @@ async fn delete_backup(
 // ── Logs ────────────────────────────────────────────────────────────────
 
 /// `GetLogs::MAX_DISPLAY_SIZE_BYTES`.
-const MAX_DISPLAY_SIZE_BYTES: usize = 5 * 1024 * 1024;
+pub(crate) const MAX_DISPLAY_SIZE_BYTES: usize = 5 * 1024 * 1024;
 /// `GetLogs::MAX_DOWNLOAD_SIZE_BYTES`.
-const MAX_DOWNLOAD_SIZE_BYTES: usize = 50 * 1024 * 1024;
+pub(crate) const MAX_DOWNLOAD_SIZE_BYTES: usize = 50 * 1024 * 1024;
 
 /// `GetLogs::DOCKER_TIMESTAMP_PATTERN`.
-fn is_docker_timestamp(since: &str) -> bool {
+pub(crate) fn is_docker_timestamp(since: &str) -> bool {
     let b = since.as_bytes();
     let digits =
         |r: std::ops::Range<usize>| b.get(r).is_some_and(|d| d.iter().all(u8::is_ascii_digit));
@@ -1007,7 +1007,7 @@ fn is_docker_timestamp(since: &str) -> bool {
 }
 
 /// `GetLogs::resolveLogTail`.
-fn log_tail(lines: Option<i64>) -> String {
+pub(crate) fn log_tail(lines: Option<i64>) -> String {
     match lines {
         Some(-1) => "all".to_string(),
         None | Some(i64::MIN..=0) => "1000".to_string(),
@@ -1016,7 +1016,7 @@ fn log_tail(lines: Option<i64>) -> String {
 }
 
 /// `removeAnsiColors`.
-fn remove_ansi_colors(text: &str) -> String {
+pub(crate) fn remove_ansi_colors(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {

@@ -3,7 +3,9 @@
 //! `/ui/resources/{kind}/{uuid}/...`, with `kind` one of `application`, `service`, `database`,
 //! `service-application` and `service-database`.
 
+pub mod config;
 pub mod envs;
+pub mod logs;
 pub mod secret_manager;
 pub mod storages;
 
@@ -23,6 +25,8 @@ use crate::state::AppState;
 pub fn routes(state: AppState) -> Router<AppState> {
     Router::new()
         .merge(envs::routes())
+        .merge(logs::routes())
+        .merge(config::routes())
         .merge(secret_manager::routes())
         .merge(storages::routes())
         .route_layer(from_fn_with_state(state, crate::session::ui_guard))
