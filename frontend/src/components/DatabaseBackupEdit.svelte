@@ -23,6 +23,7 @@
     edit,
     canUpdate,
     onchanged,
+    actionsInHeader = true,
   }: {
     record: DatabaseRecord;
     backupUuid: string;
@@ -31,6 +32,8 @@
     edit: BackupEdit;
     canUpdate: boolean;
     onchanged: (e: BackupEdit) => void;
+    /** The page shows the actions in the top header bar above xl; the schedule modal of a service does not. */
+    actionsInHeader?: boolean;
   } = $props();
 
   // The inputs hold text, whatever the columns store (`0`, `3600.0`, null).
@@ -131,7 +134,7 @@
 
       <SettingsSection title="Backup schedule" description="Choose what to back up, when it runs, and how long it may run.">
         {#snippet actions()}
-          <div class="flex items-center gap-2 xl:hidden">
+          <div class="flex items-center gap-2 {actionsInHeader ? 'xl:hidden' : ''}">
             {#if !form.enabled}
               <button type="button" class="button button-highlighted" onclick={toggleEnabled}>Enable backup</button>
             {:else}

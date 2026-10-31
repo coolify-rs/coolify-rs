@@ -3,6 +3,7 @@
 // The test password is read from the fixture file and never printed; errors are redacted.
 import { chromium } from 'playwright-core';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 
 const args = process.argv.slice(2);
 const opt = (k, v) => (args.find((a) => a.startsWith(`--${k}=`)) ?? `=${v}`).split('=')[1];
@@ -107,6 +108,7 @@ try {
   ];
   const suffix = light ? '-light' : '';
   for (const [name, path, act] of steps) {
+    if (args.includes('--rows')) break;
     if (only && !name.startsWith(only)) continue;
     for (const [label, page, base] of sides) {
       try {
@@ -124,6 +126,48 @@ try {
     console.log(`bk-${name}${suffix}`);
     await closeModal(sides[0][1]).catch(() => {});
     await closeModal(sides[1][1]).catch(() => {});
+  }
+  // Rows made through both UIs: the schedule forms, then Disable backup.
+  if (args.includes('--rows')) {
+    const sql = (q) => execFileSync('docker', ['exec', 'coolify-rs-reference-postgres-1', 'psql', '-U', 'coolify', '-d', 'coolify', '-At', '-c', q]).toString().trim();
+    const vol = `select row_to_json(x) from (select frequency, enabled, save_s3, disable_local_backup, stop_during_backup, retention_amount_locally, retention_days_locally, timeout, missing_backup_notification_days, team_id, backupable_type from scheduled_volume_backups where backupable_id = ${fx.app_volume2} and backupable_type like '%LocalPersistentVolume') x`;
+    const database = `select row_to_json(x) from (select frequency, enabled, save_s3, databases_to_backup, dump_all, timeout, team_id, database_type from scheduled_database_backups where uuid not like 'wave5%' and database_type like '%ServiceDatabase' and database_id = (select id from service_databases where uuid = '${fx.database}')) x`;
+    const seen = [];
+    for (const [label, page, base] of sides) {
+      const row = { label };
+      await page.goto(base + `${app}/persistent-storage`);
+      await settle(page);
+      await page.locator('.volumes-col-actions button', { hasText: 'Backup' }).last().click();
+      await page.waitForTimeout(500);
+      await page.locator('input[name=frequency], #frequency').last().fill('0 3 * * *');
+      await page.getByRole('button', { name: 'Create schedule', exact: true }).click();
+      await page.waitForTimeout(2500);
+      row.url = new URL(page.url()).pathname.replace(/backups\/[a-z0-9]+$/, 'backups/B');
+      row.created = sql(vol);
+      await page.getByRole('button', { name: 'Disable backup', exact: true }).first().click();
+      await page.waitForTimeout(1500);
+      row.disabled = sql(vol);
+      sql(`delete from scheduled_volume_backups where backupable_id = ${fx.app_volume2} and backupable_type like '%LocalPersistentVolume'`);
+
+      await page.goto(base + `${svc}/storage-backups`);
+      await settle(page);
+      await button(page, 'Add backup').click();
+      await page.getByRole('menuitem', { name: 'Database backup' }).first().click();
+      await page.waitForTimeout(400);
+      await page.locator('input[placeholder="0 0 * * * or daily"]').last().fill('weekly');
+      await page.getByRole('button', { name: 'Add schedule', exact: true }).click();
+      await page.waitForTimeout(3000);
+      row.db_url = new URL(page.url()).pathname + new URL(page.url()).search.replace(/=[a-z0-9]+$/, '=B');
+      row.db_created = sql(database);
+      sql(`delete from scheduled_database_backups where uuid not like 'wave5%' and database_type like '%ServiceDatabase' and database_id = (select id from service_databases where uuid = '${fx.database}')`);
+      seen.push(row);
+    }
+    for (const key of Object.keys(seen[0])) {
+      if (key === 'label') continue;
+      console.log(seen[0][key] === seen[1][key] ? 'rows ok  ' : 'ROWS DIFF', key, seen[0][key] === seen[1][key] ? '' : `\n  ref ${seen[0][key]}\n  rs  ${seen[1][key]}`);
+    }
+    await browser.close();
+    process.exit(0);
   }
   if (!only && !light) {
     let same = 0;

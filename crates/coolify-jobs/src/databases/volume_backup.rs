@@ -832,7 +832,10 @@ impl Jobs {
             };
             // The endpoint check of `testConnection` also guards this request.
             let result = async {
-                self.check_s3_connection(&row).await?;
+                // Upstream's request to a refused endpoint fails with this message as well.
+                self.check_s3_connection(&row)
+                    .await
+                    .map_err(|_| "One or more S3 backup files could not be deleted.".to_owned())?;
                 S3Target::from_row(enc, &row)?
                     .delete_objects(&[location.to_owned()])
                     .await

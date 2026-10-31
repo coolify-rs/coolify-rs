@@ -257,6 +257,8 @@
         <span>{deploying ? 'Deploying…' : 'Deploy'}</span>
       </button>
     {/if}
+    <!-- `$slot->hasActualContent()`: the remove action has no other entries, so no caret. -->
+    {#if !removable}
     <button
       type="button"
       class="split-action-caret"
@@ -269,11 +271,10 @@
         <Reicon name="chevron-down" class="size-3" />
       </span>
     </button>
-    {#if menuOpen === id}
+    {/if}
+    {#if menuOpen === id && !removable}
       <div class="listbox-panel right-0! left-auto! xl:min-w-60! xl:max-w-96!" role="menu">
-        {#if removable}
-          <!-- The main action replaces the slot; the menu has no other entries. -->
-        {:else if running || degraded}
+        {#if running || degraded}
           {#if running}
             <button type="button" class="listbox-option justify-start! gap-2.5!" role="menuitem" onclick={() => ((menuOpen = null), pullAndRestart())}>
               <Reicon name="refresh" class="size-3.5 opacity-70" />

@@ -189,7 +189,7 @@
 {#if data}
   {#if opened}
     {@const row = opened}
-    <Modal title="Edit backup schedule" isLarge focusFirstField={false} onclose={closeSchedule}>
+    <Modal title="Edit backup schedule" isLarge fixedHeight focusFirstField={false} onclose={closeSchedule}>
       <div class="flex min-w-0 flex-col gap-6">
         <div>
           <h2 class="text-base font-semibold text-neutral-950 dark:text-fg">{row.name}</h2>
@@ -217,6 +217,7 @@
               base="{base}/{row.database.database_uuid}"
               edit={openedEdit}
               canUpdate={data.can_update}
+              actionsInHeader={false}
               onchanged={(e) => (openedEdit = e)}
             />
           {/key}

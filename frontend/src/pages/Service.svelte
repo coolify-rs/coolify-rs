@@ -154,7 +154,7 @@
   </div>
 {:else if data}
   <div>
-    <ServiceHeading {data} {base} {resources} onrefresh={refreshQuiet} />
+    <ServiceHeading {data} {base} {resources} selected={stack ? ([...data.applications, ...data.databases].find((p) => p.uuid === stack) ?? null) : null} onrefresh={refreshQuiet} />
 
     <section class="application-settings-workspace mt-4 w-full max-w-none lg:mt-0">
       <div class="grid min-w-0 gap-8 xl:grid-cols-[210px_minmax(0,1fr)] xl:gap-8">

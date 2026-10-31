@@ -60,8 +60,16 @@ export function diffForHumans(ts: string | null | undefined, short = false): str
   if (!d) return '';
   const diff = Math.round((Date.now() - d.getTime()) / 1000);
   const abs = Math.abs(diff);
-  const [unit, abbr, size] = UNITS.find(([, , s]) => abs >= s) ?? UNITS[UNITS.length - 1];
-  const n = Math.max(1, Math.floor(abs / size));
+  // Carbon counts months and years on the calendar.
+  const [early, late] = diff >= 0 ? [d, new Date()] : [new Date(), d];
+  let months = (late.getUTCFullYear() - early.getUTCFullYear()) * 12 + late.getUTCMonth() - early.getUTCMonth();
+  const anniversary = new Date(early);
+  anniversary.setUTCMonth(early.getUTCMonth() + months);
+  if (anniversary > late) months--;
+  const calendar: [string, string, number] | undefined = months >= 12 ? UNITS[0] : months >= 1 ? UNITS[1] : undefined;
+  const [unit, abbr, size] = calendar ?? UNITS.slice(2).find(([, , s]) => abs >= s) ?? UNITS[UNITS.length - 1];
+  const count = months >= 12 ? Math.floor(months / 12) : months >= 1 ? months : Math.floor(abs / size);
+  const n = Math.max(1, count);
   if (short) return `${n}${abbr}`;
   const text = `${n} ${unit}${n === 1 ? '' : 's'}`;
   return diff >= 0 ? `${text} ago` : `${text} from now`;

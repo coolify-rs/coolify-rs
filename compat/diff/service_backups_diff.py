@@ -90,16 +90,22 @@ def schedule_row(backup):
     return r
 
 
-def wait_execution(backup, count, table="scheduled_volume_backup_executions", parent="scheduled_volume_backups", key="scheduled_volume_backup_id", timeout=240):
+SEEN = {}
+
+
+def wait_execution(backup, _count=None, table="scheduled_volume_backup_executions", parent="scheduled_volume_backups", key="scheduled_volume_backup_id", timeout=150):
+    """The first finished execution newer than the last one seen: retention removes old rows, so counts do not work."""
     end = time.time() + timeout
-    q = f"select e.status, e.message, e.filename, e.size, e.s3_uploaded, e.local_storage_deleted from {table} e join {parent} b on b.id = e.{key} where b.uuid = '{backup}' order by e.id"
+    after = SEEN.get(backup, 0)
+    q = f"select e.id, e.status, e.message, e.filename, e.size, e.s3_uploaded, e.local_storage_deleted from {table} e join {parent} b on b.id = e.{key} where b.uuid = '{backup}' and e.id > {after} order by e.id limit 1"
     while time.time() < end:
-        rows = d.sql(f"select json_agg(x) from ({q}) x")
-        rows = json.loads(rows) if rows else []
-        if len(rows) >= count and rows[count - 1]["status"] != "running":
-            return rows[count - 1]
-        time.sleep(3)
-    return {"status": "timeout"}
+        r = row(q)
+        if r and r["status"] != "running":
+            SEEN[backup] = r.pop("id")
+            return r
+        time.sleep(2)
+    print("timeout waiting for", backup, flush=True)
+    return {"status": "timeout", "s3_uploaded": None}
 
 
 def stamp(name):
@@ -249,8 +255,9 @@ def run_side(side, s3_uuid):
         # S3 refused before any request: the message has the absolute settings URL.
         c, b = d.call(side, "PUT", path_app, {"frequency": "daily", "save_s3": True, "s3_storage_uuid": s3_uuid}, tok=ROOT)
         out["app.s3_set"] = [c, norm(b, {**subs, s3_uuid: "S3"})]
-        d.call(side, "POST", path_app + "/run", tok=ROOT)
-        ex = wait_execution(b_app, 3)
+        c, b = d.call(side, "POST", path_app + "/run", tok=ROOT)
+        out["app.s3_run"] = [c, norm(b, subs)]
+        ex = wait_execution(b_app, 3, timeout=120)
         out["app.s3_refused"] = {"status": ex["status"], "s3_uploaded": ex["s3_uploaded"], "message": norm(ex.get("message") or "", subs)}
         c, b = d.call(side, "DELETE", path_app, tok=ROOT)
         out["app.delete"] = [c, norm(b, subs)]
@@ -302,7 +309,7 @@ def run_side(side, s3_uuid):
         # Restore the dump into the database through the import route.
         vm(f"{psql} 'drop table seed'")
         c, b = d.call(side, "POST", imp, {"source": "server", "path": file}, tok=ROOT)
-        out["imp.server_start"] = [c, re.sub(r'"id":\d+', '"id":N', re.sub(r"imports/\d+", "imports/N", norm(b, subs) if isinstance(norm(b, subs), str) else json.dumps(norm(b, subs))))]
+        out["imp.server_start"] = [c, re.sub(r'"id": ?\d+', '"id":N', re.sub(r"imports/\d+", "imports/N", norm(b, subs) if isinstance(norm(b, subs), str) else json.dumps(norm(b, subs))))]
         activity = json.loads(b).get("id") if c < 300 else None
         if activity:
             end = time.time() + 180
@@ -356,21 +363,25 @@ def run_side(side, s3_uuid):
     return out
 
 
-s3_id = None
-s3_uuid = "wave5s3" + str(int(time.time()))
+stamp_s3 = str(int(time.time()))
+s3_uuids = {"ref": "wave5s3ref" + stamp_s3, "rs": "wave5s3rs" + stamp_s3}
 team_id = d.sql(f"select team_id from projects where uuid = '{PROJECT}'")
 try:
-    s3_id = tinker(
-        f"$s = new App\\Models\\S3Storage; $s->forceFill(['uuid' => '{s3_uuid}', 'name' => 'wave5-fake', 'region' => 'us-east-1', 'key' => 'wavekey', 'secret' => 'wavesecret', 'bucket' => 'wavebucket', 'endpoint' => 'http://127.0.0.1:9000', 'is_usable' => true, 'team_id' => {team_id}]); $s->save(); echo $s->id;"
-    ).split("\n")[-1]
-    ref = run_side("ref", s3_uuid)
+    # One row per side: the refused connection test marks the storage unusable.
+    for s3_uuid in s3_uuids.values():
+        tinker(
+            f"$s = new App\\Models\\S3Storage; $s->forceFill(['uuid' => '{s3_uuid}', 'name' => 'wave5-fake', 'region' => 'us-east-1', 'key' => 'wavekey', 'secret' => 'wavesecret', 'bucket' => 'wavebucket', 'endpoint' => 'http://127.0.0.1:9000', 'is_usable' => true, 'team_id' => {team_id}]); $s->save(); echo $s->id;"
+        )
+    ref = run_side("ref", s3_uuids["ref"])
     print("reference side done", flush=True)
-    rs = run_side("rs", s3_uuid)
+    rs = run_side("rs", s3_uuids["rs"])
     print("coolify-rs side done", flush=True)
     for key in sorted(set(ref) | set(rs)):
         check(key, ref.get(key), rs.get(key))
 finally:
-    d.sql(f"delete from scheduled_volume_backup_s3_storage where s3_storage_id in (select id from s3_storages where uuid = '{s3_uuid}')")
-    d.sql(f"delete from s3_storages where uuid = '{s3_uuid}'")
+    for s3_uuid in s3_uuids.values():
+        d.sql(f"delete from volume_backup_s3_replicas where s3_storage_id in (select id from s3_storages where uuid = '{s3_uuid}')")
+        d.sql(f"delete from scheduled_volume_backup_s3_storage where s3_storage_id in (select id from s3_storages where uuid = '{s3_uuid}')")
+        d.sql(f"delete from s3_storages where uuid = '{s3_uuid}'")
 print("failed:", failed)
 sys.exit(1 if failed else 0)

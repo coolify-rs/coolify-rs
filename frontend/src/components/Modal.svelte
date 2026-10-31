@@ -11,6 +11,7 @@
     children,
     footer,
     isLarge = false,
+    fixedHeight = false,
     narrow = false,
     focusFirstField = true,
   }: {
@@ -20,6 +21,8 @@
     children: Snippet;
     footer?: Snippet;
     isLarge?: boolean;
+    /** `fixedHeight` of modal-input.blade.php. */
+    fixedHeight?: boolean;
     /** The mount dialogs of the storage page. */
     narrow?: boolean;
     /** Upstream does not focus a field in modals opened through `wireOpen`. */
@@ -47,7 +50,7 @@
       aria-label={title}
       class="application-settings-form application-settings-section relative flex max-h-[calc(100dvh-2rem)] w-full flex-col overflow-hidden {isLarge
         ? 'lg:w-[95vw]! lg:max-w-7xl!'
-        : narrow ? 'lg:w-[36rem]!' : 'lg:w-auto lg:min-w-2xl lg:max-w-4xl'}"
+        : narrow ? 'lg:w-[36rem]!' : 'lg:w-auto lg:min-w-2xl lg:max-w-4xl'} {fixedHeight ? 'sm:h-[40rem]' : ''}"
       style="box-shadow: 0 0 0 1px var(--coollabs-hairline), var(--shadow-modal)"
     >
       <header class="shrink-0 flex-wrap! sm:flex-nowrap!">

@@ -26,7 +26,6 @@ export function applicationBackupNavContext(base: string, backup: string, sectio
     parent,
     groups: [
       [
-        { label: 'Back to backups', icon: 'logout', href: `${base}/backups`, active: false },
         { label: 'General', icon: 'settings', href: url, active: section === 'general' },
         { label: 'Executions', icon: 'browser-terminal', href: `${url}/executions`, active: section === 'executions' },
       ],
