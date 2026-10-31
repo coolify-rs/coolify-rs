@@ -441,7 +441,7 @@ static CONTAINER_NAME: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::
 });
 
 /// The `DockerImageFormat` rule.
-fn docker_image_format(v: &Value) -> Option<String> {
+pub(crate) fn docker_image_format(v: &Value) -> Option<String> {
     let bad =
         "The :attribute format is invalid. Use image:tag or image@sha256:hash format.".to_owned();
     let Some(s) = v.as_str() else {

@@ -21,6 +21,7 @@ pub mod databases;
 pub mod destinations;
 pub mod environment_variables;
 pub mod git_sources;
+pub mod github_runners;
 pub mod instance;
 pub mod private_keys;
 pub mod projects;

@@ -400,6 +400,7 @@ async function runNewSections() {
   if (want('patches-reboot')) await runPatchesReboot();
   if (want('patches-all')) await runPatchesAll();
   if (want('tunnel')) await runTunnel();
+  if (want('runners')) await runRunners();
 }
 async function compareActivityLog(name) {
   const logs = {};
@@ -566,6 +567,123 @@ async function runTunnel() {
   await step('tunnel: not validated', (side) => open(side, P), { ignore: ['settings.is_usable', 'settings.is_reachable'] });
   await shoot('not_validated');
   for (const side of ['ref', 'rs']) sql(`update server_settings set is_usable=true where server_id=${server[side].id}`);
+}
+function runnerConfig(side) {
+  const r = json(`select row_to_json(t)::text from (select labels::text, is_enabled, is_dedicated, max_runners, docker_mode, runner_image, cpu_limit, memory_limit, capacity_wait_timeout, idle_timeout, job_timeout, allow_pull_requests from github_runner_configs where server_id=${server[side].id}) t`);
+  return JSON.stringify(r);
+}
+async function runRunners() {
+  const P = '/server/{U}/github-runners';
+  const shoot = async (name) => {
+    for (const side of ['ref', 'rs']) await pages[side].screenshot({ path: `${out}runners_${name}-${side}.png`, fullPage: true });
+  };
+  const team = sql(`select team_id from servers where id=${server.ref.id}`);
+  const compareConfig = (name) => verdict(`runners: ${name} config row`, runnerConfig('ref') === runnerConfig('rs'), `ref ${runnerConfig('ref')}\n     rs  ${runnerConfig('rs')}`);
+  const fill = async (side, values) => {
+    const page = pages[side];
+    for (const [k, v] of Object.entries(values)) await field(page, k).fill(v);
+    await sleep(500);
+    await page.keyboard.press('Enter');
+    await sleep(2000);
+  };
+  await step('runners: no organization app', (side) => open(side, P));
+  await shoot('no_app');
+  // A GitHub App that is not ready, with its API on a closed local port: nothing can reach GitHub.
+  sql(`insert into github_apps (uuid, name, organization, api_url, html_url, app_id, installation_id, team_id, created_at, updated_at) values ('diff-runner-app', 'diff runner app', 'diff-org', 'http://127.0.0.1:9', 'https://github.example.test', 1, 1, ${team}, now(), now())`);
+  const appId = sql(`select id from github_apps where uuid='diff-runner-app'`);
+  const execs = [];
+  try {
+    await step('runners: disabled', (side) => open(side, P));
+    await shoot('disabled');
+    await step('runners: enable', async (side) => {
+      const page = await open(side, P);
+      await clickTop(page, 'Enable runners');
+      await sleep(500);
+      await clickTop(page, 'Enable runners');
+      await sleep(3000);
+    });
+    compareConfig('enabled');
+    await shoot('enabled');
+    await step('runners: reject values', async (side) => {
+      await open(side, P);
+      await fill(side, { maxRunners: '99', cpuLimit: 'abc', memoryLimit: '4x', runnerImage: 'Bad Image', capacityWaitTimeout: '0' });
+    });
+    await shoot('rejected');
+    await step('runners: reject reserved labels', async (side) => {
+      await open(side, P);
+      await fill(side, { labels: 'linux, x64' });
+    });
+    await shoot('labels');
+    await step('runners: save', async (side) => {
+      await open(side, P);
+      await fill(side, { labels: 'Build, build, linux, gpu_1', maxRunners: '4', cpuLimit: '1.5', memoryLimit: '4G', runnerImage: 'ghcr.io/actions/actions-runner:2.337.0', capacityWaitTimeout: '30', idleTimeout: '5', jobTimeout: '120' });
+    });
+    compareConfig('saved');
+    await step('runners: save listboxes', async (side) => {
+      const page = await open(side, P);
+      await listbox(page, 'allowPullRequests', 'Run pull request jobs');
+      await listbox(page, 'dockerMode', 'Docker (privileged, full host access)');
+      await sleep(500);
+      await page.locator('input:visible').first().focus();
+      await page.keyboard.press('Enter');
+      await sleep(2000);
+    });
+    compareConfig('listboxes');
+    await shoot('warnings');
+    await step('runners: sysbox missing', async (side) => {
+      const page = await open(side, P);
+      await listbox(page, 'dockerMode', 'Isolated Docker (Sysbox)');
+      await sleep(4000);
+      await field(page, 'cpuLimit').fill('2');
+      await sleep(600);
+      await page.keyboard.press('Enter');
+      await sleep(4000);
+    });
+    await shoot('sysbox');
+    // Executions: rows only; the cancel cleanup runs real commands for a container that does not exist.
+    for (const side of ['ref', 'rs']) {
+      server[side].names.EXEC = `diff-exec-${side}`;
+      const id = sql(`insert into github_runner_executions (trigger_workflow_job_id, uuid, github_app_id, github_runner_config_id, server_id, status, repository_full_name, workflow_name, job_name, created_at, updated_at) select ${side === 'ref' ? 990001 : 990002}, 'diff-exec-${side}', ${appId}, id, ${server[side].id}, 'idle', 'diff-org/repo', 'CI', 'build', now(), now() from github_runner_configs where server_id=${server[side].id} returning id`).split('\n')[0];
+      execs.push(id);
+      sql(`insert into github_runner_executions (trigger_workflow_job_id, uuid, github_app_id, github_runner_config_id, server_id, status, repository_full_name, conclusion, started_at, completed_at, workflow_job_html_url, created_at, updated_at) select ${side === 'ref' ? 990003 : 990004}, 'diff-done-${side}', ${appId}, id, ${server[side].id}, 'completed', 'diff-org/repo', 'success', now() - interval '125 seconds', now(), 'https://github.example.test/run', now(), now() from github_runner_configs where server_id=${server[side].id}`);
+    }
+    await step('runners: executions', (side) => open(side, P));
+    await shoot('executions');
+    await step('runners: cancel', async (side) => {
+      const page = await open(side, P);
+      await page.locator('#github-runners-executions-section').scrollIntoViewIfNeeded();
+      await sleep(300);
+      await clickTop(page, 'Cancel');
+      await sleep(400);
+      await clickTop(page, 'Cancel Runner');
+      await sleep(3000);
+    }, { settle: 8000 });
+    const finished = (side) => sql(`select status, error_message, completed_at is not null from github_runner_executions where uuid='diff-exec-${side}'`);
+    verdict('runners: cancelled row', finished('ref') === finished('rs') && finished('rs').startsWith('cancelled'), `${finished('ref')} | ${finished('rs')}`);
+    await shoot('cancelled');
+    await step('runners: disable', async (side) => {
+      const page = await open(side, P);
+      await clickTop(page, 'Disable runners');
+      await sleep(2500);
+    });
+    compareConfig('disabled');
+    await step('runners: enable again', async (side) => {
+      const page = await open(side, P);
+      await clickTop(page, 'Enable runners');
+      await sleep(500);
+      await clickTop(page, 'Enable runners');
+      await sleep(3000);
+    });
+    compareConfig('enabled again');
+  } finally {
+    sql(`delete from github_runner_executions where github_app_id=${appId}`);
+    for (const side of ['ref', 'rs']) sql(`delete from github_runner_configs where server_id=${server[side].id}`);
+    sql(`delete from github_apps where id=${appId}`);
+  }
+  for (const side of ['ref', 'rs']) sql(`update server_settings set server_role='deployment' where server_id=${server[side].id}`);
+  await step('runners: deployment role', (side) => open(side, P), { ignore: ['settings.server_role'] });
+  await shoot('deployment');
+  for (const side of ['ref', 'rs']) sql(`update server_settings set server_role='both' where server_id=${server[side].id}`);
 }
 async function runPatchesAll() {
   const P = '/server/{U}/security/patches';

@@ -26,6 +26,7 @@
   import ServerTerminalAccess from './ServerTerminalAccess.svelte';
   import ServerPatches from './ServerPatches.svelte';
   import ServerCloudflareTunnel from './ServerCloudflareTunnel.svelte';
+  import ServerGithubRunners from './ServerGithubRunners.svelte';
   import { serverSection } from '../lib/serverMenu';
 
   let { uuid, section, sub }: { uuid: string; section: string; sub?: string } = $props();
@@ -53,6 +54,7 @@
     'security/terminal-access': ServerTerminalAccess,
     'security/patches': ServerPatches,
     'cloudflare-tunnel': ServerCloudflareTunnel,
+    'github-runners': ServerGithubRunners,
   };
   const Page = $derived(pages[sub ? `${section}/${sub}` : section] ?? pages[section]);
 </script>
