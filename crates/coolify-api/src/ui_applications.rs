@@ -12,7 +12,7 @@ use coolify_db::applications::{self as apps, ApplicationRow, NewApplication};
 use coolify_db::servers::{self, ColumnValue};
 use coolify_domain::naming::strip_tags;
 use coolify_jobs::applications::queue::{QueueOptions, Queued};
-use coolify_jobs::applications::{domains, labels, snapshot};
+use coolify_jobs::applications::{domains, snapshot};
 use serde_json::{Map, Value, json};
 
 use crate::auth::AuthCtx;
@@ -336,7 +336,8 @@ pub async fn state(
             .and_then(Value::as_str)
             .is_some_and(|t| t != "NONE")
     {
-        let generated = labels::application(&labels::LabelInput::new(&a, &server)).join("\n");
+        let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+        let generated = crate::routes::application_fields::generated_labels(&a, &server, enc)?;
         use base64::Engine as _;
         let stored = base64::engine::general_purpose::STANDARD.encode(generated);
         apps::update_if_changed(
@@ -1192,7 +1193,8 @@ async fn regenerate_labels(state: &AppState, id: i64, manual: bool) -> Result<()
         return Ok(());
     };
     use base64::Engine as _;
-    let generated = labels::application(&labels::LabelInput::new(&a, &server)).join("\n");
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    let generated = crate::routes::application_fields::generated_labels(&a, &server, enc)?;
     let stored = base64::engine::general_purpose::STANDARD.encode(generated);
     apps::update_if_changed(
         &state.db,

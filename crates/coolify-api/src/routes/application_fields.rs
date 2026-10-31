@@ -1121,7 +1121,7 @@ pub(super) fn noindex_values(input: &Input) -> Vec<Value> {
 }
 
 /// `generateLabelsApplication($application)` joined with newlines, as `custom_labels` stores it.
-pub(super) fn generated_labels(
+pub(crate) fn generated_labels(
     a: &ApplicationRow,
     server: &servers::ServerRow,
     enc: &Encrypter,

@@ -179,18 +179,13 @@ pub async fn list_for_server(db: &Db, server_id: i64) -> DbResult<Vec<Applicatio
 }
 
 /// Whether the application has pieces coolify-rs cannot deploy yet (additional
-/// servers, file storages, previews).
+/// servers, previews).
 pub async fn unported_parts(db: &Db, id: i64) -> DbResult<Vec<&'static str>> {
     let mut parts = Vec::new();
     for (sql, label) in [
         (
             "SELECT EXISTS (SELECT 1 FROM additional_destinations WHERE application_id = $1)",
             "additional servers",
-        ),
-        (
-            // Only files Coolify would write (`hasContentToWrite()`); directories and git files are only mounted.
-            "SELECT EXISTS (SELECT 1 FROM local_file_volumes WHERE resource_type = 'App\\Models\\Application' AND resource_id = $1 AND is_directory = false AND COALESCE(is_host_file, false) = false AND is_based_on_git = false AND content IS NOT NULL)",
-            "file storages",
         ),
         (
             "SELECT EXISTS (SELECT 1 FROM application_previews WHERE application_id = $1 AND deleted_at IS NULL)",

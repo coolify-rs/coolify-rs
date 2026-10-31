@@ -91,9 +91,22 @@ def norm(text, pairs):
     return text
 
 
+def sorted_mounts(text):
+    """The Compose file with each run of bind mount lines sorted."""
+    out, run = [], []
+    for line in text.splitlines():
+        if line.lstrip().startswith("- '/data/coolify/applications/"):
+            run.append(line)
+            continue
+        out.extend(sorted(run))
+        run = []
+        out.append(line)
+    return "\n".join(out + sorted(run))
+
+
 # POST /applications/{uuid}/storages on each side's own API, then a shell command on the VM ({file}: the path of the first).
-STORAGE_BODIES = [{"type": "file", "mount_path": "/etc/diff/app.conf", "content": "hello storage\n"},
-                  {"type": "file", "mount_path": "/etc/diff/data", "is_directory": True},
+STORAGE_BODIES = [{"type": "file", "mount_path": "/etc/diff/app.conf", "content": "hello storage"},
+                  {"type": "file", "mount_path": "/etc/diff/data", "is_directory": True, "fs_path": "etc/diff/data"},
                   {"type": "file", "mount_path": "/etc/diff/empty.conf"}]
 STORAGES = {"file-storage": (STORAGE_BODIES, "rm -f {file}"),
             "file-storage-blocked": (STORAGE_BODIES, "rm -f {file} && mkdir -p {file} && touch {file}/x"),
@@ -311,6 +324,10 @@ def main():
                 record(f"[{case}] both run the older commit", images[0] == f"{ur}:{ROLLBACK_COMMIT}" and images[1] == f"{us}:{ROLLBACK_COMMIT}", images)
             fr = norm(vm(f"cat /data/coolify/applications/{ur}/docker-compose.yaml"), [(ur, "U"), (f"{case}-ref", "NAME")] + ip_pairs)
             fs = norm(vm(f"cat /data/coolify/applications/{us}/docker-compose.yaml"), [(us, "U"), (f"{case}-rs", "NAME")] + ip_pairs)
+            if case in STORAGES:
+                # `fileStorages()->get()` has no ORDER BY: upstream's mount order is the heap order of a table
+                # other writers share, and two runs of the reference differ.
+                fr, fs = sorted_mounts(fr), sorted_mounts(fs)
             record(f"[{case}] docker-compose.yaml identical", fr == fs and fr != "",
                    "\n".join(difflib.unified_diff(fr.splitlines(), fs.splitlines(), lineterm="")))
             envs = []

@@ -1209,15 +1209,6 @@ async fn finish_create(
     application_type: &'static str,
 ) -> ApiResult {
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-    // The deployment job does not do these yet (`deployable()` on start answers the same).
-    if cx.instant
-        && columns.iter().any(|(k, v)| match (*k, v) {
-            ("dockerfile", ColumnValue::Text(Some(t))) => !t.trim().is_empty(),
-            _ => false,
-        })
-    {
-        return Err(ApiError::NotPorted);
-    }
     let build_pack = columns
         .iter()
         .rev()
@@ -1913,13 +1904,11 @@ pub(super) fn random_str(n: usize) -> String {
 
 /// What a start, restart, stop or delete of this application needs that coolify-rs lacks.
 pub(super) async fn deployable(state: &AppState, a: &ApplicationRow) -> Result<(), ApiError> {
-    // The deploy job builds Docker images and the dockerfile, static, nixpacks and railpack
-    // git build packs; dockercompose and an inline Dockerfile are not ported.
+    // Every build pack of the deploy job.
     let unsupported = !matches!(
         a.str("build_pack"),
         Some("dockerimage" | "dockerfile" | "static" | "nixpacks" | "railpack" | "dockercompose")
-    ) || a.str("dockerfile").is_some_and(|d| !d.is_empty())
-        || a.destination.is_none()
+    ) || a.destination.is_none()
         || !apps::unported_parts(&state.db, a.id).await?.is_empty();
     if unsupported {
         Err(ApiError::NotPorted)
