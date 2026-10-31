@@ -9,6 +9,9 @@
   import UserMenu from './UserMenu.svelte';
   import ServerTopbar from './ServerTopbar.svelte';
   import UpgradeBadge from './UpgradeBadge.svelte';
+  import LayoutPopups from './LayoutPopups.svelte';
+  import GlobalSearch from './GlobalSearch.svelte';
+  import DeploymentsIndicator from './DeploymentsIndicator.svelte';
   import { page } from '../lib/page.svelte';
   import { layout } from '../lib/layout.svelte';
   import { link, router } from '../lib/router.svelte';
@@ -39,6 +42,8 @@
 
 <svelte:window onscroll={markScrolled} onkeydown={(e) => e.key === 'Escape' && (layout.mobileOpen = false)} />
 
+<LayoutPopups />
+<GlobalSearch />
 <div class="app-shell dark:text-inherit text-black" style="--sidebar-w: {collapsed ? 'var(--sidebar-collapsed-w)' : '14rem'}">
   <!-- Desktop top bar -->
   <header class="app-topbar hidden lg:flex fixed top-0 inset-x-0 z-50 h-12 items-center bg-white/95 dark:bg-panel/95 backdrop-blur">
@@ -75,6 +80,7 @@
       </div>
       <!-- Resource pages teleport into these (layouts/app.blade.php). -->
       <div id="configuration-warning-hud-slot" class="relative shrink-0"></div>
+      <DeploymentsIndicator variant="topbar" />
       <div id="resource-action-hud-slot" class="hidden shrink-0 items-center xl:flex"></div>
     </div>
   </header>
@@ -155,6 +161,7 @@
     </div>
     <div class="flex shrink-0 items-center gap-1">
       <div id="configuration-warning-hud-slot-mobile" class="relative shrink-0"></div>
+      <DeploymentsIndicator variant="mobile" />
       {#if session.isInstanceAdmin}<UpgradeBadge />{/if}
       <UserMenu />
       <button

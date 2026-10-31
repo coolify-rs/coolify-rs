@@ -7,7 +7,7 @@
   import { router } from '../lib/router.svelte';
   import { notify } from '../lib/toast.svelte';
 
-  let { onclose }: { onclose: () => void } = $props();
+  let { onclose, title }: { onclose: () => void; title?: string } = $props();
 
   let name = $state('');
   let description = $state('');
@@ -33,7 +33,7 @@
   }
 </script>
 
-<Modal title="New Project" {onclose}>
+<Modal title={title ?? 'New Project'} {onclose}>
   <form class="space-y-4" onsubmit={submit}>
     <div class="grid gap-4 md:grid-cols-2">
       <FormInput label="Name" id="name" placeholder="Your project name" required bind:value={name} error={error?.field('name')} />

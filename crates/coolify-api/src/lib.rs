@@ -24,6 +24,7 @@ pub mod ui_applications;
 pub mod ui_auth;
 pub mod ui_changelog;
 pub mod ui_databases;
+pub mod ui_layout;
 pub mod ui_notifications;
 pub mod ui_profile;
 pub mod ui_security;

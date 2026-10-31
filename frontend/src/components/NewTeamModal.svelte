@@ -8,7 +8,7 @@
   import { router } from '../lib/router.svelte';
   import { notify } from '../lib/toast.svelte';
 
-  let { onclose }: { onclose: () => void } = $props();
+  let { onclose, title }: { onclose: () => void; title?: string } = $props();
 
   let name = $state('');
   let description = $state('');
@@ -35,7 +35,7 @@
   }
 </script>
 
-<Modal title="New Team" {onclose}>
+<Modal title={title ?? 'New Team'} {onclose}>
   <form class="application-settings-form flex w-full flex-col gap-4" onsubmit={submit}>
     <FormInput id="name" label="Name" required bind:value={name} error={error?.field('name')} />
     <FormInput id="description" label="Description" bind:value={description} error={error?.field('description')} />

@@ -47,7 +47,8 @@
   const filtered = $derived((storages ?? []).filter(matches));
 
   // New storage.
-  let creating = $state(false);
+  // GlobalSearch's `open-create-modal-storage` arrives as `?create=1`.
+  let creating = $state(router.query('create') === '1');
   let name = $state('');
   let description = $state('');
   let parts = $state<EndpointParts>({ scheme: 'https', host: '', port: '', path: '' });
