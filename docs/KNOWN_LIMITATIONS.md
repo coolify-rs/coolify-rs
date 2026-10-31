@@ -9,12 +9,12 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Not every upstream API operation is implemented (`scripts/parity.py`). Others answer `501 {"message":"This endpoint is not
   implemented in coolify-rs yet."}`.
 - The web UI covers the dashboard, projects, environments, private keys, API, cloud and integration tokens, cloud-init scripts,
-  notifications, tags, shared variables, S3 storage, team settings, members and appearance.
-  Not available yet: registration and the root setup window, password reset and forced password change, 2FA
-  enrollment and recovery codes, passkeys, OAuth/SSO, team creation and invitations, instance settings, API token
-  management, and every page for servers, resources, sources, storages, notifications and tags (they open a "not
+  notifications, tags, shared variables, S3 storage, teams, members, invitations, profile, 2FA enrollment, passkey
+  management and appearance.
+  Not available yet: registration and the root setup window, password reset and forced password change, OAuth/SSO,
+  instance settings, and every page for servers, resources, sources, storages, notifications and tags (they open a "not
   available in coolify-rs yet" page).
-- Within the ported pages: no canvas views, global search, project icons, team avatars or custom color themes;
+- Within the ported pages: no canvas views, global search, project icons or custom color themes;
   applications and services in an environment are counted, not listed; the dashboard's server status does not include
   the Traefik-outdated and Sentinel checks; table/grid choices are remembered per browser, not per user.
 - Browser sessions live in memory: a restart signs everyone out. Session limits: 10,000 sessions, 7-day idle
@@ -133,6 +133,34 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Pages behind `viewAny` (cloud tokens, cloud-init scripts, integration tokens) stay empty for a member instead of upstream's
   403 page.
 - `SharedVariables` overview: `{{scope.KEY}}` matching decrypts every resource variable of the team on each visit, as upstream.
+
+## Team and profile pages
+
+Ported and compared with the reference (`compat/ui/flow_teams.mjs`, `flow_teams2.mjs`, `flow_profile.mjs`,
+`flow_whatsnew.mjs`): new team, danger zone, member actions, invitations by link and email and their acceptance
+(`/invitations/{uuid}`, `/auth/link`), team and profile avatars, audit log, instance users, `/profile` with email
+change, password, two-factor enrollment and recovery codes, passkey management, account deletion, `/select-team`,
+`/user/confirm-password` and the user menu's What's New.
+
+- A valid new password is not checked against Have I Been Pwned: upstream's `uncompromised()` rule asks an external
+  service. The other production rules apply. A successful password change could only be tried on coolify-rs for the
+  same reason, so it is compared with the PHP and not with reference rows.
+- Avatars are stored on the local disk (`{COOLIFY_RS_DATA_DIR}/images`). Upstream's `avatar_storage_type = s3` is not
+  used for writing, and a row with an S3 avatar answers 404 in coolify-rs. A file stored by upstream's container is not
+  visible to coolify-rs unless the disks are shared.
+- Deleting a user through `/team/admin` is refused with a message when a team only that user belongs to still owns
+  servers or projects. Upstream force-deletes them; their deletion hooks are not all ported.
+- Deleting a team or account removes keys, tags, shared variables, S3 storages and sources with their rows, but writes
+  no audit events for those rows and does not remove a key's file (upstream's model events do).
+- The confirm-password page has no "Confirm with a passkey" button, and passkey sign-in and the use of a passkey at
+  login are not part of this page set. Passkey `last_used_at` therefore stays empty unless upstream signs in with it.
+- A password confirmation is remembered per session and skips the password step only on the pages listed above. Older
+  pages (server, application and database deletion) still ask for the password within upstream's three hours.
+- What's New reads `{COOLIFY_RS_DATA_DIR}/changelogs/*.json`. `PullChangelog` is not ported, because it fetches them
+  from upstream's CDN, so a new install shows no updates. Unread counts are not cached.
+- The user menu's Feedback entry is not ported: `Livewire\Help` sends to upstream's support address or Cloud API.
+- Forced password change after a magic link is the job of the `/force-password-reset` page. Until that page exists a
+  new invitee lands on the dashboard after accepting.
 
 ## API divergences (implemented routes)
 

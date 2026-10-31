@@ -73,6 +73,7 @@ await flow(
     await h.field('Description').fill('changed by flow');
     await h.field('Description').press('Enter');
     rec.team_saved = await h.toasts();
+    rec.changes_updated = tinker(`echo json_encode(App\\Models\\AuditEvent::where("event","ui.team.updated")->where("team_id",${team})->latest("id")->first()?->changes);`);
     rec.team_updated_audit = auditSince(before).filter((r) => r.actor_email === `${OWNER}@example.test`).map(scrub);
 
     // Instance users: a test user who is an admin of the root team.

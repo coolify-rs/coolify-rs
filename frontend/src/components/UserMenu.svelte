@@ -1,6 +1,7 @@
 <script lang="ts">
   // Port of upstream components/top-user-menu.blade.php.
   import Reicon from './Reicon.svelte';
+  import WhatsNew from './WhatsNew.svelte';
   import { link, router } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
   import { sessionApi } from '../lib/api';
@@ -90,7 +91,7 @@
     </svg>
   </button>
 
-  {#if open}
+  <div class:hidden={!open}>
     <div
       style:max-height={panelMaxHeight}
       style:position={sidebar ? 'fixed' : undefined}
@@ -126,10 +127,17 @@
 
       <div class="my-1 h-px bg-neutral-200 dark:bg-white/[0.07]"></div>
 
+      <WhatsNew onopen={() => (open = false)} />
       <a href="https://coolify.io/docs" target="_blank" rel="noopener noreferrer" class="listbox-option">
         <span class="flex items-center gap-2">
           <Reicon name="documentation" class="size-4 opacity-80" />
           Documentation
+        </span>
+      </a>
+      <a href="https://coolify.io/sponsorships" target="_blank" rel="noopener noreferrer" class="listbox-option">
+        <span class="flex items-center gap-2">
+          <Reicon name="sponsor" class="size-4 text-pink-500" />
+          Sponsor us
         </span>
       </a>
 
@@ -142,5 +150,5 @@
         </span>
       </button>
     </div>
-  {/if}
+  </div>
 </div>

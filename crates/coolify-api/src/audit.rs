@@ -171,7 +171,36 @@ pub async fn team_mutation(
     };
     let mut changes = serde_json::Map::new();
     let mut changed_fields = Vec::new();
-    for (k, v) in row {
+    // On `created`, Eloquent holds only what was assigned: the `$attributes` defaults first.
+    let assigned: serde_json::Map<String, Value> = if action == "created" {
+        let personal = row.get("personal_team") == Some(&Value::Bool(true));
+        let fields: &[&str] = if personal {
+            &[
+                "is_mcp_server_enabled",
+                "is_build_server_fallback_enabled",
+                "is_two_factor_required",
+                "name",
+                "personal_team",
+                "show_boarding",
+            ]
+        } else {
+            &[
+                "is_mcp_server_enabled",
+                "is_build_server_fallback_enabled",
+                "is_two_factor_required",
+                "name",
+                "description",
+                "personal_team",
+            ]
+        };
+        fields
+            .iter()
+            .filter_map(|k| row.get(*k).map(|v| ((*k).to_string(), v.clone())))
+            .collect()
+    } else {
+        row.clone()
+    };
+    for (k, v) in &assigned {
         if action == "updated" {
             let before = other.and_then(|o| o.get(k));
             if before == Some(v) || k == "updated_at" {

@@ -174,7 +174,7 @@
               {/each}
             </div>
           </div>
-          <Pager total={data.total} bind:page bind:pageSize={perPage} storageKey="coolify.page-size.audit-log" separator="–" />
+          <Pager total={data.total} bind:page bind:pageSize={perPage} storageKey="coolify.page-size.audit-log" separator="–" shownSize={10} />
         {:else if data}
           <Empty title="No activity found" description="Team actions will appear here as they happen." iconName="time-back" size="sm" />
         {/if}

@@ -20,6 +20,7 @@ pub mod session;
 pub mod state;
 pub mod ui;
 pub mod ui_applications;
+pub mod ui_changelog;
 pub mod ui_databases;
 pub mod ui_notifications;
 pub mod ui_profile;

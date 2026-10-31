@@ -6,7 +6,8 @@
   import { ApiError } from '../lib/api';
   import { teamsUi, type InvitationView } from '../lib/teamsApi';
   import { session } from '../lib/session.svelte';
-  import { router, link as navLink } from '../lib/router.svelte';
+  import { router } from '../lib/router.svelte';
+  import ErrorPage from '../components/ErrorPage.svelte';
   import { setLoginError } from '../lib/session.svelte';
 
   // `uuid` for /invitations/{uuid}, `token` for /auth/link?token=...
@@ -55,17 +56,7 @@
 </script>
 
 {#if failure}
-  <!-- Port of upstream errors/400.blade.php and errors/404.blade.php. -->
-  <main class="error-shell">
-    <div class="error-shell-content">
-      <p class="error-code">{failure.status}</p>
-      <h1 class="error-title">{failure.status === 404 ? 'How did you get here?' : 'Bad request'}</h1>
-      <p class="error-description">{failure.status === 404 ? 'Sorry, we couldn’t find the page you’re looking for.' : failure.message}</p>
-      <div class="error-actions">
-        <a href="/" use:navLink><button type="button" class="button">Dashboard</button></a>
-      </div>
-    </div>
-  </main>
+  <ErrorPage code={failure.status === 404 ? 404 : 400} description={failure.status === 404 ? undefined : failure.message} />
 {:else if view}
   <AuthShell title="coolify-rs" description="Review your invitation to join a team.">
     <div class="flex flex-col gap-4">

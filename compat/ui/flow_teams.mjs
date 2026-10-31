@@ -22,6 +22,8 @@ const audit = (start, ids) =>
   auditSince(start)
     .filter((r) => [ids.OWNER_ID, ids.MEMBER_ID].includes(r.actor_id) && !r.event.startsWith('auth.'))
     .map((r) => JSON.stringify(r).replace(/"invitation_uuid":"[a-z0-9]+"/g, '"invitation_uuid":"U"').replace(/"team_id":\d+/g, '"team_id":"T"').replace(/"(actor_id|member_id)":\d+/g, '"$1":"I"'));
+const changesOf = (event, team) =>
+  tinker(`echo json_encode(App\\Models\\AuditEvent::where("event","${event}")->where("team_id",${team})->latest("id")->first()?->changes);`).replace(/Batb Flow[^"]*/g, 'N');
 const flowTeams = () => psql(`select coalesce(string_agg(id::text, ','), '') from teams where name like 'Batb Flow%'`);
 
 function cleanup() {
@@ -58,6 +60,7 @@ await flow(
     await form.locator('input:visible').nth(0).fill('x');
     await form.locator('button:has-text("Create team")').click();
     rec.create_short = await h.toasts();
+    await h.shot('tb-new-error', false);
     await form.locator('input:visible').nth(0).fill(TEAM);
     await form.locator('input:visible').nth(1).fill('Flow description');
     await form.locator('button:has-text("Create team")').click();
@@ -67,6 +70,7 @@ await flow(
     rec.team_row = rows('teams', `name='${TEAM}'`, 'name,description,personal_team,show_boarding,is_mcp_server_enabled,is_build_server_fallback_enabled,is_two_factor_required,custom_server_limit');
     const team = Number(psql(`select id from teams where name='${TEAM}'`));
     ids.TEAM_ID = team;
+    rec.changes_created = changesOf('ui.team.created', team);
     rec.team_user = mask(rows('team_user', `team_id=${team}`, 'user_id,role,created_at'), ids);
     rec.current_team = mask(psql(`select current_team_id from users where id=${owner}`), ids);
     rec.email_settings = rows('email_notification_settings', `team_id=${team}`, 'use_instance_email_settings,smtp_enabled');
@@ -79,6 +83,7 @@ await flow(
     await h.page.locator('input[type=email]:visible').fill('not-an-email');
     await h.button('Generate link').click();
     rec.invite_invalid = await h.toasts();
+    await h.shot('tb-invite-error', false);
     await h.page.locator('input[type=email]:visible').fill('');
     await h.button('Generate link').click();
     rec.invite_empty = await h.toasts();
@@ -180,6 +185,7 @@ await flow(
     await h.page.getByRole('button', { name: 'Permanently Delete' }).click();
     await h.page.waitForTimeout(2500);
     rec.delete_url = new URL(h.page.url()).pathname;
+    rec.changes_deleted = changesOf('ui.team.deleted', team);
     rec.deleted_team = psql(`select count(*) from teams where id=${team}`);
     rec.dangling_pivot = mask(rows('team_user', `team_id=${team}`, 'user_id,role'), ids);
     rec.settings_after = psql(`select count(*) from email_notification_settings where team_id=${team}`);

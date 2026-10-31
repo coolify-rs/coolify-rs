@@ -21,6 +21,7 @@
   import ConfirmPassword from './pages/ConfirmPassword.svelte';
   import Profile from './pages/Profile.svelte';
   import PasskeyConfirm from './pages/PasskeyConfirm.svelte';
+  import ErrorPage from './components/ErrorPage.svelte';
   import Servers from './pages/Servers.svelte';
   import ServerNew from './pages/ServerNew.svelte';
   import Server from './pages/Server.svelte';
@@ -126,6 +127,8 @@
   <ConfirmPassword />
 {:else if router.current.name === 'profile-passkey-confirm'}
   <PasskeyConfirm />
+{:else if (router.current.name === 'team-danger' && !session.isOwner) || (router.current.name === 'team-audit' && !session.isAdmin)}
+  <ErrorPage code={403} />
 {:else}
   <Shell>
     {#if router.current.name === 'profile'}
