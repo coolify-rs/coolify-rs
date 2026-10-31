@@ -35,6 +35,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route(&format!("{b}/webhooks"), get(webhooks).post(save_webhooks))
         .route(&format!("{b}/webhooks/generate"), post(generate_secret))
+        .route(&format!("{b}/metrics"), get(metrics))
 }
 
 /// `AuditEvent::isSensitiveField`, for the columns these sections write.
@@ -103,6 +104,35 @@ fn text_of(v: &Value) -> Option<String> {
         Value::Number(n) => Some(n.to_string()),
         _ => None,
     }
+}
+
+/// What `Project\Shared\Metrics` decides its states from.
+async fn metrics(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path((kind, uuid)): P,
+) -> ApiResult {
+    let res = find(&state, &ctx, &kind, &uuid).await?;
+    let server = match res.server_id {
+        Some(id) => coolify_db::servers::find_by_id(&state.db, id).await?,
+        None => None,
+    };
+    let setting = |k: &str| {
+        server
+            .as_ref()
+            .and_then(|s| s.settings.as_ref())
+            .and_then(|s| s.get(k))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    };
+    Ok(ok(json!({
+        "is_application": res.is_application(),
+        "build_pack": res.str("build_pack"),
+        "metrics_enabled": setting("is_metrics_enabled"),
+        "running": res.str("status").unwrap_or_default().contains("running"),
+        "server_uuid": server.as_ref().map(|s| s.uuid.clone()),
+    }))
+    .into_response())
 }
 
 // ---------------------------------------------------------------------------

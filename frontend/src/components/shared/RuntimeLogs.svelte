@@ -88,7 +88,7 @@
         </div>
       {/if}
       {#key targets.stream_key}
-        <LogViewer {fetchLogs} containerName={sources[0].container} timezone={data.timezone} collapsible={false} fill />
+        <LogViewer {fetchLogs} containerName={sources[0].container} timezone={data.timezone} collapsible={false} fill timestamps={false} />
       {/key}
     {:else}
       <Empty size="lg" title="Runtime logs unavailable" description="No containers are running, so there are no runtime logs to show." iconName="file-content" />

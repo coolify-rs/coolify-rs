@@ -18,6 +18,9 @@
   import HealthChecks from '../components/shared/HealthChecks.svelte';
   import ResourceLimits from '../components/shared/ResourceLimits.svelte';
   import RuntimeLogs from '../components/shared/RuntimeLogs.svelte';
+  import ApplicationAdvanced from '../components/shared/ApplicationAdvanced.svelte';
+  import ApplicationRollback from '../components/shared/ApplicationRollback.svelte';
+  import Metrics from '../components/shared/Metrics.svelte';
   import Tags from '../components/shared/Tags.svelte';
   import Webhooks from '../components/shared/Webhooks.svelte';
   import Unported from './Unported.svelte';
@@ -184,6 +187,12 @@
               <Storages kind="application" uuid={app} onchange={() => refresh().catch(() => {})} />
             {:else if active === 'logs'}
               <div class="runtime-logs-column min-w-0"><RuntimeLogs kind="application" uuid={app} /></div>
+            {:else if active === 'advanced'}
+              <ApplicationAdvanced uuid={app} {base} onchange={() => refresh().catch(() => {})} />
+            {:else if active === 'rollback'}
+              <ApplicationRollback uuid={app} />
+            {:else if active === 'metrics'}
+              <Metrics kind="application" uuid={app} />
             {:else if active === 'webhooks'}
               <Webhooks kind="application" uuid={app} />
             {:else if active === 'healthcheck' && record.build_pack !== 'dockercompose'}

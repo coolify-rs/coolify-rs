@@ -75,7 +75,7 @@
 {#snippet external(href: string, text: string)}
   <a class="button" {href} target="_blank" rel="noopener noreferrer">
     {text}
-    <Reicon name="external-link" class="size-3.5" />
+    <Reicon name="external-link" class="size-3" />
   </a>
 {/snippet}
 

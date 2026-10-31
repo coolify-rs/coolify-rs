@@ -3,6 +3,7 @@
 //! `/ui/resources/{kind}/{uuid}/...`, with `kind` one of `application`, `service`, `database`,
 //! `service-application` and `service-database`.
 
+pub mod advanced;
 pub mod config;
 pub mod envs;
 pub mod logs;
@@ -25,6 +26,7 @@ use crate::state::AppState;
 pub fn routes(state: AppState) -> Router<AppState> {
     Router::new()
         .merge(envs::routes())
+        .merge(advanced::routes())
         .merge(logs::routes())
         .merge(config::routes())
         .merge(secret_manager::routes())
@@ -110,7 +112,7 @@ impl Res {
     /// `$resource->git_based()`.
     pub fn git_based(&self) -> bool {
         self.is_application()
-            && !self.str("dockerfile").is_some_and(|v| !v.is_empty())
+            && self.str("dockerfile").is_none_or(str::is_empty)
             && self.str("build_pack") != Some("dockerimage")
     }
     /// `$resource->type() === 'service' || $resource?->build_pack === 'dockercompose'`.

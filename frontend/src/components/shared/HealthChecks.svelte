@@ -54,7 +54,7 @@
   async function toggle() {
     try {
       const r = await request<{ message?: string; info?: string }>('POST', `${base}/toggle`, form);
-      if (r.info) notify.info(r.info);
+      if (r.info) notify.info('Info', r.info);
       if (r.message) notify.success(r.message);
       await load();
       onchange?.();

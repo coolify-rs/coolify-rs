@@ -365,7 +365,7 @@ fn show_preview(res: &Res) -> bool {
         && res
             .str("git_repository")
             .is_some_and(|v| !v.trim().is_empty())
-        && !res.str("dockerfile").is_some_and(|v| !v.trim().is_empty())
+        && res.str("dockerfile").is_none_or(|v| v.trim().is_empty())
 }
 
 /// `method_exists($resource, 'redactsAllEnvValuesInLogs')`: applications, services, standalone
@@ -748,6 +748,7 @@ fn column_order(changed: &mut [&str]) {
     changed.sort_by_key(|c| COLUMNS.iter().position(|x| x == c));
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn audit_env(
     state: &AppState,
     ctx: &AuthCtx,

@@ -21,6 +21,8 @@ const audit = (start, name) =>
     return { event: e.event, description: e.description.replace(name, 'APP'), metadata: m };
   });
 const save = async (h) => {
+  // The reference's real-time warning covers the bar when its websocket is down.
+  await h.page.locator('button:has-text("Acknowledge")').first().click({ timeout: 300 }).catch(() => {});
   await h.page.locator('button:visible', { hasText: /Save changes/ }).first().click();
 };
 const field = (h, label) => h.page.locator('label:visible', { hasText: label }).first().locator('xpath=ancestor::div[.//input][1]//input').first();
@@ -138,11 +140,11 @@ await flow(port, 'alice', async (h) => {
   rec.generate_audit = audit(start, name);
   const secret = h.page.locator('label:visible', { hasText: 'Webhook secret' }).nth(1).locator('xpath=ancestor::div[.//input][1]//input').first();
   await secret.fill('short');
-  await save(h);
+  await secret.press('Enter');
   rec.secret_bad = await h.toasts(800);
   await h.shot('sc-webhook-bad');
   await secret.fill('0123456789abcdef');
-  await save(h);
+  await secret.press('Enter');
   rec.secret_toast = await h.toasts(800);
   psql(`update applications set build_pack = 'dockerimage' where uuid = '${app}'`);
   return rec;
