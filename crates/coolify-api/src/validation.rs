@@ -13,6 +13,8 @@ use crate::response::ApiError;
 #[derive(Debug, Clone)]
 pub enum Rule {
     Required,
+    /// `present`: the key is in the request, whatever its value.
+    Present,
     Nullable,
     String,
     Boolean,
@@ -42,6 +44,12 @@ pub enum Rule {
     Custom(fn(&Value) -> Option<&'static str>),
     /// A closure rule whose message is built from the value.
     CustomOwned(fn(&Value) -> Option<String>),
+    /// A rule object already evaluated against the value (it holds state, such as the stored
+    /// value `ManualWebhookSecret` compares with); runs like `CustomOwned`.
+    Evaluated(Option<String>),
+    /// Wildcard rules (`field.*`, `field.*.key`): given the value of the part before the first
+    /// dot, the `(attribute, message)` failures in rule order. The field's name is only a label.
+    Expand(fn(&Value) -> Vec<(String, String)>),
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +80,7 @@ fn message(field: &str, rule: &str, messages: Messages, param: Option<usize>) ->
         .map(|(_, m)| (*m).to_string())
         .unwrap_or_else(|| match rule {
             "required" => "The :attribute field is required.".into(),
+            "present" => "The :attribute field must be present.".into(),
             "string" => "The :attribute field must be a string.".into(),
             "boolean" => "The :attribute field must be true or false.".into(),
             "min" => "The :attribute field must be at least :min characters.".into(),
@@ -174,6 +183,15 @@ fn is_laravel_boolean(v: &Value) -> bool {
     }
 }
 
+/// Laravel's `getSize` under a numeric rule: the number, the size of an array, else the string length.
+fn numeric_rule_size(v: &Value) -> f64 {
+    match v {
+        Value::Array(a) => a.len() as f64,
+        Value::Object(o) => o.len() as f64,
+        _ => php_number(v).unwrap_or_else(|| php_string(v).chars().count() as f64),
+    }
+}
+
 /// Validates `input` against `fields`, then reports keys outside `allowed`
 /// with "This field is not allowed." (the controllers' `$extraFields` check).
 pub fn validate(
@@ -194,6 +212,15 @@ pub fn validate(
     };
 
     for f in fields {
+        if let [Rule::Expand(expand)] = f.rules.as_slice() {
+            let parent = f.name.split('.').next().unwrap_or_default();
+            if let Some(v) = input.get(parent) {
+                for (attribute, msg) in expand(v) {
+                    push(&attribute, msg);
+                }
+            }
+            continue;
+        }
         let value = input.get(f.name);
         let nullable = f.rules.iter().any(|r| matches!(r, Rule::Nullable));
         // Missing key, or null on a nullable field: only implicit rules run.
@@ -206,6 +233,13 @@ pub fn validate(
         // Laravel evaluates rules in declared order and stops after a failed
         // implicit rule (`required`); other failures do not stop it.
         for rule in &f.rules {
+            if let Rule::Present = rule {
+                if value.is_none() {
+                    push(f.name, message(f.name, "present", messages, None));
+                    break;
+                }
+                continue;
+            }
             if let Rule::Required = rule {
                 // validateRequired: null, or an empty array (`count() < 1`).
                 let empty_array = v.as_array().is_some_and(Vec::is_empty)
@@ -220,7 +254,7 @@ pub fn validate(
                 continue;
             }
             match rule {
-                Rule::Required | Rule::Nullable => {}
+                Rule::Required | Rule::Nullable | Rule::Present => {}
                 Rule::String => {
                     if !v.is_string() {
                         push(f.name, message(f.name, "string", messages, None));
@@ -259,16 +293,13 @@ pub fn validate(
                     }
                 }
                 Rule::Between(min, max) => {
-                    // Laravel's getSize: the number when numeric, else the string length.
-                    let size =
-                        php_number(v).unwrap_or_else(|| php_string(v).chars().count() as f64);
+                    let size = numeric_rule_size(v);
                     if size < *min as f64 || size > *max as f64 {
                         push(f.name, message_between(f.name, messages, *min, *max));
                     }
                 }
                 Rule::MinNum(n) | Rule::MaxNum(n) => {
-                    let size =
-                        php_number(v).unwrap_or_else(|| php_string(v).chars().count() as f64);
+                    let size = numeric_rule_size(v);
                     let (failed, rule) = match rule {
                         Rule::MinNum(_) => (size < *n as f64, "min.numeric"),
                         _ => (size > *n as f64, "max.numeric"),
@@ -315,6 +346,12 @@ pub fn validate(
                         push(f.name, msg.replace(":attribute", &attribute(f.name)));
                     }
                 }
+                Rule::Evaluated(failure) => {
+                    if let Some(msg) = failure {
+                        push(f.name, msg.replace(":attribute", &attribute(f.name)));
+                    }
+                }
+                Rule::Expand(_) => {}
             }
         }
     }

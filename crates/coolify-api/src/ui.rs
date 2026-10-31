@@ -104,6 +104,10 @@ pub fn routes(state: AppState) -> Router<AppState> {
             "/ui/applications/{uuid}/deployments/{dep}/cancel",
             post(crate::ui_applications::cancel),
         )
+        .route(
+            "/ui/applications/{uuid}/deployments/{dep}/force-start",
+            post(crate::ui_applications::force_start),
+        )
         .route("/ui/databases", post(crate::ui_databases::create))
         .route(
             "/ui/databases/{uuid}",

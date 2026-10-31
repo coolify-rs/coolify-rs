@@ -191,7 +191,7 @@ async fn last_used_at_is_recorded() {
 }
 
 #[tokio::test]
-async fn unknown_and_unported_routes() {
+async fn unknown_routes() {
     let h = Harness::new().await;
     let nf = r#"{"message":"Not found.","docs":"https:\/\/coolify.io\/docs"}"#;
     h.call("GET", "/api/v1/nope", None, None)
@@ -208,6 +208,6 @@ async fn unknown_and_unported_routes() {
             None,
         )
         .await;
-    assert_eq!(r.status, 501);
+    assert_eq!(r.status, 404);
     h.finish().await;
 }

@@ -59,6 +59,8 @@ pub enum ApiError {
     Unauthorized,
     /// `{"message": ...}` with an arbitrary status.
     Message(StatusCode, &'static str),
+    /// `response()->json($body, $status)` with a body of its own.
+    Status(StatusCode, Value),
     /// `abort($status, $message)`: Laravel's exception handler, pretty-printed JSON.
     Abort(StatusCode, &'static str),
     /// 422 `{"message":"Validation failed.","errors":{...}}`
@@ -135,6 +137,7 @@ impl IntoResponse for ApiError {
                 json!({"message": "You are not authorized to perform this action.", "error": "Unauthorized"}),
             ),
             Self::Message(status, m) => (status, json!({"message": m})),
+            Self::Status(status, body) => (status, body),
             Self::Validation(errors) => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 json!({"message": "Validation failed.", "errors": errors}),

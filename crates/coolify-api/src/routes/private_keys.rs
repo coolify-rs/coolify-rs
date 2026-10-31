@@ -67,6 +67,20 @@ fn present(state: &AppState, ctx: &AuthCtx, key: &KeyRow) -> ApiResult<Value> {
     Ok(Value::Object(serialize_record(record)))
 }
 
+/// `$key->toArray()`: `private_key` stays hidden, `public_key` is appended, columns keep their order.
+pub(crate) fn model_array(state: &AppState, key: &KeyRow) -> ApiResult<Value> {
+    let enc = encrypter(state)?;
+    let plain = enc
+        .decrypt_string(&key.private_key_encrypted)
+        .map_err(|_| ApiError::Internal)?;
+    let mut record = key.record.clone();
+    let public = inspect(&plain)
+        .map(|i| i.public_key)
+        .unwrap_or_else(|| "Error loading private key".into());
+    record.insert("public_key".into(), Value::String(public));
+    Ok(Value::Object(record))
+}
+
 pub async fn list(State(state): State<AppState>, Extension(ctx): Extension<AuthCtx>) -> ApiResult {
     let keys = private_keys::list(&state.db, ctx.team_id).await?;
     let items = keys

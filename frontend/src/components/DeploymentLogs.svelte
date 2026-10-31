@@ -188,6 +188,17 @@
     }
   }
 
+  // `DeploymentNavbar::force_start`.
+  async function forceStart() {
+    try {
+      const { started } = await appUi.forceStart(uuid, dep);
+      detail = await appUi.deployment(uuid, dep);
+      if (!started) notify.info('This deployment is no longer queued, so it was not started again.');
+    } catch (e) {
+      notify.error(e instanceof ApiError ? e.message : String(e));
+    }
+  }
+
   // `exportLogs(showTimestamps, searchQuery)`.
   function exportLogs(): string {
     const q = searchQuery.trim().toLowerCase();
@@ -303,12 +314,7 @@
               {#if status === 'queued' || status === 'in_progress'}
                 <div class="flex flex-wrap items-center justify-end gap-2">
                   {#if status === 'queued'}
-                    <button
-                      type="button"
-                      class="button logs-viewer-deployment-btn"
-                      onclick={() => notify.info('Not available in coolify-rs yet', 'Force-starting a queued deployment is not supported by coolify-rs yet.')}
-                      >Force start</button
-                    >
+                    <button type="button" class="button logs-viewer-deployment-btn" onclick={forceStart}>Force start</button>
                   {/if}
                   <button type="button" class="button button-error logs-viewer-deployment-btn logs-viewer-cancel-btn" onclick={cancel}>Cancel deployment</button>
                 </div>

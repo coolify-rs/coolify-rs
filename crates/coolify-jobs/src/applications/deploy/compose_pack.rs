@@ -158,33 +158,47 @@ impl Run {
         {
             self.b.compose_location = super::build::validate_path(loc, "docker_compose_location")?;
         }
-        if self
+        let preserve = self.app.setting_bool("is_preserve_repository_enabled");
+        if let Some(command) = self
             .app
             .str("docker_compose_custom_start_command")
-            .is_some_and(|c| !c.is_empty())
-            || self
-                .app
-                .str("docker_compose_custom_build_command")
-                .is_some_and(|c| !c.is_empty())
+            .filter(|c| !c.is_empty())
         {
-            return Err(Fail::new(
-                "Custom Docker Compose start and build commands are not supported by coolify-rs yet.",
-            ));
+            validate_shell_safe_command(command, "docker_compose_custom_start_command")?;
+            let project = if preserve { &self.cfg } else { &self.workdir };
+            self.b.compose_start_command = Some(with_project_directory(command, project));
         }
-        if self.app.setting_bool("is_preserve_repository_enabled") {
-            return Err(Fail::new(
-                "Preserving the repository on the server is not supported by coolify-rs yet.",
-            ));
+        if let Some(command) = self
+            .app
+            .str("docker_compose_custom_build_command")
+            .filter(|c| !c.is_empty())
+        {
+            validate_shell_safe_command(command, "docker_compose_custom_build_command")?;
+            self.b.compose_build_command = Some(with_project_directory(command, &self.workdir));
         }
         let name = self.app.str("name").unwrap_or_default().to_owned();
-        self.info(&format!(
-            "Starting deployment of {name} to {}.",
-            self.server_name
-        ))
-        .await;
+        if self.b.is_preview() {
+            self.info(&format!(
+                "Starting pull request (#{}) deployment of {}:{} to {}.",
+                self.b.pull_request_id,
+                self.b.repository,
+                self.branch_name(),
+                self.server_name
+            ))
+            .await;
+        } else {
+            self.info(&format!(
+                "Starting deployment of {name} to {}.",
+                self.server_name
+            ))
+            .await;
+        }
         self.prepare_builder_image().await?;
         self.check_git_if_build_needed().await?;
         self.clone_repository().await?;
+        if preserve {
+            self.sync_file_storages_with_repository().await?;
+        }
         self.generate_image_names();
         self.cleanup_git().await?;
         self.generate_build_env_variables().await?;
@@ -214,12 +228,21 @@ impl Run {
             self.app
                 .raw
                 .insert("docker_compose_raw".into(), Value::String(raw.clone()));
+            // Users define the secrets in their own compose file.
+            if self.b.secrets_supported && !self.b.build_secrets.is_empty() {
+                self.info("Build secrets are configured. Ensure your docker-compose file includes build.secrets configuration for services that need them.")
+                    .await;
+            }
             (raw, None)
         } else {
-            let mut parsed =
-                compose_parser::application_parser(&self.jobs, self.app.id, 0, Some(&self.commit))
-                    .await
-                    .map_err(Fail::new)?;
+            let mut parsed = compose_parser::application_parser(
+                &self.jobs,
+                self.app.id,
+                self.b.pull_request_id,
+                Some(&self.commit),
+            )
+            .await
+            .map_err(Fail::new)?;
             for w in parsed.warnings.clone() {
                 self.log(&format!("Warning: {w}"), "stderr", false).await;
             }
@@ -233,6 +256,10 @@ impl Run {
             if parsed.is_empty() {
                 self.info("Failed to parse docker-compose file.").await;
                 return Err(Fail::new("Failed to parse docker-compose file."));
+            }
+            // Add build secrets to compose file if enabled and BuildKit is supported
+            if self.b.secrets_supported && !self.b.build_secrets.is_empty() {
+                self.add_build_secrets_to_compose(&mut parsed).await?;
             }
             let build_env = self.generate_buildtime_environment_variables().await?;
             let fingerprint = self.compose_build_fingerprint(&build_env).await?;
@@ -268,7 +295,11 @@ impl Run {
         self.pull_compose_images().await?;
         self.stop_running_container(true).await?;
         self.info("Starting new application.").await;
-        let network = self.app.uuid.clone();
+        let network = if self.b.is_preview() {
+            format!("{}-{}", self.app.uuid, self.b.pull_request_id)
+        } else {
+            self.app.uuid.clone()
+        };
         self.exec(vec![
             Cmd::new(format!(
                 "docker network inspect '{network}' >/dev/null 2>&1 || docker network create --attachable '{network}' >/dev/null || true"
@@ -282,6 +313,68 @@ impl Run {
         .await?;
         self.start_compose_services().await?;
         self.info("New container started.").await;
+        Ok(())
+    }
+
+    /// The loop over `fileStorages` after the clone: a file storage follows what the path is in
+    /// the repository.
+    async fn sync_file_storages_with_repository(&mut self) -> Step {
+        use coolify_db::servers::ColumnValue;
+        use coolify_db::storages::{StorageKind, save_dirty};
+        let (files, owner) = self.file_storages().await?;
+        for mut file in files {
+            let real_path = file.fs_path.replace(&self.cfg, &self.workdir);
+            let key = format!("file_stat_{}", file.id);
+            self.exec(vec![
+                Cmd::new(in_docker(
+                    &self.dep,
+                    &format!("stat -c '%F' {}", quote(&real_path)),
+                ))
+                .hidden()
+                .ignore_errors()
+                .save(key.clone(), true),
+            ])
+            .await?;
+            let stat = self
+                .saved
+                .get(&key)
+                .map(|s| s.trim().to_owned())
+                .unwrap_or_default();
+            let dirty = if stat == "directory" && !file.is_directory {
+                file.is_directory = true;
+                file.content = None;
+                vec![
+                    ("is_directory", ColumnValue::Bool(true)),
+                    ("content", ColumnValue::Text(None)),
+                ]
+            } else if stat == "regular file" && file.is_directory {
+                file.is_directory = false;
+                file.is_based_on_git = true;
+                vec![
+                    ("is_directory", ColumnValue::Bool(false)),
+                    ("is_based_on_git", ColumnValue::Bool(true)),
+                ]
+            } else {
+                continue;
+            };
+            save_dirty(
+                &self.jobs.0.db,
+                StorageKind::File,
+                file.id,
+                &dirty,
+                super::now(),
+            )
+            .await
+            .map_err(|e| Fail::new(e.to_string()))?;
+            self.jobs
+                .delete_storage_on(&owner, &file, self.server.id)
+                .await
+                .map_err(Fail::new)?;
+            self.jobs
+                .save_storage_on(&owner, &file, self.server.id)
+                .await
+                .map_err(Fail::new)?;
+        }
         Ok(())
     }
 
@@ -352,7 +445,12 @@ impl Run {
         let Some(fingerprint) = self.b.compose_fingerprint.clone().filter(|f| !f.is_empty()) else {
             return Ok(false);
         };
-        if self.b.force_rebuild || self.commit.trim().is_empty() || self.commit == "HEAD" {
+        if self.b.force_rebuild
+            || self.b.is_preview()
+            || self.b.compose_build_command.is_some()
+            || self.commit.trim().is_empty()
+            || self.commit == "HEAD"
+        {
             return Ok(false);
         }
         let mut images: Vec<String> = Vec::new();
@@ -403,11 +501,12 @@ impl Run {
         Ok(true)
     }
 
-    /// `build_docker_compose_images($composeFile, $buildEnvironment)` (no custom build command).
+    /// `build_docker_compose_images($composeFile, $buildEnvironment)`.
     async fn build_compose_images(&mut self, compose: Option<&ParsedCompose>) -> Step {
-        if let Some(c) = compose {
-            self.modify_dockerfiles_for_compose(c).await?;
-        }
+        // A raw Compose file is a string for upstream: no services, only the checks before the loop.
+        let raw = ParsedCompose::empty();
+        self.modify_dockerfiles_for_compose(compose.unwrap_or(&raw))
+            .await?;
         self.info("Pulling & building required images.").await;
         let build_env = self.b.compose_build_env.take();
         self.save_buildtime_environment_variables_with(build_env)
@@ -417,6 +516,29 @@ impl Run {
             self.workdir.clone(),
             self.b.compose_location.clone(),
         );
+        if let Some(custom) = self.b.compose_build_command.clone() {
+            // Auto-inject -f (compose file) and --env-file flags
+            let mut build =
+                inject_compose_flags(&custom, &format!("{w}{loc}"), BUILD_TIME_ENV_PATH);
+            if self.b.buildkit {
+                build = format!("DOCKER_BUILDKIT=1 {build}");
+            }
+            if !self.app.setting_bool("use_build_secrets") && !self.b.build_args.is_empty() {
+                let original = build.clone();
+                build = inject_build_args(&build, &self.b.build_args.join(" "));
+                if build != original {
+                    self.info("Adding build arguments to custom Docker Compose build command.")
+                        .await;
+                }
+            }
+            let dep = self.dep.clone();
+            let result = self
+                .exec(vec![
+                    Cmd::new(in_docker(&dep, &format!("cd /artifacts/{dep} && {build}"))).hidden(),
+                ])
+                .await;
+            return result.map_err(|e| syntax_error(e, "build", &custom));
+        }
         let mut command = format!("{} docker compose", self.b.coolify_variables);
         if self.b.buildkit {
             command = format!("DOCKER_BUILDKIT=1 {command}");
@@ -428,7 +550,7 @@ impl Run {
         if self.b.force_rebuild {
             command.push_str(" --no-cache");
         }
-        if !self.b.build_args.is_empty() {
+        if !self.app.setting_bool("use_build_secrets") && !self.b.build_args.is_empty() {
             command.push_str(&format!(" {}", self.b.build_args.join(" ")));
             self.info("Adding build arguments to Docker Compose build command.")
                 .await;
@@ -438,7 +560,7 @@ impl Run {
             .await
     }
 
-    /// `modify_dockerfiles_for_compose($composeFile)` (no build secrets).
+    /// `modify_dockerfiles_for_compose($composeFile)`.
     async fn modify_dockerfiles_for_compose(&mut self, compose: &ParsedCompose) -> Step {
         if self
             .app
@@ -588,6 +710,13 @@ impl Run {
                 ))
                 .await;
             }
+            if self.b.secrets_supported && !self.b.build_secrets.is_empty() {
+                self.modify_dockerfile_for_secrets(&full).await?;
+                self.info(&format!(
+                    "Modified Dockerfile for service {name} to use build secrets."
+                ))
+                .await;
+            }
         }
         Ok(())
     }
@@ -595,7 +724,12 @@ impl Run {
     /// The Docker Compose part of `generate_runtime_environment_variables()`.
     async fn compose_runtime_env(&mut self) -> Result<ComposeEnv, Fail> {
         let mut lines = Vec::new();
-        let domains = compose_parser::php_json_array(self.app.str("docker_compose_domains"));
+        let preview_domains = self.preview_compose_domains();
+        let domains = compose_parser::php_json_array(if self.b.is_preview() {
+            preview_domains.as_deref()
+        } else {
+            self.app.str("docker_compose_domains")
+        });
         for (service, entry) in &domains {
             let Some(domain) = compose_parser::domain_entry_string(entry).filter(|d| !d.is_empty())
             else {
@@ -610,17 +744,22 @@ impl Run {
             lines.push(format!("SERVICE_URL_{key}={url}"));
             lines.push(format!("SERVICE_FQDN_{key}={}", parts.host));
         }
-        let compose_text = if self.app.setting_bool("is_raw_compose_deployment_enabled") {
-            self.app.str("docker_compose_raw")
-        } else {
-            self.app.str("docker_compose")
-        }
-        .unwrap_or_default()
-        .to_owned();
+        let compose_text =
+            if self.b.is_preview() || self.app.setting_bool("is_raw_compose_deployment_enabled") {
+                self.app.str("docker_compose_raw")
+            } else {
+                self.app.str("docker_compose")
+            }
+            .unwrap_or_default()
+            .to_owned();
         for name in compose_parser::service_names(&compose_text) {
             lines.push(format!(
-                "SERVICE_NAME_{}={name}",
-                name.replace(['-', '.'], "_").to_uppercase()
+                "SERVICE_NAME_{}={}",
+                name.replace(['-', '.'], "_").to_uppercase(),
+                compose_parser::volumes::add_preview_deployment_suffix(
+                    &name,
+                    self.b.pull_request_id
+                )
             ));
         }
         // Generated SERVICE_* variables and blank variables Compose unsets stay out of the file.
@@ -652,8 +791,13 @@ impl Run {
         })
     }
 
-    /// `pull_docker_compose_images()` (no build server, no custom build command).
+    /// `pull_docker_compose_images()` (no build server).
     async fn pull_compose_images(&mut self) -> Step {
+        if self.b.compose_build_command.is_some() {
+            self.info("Skipping the image pull before stopping the current deployment, because the custom build command can build images outside of Docker Compose.")
+                .await;
+            return Ok(());
+        }
         let yaml = self.generated_compose.clone().unwrap_or_default();
         let services = compose_parser::registry_image_services(&yaml);
         if services.is_empty() {
@@ -681,39 +825,176 @@ impl Run {
         self.exec(vec![Cmd::new(command).hidden()]).await
     }
 
-    /// `start_docker_compose_services()` (no custom start command, no preserved repository).
+    /// `start_docker_compose_services()`.
     async fn start_compose_services(&mut self) -> Step {
-        let workdir = self.cfg.clone();
+        self.write_missing_content_files().await?;
+        let server_workdir = self.cfg.clone();
+        let (u, w, dep) = (
+            self.app.uuid.clone(),
+            self.workdir.clone(),
+            self.dep.clone(),
+        );
+        let preserve = self.app.setting_bool("is_preserve_repository_enabled");
+        let custom = self.b.compose_start_command.clone();
+        let vars = self.b.coolify_variables.clone();
         if self.app.setting_bool("is_raw_compose_deployment_enabled") {
+            if let Some(custom) = custom {
+                let start = inject_compose_flags(
+                    &custom,
+                    &format!("{server_workdir}{}", self.b.compose_location),
+                    &format!("{server_workdir}/{ENV_FILE}"),
+                );
+                self.write_deployment_configurations().await?;
+                let result = self
+                    .exec(vec![
+                        Cmd::new(in_docker(&dep, &format!("cd {w} && {start}")))
+                            .kind("stdout")
+                            .command_hidden(),
+                    ])
+                    .await;
+                return result.map_err(|e| syntax_error(e, "start", &custom));
+            }
             // write_deployment_configurations() runs first, then compose starts from the server.
-            self.write_deployment_configurations().await;
-            let command = format!(
-                "{} docker compose --env-file {workdir}/{ENV_FILE} --project-directory {workdir} -f {workdir}/docker-compose.yaml up -d",
-                self.b.coolify_variables
-            );
+            self.write_deployment_configurations().await?;
             self.b.compose_location = "/docker-compose.yaml".into();
-            self.exec(vec![Cmd::new(command).kind("stdout").command_hidden()])
-                .await
-        } else {
-            let (u, w, loc) = (
-                self.app.uuid.clone(),
-                self.workdir.clone(),
-                self.b.compose_location.clone(),
-            );
             let command = format!(
-                "{} docker compose --env-file {w}/{ENV_FILE} --project-name {u} --project-directory {w} -f {w}{loc} up -d",
-                self.b.coolify_variables
+                "{vars} docker compose --env-file {server_workdir}/{ENV_FILE} --project-directory {server_workdir} -f {server_workdir}/docker-compose.yaml up -d"
             );
-            let dep = self.dep.clone();
-            self.exec(vec![
-                Cmd::new(in_docker(&dep, &command))
-                    .kind("stdout")
-                    .command_hidden(),
-            ])
-            .await?;
-            self.write_deployment_configurations().await;
-            Ok(())
+            return self
+                .exec(vec![Cmd::new(command).kind("stdout").command_hidden()])
+                .await;
         }
+        let loc = self.b.compose_location.clone();
+        if let Some(custom) = custom {
+            let path = if preserve { &server_workdir } else { &w };
+            let start = inject_compose_flags(
+                &custom,
+                &format!("{path}{loc}"),
+                &format!("{path}/{ENV_FILE}"),
+            );
+            self.write_deployment_configurations().await?;
+            let command = if preserve {
+                let in_workdir = format!("cd {server_workdir} && {start}");
+                // A non-root SSH user cannot cd into the resource directory: as one `sh -c`
+                // script, the sudo parser runs the cd and the start command as root.
+                if self.server.is_non_root() {
+                    format!("sh -c {}", quote(&in_workdir))
+                } else {
+                    in_workdir
+                }
+            } else {
+                in_docker(&dep, &format!("cd /artifacts/{dep} && {start}"))
+            };
+            return self
+                .exec(vec![Cmd::new(command).kind("stdout").command_hidden()])
+                .await;
+        }
+        if preserve {
+            let command = format!(
+                "{vars} docker compose --env-file {server_workdir}/{ENV_FILE} --project-name {u} --project-directory {server_workdir} -f {server_workdir}{loc} up -d"
+            );
+            self.write_deployment_configurations().await?;
+            return self
+                .exec(vec![Cmd::new(command).kind("stdout").command_hidden()])
+                .await;
+        }
+        let command = format!(
+            "{vars} docker compose --env-file {w}/{ENV_FILE} --project-name {u} --project-directory {w} -f {w}{loc} up -d"
+        );
+        self.exec(vec![
+            Cmd::new(in_docker(&dep, &command))
+                .kind("stdout")
+                .command_hidden(),
+        ])
+        .await?;
+        self.write_deployment_configurations().await
+    }
+}
+
+/// `validateShellSafeCommand($value, $fieldName)`.
+fn validate_shell_safe_command(value: &str, field: &str) -> Step {
+    static SAFE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r#"^(?:[ \t]+|&&|\|\||"[^"$`\\\n\r]*"|'[^'\n\r]*'|[a-zA-Z0-9._\-/=:@,+\[\]{}#%^~*?!]+)+$"#,
+        )
+        .unwrap_or_else(|_| unreachable!())
+    });
+    if SAFE.is_match(value) {
+        Ok(())
+    } else {
+        Err(Fail::new(format!(
+            "Invalid {field}: contains forbidden shell characters."
+        )))
+    }
+}
+
+/// `str($command)->replaceFirst('compose', 'compose --project-directory '.$dir)` unless present.
+fn with_project_directory(command: &str, directory: &str) -> String {
+    if command.contains("--project-directory") {
+        command.to_owned()
+    } else {
+        command.replacen(
+            "compose",
+            &format!("compose --project-directory {directory}"),
+            1,
+        )
+    }
+}
+
+/// `injectDockerComposeFlags($command, $composeFilePath, $envFilePath)`.
+fn inject_compose_flags(command: &str, compose_file: &str, env_file: &str) -> String {
+    static FILE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?:^|\s)(?:-f(?:[=\s]|[./~]|$)|--file(?:=|\s))")
+            .unwrap_or_else(|_| unreachable!())
+    });
+    static ENV: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?:^|\s)--env-file(?:=|\s)").unwrap_or_else(|_| unreachable!())
+    });
+    static COMPOSE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"docker\s+compose").unwrap_or_else(|_| unreachable!()));
+    let mut replacement = "docker compose".to_owned();
+    if !FILE.is_match(command) {
+        replacement.push_str(&format!(" -f {compose_file}"));
+    }
+    if !ENV.is_match(command) {
+        replacement.push_str(&format!(" --env-file {env_file}"));
+    }
+    COMPOSE
+        .replacen(command, 1, regex::NoExpand(&replacement))
+        .into_owned()
+}
+
+/// `injectDockerComposeBuildArgs($command, $buildArgsString)`.
+fn inject_build_args(command: &str, build_args: &str) -> String {
+    static BUILD: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"( builder build| buildx build| build)(?:\s|$)")
+            .unwrap_or_else(|_| unreachable!())
+    });
+    if build_args.trim().is_empty() {
+        return command.to_owned();
+    }
+    let Some(end) = BUILD
+        .captures(command)
+        .and_then(|c| c.get(1))
+        .map(|m| m.end())
+    else {
+        return command.to_owned();
+    };
+    let (head, tail) = command.split_at(end);
+    format!("{head} {build_args}{tail}")
+}
+
+/// The `catch (\\RuntimeException)` around a custom command.
+fn syntax_error(e: Fail, what: &str, command: &str) -> Fail {
+    match &e {
+        Fail::Error { message, .. }
+            if message.contains("matching `'") || message.contains("unexpected EOF") =>
+        {
+            Fail::new(format!(
+                "Custom {what} command failed due to shell syntax error. Please check your command for special characters (like unmatched quotes): {command}"
+            ))
+        }
+        _ => e,
     }
 }
 
@@ -773,5 +1054,42 @@ mod tests {
             None
         );
         assert_eq!(lcfirst("Docker Compose file"), "docker Compose file");
+    }
+
+    #[test]
+    fn custom_command_flags() {
+        assert_eq!(
+            inject_compose_flags("docker compose build", "/w/c.yaml", "/e"),
+            "docker compose -f /w/c.yaml --env-file /e build"
+        );
+        assert_eq!(
+            inject_compose_flags("docker  compose -f x.yml --env-file=y up -d", "/w", "/e"),
+            "docker compose -f x.yml --env-file=y up -d"
+        );
+        assert_eq!(
+            inject_compose_flags("docker compose --from up", "/w", "/e"),
+            "docker compose -f /w --env-file /e --from up"
+        );
+        assert_eq!(
+            inject_build_args(
+                "docker compose -f x build --pull && docker compose push",
+                "--build-arg A"
+            ),
+            "docker compose -f x build --build-arg A --pull && docker compose push"
+        );
+        assert_eq!(
+            inject_build_args("docker buildx build .", "--build-arg A"),
+            "docker buildx build --build-arg A ."
+        );
+        assert_eq!(
+            inject_build_args("docker compose push", "--build-arg A"),
+            "docker compose push"
+        );
+        assert_eq!(
+            with_project_directory("docker compose up -d", "/w"),
+            "docker compose --project-directory /w up -d"
+        );
+        assert!(validate_shell_safe_command("docker compose up -d && echo 'a b'", "x").is_ok());
+        assert!(validate_shell_safe_command("echo $(id)", "x").is_err());
     }
 }

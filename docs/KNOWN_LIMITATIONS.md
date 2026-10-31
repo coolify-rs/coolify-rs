@@ -117,6 +117,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   pre/post-deployment commands, building on a build server (selecting it says so), a Dockerfile stored on the
   application (no repository), "Force start" of a queued
   deployment and the other application pages (Domains, Environment Variables, Storage, Advanced, Healthcheck,
+  application (no repository), switching the Git source to a GitLab or Gitea App and the other application pages (Domains, Environment Variables, Storage, Advanced, Healthcheck,
   Runtime Logs, Terminal, …). The General page's instant saves (site type, labels) store only the setting they
   change, while upstream's `syncData()` also persists unsaved form edits when it regenerates the Nginx
   configuration. Log export does not apply upstream's secret redaction beyond what the deployment already wrote
@@ -132,6 +133,61 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Docker Compose applications deploy (build, pull, `docker compose up`, build fingerprint reuse, raw mode). Not ported:
   custom Compose start/build commands, "preserve repository", preview deployments, configuration files with content
   (file storages Coolify writes), build secrets. The startup cleanup scopes interrupted deployments by host name, so
+  written as upstream writes it, and `build_pack = dockercompose` without `instant_deploy` runs `LoadComposeFile` after the
+  response. Every create field and `PATCH /applications/{uuid}` store what upstream stores. Inline Dockerfiles deploy, also with
+  `instant_deploy` (`inline` and `inline-instant` in `compat/diff/git_deploy_diff.py`). A request that upstream fails halfway (a value PostgreSQL rejects, such as
+  `gpu_driver: null` or `connect_to_docker_network: "maybe"`) answers the same 500 but leaves no row behind, where
+  upstream keeps the application it had already saved. PATCH does not queue `ReleaseRemovedDnsHostnamesJob`: managed DNS
+  is not ported. The GitHub App repository check does not apply upstream's `SafeExternalUrl` private-network policy to the GitHub API URL, and the
+  GitHub App path is not yet verified against a real GitHub App (only up to the lookup of the App).
+- Application envs, storages, tags and the secret manager link are ported; the secret manager stores only the source
+  (nothing fetches secrets from Doppler, Infisical or Vault at deployment). File storages are written and deleted on the
+  server by the API, and the deploy job mounts them and writes missing content files (`EnsureContentFilesOnServer`), also
+  when a directory is in the way (`file-storage*` and `compose-files` in `compat/diff/git_deploy_diff.py`, with the delete).
+  The job reads the rows `ORDER BY id`; upstream has no `ORDER BY`, so its mount order in the Compose file follows the
+  heap of the table and can differ from ours and between its own runs (the diff sorts these lines).
+  `DELETE /applications/{uuid}/envs/bulk` answers 405 instead of upstream's 404 (the literal path wins over `{env_uuid}`).
+  Responses of a created or updated storage include the owning application with its server, as upstream does, also
+  `proxy.last_saved_proxy_configuration` for tokens without `read:sensitive`: an upstream leak kept for parity.
+- Application operations are ported in the API (`compat/diff/applications_ops_diff.py`): previews, clone, rollback,
+  logs, move, destinations. What they do not do yet:
+  - Preview deployments build and run for every build pack (`preview-*` in `compat/diff/git_deploy_diff.py`). Not ported
+    around them: `ApplicationPullRequestUpdateJob` (no GitHub App to comment on), the preview restart limit
+    (the status poller counts restarts but does not stop the preview), deployment notifications. `POST /deploy` by tag answers 501. An application with
+    an additional destination answers 501 to start, restart and rollback (`unported_parts`).
+  - `POST /migrate` answers 404 like upstream outside a Coolify development instance (`isDev()`), so
+    `MigrateResourceToDestination` is not ported.
+  - `clone_volumes` copies data on one server only. A copy to another server (upstream goes through scp on the Coolify
+    host) is logged and the new volume stays empty. A source the job cannot deploy answers 501 before anything is created.
+  - The preview routes read the service names and named volumes of a Compose preview from `docker_compose_raw`, where
+    upstream's `composeServiceNamesForPreview()` runs `parse(pull_request_id)`: creating a preview does not yet add its bind
+    mounts or store the rendered file; the deployment does. A clone of a Compose application with a named volume and a
+    preview answers 500 like upstream, but writes nothing where upstream leaves a half-made clone.
+  - Managed DNS records (`ManagedDnsRecordCleanup`) are not released when a preview's domains change or it is deleted, and
+    log redaction does not resolve remote secrets.
+- Scheduled tasks and the scheduler are ported for applications (`compat/diff/applications_scheduled_tasks_diff.py`).
+  - The scheduler starts with the process. `COOLIFY_RS_SCHEDULER=off` (also `0`, `false`, `no`) turns it off, and
+    `scripts/dev-server.sh` sets it to off unless the caller says otherwise, because the reference runs its own scheduler
+    on the same database. Both use `scheduled_job_states` and `scheduled_job_deliveries`, so running both still runs an
+    occurrence once; a manual execute works with the scheduler off.
+  - Only the `tasks` source is registered. Database backups, volume backups and Docker cleanups register their sources
+    with `Scheduler::with_default_sources` when they are ported. Notifications are not ported: `TaskSuccess` and
+    `TaskFailed` end in `notify_task_success()` and `notify_task_failed()`, the missed-run throttle too. The
+    `ScheduledTaskDone` broadcast and the manager's cache heartbeat for the UI are not ported.
+  - Jobs run on tokio tasks, not on a queue. A job that finds the overlap lock of its task held does nothing, as upstream's
+    middleware says, but with one Horizon worker upstream's second job only starts after the first ended, so it runs then
+    (a manual execute during a run: one execution here, two on the reference). The lock lives in the process, not in Redis.
+    A process restart fails the running executions at startup ("The worker stopped..."), without a trace in `error_details`.
+  - Service tasks: the job and the scheduler handle them, untested, since services are not ported. The routes are not
+    registered (`routes/scheduled_tasks.rs` has the generic handlers), and a service that is starting counts as running
+    if its containers run, because `isStarting()` needs the service start activities.
+  - `subscription_unpaid` is not ported: it applies to Coolify Cloud only. Redaction does not resolve remote secrets. A
+    timezone uses chrono-tz data, not PHP's, so a future rule change could differ until both update. A cron step below zero
+    (`*/-5`) is invalid here and an endless loop upstream; `validate_cron_expression()` refuses it anyway.
+- Docker Compose applications deploy (build, pull, `docker compose up`, build fingerprint reuse, raw mode, custom start and
+  build commands, preserved repositories, build secrets, previews). The `content` column of a file storage that came from
+  the repository (`is_based_on_git`) can be filled on the reference and empty here after a preserved-repository deployment;
+  the cause on the reference was not established and `git_deploy_diff.py` does not compare it. The startup cleanup scopes interrupted deployments by host name, so
   two coolify-rs instances on one host would mark each other's running deployments as failed.
 - At startup upstream (`app:init`) marks every in-progress and queued deployment as failed; coolify-rs marks only the
   in-progress deployments its own host was running (`horizon_job_worker`), so an upstream instance sharing the database
@@ -141,6 +197,9 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Deployments: only the Docker image build pack. Git build packs (Dockerfile, static, Railpack, Nixpacks, Compose), previews, additional servers, build servers, registry pushes, basic auth, pre/post-deployment commands and custom Docker options are not ported (501). `current_process_id` stays empty, and commands that upstream feeds on stdin carry their input inside the script. Jobs run in the coolify-rs process: a restart drops a running deployment.
 - No backups, notifications or webhooks yet. SSH runs without
 - No proxy management, scheduler, notifications or webhooks yet. SSH runs without
+- The new-server page offers only "IP address or domain" (no cloud provisioning).
+- Deployments: additional servers, build servers and registry pushes are not ported or not compared with the reference (`git_deploy_diff.py` runs one server without a registry). `current_process_id` stays empty, and commands that upstream feeds on stdin carry their input inside the script. Jobs run in the coolify-rs process: a restart drops a running deployment.
+- No proxy management, backups, scheduler, notifications or webhooks yet. SSH runs without
   connection multiplexing (one connection per command).
 - coolify-rs cannot bootstrap a new installation: it requires a database created by upstream Coolify at the baseline
   (`main` @ b5823c7, 473 migrations); it runs no upstream DDL. A 4.5.0 database is served read-only until upstream

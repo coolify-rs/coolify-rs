@@ -81,8 +81,8 @@ impl ParsedCompose {
 }
 
 /// `Application::parse($pull_request_id, null, $commit)` → `applicationParser()` for an
-/// application with `compose_parsing_version >= 3`, with all its database writes. Only
-/// `pull_request_id = 0` is ported.
+/// application with `compose_parsing_version >= 3`, with all its database writes.
+/// A preview reads its row and domains by `pull_request_id`.
 pub async fn application_parser(
     jobs: &Jobs,
     app_id: i64,

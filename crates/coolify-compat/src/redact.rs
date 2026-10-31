@@ -166,12 +166,28 @@ fn replace_with(
 fn redact_patterns(text: &str) -> Result<String, Limit> {
     let mut text = text.to_owned();
     for (re, rep) in PATTERNS.iter() {
-        text = replace_all(re, &text, rep)?;
+        // PCRE fails fast on a required literal; see `redact_assignments()`.
+        let required: &[&str] = match re.as_str() {
+            p if p.starts_with("x-access-token:") => &["x-access-token:"],
+            p if p.starts_with("oauth2:") => &["oauth2:"],
+            p if p.starts_with(r"\bgh") => &["ghp_", "gho_", "ghu_", "ghs_", "ghr_"],
+            p if p.starts_with(r"\b(gl") => &["glpat-", "glcbt-", "glrt-"],
+            p if p.starts_with(r"\b(A") => &["AKIA", "ABIA", "ACCA", "ASIA"],
+            _ => &[],
+        };
+        if required.is_empty() || required.iter().any(|r| text.contains(r)) {
+            text = replace_all(re, &text, rep)?;
+        }
     }
     Ok(text)
 }
 
 fn redact_assignments(text: &str) -> Result<String, Limit> {
+    // PCRE fails fast on a required literal: a long line without a separator cannot match. Without
+    // this check fancy-regex spends its step limit on the line and it would be suppressed.
+    if !text.contains(['=', ':']) {
+        return Ok(text.to_owned());
+    }
     let text = replace_all(
         &QUOTED_ASSIGNMENT,
         text,
@@ -330,6 +346,10 @@ fn replace_known_secrets(text: &str, known: &[&str], locked: &[&str]) -> Result<
         .map(|s| fancy_regex::escape(s).into_owned())
         .collect::<Vec<_>>()
         .join("|");
+    // PCRE fails fast on a required literal; fancy-regex would spend its limit on a long line.
+    if !short.iter().any(|s| text.contains(s.as_str())) {
+        return Ok(text);
+    }
     let token = Regex::new(&format!(
         r"(?<![\p{{L}}\p{{M}}\p{{N}}_])(?:{alternatives})(?![\p{{L}}\p{{M}}\p{{N}}_])"
     ))
@@ -355,6 +375,13 @@ mod tests {
         redact_text(t, &[], &[])
     }
     const X: &str = REDACTED;
+
+    /// The largest output a scheduled task stores: one line of 5MB.
+    #[test]
+    fn a_very_long_line_is_kept() {
+        let line = "a".repeat(5 * 1024 * 1024);
+        assert!(redact_text(&line, &["some-long-secret"], &["pw1"]) == line);
+    }
 
     // Cases from upstream tests/Unit/SensitiveDataRedactorTest.php.
     #[test]

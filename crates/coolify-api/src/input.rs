@@ -94,7 +94,9 @@ fn to_map(v: Value) -> Map<String, Value> {
             .enumerate()
             .map(|(i, v)| (i.to_string(), v))
             .collect(),
-        _ => Map::new(),
+        Value::Null => Map::new(),
+        // `(array) json_decode(...)` of a scalar.
+        scalar => [("0".to_owned(), scalar)].into_iter().collect(),
     }
 }
 

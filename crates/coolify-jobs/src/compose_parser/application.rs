@@ -2,7 +2,7 @@
 //! (bootstrap/helpers/parsers.php): parses `docker_compose_raw`, writes the environment variables,
 //! storages and domains it derives, saves `docker_compose` and returns the compose structure.
 //!
-//! Production deployments (`pull_request_id = 0`) only.
+//! Production deployments and previews.
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -105,6 +105,7 @@ pub struct Run<'a> {
     /// `$resource->environment_variables` once loaded (the relation is cached until `data_forget`).
     env_cache: Option<Vec<EnvRow>>,
     warnings: Vec<String>,
+    jobs: Jobs,
 }
 
 impl std::fmt::Debug for Run<'_> {
@@ -194,6 +195,7 @@ impl<'a> Run<'a> {
             },
             env_cache: None,
             warnings: Vec::new(),
+            jobs: jobs.clone(),
         })
     }
 
@@ -572,13 +574,17 @@ impl<'a> Run<'a> {
         Ok(value)
     }
 
-    /// `resolveComposeLongBindSource($source, $resource)`.
-    async fn resolve_compose_long_bind_source(&self, source: &str) -> Result<String, String> {
+    /// `resolveComposeLongBindSource($source, $resource, $isPreview)`.
+    async fn resolve_compose_long_bind_source(
+        &self,
+        source: &str,
+        is_preview: bool,
+    ) -> Result<String, String> {
         let Some(c) = LONG_BIND_DEFAULT.captures(source) else {
             return Ok(validate::resolve_compose_volume_source_default(source));
         };
         let key = c[1].to_owned();
-        let row = store::env_first(self.db, MORPH, self.app.id, &key, false)
+        let row = store::env_first(self.db, MORPH, self.app.id, &key, is_preview)
             .await
             .map_err(Self::db_err)?;
         let runtime_ok = match &row {
@@ -652,11 +658,15 @@ pub(crate) async fn application_parser(
     pull_request_id: i64,
     commit: Option<&str>,
 ) -> Result<ParsedCompose, String> {
-    if pull_request_id != 0 {
-        return Err(
-            "Preview deployments of Docker Compose applications are not ported yet.".into(),
-        );
-    }
+    let is_pull_request = pull_request_id != 0;
+    // `$resource->previews()->find($preview_id)`
+    let preview = if is_pull_request {
+        coolify_db::application_ops::preview(run.db, run.app.id, pull_request_id)
+            .await
+            .map_err(Run::db_err)?
+    } else {
+        None
+    };
     run.warnings.clear();
     let uuid = run.uuid();
     let Some(compose) = run
@@ -704,11 +714,28 @@ pub(crate) async fn application_parser(
     if !top_volumes.is_empty() {
         top_volumes.retain(|(_, v)| *v != PhpValue::Null);
     }
-    let base_network = uuid.clone();
+    let base_network = if is_pull_request {
+        format!("{uuid}-{pull_request_id}")
+    } else {
+        uuid.clone()
+    };
 
-    let legacy_null_variables = store::env_list(run.db, MORPH, run.app.id, false)
+    let mut legacy_null_variables = store::env_list(run.db, MORPH, run.app.id, false)
         .await
         .map_err(Run::db_err)?;
+    if is_pull_request {
+        // ->concat($legacyNullEnvironmentVariables)->unique('key'): the preview's come first.
+        let mut merged = store::env_list(run.db, MORPH, run.app.id, true)
+            .await
+            .map_err(Run::db_err)?;
+        for row in legacy_null_variables {
+            if !merged.iter().any(|m| m.key == row.key) {
+                merged.push(row);
+            }
+        }
+        legacy_null_variables = merged;
+    }
+    let mut preview_own_volumes: Vec<String> = Vec::new();
 
     let mut all_magic: Arr = Vec::new();
     for (name_key, service) in &services {
@@ -1007,7 +1034,9 @@ pub(crate) async fn application_parser(
                     if !php::empty_str(&source) {
                         validate::validate_compose_array_volume_source(&source)?;
                         if kind == "bind" {
-                            source = run.resolve_compose_long_bind_source(&source).await?;
+                            source = run
+                                .resolve_compose_long_bind_source(&source, is_pull_request)
+                                .await?;
                         }
                     }
                     validate::validate_compose_content_volume_source(&volume)?;
@@ -1058,6 +1087,10 @@ pub(crate) async fn application_parser(
                         &main_directory,
                         found.as_ref().map(|f| f.fs_path.as_str()),
                     )?;
+                    if is_pull_request && found.as_ref().is_none_or(|f| f.is_preview_suffix_enabled)
+                    {
+                        source = volumes::add_preview_deployment_suffix(&source, pull_request_id);
+                    }
                     if !volumes::compose_bind_keeps_missing_host_path(&volume) {
                         let content_enc = content.as_deref().map(|c| run.enc.encrypt_string(c));
                         match &found {
@@ -1081,7 +1114,7 @@ pub(crate) async fn application_parser(
                                 .map_err(Run::db_err)?;
                             }
                             None => {
-                                store::file_volume_insert(
+                                let id = store::file_volume_insert(
                                     run.db,
                                     MORPH,
                                     run.app.id,
@@ -1093,6 +1126,8 @@ pub(crate) async fn application_parser(
                                 )
                                 .await
                                 .map_err(Run::db_err)?;
+                                // `LocalFileVolume::created`: ServerStorageSaveJob.
+                                run.jobs.spawn_created_application_file(run.app.id, id);
                             }
                         }
                     } else {
@@ -1124,16 +1159,29 @@ pub(crate) async fn application_parser(
                     declaration.as_ref().and_then(|d| php::data_get(d, "driver_opts.type")),
                     Some(PhpValue::Str(t)) if t == "cifs" || t == "nfs"
                 );
+                // A preview never mounts an external or network volume: it gets its own volume.
+                let is_preview_own_volume = is_pull_request
+                    && (is_network_volume
+                        || volumes::compose_external_volume_declaration(&top_volumes, &source)?
+                            .is_some());
                 let legacy_name = format!("{uuid}_{}", php::slug(&source));
-                if use_external_as_written(run, &top_volumes, &source, &legacy_name).await? {
+                if !is_pull_request
+                    && use_external_as_written(run, &top_volumes, &source, &legacy_name).await?
+                {
                     php::put(&mut volumes_parsed, index.clone(), volume);
                     continue;
                 }
-                if is_network_volume {
+                if !is_pull_request && is_network_volume {
                     php::put(&mut volumes_parsed, index.clone(), volume);
                     continue;
                 }
-                let name = format!("{uuid}_{}", php::slug(&source));
+                if is_preview_own_volume {
+                    preview_own_volumes.push(source.clone());
+                }
+                let mut name = format!("{uuid}_{}", php::slug(&source));
+                if is_pull_request {
+                    name = volumes::add_preview_deployment_suffix(&name, pull_request_id);
+                }
                 volume = match &volume {
                     PhpValue::Str(s) => {
                         let parsed = validate::parse_docker_volume_string(s)?;
@@ -1162,16 +1210,44 @@ pub(crate) async fn application_parser(
                 php::put_str(
                     &mut top_volumes,
                     &name,
-                    PhpValue::Array(volumes::compose_renamed_volume_declaration_for(
-                        declaration.as_ref(),
-                        &name,
-                        ignores,
-                        false,
-                    )),
+                    if is_preview_own_volume {
+                        PhpValue::map([("name", PhpValue::Str(name.clone()))])
+                    } else {
+                        PhpValue::Array(volumes::compose_renamed_volume_declaration_for(
+                            declaration.as_ref(),
+                            &name,
+                            ignores,
+                            is_pull_request,
+                        ))
+                    },
                 );
             }
             php::put(&mut volumes_parsed, index.clone(), volume);
         }
+
+        let depends_on: Arr = if is_pull_request {
+            depends_on
+                .into_iter()
+                .map(|(condition, dependency)| match condition {
+                    Key::Int(_) => (
+                        condition,
+                        PhpValue::Str(volumes::add_preview_deployment_suffix(
+                            &php::to_string(&dependency),
+                            pull_request_id,
+                        )),
+                    ),
+                    Key::Str(name) => (
+                        Key::from_php_string(&volumes::add_preview_deployment_suffix(
+                            &name,
+                            pull_request_id,
+                        )),
+                        dependency,
+                    ),
+                })
+                .collect()
+        } else {
+            depends_on
+        };
 
         let mut networks_temp: Arr = Vec::new();
         if !use_network_mode {
@@ -1358,7 +1434,11 @@ pub(crate) async fn application_parser(
             }
         }
 
-        let branch = run.app.str("git_branch").unwrap_or_default().to_owned();
+        let branch = if is_pull_request {
+            format!("pull/{pull_request_id}/head")
+        } else {
+            run.app.str("git_branch").unwrap_or_default().to_owned()
+        };
         let relation = run.env_relation().await?;
         let has = |k: &str| relation.iter().any(|r| r.key == k);
         if !has("COOLIFY_BRANCH") {
@@ -1383,7 +1463,16 @@ pub(crate) async fn application_parser(
             );
         }
 
-        let domains_map: Arr = if run.build_pack_is_compose() {
+        let domains_map: Arr = if !run.build_pack_is_compose() {
+            Vec::new()
+        } else if is_pull_request {
+            php::json_array(
+                preview
+                    .as_ref()
+                    .and_then(|p| p.get("docker_compose_domains"))
+                    .and_then(Value::as_str),
+            )
+        } else if run.build_pack_is_compose() {
             php::json_array(run.attrs.docker_compose_domains.as_deref())
         } else {
             Vec::new()
@@ -1418,11 +1507,15 @@ pub(crate) async fn application_parser(
                         &format!("SERVICE_FQDN_{env_key}"),
                         PhpValue::Str(host.clone()),
                     );
+                    // A preview uses its own domains; the stored variables belong to the main application.
+                    if is_pull_request {
+                        continue;
+                    }
                     run.env_update_or_create(&format!("SERVICE_URL_{env_key}"), Some(&url_text))
                         .await?;
                     run.env_update_or_create(&format!("SERVICE_FQDN_{env_key}"), Some(&host))
                         .await?;
-                } else {
+                } else if !is_pull_request {
                     for prefix in ["SERVICE_FQDN_", "SERVICE_URL_"] {
                         store::env_null_values_like(
                             run.db,
@@ -1437,9 +1530,16 @@ pub(crate) async fn application_parser(
                 }
             }
         }
-        let fqdns: Option<Vec<String>> = fqdns_string
-            .filter(|f| !f.trim().is_empty())
-            .map(|f| f.split(',').map(str::to_owned).collect());
+        let fqdns: Option<Vec<String>> = fqdns_string.filter(|f| !f.trim().is_empty()).map(|f| {
+            if is_pull_request {
+                f.split(',')
+                    .map(|d| d.trim().to_owned())
+                    .filter(|d| !d.is_empty())
+                    .collect()
+            } else {
+                f.split(',').map(str::to_owned).collect()
+            }
+        });
 
         let project_name = run
             .app
@@ -1538,6 +1638,7 @@ pub(crate) async fn application_parser(
                 }
                 let mut value = v;
                 if value == PhpValue::Str(String::new())
+                    && !(is_pull_request && k.as_string().starts_with("SERVICE_URL_"))
                     && let Some(row) =
                         store::env_first(run.db, MORPH, run.app.id, &k.as_string(), false)
                             .await
@@ -1590,8 +1691,28 @@ pub(crate) async fn application_parser(
                 _ => None,
             })
             .unwrap_or_else(|| "both".into());
-            let overrides = overrides_map(run.attrs.domain_port_overrides.as_ref());
-            let noindex = run.noindex_domains();
+            let overrides = if is_pull_request {
+                overrides_map(
+                    json_value_to_php(
+                        preview
+                            .as_ref()
+                            .and_then(|p| p.get("domain_port_overrides")),
+                    )
+                    .as_ref(),
+                )
+            } else {
+                overrides_map(run.attrs.domain_port_overrides.as_ref())
+            };
+            let noindex = if is_pull_request {
+                fqdn_list.clone()
+            } else {
+                run.noindex_domains()
+            };
+            let label_uuid = if is_pull_request {
+                format!("{uuid}-{pull_request_id}")
+            } else {
+                uuid.clone()
+            };
             let only_port = service::first_docker_compose_service_port(&service);
             let traffic = run.server.setting_bool("is_traffic_analytics_enabled");
             let log_append = labels::caddy_supports_log_append(&run.server.proxy);
@@ -1602,14 +1723,18 @@ pub(crate) async fn application_parser(
             let resolver = run
                 .server
                 .certificate_resolver(run.app.setting_str("traefik_certificate_resolver"));
-            let network = run.app.network().to_owned();
+            let network = if is_pull_request {
+                format!("{}-{pull_request_id}", run.app.network())
+            } else {
+                run.app.network().to_owned()
+            };
             let force_https = run.setting_default("is_force_https_enabled", false);
             let permanent = run.setting_default("is_permanent_redirect_enabled", false);
             let gzip = run.setting_default("is_gzip_enabled", true);
             let stripprefix = run.setting_default("is_stripprefix_enabled", true);
             let traefik = |current: &[PhpValue]| {
                 labels::fqdn_labels_for_traefik(&ProxyLabelArgs {
-                    uuid: &uuid,
+                    uuid: &label_uuid,
                     network: &network,
                     domains: fqdn_list,
                     force_https,
@@ -1630,7 +1755,7 @@ pub(crate) async fn application_parser(
             };
             let caddy = |current: &[PhpValue]| {
                 labels::fqdn_labels_for_caddy(&ProxyLabelArgs {
-                    uuid: &uuid,
+                    uuid: &label_uuid,
                     network: &network,
                     domains: fqdn_list,
                     force_https,
@@ -1743,19 +1868,26 @@ pub(crate) async fn application_parser(
             && !has_image
             && let Some(c) = commit.filter(|c| php::truthy(&PhpValue::Str((*c).to_owned())))
         {
-            let tag: String = c.chars().take(128).collect();
+            let tag: String = if is_pull_request {
+                format!("pr-{pull_request_id}")
+            } else {
+                c.chars().take(128).collect()
+            };
             php::put_str(
                 &mut payload,
                 "image",
                 PhpValue::Str(format!("{uuid}_{service_name}:{tag}")),
             );
         }
-        php::put_str(
-            &mut parsed_services,
-            &service_name,
-            PhpValue::Array(payload),
-        );
+        let service_key = if is_pull_request {
+            volumes::add_preview_deployment_suffix(&service_name, pull_request_id)
+        } else {
+            service_name.clone()
+        };
+        php::put_str(&mut parsed_services, &service_key, PhpValue::Array(payload));
     }
+    // The preview mounts its own volumes instead of these external and network volumes.
+    top_volumes.retain(|(k, _)| !preview_own_volumes.contains(&k.as_string()));
 
     let mut top: Arr = vec![(
         Key::Str("services".into()),

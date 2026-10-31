@@ -581,7 +581,7 @@ async fn clone_application(
             state.version.clone(),
         )
     });
-    let plan = ops::CloneApplication {
+    let plan = coolify_db::application_ops::CloneApplication {
         source_id: source.id,
         source_uuid: source.uuid.clone(),
         new_uuid: new_uuid.clone(),
@@ -589,7 +589,8 @@ async fn clone_application(
         columns,
         nixpacks_default,
     };
-    let (new_id, _previews, _volumes) = ops::clone_application(&state.db, &plan, now).await?;
+    let (new_id, _previews, _volumes) =
+        coolify_db::application_ops::clone_application(&state.db, &plan, now).await?;
     if proxied && readonly_labels {
         crate::ui_applications::regenerate_labels(state, new_id, false).await?;
     }

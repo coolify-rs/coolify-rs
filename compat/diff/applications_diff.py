@@ -24,6 +24,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from applications_fields_diff import Cases, run_image_create  # noqa: E402
 from databases_diff import call, json_diff, record, results, same, sql  # noqa: E402
 
 
@@ -125,6 +126,13 @@ def main():
         same("deployment missing", "GET", "/api/v1/deployments/nope", tok="acme_owner_root")
         same("delete missing", "DELETE", "/api/v1/applications/nope", tok="acme_owner_root")
 
+        # Every other create field on this type, and POST /applications/dockerfile.
+        fields = Cases(base)
+        try:
+            run_image_create(fields)
+        finally:
+            fields.cleanup()
+
         # Deploy one plain application through each side.
         deployed = {}
         for side in ("ref", "rs"):
@@ -166,7 +174,15 @@ def main():
         codes = []
         for u, domain in ((ur, dr), (us, ds)):
             host = domain.split("://", 1)[1]
-            codes.append(vm(f"curl -s -o /dev/null -w '%{{http_code}}' -H 'Host: {host}' http://127.0.0.1/"))
+            # Traefik needs a moment to pick up a container that just turned healthy. Also record the
+            # number of attempts, so a lasting difference between the sides stays visible.
+            for attempt in range(1, 31):
+                code = vm(f"curl -s -o /dev/null -w '%{{http_code}}' -H 'Host: {host}' http://127.0.0.1/")
+                if code == "200":
+                    break
+                time.sleep(2)
+            print(f"proxy answer {u}: {code} after {attempt} attempts")
+            codes.append(code)
         record("both answer through the proxy", codes == ["200", "200"], codes)
         for tok in ("acme_owner_read", "acme_owner_root"):
             a_ = call("ref", "GET", f"/api/v1/deployments/applications/{ur}", tok=tok)
@@ -175,6 +191,23 @@ def main():
             a_ = call("ref", "GET", f"/api/v1/deployments/{qr['deployment_uuid']}", tok=tok)
             b_ = call("rs", "GET", f"/api/v1/deployments/{qr['deployment_uuid']}", tok=tok)
             record(f"deployment by uuid [{tok}]", a_ == b_, json_diff(a_, b_))
+
+        # PATCH with instant_deploy: a new deployment on each side.
+        before = {u: deployment_row(u)["id"] for u in (ur, us)}
+        patched = {}
+        for side, u in (("ref", ur), ("rs", us)):
+            c, r = call(side, "PATCH", f"/api/v1/applications/{u}", {"limits_memory": "300m", "instant_deploy": True}, tok="acme_owner_root")
+            patched[side] = (c, r.replace(u.encode(), b"U"))
+        record("patch with instant_deploy answers alike", patched["ref"] == patched["rs"] and patched["rs"][0] == 200, patched)
+        for u in (ur, us):
+            for _ in range(150):
+                d = deployment_row(u)
+                if d["id"] != before[u] and d["status"] in ("finished", "failed"):
+                    break
+                time.sleep(2)
+            record(f"patch deployment finished {u[:6]}", d["id"] != before[u] and d["status"] == "finished", d["status"])
+        limits = [app_row(u)["limits_memory"] for u in (ur, us)]
+        record("patch saved before the deployment", limits == ["300m", "300m"], limits)
 
         # Stop through each side.
         for side, u in (("ref", ur), ("rs", us)):

@@ -178,25 +178,13 @@ pub async fn list_for_server(db: &Db, server_id: i64) -> DbResult<Vec<Applicatio
     rows.iter().map(to_row).collect()
 }
 
-/// Whether the application has pieces coolify-rs cannot deploy yet (additional
-/// servers, file storages, previews).
+/// Whether the application has pieces coolify-rs cannot deploy yet (additional servers).
 pub async fn unported_parts(db: &Db, id: i64) -> DbResult<Vec<&'static str>> {
     let mut parts = Vec::new();
-    for (sql, label) in [
-        (
-            "SELECT EXISTS (SELECT 1 FROM additional_destinations WHERE application_id = $1)",
-            "additional servers",
-        ),
-        (
-            // Only files Coolify would write (`hasContentToWrite()`); directories and git files are only mounted.
-            "SELECT EXISTS (SELECT 1 FROM local_file_volumes WHERE resource_type = 'App\\Models\\Application' AND resource_id = $1 AND is_directory = false AND COALESCE(is_host_file, false) = false AND is_based_on_git = false AND content IS NOT NULL)",
-            "file storages",
-        ),
-        (
-            "SELECT EXISTS (SELECT 1 FROM application_previews WHERE application_id = $1 AND deleted_at IS NULL)",
-            "previews",
-        ),
-    ] {
+    for (sql, label) in [(
+        "SELECT EXISTS (SELECT 1 FROM additional_destinations WHERE application_id = $1)",
+        "additional servers",
+    )] {
         let found: bool = sqlx::query_scalar(sql)
             .bind(id)
             .fetch_one(db.pool())
@@ -238,6 +226,10 @@ pub async fn create(db: &Db, n: NewApplication, now: NaiveDateTime) -> DbResult<
         .iter()
         .enumerate()
         .map(|(i, (c, v))| {
+            // A NULL is written as a literal: a text-typed NULL parameter does not fit other columns.
+            if matches!(v, ColumnValue::Text(None)) {
+                return "NULL".to_owned();
+            }
             let cast = match v {
                 ColumnValue::Int(_) => "::integer",
                 ColumnValue::Text(_)
@@ -273,6 +265,9 @@ pub async fn create(db: &Db, n: NewApplication, now: NaiveDateTime) -> DbResult<
     let names: Vec<String> = settings.iter().map(|(c, _)| format!("\"{c}\"")).collect();
     let placeholders: Vec<String> = (0..settings.len())
         .map(|i| {
+            if matches!(settings[i].1, ColumnValue::Text(None)) {
+                return "NULL".to_owned();
+            }
             let cast = if matches!(settings[i].1, ColumnValue::Int(_)) {
                 "::bigint"
             } else {
@@ -401,6 +396,11 @@ pub async fn force_delete(db: &Db, id: i64, now: NaiveDateTime) -> DbResult<()> 
             "resourceable_id",
         ),
         ("taggables", "taggable_type", "taggable_id"),
+        (
+            "secret_manager_links",
+            "resourceable_type",
+            "resourceable_id",
+        ),
     ] {
         sqlx::query(&format!(
             "DELETE FROM {table} WHERE {col_type} = $1 AND {col_id} = $2"
@@ -468,6 +468,17 @@ pub async fn server_image_repositories(db: &Db, server_id: i64) -> DbResult<Vec<
     .await?)
 }
 
+/// `is_preview_suffix_enabled` of the persistent volumes, keyed by name.
+pub async fn preview_suffix_volumes(db: &Db, id: i64) -> DbResult<Vec<(String, bool)>> {
+    Ok(sqlx::query_as(
+        "SELECT name, COALESCE(is_preview_suffix_enabled, true) FROM local_persistent_volumes WHERE resource_type = $1 AND resource_id = $2",
+    )
+    .bind(MORPH)
+    .bind(id)
+    .fetch_all(db.pool())
+    .await?)
+}
+
 /// Servers with at least one application on a standalone Docker destination.
 pub async fn servers_with_applications(db: &Db) -> DbResult<Vec<i64>> {
     Ok(sqlx::query_scalar(&format!(
@@ -478,7 +489,85 @@ pub async fn servers_with_applications(db: &Db) -> DbResult<Vec<i64>> {
     .await?)
 }
 
-/// Whether a domain (portless, without scheme) is used by another application of the team.
+/// A row of [`domain_rows_of_team`]: `(uuid, name, fqdn, build_pack, docker_compose_domains)`.
+pub type DomainRow = (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+/// The columns `checkIfDomainIsAlreadyUsedViaAPI` loads of the team's applications, by name.
+pub async fn domain_rows_of_team(db: &Db, team_id: TeamId) -> DbResult<Vec<DomainRow>> {
+    Ok(sqlx::query_as(
+        "SELECT a.uuid, a.name, a.fqdn, a.build_pack, a.docker_compose_domains FROM applications a \
+         JOIN environments e ON e.id = a.environment_id JOIN projects p ON p.id = e.project_id \
+         WHERE p.team_id = $1 AND a.deleted_at IS NULL ORDER BY a.name",
+    )
+    .bind(team_id)
+    .fetch_all(db.pool())
+    .await?)
+}
+
+/// `ServiceApplication::ownedByCurrentTeamAPI`, by name: `(uuid, fqdn, service name)`.
+pub async fn service_domain_rows_of_team(
+    db: &Db,
+    team_id: TeamId,
+) -> DbResult<Vec<(String, Option<String>, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT sa.uuid, sa.fqdn, s.name FROM service_applications sa JOIN services s ON s.id = sa.service_id \
+         JOIN environments e ON e.id = s.environment_id JOIN projects p ON p.id = e.project_id \
+         WHERE p.team_id = $1 AND sa.deleted_at IS NULL ORDER BY sa.name",
+    )
+    .bind(team_id)
+    .fetch_all(db.pool())
+    .await?)
+}
+
+/// `instanceSettings()->fqdn`.
+pub async fn instance_fqdn(db: &Db) -> DbResult<Option<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT fqdn FROM instance_settings WHERE id = 0")
+            .fetch_optional(db.pool())
+            .await?
+            .flatten(),
+    )
+}
+
+/// Whether a `morphTo` source exists (`data_get($application, 'source')`).
+pub async fn source_exists(db: &Db, source_type: &str, source_id: i64) -> DbResult<bool> {
+    let table = match source_type {
+        r"App\Models\GithubApp" => "github_apps",
+        r"App\Models\GitlabApp" => "gitlab_apps",
+        r"App\Models\BitbucketApp" => "bitbucket_apps",
+        r"App\Models\GiteaApp" => "gitea_apps",
+        _ => return Ok(false),
+    };
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT EXISTS (SELECT 1 FROM {table} WHERE id = $1)"
+    ))
+    .bind(source_id)
+    .fetch_one(db.pool())
+    .await?)
+}
+
+/// The `saving` hook when the build pack leaves `dockercompose`: `SERVICE_FQDN_*` and
+/// `SERVICE_URL_*` variables go, preview copies included.
+pub async fn delete_service_url_variables(db: &Db, id: i64) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query(
+        "DELETE FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 \
+         AND (key LIKE 'SERVICE_FQDN_%' OR key LIKE 'SERVICE_URL_%')",
+    )
+    .bind(MORPH)
+    .bind(id)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
+/// The fqdns of the team's other applications (`checkIfDomainIsAlreadyUsedViaAPI`).
 pub async fn fqdns_of_team(db: &Db, team_id: TeamId) -> DbResult<Vec<(String, String, String)>> {
     Ok(sqlx::query_as(
         "SELECT a.uuid, a.name, a.fqdn FROM applications a JOIN environments e ON e.id = a.environment_id \

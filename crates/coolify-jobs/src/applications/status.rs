@@ -174,6 +174,9 @@ impl Jobs {
         let now = Utc::now().naive_utc();
         let mut statuses: BTreeMap<i64, Vec<(String, i64)>> = BTreeMap::new();
         let mut found: Vec<i64> = Vec::new();
+        let mut found_previews: Vec<i64> = Vec::new();
+        // $previewContainerRestartCounts: the preview row and the highest count of its containers.
+        let mut preview_restarts: BTreeMap<i64, (i64, i64)> = BTreeMap::new();
         for c in &containers {
             let Some(labels) = c.pointer("/Config/Labels").and_then(Value::as_object) else {
                 continue;
@@ -202,7 +205,41 @@ impl Jobs {
                 .or_else(|| labels.get("coolify.applicationId"))
                 .and_then(Value::as_str)
                 .is_some_and(|v| !v.is_empty());
-            if !is_app || truthy("coolify.pullRequestId") {
+            if !is_app {
+                continue;
+            }
+            if truthy("coolify.pullRequestId") {
+                // The preview that owns the container.
+                let pull_request_id = labels
+                    .get("coolify.pullRequestId")
+                    .and_then(Value::as_str)
+                    .and_then(|v| v.parse::<i64>().ok());
+                if let (Some(a), Some(pr)) = (owner(&applications, labels), pull_request_id)
+                    && let Ok(Some(preview)) =
+                        coolify_db::application_ops::preview(db, a.id, pr).await
+                {
+                    let id = preview
+                        .get("id")
+                        .and_then(Value::as_i64)
+                        .unwrap_or_default();
+                    found_previews.push(id);
+                    let observed = c.get("RestartCount").and_then(Value::as_i64).unwrap_or(0);
+                    let stored = preview
+                        .get("restart_count")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0);
+                    let entry = preview_restarts.entry(id).or_insert((stored, 0));
+                    entry.1 = entry.1.max(observed);
+                    let status = container_status(c);
+                    let values =
+                        if preview.get("status").and_then(Value::as_str) == Some(status.as_str()) {
+                            ("last_online_at", ColumnValue::Time(now))
+                        } else {
+                            ("status", ColumnValue::Text(Some(status)))
+                        };
+                    let _ =
+                        coolify_db::application_ops::update_preview(db, id, &[values], now).await;
+                }
                 continue;
             }
             let Some(a) = owner(&applications, labels) else {
@@ -228,6 +265,49 @@ impl Jobs {
                     .entry(a.id)
                     .or_default()
                     .push((container_status(c), restarts));
+            }
+        }
+        // trackPreviewRestartCounts(); the restart limit of a preview is not ported.
+        for (id, (stored, observed)) in preview_restarts {
+            if observed > stored {
+                let _ = coolify_db::application_ops::update_preview(
+                    db,
+                    id,
+                    &[
+                        ("restart_count", ColumnValue::Int(observed)),
+                        ("last_restart_at", ColumnValue::Time(now)),
+                        ("last_restart_type", ColumnValue::Text(Some("crash".into()))),
+                    ],
+                    now,
+                )
+                .await;
+            }
+        }
+        // $notRunningApplicationPreviews
+        if !containers.is_empty() {
+            for a in &applications {
+                for preview in coolify_db::application_ops::previews(db, a.id)
+                    .await
+                    .unwrap_or_default()
+                {
+                    let id = preview
+                        .get("id")
+                        .and_then(Value::as_i64)
+                        .unwrap_or_default();
+                    let status = preview
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if !found_previews.contains(&id) && !status.starts_with("exited") {
+                        let _ = coolify_db::application_ops::update_preview(
+                            db,
+                            id,
+                            &[("status", ColumnValue::Text(Some("exited".into())))],
+                            now,
+                        )
+                        .await;
+                    }
+                }
             }
         }
         for a in applications.iter().filter(|a| !found.contains(&a.id)) {

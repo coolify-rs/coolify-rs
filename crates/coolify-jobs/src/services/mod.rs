@@ -938,12 +938,12 @@ impl Jobs {
     pub fn spawn_scheduled_task(&self, s: ServiceRow, task: coolify_db::records::Record) {
         let jobs = self.clone();
         tokio::spawn(async move {
-            jobs.run_scheduled_task(&s, &task).await;
+            jobs.run_service_scheduled_task(&s, &task).await;
         });
     }
 
     /// `ScheduledTaskJob::handle()`.
-    async fn run_scheduled_task(&self, s: &ServiceRow, task: &coolify_db::records::Record) {
+    async fn run_service_scheduled_task(&self, s: &ServiceRow, task: &coolify_db::records::Record) {
         let db = &self.0.db;
         let task_id = task.get("id").and_then(Value::as_i64).unwrap_or_default();
         let started = std::time::Instant::now();

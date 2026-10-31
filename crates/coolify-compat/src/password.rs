@@ -23,9 +23,38 @@ pub fn verify_dummy(password: &str) -> bool {
     false
 }
 
+/// `password_hash($password, PASSWORD_BCRYPT, ['cost' => $cost])`: a `$2y$` hash.
+pub fn hash_bcrypt(password: &str, cost: u32) -> Option<String> {
+    bcrypt::hash_with_result(password, cost)
+        .ok()
+        .map(|h| h.format_for_version(bcrypt::Version::TwoY))
+}
+
+/// `password_hash($password, PASSWORD_ARGON2ID, ['memory_cost' => .., 'time_cost' => ..])`
+/// (one thread, 16 byte salt, 32 byte output: PHP's defaults).
+pub fn hash_argon2id(password: &str, memory_cost: u32, time_cost: u32) -> Option<String> {
+    use argon2::password_hash::{PasswordHasher, SaltString, rand_core::OsRng};
+    let params = argon2::Params::new(memory_cost, time_cost, 1, Some(32)).ok()?;
+    let hasher = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
+    let salt = SaltString::generate(&mut OsRng);
+    hasher
+        .hash_password(password.as_bytes(), &salt)
+        .ok()
+        .map(|h| h.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hashes_like_php() {
+        let bcrypt = hash_bcrypt("secret-password", 4).unwrap();
+        assert!(bcrypt.starts_with("$2y$04$"));
+        assert!(verify("secret-password", &bcrypt));
+        let argon = hash_argon2id("secret-password", 8192, 1).unwrap();
+        assert!(argon.starts_with("$argon2id$v=19$m=8192,t=1,p=1$"));
+    }
 
     #[test]
     fn verifies_laravel_hashes() {

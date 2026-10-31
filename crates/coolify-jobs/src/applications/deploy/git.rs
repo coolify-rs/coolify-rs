@@ -269,6 +269,8 @@ pub(super) struct ImportInput<'a> {
     pub oauth_token: Option<&'a str>,
     /// `gitlabAppPrivateKey()` / `giteaAppPrivateKey()` for a source without OAuth tokens.
     pub source_key: Option<&'a str>,
+    pub pull_request_id: i64,
+    pub git_type: Option<&'a str>,
 }
 
 fn hidden(command: String) -> Cmd {
@@ -289,7 +291,96 @@ fn ssh_key_setup(dep: &str, private_key_b64: &str) -> Vec<Cmd> {
     ]
 }
 
-/// `Application::generateGitImportCommands($uuid, 0, null, true, false, null, $commit)`.
+/// `buildGitCheckoutCommand($target, $gitSshCommand, $gitConfigOptions)`.
+fn git_checkout_command(
+    target: &str,
+    settings: ImportSettings,
+    ssh: Option<&str>,
+    git_config: Option<&str>,
+) -> String {
+    let git = git_config.map_or_else(|| "git".to_owned(), |o| format!("git {o}"));
+    let mut command = format!("{git} checkout {}", quote(target));
+    if settings.submodules {
+        let ssh = ssh.unwrap_or("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null");
+        command.push_str(&format!(
+            " && GIT_SSH_COMMAND=\"{ssh}\" {git} submodule update --init --recursive"
+        ));
+    }
+    command
+}
+
+/// The pull request part of `generateGitImportCommands()` for a GitHub App source: a second
+/// command, run after the clone (`gitCommandsAsShellCommand()` joins them).
+fn github_pull_request_fetch(
+    i: &ImportInput<'_>,
+    clone: String,
+    git_config: Option<&str>,
+) -> (Vec<Cmd>, String) {
+    let first = in_docker(i.dep, &clone);
+    if i.pull_request_id == 0 {
+        return (vec![hidden(first)], i.branch.to_owned());
+    }
+    let pr_branch = format!("pr-{}-coolify", i.pull_request_id);
+    let branch = format!("pull/{}/head:{pr_branch}", i.pull_request_id);
+    let dir = quote(&format!("/artifacts/{}", i.dep));
+    let checkout = git_checkout_command(&pr_branch, i.settings, None, git_config);
+    let second = in_docker(
+        i.dep,
+        &format!(
+            "cd {dir} && git fetch origin {} && {checkout}",
+            quote(&branch)
+        ),
+    );
+    (vec![hidden(format!("{first} && {second}"))], branch)
+}
+
+/// The pull request part of the deploy key and "other" types: an `echo` command and the clone
+/// command extended with the fetch and the checkout. `ssh_prefix` goes before `git fetch`.
+fn pull_request_clone(
+    i: &ImportInput<'_>,
+    clone: String,
+    ssh_prefix: &str,
+    ssh: &str,
+    commands: &mut Vec<Cmd>,
+) -> (String, String) {
+    if i.pull_request_id == 0 {
+        return (clone, i.branch.to_owned());
+    }
+    let dir = quote(&format!("/artifacts/{}", i.dep));
+    let pr_branch = format!("pr-{}-coolify", i.pull_request_id);
+    let echo = |branch: &str| hidden(in_docker(i.dep, &format!("echo 'Checking out {branch}'")));
+    let fetch = |branch: &str| {
+        format!(
+            "{clone} && cd {dir} && {ssh_prefix} git fetch origin {branch} && {}",
+            git_checkout_command(&pr_branch, i.settings, Some(ssh), None)
+        )
+    };
+    match i.git_type {
+        Some("gitlab") => {
+            let branch = format!("merge-requests/{}/head:{pr_branch}", i.pull_request_id);
+            commands.push(echo(&branch));
+            (fetch(&branch), branch)
+        }
+        Some("github" | "gitea") => {
+            let branch = format!("pull/{}/head:{pr_branch}", i.pull_request_id);
+            commands.push(echo(&branch));
+            (fetch(&branch), branch)
+        }
+        Some("bitbucket") => {
+            commands.push(echo(i.branch));
+            (
+                format!(
+                    "{clone} && cd {dir} && {ssh_prefix} {}",
+                    git_checkout_command(i.commit, i.settings, Some(ssh), None)
+                ),
+                i.branch.to_owned(),
+            )
+        }
+        _ => (clone, i.branch.to_owned()),
+    }
+}
+
+/// `Application::generateGitImportCommands($uuid, $pull_request_id, $git_type, true, false, null, $commit)`.
 pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImport, String> {
     use base64::Engine as _;
     let base_dir = format!("/artifacts/{}", i.dep);
@@ -316,9 +407,10 @@ pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImp
                 clone = set_git_import_settings(
                     &clone, i.settings, true, i.commit, None, None, &base_dir,
                 );
+                let (commands, branch) = github_pull_request_fetch(i, clone, None);
                 return Ok(GitImport {
-                    commands: vec![hidden(in_docker(i.dep, &clone))],
-                    branch: i.branch.to_owned(),
+                    commands,
+                    branch,
                     full_repo_url: full,
                 });
             }
@@ -348,9 +440,10 @@ pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImp
                 Some(&option),
                 &base_dir,
             );
+            let (commands, branch) = github_pull_request_fetch(i, clone, Some(&option));
             Ok(GitImport {
-                commands: vec![hidden(in_docker(i.dep, &clone))],
-                branch: i.branch.to_owned(),
+                commands,
+                branch,
                 full_repo_url: repo_url,
             })
         }
@@ -374,10 +467,12 @@ pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImp
                 &base_dir,
             );
             let mut commands = ssh_key_setup(i.dep, &key_b64);
+            let prefix = format!("GIT_SSH_COMMAND=\"{ssh}\"");
+            let (command, branch) = pull_request_clone(i, command, &prefix, &ssh, &mut commands);
             commands.push(hidden(in_docker(i.dep, &command)));
             Ok(GitImport {
                 commands,
-                branch: i.branch.to_owned(),
+                branch,
                 full_repo_url: i.repository.to_owned(),
             })
         }
@@ -385,9 +480,14 @@ pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImp
             clone = format!("{clone} {} {dir}", quote(i.repository));
             clone =
                 set_git_import_settings(&clone, i.settings, true, i.commit, None, None, &base_dir);
+            let ssh = git_ssh_command(i.port, Some("/root/.ssh/id_rsa"), false);
+            let prefix = format!("GIT_SSH_COMMAND=\"{ssh}\"");
+            let mut commands = Vec::new();
+            let (clone, branch) = pull_request_clone(i, clone, &prefix, &ssh, &mut commands);
+            commands.push(hidden(in_docker(i.dep, &clone)));
             Ok(GitImport {
-                commands: vec![hidden(in_docker(i.dep, &clone))],
-                branch: i.branch.to_owned(),
+                commands,
+                branch,
                 full_repo_url: i.repository.to_owned(),
             })
         }
@@ -824,6 +924,8 @@ mod tests {
             github_token: None,
             oauth_token: Some("t+k"),
             source_key: None,
+            pull_request_id: 0,
+            git_type: None,
         })
         .unwrap();
         assert_eq!(
@@ -860,6 +962,8 @@ mod tests {
             github_token: None,
             oauth_token: None,
             source_key: None,
+            pull_request_id: 0,
+            git_type: None,
         })
         .unwrap();
         assert_eq!(g.full_repo_url, "https://github.com/o/r");

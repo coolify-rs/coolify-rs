@@ -50,17 +50,24 @@ pub struct QueueOptions {
 
 /// `validateGitRef($commit, 'deployment commit')`.
 pub fn validate_commit(commit: &str) -> Result<String, String> {
+    validate_git_ref(commit, "deployment commit")
+}
+
+/// `validateGitRef($input, $context)`.
+pub fn validate_git_ref(commit: &str, context: &str) -> Result<String, String> {
     let c = commit.trim();
     if c.is_empty() || c == "HEAD" {
         return Ok(c.to_owned());
     }
     if c.starts_with('-') {
-        return Err("Invalid deployment commit: must not start with a hyphen.".into());
+        return Err(format!("Invalid {context}: must not start with a hyphen."));
     }
     let mut chars = c.chars();
     let first_ok = chars.next().is_some_and(|ch| ch.is_ascii_alphanumeric());
     if !first_ok || !chars.all(|ch| ch.is_ascii_alphanumeric() || "._-/".contains(ch)) {
-        return Err("Invalid deployment commit: contains disallowed characters. Only alphanumeric characters, dots, hyphens, underscores, and slashes are allowed.".into());
+        return Err(format!(
+            "Invalid {context}: contains disallowed characters. Only alphanumeric characters, dots, hyphens, underscores, and slashes are allowed."
+        ));
     }
     Ok(c.to_owned())
 }
@@ -161,7 +168,8 @@ impl Jobs {
             queue_id = apps::insert_deployment(db, &new, now)
                 .await
                 .map_err(|e| e.to_string())?;
-            started = o.no_questions_asked || self.next_queuable(server_id, a.id).await;
+            started = o.no_questions_asked
+                || self.next_queuable(server_id, a.id, o.pull_request_id).await;
             if started {
                 apps::update_deployment(
                     db,
@@ -184,15 +192,21 @@ impl Jobs {
         })
     }
 
-    /// `next_queuable()`: no build of the application in progress and a free build slot.
-    async fn next_queuable(&self, server_id: i64, application_id: i64) -> bool {
+    /// `next_queuable()`: no build of the application in progress for the same pull request (a
+    /// production deployment and a preview run side by side) and a free build slot.
+    async fn next_queuable(
+        &self,
+        server_id: i64,
+        application_id: i64,
+        pull_request_id: i64,
+    ) -> bool {
         let db = &self.0.db;
         let in_progress = apps::deployments_with_status(db, application_id, &["in_progress"])
             .await
             .unwrap_or_default();
         if in_progress
             .iter()
-            .any(|d| d.int("pull_request_id").unwrap_or(0) == 0)
+            .any(|d| d.int("pull_request_id").unwrap_or(0) == pull_request_id)
         {
             return false;
         }
@@ -209,6 +223,53 @@ impl Jobs {
             .await
             .unwrap_or(i64::MAX)
             < concurrent
+    }
+
+    /// `LoadComposeFile::dispatch($application)`.
+    pub fn spawn_load_compose_file(&self, application_id: i64) {
+        let jobs = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                crate::compose_parser::load_compose_file(&jobs, application_id, false).await
+            {
+                tracing::warn!(
+                    application_id,
+                    error = e.message(),
+                    "LoadComposeFile failed"
+                );
+            }
+        });
+    }
+
+    /// `force_start_deployment($deployment)`: starts a queued deployment right away, ignoring the
+    /// per-application and per-server limits. False when it is no longer queued, so a repeated
+    /// force start never runs the same deployment twice.
+    pub async fn force_start_deployment(&self, queue_id: i64) -> bool {
+        {
+            let _guard = QUEUE_LOCK.lock().await;
+            let Ok(Some(current)) = apps::deployment_by_id(&self.0.db, queue_id).await else {
+                return false;
+            };
+            if current.status != "queued" {
+                return false;
+            }
+            if apps::update_deployment(
+                &self.0.db,
+                queue_id,
+                &[(
+                    "status",
+                    coolify_db::servers::ColumnValue::Text(Some("in_progress".into())),
+                )],
+                Utc::now().naive_utc(),
+            )
+            .await
+            .is_err()
+            {
+                return false;
+            }
+        }
+        self.dispatch_deployment(queue_id);
+        true
     }
 
     /// `ApplicationDeploymentJob::dispatch(...)`: runs on the deployment workers.
@@ -256,7 +317,11 @@ impl Jobs {
                 continue;
             }
             let server_id = fresh.int("server_id").unwrap_or_default();
-            if !self.next_queuable(server_id, fresh.application_id).await {
+            let pull_request_id = fresh.int("pull_request_id").unwrap_or(0);
+            if !self
+                .next_queuable(server_id, fresh.application_id, pull_request_id)
+                .await
+            {
                 continue;
             }
             let _ = apps::update_deployment(

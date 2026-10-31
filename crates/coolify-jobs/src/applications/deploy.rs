@@ -5,8 +5,11 @@
 //! upstream's job; the git build packs are in `build.rs`.
 
 mod build;
+mod commands;
 mod compose_pack;
 mod git;
+mod preview;
+mod secrets;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,11 +25,13 @@ use coolify_remote::{RunOptions, Stream, Target};
 use serde_json::Value;
 
 use super::compose::{self, ENV_FILE};
+use super::docker_run;
 use super::labels::{self, LabelInput};
 use super::snapshot;
 use crate::Jobs;
 use crate::databases::env::{self, Owner, Var};
 use crate::server::ServerInfo;
+use crate::storages::{FileStorage, StorageOwner};
 
 /// `ExecuteRemoteCommand::$batch_counter`: one per `execute_remote_command` call, never reset.
 static BATCH: AtomicU64 = AtomicU64::new(0);
@@ -159,6 +164,18 @@ struct BuildState {
     compose_location: String,
     buildkit: bool,
     buildx: bool,
+    /// `$this->pull_request_id`.
+    pull_request_id: i64,
+    /// `$this->git_type`.
+    git_type: Option<String>,
+    /// `$this->dockerImagePreviewTag`.
+    preview_tag: Option<String>,
+    /// `$this->preview`.
+    preview: Option<coolify_db::records::Record>,
+    /// `$this->dockerSecretsSupported`.
+    secrets_supported: bool,
+    /// `$this->build_secrets`.
+    build_secrets: String,
     variables: Option<Vec<Var>>,
     env_args: build::Ordered,
     build_args: Vec<String>,
@@ -169,6 +186,17 @@ struct BuildState {
     compose_env: Option<compose::ComposeEnv>,
     compose_fingerprint: Option<String>,
     compose_build_env: Option<Vec<String>>,
+    /// `$this->docker_compose_custom_start_command`.
+    compose_start_command: Option<String>,
+    /// `$this->docker_compose_custom_build_command`.
+    compose_build_command: Option<String>,
+}
+
+impl BuildState {
+    /// `$this->pull_request_id !== 0`.
+    fn is_preview(&self) -> bool {
+        self.pull_request_id != 0
+    }
 }
 
 /// The state of one deployment.
@@ -296,34 +324,12 @@ impl Run {
 
     /// `EnvironmentVariable::logRedactionSecretsFor($application)`: values hidden in the log.
     async fn init_redaction(&mut self) {
-        let Some(enc) = self.jobs.0.encrypter.clone() else {
-            return;
-        };
-        let owner = Owner {
-            morph: apps::MORPH,
-            id: self.app.id,
-            team_id: self.app.team_id,
-            project_id: self.app.project.get("id").and_then(Value::as_i64),
-            environment_id: self.app.environment.get("id").and_then(Value::as_i64),
-        };
-        let Ok(variables) =
-            env::load_for(&self.jobs.0.db, &enc, &owner, Some(self.server.id)).await
-        else {
-            return;
-        };
-        let redact_all = self
-            .app
-            .settings
-            .get("redact_all_env_values_in_logs")
-            .and_then(Value::as_bool)
-            != Some(false);
-        for v in variables.iter().filter(|v| !v.is_preview) {
-            if v.is_shown_once {
-                self.locked.extend(log_redaction_values(v));
-            } else if redact_all {
-                self.known.extend(log_redaction_values(v));
-            }
-        }
+        let (known, locked) = self
+            .jobs
+            .log_redaction_secrets(&self.app, self.server.id, self.b.is_preview())
+            .await;
+        self.known.extend(known);
+        self.locked.extend(locked);
     }
 
     async fn info(&self, message: &str) {
@@ -394,7 +400,12 @@ impl Run {
             let queue_id = self.queue_id;
             let command_for_log =
                 (!cmd.skip_command_log && !cmd.command_hidden).then(|| self.redact(&cmd.command));
-            let raw_command = cmd.command.clone();
+            // `$message.' '.$command`: the command of the entry, which these two do not have.
+            let raw_command = if cmd.skip_command_log || cmd.command_hidden {
+                String::new()
+            } else {
+                cmd.command.clone()
+            };
             let hint_added = self.hint_added.clone();
             let known = self.known.clone();
             let locked = self.locked.clone();
@@ -606,9 +617,18 @@ impl Run {
             }
             seen.push(id);
             let labels = v.get("Labels").and_then(Value::as_str).unwrap_or_default();
-            if !labels.contains("coolify.pullRequestId=")
-                || labels.contains("coolify.pullRequestId=0")
-            {
+            let base = !labels.contains("coolify.pullRequestId=")
+                || labels.contains("coolify.pullRequestId=0,")
+                || labels.ends_with("coolify.pullRequestId=0");
+            let keep = if self.b.is_preview() {
+                !base
+                    && labels
+                        .split(',')
+                        .any(|l| l == format!("coolify.pullRequestId={}", self.b.pull_request_id))
+            } else {
+                base
+            };
+            if keep {
                 containers.push(v);
             }
         }
@@ -643,36 +663,6 @@ fn redact_base64_payloads(text: &str) -> String {
 
 impl Jobs {
     /// Runs the queued deployment `queue_id` (the `ApplicationDeploymentJob` queue worker).
-    /// Fails a queued preview deployment, which `ApplicationDeploymentJob` would build.
-    async fn refuse_preview_deployment(
-        &self,
-        app: &apps::ApplicationRow,
-        queue_id: i64,
-        deployment_uuid: &str,
-        pull_request_id: i64,
-    ) {
-        let db = &self.0.db;
-        let entry = apps::LogEntry {
-            command: None,
-            output: "Preview deployments are not supported by coolify-rs yet.".into(),
-            kind: "stderr",
-            timestamp: now().format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string(),
-            hidden: false,
-            batch: 1,
-        };
-        let _ = apps::append_log(db, queue_id, &[entry], now()).await;
-        let _ = apps::transition_status(db, queue_id, "failed", now()).await;
-        if let Ok(Some(preview)) = self.find_preview(app.id, pull_request_id).await {
-            self.update_pull_request(
-                app,
-                &preview,
-                super::previews::PullRequestStatus::Error,
-                Some(deployment_uuid),
-            )
-            .await;
-        }
-    }
-
     pub async fn run_application_deployment(&self, queue_id: i64) {
         let Ok(Some(q)) = apps::deployment_by_id(&self.0.db, queue_id).await else {
             return;
@@ -681,16 +671,10 @@ impl Jobs {
             return;
         };
         let server_id = q.int("server_id").unwrap_or_default();
+        let pull_request_id = q.int("pull_request_id").unwrap_or(0);
         let Ok(Some(server_row)) = servers::find_by_id(&self.0.db, server_id).await else {
             return;
         };
-        // A preview deployment needs the preview pipeline; never deploy the main branch for it.
-        let pull_request_id = q.int("pull_request_id").unwrap_or_default();
-        if pull_request_id != 0 {
-            self.refuse_preview_deployment(&app, queue_id, &q.uuid, pull_request_id)
-                .await;
-            return;
-        }
         let server = ServerInfo::from_row(&server_row);
         let server_name = server_row
             .record
@@ -732,13 +716,20 @@ impl Jobs {
             disable_build_cache,
             dockerfile_location: "/Dockerfile".into(),
             compose_location: "/docker-compose.yaml".into(),
+            pull_request_id,
+            git_type: q.str("git_type").map(str::to_owned),
+            preview_tag: q.str("docker_registry_image_tag").map(str::to_owned),
             ..Default::default()
         };
         let mut run = Run {
             jobs: self.clone(),
             queue_id,
             dep: q.uuid.clone(),
-            container: compose::container_name(&app, created),
+            container: if pull_request_id == 0 {
+                compose::container_name(&app, created)
+            } else {
+                compose::preview_container_name(&app, pull_request_id)
+            },
             commit: q.str("commit").unwrap_or("HEAD").to_owned(),
             workdir: format!("/artifacts/{}{base}", q.uuid),
             cfg: format!("/data/coolify/applications/{}", app.uuid),
@@ -756,6 +747,13 @@ impl Jobs {
             hint_added: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         run.init_redaction().await;
+        if pull_request_id != 0
+            && let Err(e) = run.load_preview().await
+        {
+            run.failed(&e).await;
+            run.finally().await;
+            return;
+        }
 
         // handle()
         if q.status == "cancelled-by-user" {
@@ -781,7 +779,7 @@ impl Jobs {
             run.failed(&Fail::new("Server is not functional.")).await;
             return;
         }
-        let result = run.deploy().await;
+        let result = Box::pin(run.deploy()).await;
         if let Err(e) = &result {
             run.failed(e).await;
         }
@@ -814,6 +812,83 @@ fn hostname() -> Option<String> {
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_owned())
+}
+
+impl Jobs {
+    /// `EnvironmentVariable::logRedactionSecretsFor($application, includePreview: ...)`:
+    /// the known and the locked values, without remote secrets (not ported).
+    pub(crate) async fn log_redaction_secrets(
+        &self,
+        app: &ApplicationRow,
+        server_id: i64,
+        include_preview: bool,
+    ) -> (Vec<String>, Vec<String>) {
+        let owner = Owner {
+            morph: apps::MORPH,
+            id: app.id,
+            team_id: app.team_id,
+            project_id: app.project.get("id").and_then(Value::as_i64),
+            environment_id: app.environment.get("id").and_then(Value::as_i64),
+        };
+        let redact_all = app
+            .settings
+            .get("redact_all_env_values_in_logs")
+            .and_then(Value::as_bool)
+            != Some(false);
+        self.owner_log_redaction_secrets(&owner, redact_all, server_id, include_preview)
+            .await
+    }
+
+    /// `logRedactionSecretsFor($service)`.
+    pub(crate) async fn service_log_redaction_secrets(
+        &self,
+        service_id: i64,
+        team_id: i64,
+        server_id: i64,
+    ) -> (Vec<String>, Vec<String>) {
+        let Ok(Some((environment_id, project_id, redact_all))) =
+            coolify_db::scheduled_tasks::service_log_context(&self.0.db, service_id).await
+        else {
+            return (Vec::new(), Vec::new());
+        };
+        let owner = Owner {
+            morph: "App\\Models\\Service",
+            id: service_id,
+            team_id,
+            project_id,
+            environment_id,
+        };
+        self.owner_log_redaction_secrets(&owner, redact_all, server_id, false)
+            .await
+    }
+
+    /// The loop of `logRedactionSecretsFor()`.
+    async fn owner_log_redaction_secrets(
+        &self,
+        owner: &Owner<'_>,
+        redact_all: bool,
+        server_id: i64,
+        include_preview: bool,
+    ) -> (Vec<String>, Vec<String>) {
+        let (mut known, mut locked) = (Vec::new(), Vec::new());
+        let Some(enc) = self.0.encrypter.clone() else {
+            return (known, locked);
+        };
+        let Ok(variables) = env::load_for(&self.0.db, &enc, owner, Some(server_id)).await else {
+            return (known, locked);
+        };
+        for v in variables
+            .iter()
+            .filter(|v| include_preview || !v.is_preview)
+        {
+            if v.is_shown_once {
+                locked.extend(log_redaction_values(v));
+            } else if redact_all {
+                known.extend(log_redaction_values(v));
+            }
+        }
+        (known, locked)
+    }
 }
 
 impl Run {
@@ -990,6 +1065,27 @@ impl Run {
                 .await;
             }
         }
+        if self.app.setting_bool("use_build_secrets") && self.b.buildkit {
+            let secrets = self
+                .instant(
+                    &["docker build --help 2>&1 | grep -q 'secret' && echo 'supported' || echo 'not-supported'"],
+                    true,
+                )
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            if secrets == "supported" {
+                self.b.secrets_supported = true;
+                self.info("Build secrets are enabled and will be used for enhanced security.")
+                    .await;
+            } else {
+                self.info(&format!(
+                    "Docker on {name} does not support build secrets. Using traditional build arguments."
+                ))
+                .await;
+            }
+        }
     }
 
     /// `deploy_dockerimage_buildpack()`.
@@ -999,12 +1095,19 @@ impl Run {
             .str("docker_registry_image_name")
             .unwrap_or_default()
             .to_owned();
-        let tag = self
-            .app
-            .str("docker_registry_image_tag")
-            .filter(|t| !t.is_empty())
-            .unwrap_or("latest")
-            .to_owned();
+        // resolveDockerImageTag(): a rollback runs the tag in `commit`.
+        let preview_tag = self.b.preview_tag.clone().filter(|t| !t.is_empty());
+        let tag = if let Some(tag) = preview_tag.filter(|_| self.b.is_preview()) {
+            tag
+        } else if self.b.rollback && !self.commit.trim().is_empty() {
+            self.commit.clone()
+        } else {
+            self.app
+                .str("docker_registry_image_tag")
+                .filter(|t| !t.is_empty())
+                .unwrap_or("latest")
+                .to_owned()
+        };
         let (display, image) = match tag.strip_prefix("sha256-") {
             Some(hash) => (
                 format!("{image_name}@sha256:{hash}"),
@@ -1037,6 +1140,11 @@ impl Run {
 
     /// `prepare_builder_image()`.
     async fn prepare_builder_image(&mut self) -> Step {
+        self.prepare_builder_image_again(true).await
+    }
+
+    /// `prepare_builder_image($firstTry)`.
+    async fn prepare_builder_image_again(&mut self, first_try: bool) -> Step {
         self.check_cancelled().await?;
         let settings = coolify_db::instance::deployment_settings(&self.jobs.0.db)
             .await
@@ -1065,26 +1173,82 @@ impl Run {
             )
             .await?
             .unwrap_or_default();
+        let env_flags = self.generate_docker_env_flags_for_secrets().await?;
         let buildx = format!("-v {home}/.docker/buildx:/root/.docker/buildx");
         let net = quote(self.app.network());
         let dep = &self.dep;
-        // `{env_flags}` and `{seccompMounts}` are empty for a Docker image deployment.
+        // seccompProfileMountFlags(): docker compose runs in this helper and reads the profiles.
+        let seccomp = if self.b.is_preview() {
+            String::new()
+        } else {
+            docker_run::seccomp_profile_mount_flags(self.app.str("custom_docker_run_options"))
+        };
         let run_command = if config == "OK" {
             format!(
-                "docker run -d --network {net} --name {dep}  --rm -v {home}/.docker/config.json:/root/.docker/config.json:ro {buildx} -v /var/run/docker.sock:/var/run/docker.sock  {helper}"
+                "docker run -d --network {net} --name {dep} {env_flags} --rm -v {home}/.docker/config.json:/root/.docker/config.json:ro {buildx} -v /var/run/docker.sock:/var/run/docker.sock {seccomp} {helper}"
             )
         } else {
             format!(
-                "docker run -d --network {net} --name {dep}  --rm {buildx} -v /var/run/docker.sock:/var/run/docker.sock  {helper}"
+                "docker run -d --network {net} --name {dep} {env_flags} --rm {buildx} -v /var/run/docker.sock:/var/run/docker.sock {seccomp} {helper}"
             )
         };
-        self.info(&format!("Preparing container with helper image: {helper}"))
-            .await;
+        if first_try {
+            self.info(&format!("Preparing container with helper image: {helper}"))
+                .await;
+        } else {
+            self.info("Preparing container with helper image with updated envs.")
+                .await;
+        }
         let dep = self.dep.clone();
         self.graceful_shutdown(&dep, true).await;
         let mkdir = in_docker(&dep, &format!("mkdir -p /artifacts/{dep}"));
-        self.exec(vec![Cmd::new(run_command).hidden(), Cmd::new(mkdir)])
-            .await
+        let mut run = Cmd::new(run_command).hidden();
+        if !env_flags.is_empty() {
+            run = run.skip_command_log();
+        }
+        self.exec(vec![run, Cmd::new(mkdir)]).await?;
+        self.run_pre_deployment_command().await
+    }
+
+    /// `generateLabelsApplication($this->application, $this->preview)`.
+    fn generated_labels(&self, server: &servers::ServerRow) -> Result<Vec<String>, Fail> {
+        let enc = self
+            .jobs
+            .0
+            .encrypter
+            .as_ref()
+            .ok_or_else(|| Fail::new("No application encryption key has been specified."))?;
+        let mut input = LabelInput::new(&self.app, server)
+            .with_basic_auth(&self.app, server, enc)
+            .map_err(Fail::new)?;
+        if self.b.is_preview() {
+            let overrides = self
+                .b
+                .preview
+                .as_ref()
+                .and_then(|p| p.get("domain_port_overrides"))
+                .and_then(|v| match v {
+                    Value::String(s) => serde_json::from_str::<Value>(s).ok(),
+                    other => Some(other.clone()),
+                })
+                .and_then(|v| v.as_object().cloned())
+                .map(|o| {
+                    o.iter()
+                        .filter_map(|(k, v)| {
+                            v.as_i64()
+                                .or_else(|| v.as_str()?.parse().ok())
+                                .map(|p| (k.clone(), p))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            input = input.for_preview(
+                self.b.pull_request_id,
+                self.deployed_fqdn().as_deref(),
+                overrides,
+            );
+        }
+        Ok(labels::application(&input))
     }
 
     /// `generate_compose_file()`.
@@ -1102,9 +1266,7 @@ impl Run {
             Some(text) => {
                 let text = match text {
                     Ok(t) => t,
-                    Err(()) => {
-                        labels::application(&LabelInput::new(&self.app, &server_row)).join("\n")
-                    }
+                    Err(()) => self.generated_labels(&server_row)?.join("\n"),
                 };
                 // parseContainerLabels() saves the base64 form; `coolify.` lines are dropped.
                 let kept: Vec<String> = text
@@ -1127,10 +1289,14 @@ impl Run {
                 kept
             }
             None if self.app.setting_bool("is_container_label_readonly_enabled") => {
-                labels::application(&LabelInput::new(&self.app, &server_row))
+                self.generated_labels(&server_row)?
             }
+            None if self.b.is_preview() => Vec::new(),
             None => return Err(Fail::new("Undefined variable $labels")),
         };
+        if self.b.is_preview() {
+            labels = self.generated_labels(&server_row)?;
+        }
         // traefikHostRulesWithoutIpv6Brackets
         labels = labels
             .into_iter()
@@ -1160,15 +1326,78 @@ impl Run {
                 .and_then(Value::as_str)
                 .unwrap_or_default(),
             &version,
+            self.b.pull_request_id,
         ));
         // Custom HEALTHCHECK of the repository's Dockerfile.
-        if self.app.str("build_pack") == Some("dockerfile") {
+        if self.app.str("build_pack") == Some("dockerfile")
+            || self.app.str("dockerfile").is_some_and(|d| !d.is_empty())
+        {
             self.read_dockerfile_healthcheck().await?;
         }
-        let volumes = apps::persistent_volumes(&db, self.app.id)
+        let mut volumes = apps::persistent_volumes(&db, self.app.id)
             .await
             .map_err(|e| Fail::new(e.to_string()))?;
+        if self.b.is_preview() {
+            // generate_local_persistent_volumes(): the preview suffix on the name or the host path.
+            let suffixes = apps::preview_suffix_volumes(&db, self.app.id)
+                .await
+                .map_err(|e| Fail::new(e.to_string()))?;
+            let pr = self.b.pull_request_id;
+            for (name, _, host) in &mut volumes {
+                let enabled = suffixes
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .is_none_or(|(_, on)| *on);
+                if enabled {
+                    *name = crate::compose_parser::volumes::add_preview_deployment_suffix(name, pr);
+                    if let Some(h) = host.as_mut().filter(|h| !h.is_empty()) {
+                        *h = crate::compose_parser::volumes::add_preview_deployment_suffix(h, pr);
+                    }
+                }
+            }
+        }
+        // `$persistent_file_volumes`: every file storage is mounted.
+        let file_volumes: Vec<String> = apps::file_volume_rows(&db, self.app.id)
+            .await
+            .map_err(|e| Fail::new(e.to_string()))?
+            .into_iter()
+            .map(|(_, fs_path, mount_path, _)| {
+                format!("{fs_path}:{}", mount_path.unwrap_or_default())
+            })
+            .collect();
         let network = self.app.network().to_owned();
+        let options = self.app.str("custom_docker_run_options").map(str::to_owned);
+        let mut custom = docker_run::convert_docker_run_to_compose(options.as_deref());
+        if self.app.setting_bool("is_gpu_enabled") {
+            let options = self.app.setting_str("gpu_options").map(str::to_owned);
+            if docker_run::parse_gpu_options(options.as_deref()).is_none() {
+                self.info(
+                    "GPU options are not a valid key=value list or YAML mapping. They are ignored.",
+                )
+                .await;
+            }
+            let forget = custom
+                .get_mut("deploy")
+                .and_then(|d| d.get_mut("resources"))
+                .and_then(|r| r.get_mut("reservations"));
+            if let Some(reservations) = forget {
+                reservations.remove("devices");
+                self.info("GPU access is enabled in the GPU settings, so --gpus in Custom Docker Options is ignored.")
+                    .await;
+            }
+        }
+        let unsupported = docker_run::unsupported_docker_run_options(options.as_deref());
+        if !unsupported.is_empty() {
+            self.log(
+                &format!(
+                    "Warning: These custom Docker options are not supported and were not applied: {}. See https://coolify.io/docs/applications/builds/custom-docker-options for the supported options.",
+                    unsupported.join(", ")
+                ),
+                "stderr",
+                false,
+            )
+            .await;
+        }
         let yaml = compose::compose(&compose::ComposeInput {
             a: &self.app,
             container_name: &self.container,
@@ -1176,6 +1405,8 @@ impl Run {
             network: &network,
             labels,
             volumes: &volumes,
+            file_volumes: &file_volumes,
+            custom,
         });
         self.generated_compose = Some(yaml);
         Ok(())
@@ -1196,9 +1427,14 @@ impl Run {
             project_id: self.app.project.get("id").and_then(Value::as_i64),
             environment_id: self.app.environment.get("id").and_then(Value::as_i64),
         };
-        let variables: Vec<Var> = env::load_for(&self.jobs.0.db, enc, &owner, Some(self.server.id))
-            .await
-            .map_err(Fail::new)?;
+        let mut variables: Vec<Var> =
+            env::load_for(&self.jobs.0.db, enc, &owner, Some(self.server.id))
+                .await
+                .map_err(Fail::new)?;
+        if self.b.is_preview() {
+            variables = self.deployed_variables().await?;
+        }
+        let deployed_fqdn = self.deployed_fqdn();
         let project = self
             .app
             .project
@@ -1223,6 +1459,7 @@ impl Run {
                 project_name: project.as_deref(),
                 environment_name: environment.as_deref(),
                 server_ip: Some(&ip),
+                preview: self.b.is_preview().then_some(deployed_fqdn.as_deref()),
             },
         );
         if let Some(w) = warning {
@@ -1284,7 +1521,8 @@ impl Run {
             let consistent = self
                 .app
                 .setting_bool("is_consistent_container_name_enabled");
-            if mapped || consistent || options.contains("--ip") {
+            let preview = self.b.is_preview();
+            if mapped || consistent || preview || options.contains("--ip") {
                 self.info(SEPARATOR).await;
                 if mapped {
                     self.info("Application has ports mapped to the host system, rolling update is not supported.").await;
@@ -1299,6 +1537,14 @@ impl Run {
                         .is_some_and(|n| !n.is_empty())
                 {
                     self.info("Custom internal name is set, rolling update is not supported.")
+                        .await;
+                }
+                if preview {
+                    self.app.settings.insert(
+                        "is_consistent_container_name_enabled".into(),
+                        Value::Bool(true),
+                    );
+                    self.info("Pull request deployment, rolling update is not supported.")
                         .await;
                 }
                 if options.contains("--ip") {
@@ -1334,8 +1580,26 @@ impl Run {
         }
     }
 
+    /// `write_missing_content_files()`.
+    pub(super) async fn write_missing_content_files(&mut self) -> Step {
+        if self.app.setting_bool("is_preserve_repository_enabled") {
+            return Ok(());
+        }
+        let (files, owner) = self.file_storages().await?;
+        let lines = self
+            .jobs
+            .ensure_content_files_on_server(&owner, &files, self.server.id)
+            .await
+            .map_err(Fail::new)?;
+        for (line, kind) in lines {
+            self.log(&line, kind, false).await;
+        }
+        Ok(())
+    }
+
     /// `start_by_compose_file()`.
     async fn start_by_compose_file(&mut self) -> Step {
+        self.write_missing_content_files().await?;
         let net = quote(self.app.network());
         let c = self.cfg.clone();
         let started = async {
@@ -1675,6 +1939,9 @@ impl Run {
         let jobs = self.jobs.clone();
         let server_id = self.server.id;
         tokio::spawn(async move { jobs.check_server_applications(server_id).await });
+        if let Err(Fail::Error { message, .. }) = self.run_post_deployment_command().await {
+            tracing::warn!("Post deployment command failed for {}: {message}", self.dep);
+        }
     }
 
     /// `completeDeployment()` → `transitionToStatus(FINISHED)`.
@@ -1698,21 +1965,35 @@ impl Run {
     async fn handle_successful_deployment(&mut self) {
         let db = self.jobs.0.db.clone();
         let n = now();
-        let _ = apps::update_if_changed(
-            &db,
-            self.app.id,
-            &[
-                ("restart_count", ColumnValue::Int(0)),
-                ("last_restart_at", ColumnValue::Text(None)),
-                ("last_restart_type", ColumnValue::Text(None)),
-                ("restart_limit_reached", ColumnValue::Bool(false)),
-            ],
-            n,
-        )
-        .await;
+        if self.b.is_preview() {
+            if let Some(id) = self
+                .b
+                .preview
+                .as_ref()
+                .and_then(|p| p.get("id"))
+                .and_then(Value::as_i64)
+            {
+                let _ = coolify_db::application_ops::reset_preview_restart_limit(&db, id, n).await;
+            }
+        } else {
+            let _ = apps::update_if_changed(
+                &db,
+                self.app.id,
+                &[
+                    ("restart_count", ColumnValue::Int(0)),
+                    ("last_restart_at", ColumnValue::Text(None)),
+                    ("last_restart_type", ColumnValue::Text(None)),
+                    ("restart_limit_reached", ColumnValue::Bool(false)),
+                ],
+                n,
+            )
+            .await;
+        }
         // markDeploymentConfigurationApplied($this->application_deployment_queue)
         if let Some(enc) = self.jobs.0.encrypter.as_ref()
-            && let Err(e) = snapshot::mark_applied(&db, enc, self.app.id, self.queue_id, 0).await
+            && let Err(e) =
+                snapshot::mark_applied(&db, enc, self.app.id, self.queue_id, self.b.pull_request_id)
+                    .await
         {
             tracing::warn!(
                 "Failed to mark configuration as applied for deployment {}: {e}",
@@ -1754,12 +2035,57 @@ impl Run {
         .await;
         self.log(&format!("Error code: {code}"), "stderr", true)
             .await;
+        self.log("========================================", "stderr", false)
+            .await;
+        if self.app.str("build_pack") != Some("dockercompose")
+            && code != 69420
+            && !self.b.is_preview()
+            && !self
+                .app
+                .setting_bool("is_consistent_container_name_enabled")
+        {
+            if self.healthy {
+                self.log(
+                    "Deployment failed after the new version became healthy. Keeping the new version of your application running.",
+                    "stderr",
+                    false,
+                )
+                .await;
+            } else {
+                self.log(
+                    "Deployment failed. Removing the new version of your application.",
+                    "stderr",
+                    false,
+                )
+                .await;
+                let name = self.container.clone();
+                self.remove_container(&name).await;
+            }
+        }
     }
 
-    /// `write_deployment_configurations()`: the generated compose file and README in the
-    /// configuration directory on the server.
-    async fn write_deployment_configurations(&mut self) {
+    /// `write_deployment_configurations()`: the repository when it is preserved, then the
+    /// generated compose file and README in the configuration directory on the server.
+    async fn write_deployment_configurations(&mut self) -> Step {
         let finished = now();
+        if self.app.setting_bool("is_preserve_repository_enabled") {
+            let (c, dep, w) = (self.cfg.clone(), self.dep.clone(), self.workdir.clone());
+            self.exec(vec![
+                Cmd::new(format!("mkdir -p {c}")),
+                Cmd::new(format!("docker cp {dep}:{w}/. {c}")),
+            ])
+            .await?;
+            let (files, owner) = self.file_storages().await?;
+            for file in files
+                .iter()
+                .filter(|f| !f.is_host_file && !f.is_based_on_git && !f.is_directory)
+            {
+                self.jobs
+                    .save_storage_on(&owner, file, self.server.id)
+                    .await
+                    .map_err(Fail::new)?;
+            }
+        }
         if let Some(yaml) = self.generated_compose.clone() {
             let name = sanitize_string(self.app.str("name").unwrap_or_default());
             let readme = format!(
@@ -1767,23 +2093,53 @@ impl Run {
                 finished.format("%Y-%m-%d %H:%M:%S")
             );
             let c = self.cfg.clone();
-            let written = self
-                .exec(vec![
-                    Cmd::new(format!("mkdir -p {c}")),
-                    Cmd::new(format!("rm -f {c}/docker-compose.yaml {c}/README.md")).hidden(),
-                    Cmd::new(format!("tee {c}/docker-compose.yaml > /dev/null")).input(yaml),
-                    Cmd::new(format!("echo '{readme}' | tee {c}/README.md > /dev/null")),
-                ])
-                .await;
-            if let Err(Fail::Error { message, .. }) = written {
-                self.log(
-                    &format!("Warning: Failed to write deployment configurations: {message}"),
-                    "stderr",
-                    false,
-                )
-                .await;
-            }
+            let file = if self.b.is_preview() {
+                let file = crate::compose_parser::volumes::add_preview_deployment_suffix(
+                    "docker-compose",
+                    self.b.pull_request_id,
+                );
+                self.b.compose_location = format!("/{file}.yaml");
+                format!("{file}.yaml")
+            } else {
+                "docker-compose.yaml".to_owned()
+            };
+            self.exec(vec![
+                Cmd::new(format!("mkdir -p {c}")),
+                Cmd::new(format!("rm -f {c}/{file} {c}/README.md")).hidden(),
+                Cmd::new(format!("tee {c}/{file} > /dev/null")).input(yaml),
+                Cmd::new(format!("echo '{readme}' | tee {c}/README.md > /dev/null")),
+            ])
+            .await?;
         }
+        Ok(())
+    }
+
+    /// `$this->application->fileStorages` and the owner the storage helpers take.
+    pub(super) async fn file_storages(&self) -> Result<(Vec<FileStorage>, StorageOwner), Fail> {
+        let db = self.jobs.0.db.clone();
+        let enc = self
+            .jobs
+            .0
+            .encrypter
+            .clone()
+            .ok_or_else(|| Fail::new("No application encryption key has been specified."))?;
+        let rows = coolify_db::storages::list(
+            &db,
+            coolify_db::storages::StorageKind::File,
+            apps::MORPH,
+            self.app.id,
+        )
+        .await
+        .map_err(|e| Fail::new(e.to_string()))?;
+        let files = rows
+            .iter()
+            .map(|r| FileStorage::from_record(r, &enc))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Fail::new)?;
+        let owner = StorageOwner::for_application(&db, &self.app)
+            .await
+            .map_err(|e| Fail::new(e.to_string()))?;
+        Ok((files, owner))
     }
 
     /// The `finally` block of `handle()`.
@@ -1797,7 +2153,15 @@ impl Run {
             finished,
         )
         .await;
-        self.write_deployment_configurations().await;
+        // Log but don't fail: configuration writing errors shouldn't prevent status updates.
+        if let Err(Fail::Error { message, .. }) = self.write_deployment_configurations().await {
+            self.log(
+                &format!("Warning: Failed to write deployment configurations: {message}"),
+                "stderr",
+                false,
+            )
+            .await;
+        }
         let dep = self.dep.clone();
         self.info(&format!("Gracefully shutting down build container: {dep}"))
             .await;

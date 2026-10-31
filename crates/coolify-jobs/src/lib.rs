@@ -15,10 +15,13 @@ pub mod gitea;
 pub mod github;
 pub mod gitlab;
 pub mod notifications;
+pub mod scheduled_task;
+pub mod scheduler;
 pub mod server;
 pub mod server_ops;
 pub mod server_transfer;
 pub mod services;
+pub mod storages;
 mod validate;
 
 use std::collections::{HashMap, HashSet};
@@ -60,6 +63,8 @@ struct Inner {
     db_ops: Mutex<HashSet<String>>,
     /// `config('constants.coolify.version')`, for the `coolify.version` label.
     version: std::sync::OnceLock<String>,
+    /// `WithoutOverlapping` locks of scheduled jobs: expiry and owner by key.
+    overlap_locks: Mutex<HashMap<String, (std::time::Instant, String)>>,
 }
 
 impl Jobs {
@@ -72,6 +77,7 @@ impl Jobs {
             progress: Mutex::new(HashMap::new()),
             db_ops: Mutex::new(HashSet::new()),
             version: std::sync::OnceLock::new(),
+            overlap_locks: Mutex::new(HashMap::new()),
         }))
     }
 

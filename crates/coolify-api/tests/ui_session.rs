@@ -67,14 +67,14 @@ async fn login_logout_and_bridge() {
         .assert(401, r#"{"message":"Unauthenticated."}"#);
     assert_eq!(
         h.request(
-            "POST",
-            "/ui/api/v1/applications/x/migrate",
+            "GET",
+            "/ui/api/v1/no-such-route",
             &[("cookie", &cookie)],
             None
         )
         .await
         .status,
-        501
+        404
     );
 
     // Logout ends the session.

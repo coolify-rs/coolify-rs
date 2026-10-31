@@ -27,6 +27,111 @@ pub struct LabelInput {
     /// `server.settings.generate_exact_labels` with the proxy type (`TRAEFIK` / `CADDY`).
     pub exact_labels: Option<String>,
     pub traffic_analytics: bool,
+    /// The `is_http_basic_auth_*` arguments, when enabled with a username and a password.
+    pub basic_auth: Option<BasicAuth>,
+    /// The preview branch of `generateLabelsApplication`: no retries and no redirect direction.
+    pub preview: bool,
+}
+
+/// HTTP basic auth of the label generators. Each generator hashes the password once.
+#[derive(Debug, Clone)]
+pub struct BasicAuth {
+    pub username: String,
+    /// Decrypted.
+    pub password: String,
+    /// `http_basic_auth_bcrypt_cost`.
+    pub bcrypt_cost: u32,
+    /// `(memory_cost, time_cost)` when `usesArgon2idBasicAuth()` (Caddy labels only).
+    pub argon2id: Option<(u32, u32)>,
+    /// `Server::caddySupportsBasicAuthDirective()`.
+    pub supports_directive: bool,
+}
+
+impl BasicAuth {
+    fn bcrypt(&self) -> String {
+        coolify_compat::password::hash_bcrypt(&self.password, self.bcrypt_cost).unwrap_or_default()
+    }
+
+    fn caddy_hash(&self) -> String {
+        match self.argon2id {
+            Some((memory, time)) => {
+                coolify_compat::password::hash_argon2id(&self.password, memory, time)
+                    .unwrap_or_default()
+            }
+            None => self.bcrypt(),
+        }
+    }
+}
+
+/// `Server::caddyDockerProxyImageVersion($server->configuredCaddyProxyImage())`.
+fn configured_caddy_version(server: &coolify_db::servers::ServerRow) -> Option<(u32, u32)> {
+    use serde_json::Value;
+    let proxy = server.record.get("proxy")?;
+    if proxy.get("type").and_then(Value::as_str) != Some("CADDY") {
+        return None;
+    }
+    let saved = proxy
+        .get("last_saved_proxy_configuration")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let parsed = coolify_compat::yaml_parse::parse(saved, 128).ok()?;
+    let services = php_get(&parsed, "services")?;
+    let caddy = php_get(services, "caddy")?;
+    let coolify_compat::yaml::PhpValue::Str(image) = php_get(caddy, "image")? else {
+        return None;
+    };
+    let re = regex::Regex::new(r"(?:^|/)caddy-docker-proxy:(\d+)\.(\d+)").ok()?;
+    let found = re.captures(image)?;
+    Some((found[1].parse().ok()?, found[2].parse().ok()?))
+}
+
+fn php_get<'a>(
+    value: &'a coolify_compat::yaml::PhpValue,
+    key: &str,
+) -> Option<&'a coolify_compat::yaml::PhpValue> {
+    let coolify_compat::yaml::PhpValue::Array(items) = value else {
+        return None;
+    };
+    items
+        .iter()
+        .find(|(k, _)| k.as_string() == key)
+        .map(|(_, v)| v)
+}
+
+/// `Server::hasPendingProxyConfiguration()`.
+fn has_pending_proxy_configuration(server: &coolify_db::servers::ServerRow) -> bool {
+    use serde_json::Value;
+    let Some(proxy) = server.record.get("proxy") else {
+        return false;
+    };
+    if proxy.get("status").and_then(Value::as_str) != Some("running") {
+        return false;
+    }
+    if proxy
+        .get("certificates_restart_required")
+        .is_some_and(|v| !matches!(v, Value::Null | Value::Bool(false)))
+    {
+        return true;
+    }
+    let filled = |k: &str| {
+        proxy
+            .get(k)
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+    };
+    matches!((filled("last_saved_settings"), filled("last_applied_settings")), (Some(a), Some(b)) if a != b)
+}
+
+/// `Server::caddySupportsBasicAuthDirective()` (`caddyRunsCurrentVersion()`).
+pub fn caddy_supports_basic_auth_directive(server: &coolify_db::servers::ServerRow) -> bool {
+    !has_pending_proxy_configuration(server)
+        && configured_caddy_version(server).is_some_and(|v| v >= (2, 9))
+}
+
+/// `Server::caddySupportsArgon2idBasicAuth()`.
+pub fn caddy_supports_argon2id(server: &coolify_db::servers::ServerRow) -> bool {
+    caddy_supports_basic_auth_directive(server)
+        && configured_caddy_version(server).is_some_and(|v| v >= (2, 11))
 }
 
 impl LabelInput {
@@ -119,7 +224,67 @@ impl LabelInput {
                 .get("is_traffic_analytics_enabled")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            basic_auth: None,
+            preview: false,
         }
+    }
+
+    /// The preview branch of `generateLabelsApplication($application, $preview)`: the preview's
+    /// domains, every one of them noindex.
+    #[must_use]
+    pub fn for_preview(
+        mut self,
+        pull_request_id: i64,
+        fqdn: Option<&str>,
+        port_overrides: BTreeMap<String, i64>,
+    ) -> Self {
+        self.uuid = format!("{}-pr-{pull_request_id}", self.uuid);
+        self.fqdn = fqdn.map(str::to_owned);
+        self.noindex_domains = fqdn
+            .unwrap_or_default()
+            .split(',')
+            .filter(|d| !d.is_empty())
+            .map(str::to_owned)
+            .collect();
+        self.port_overrides = port_overrides;
+        self.redirect = "both".to_owned();
+        self.preview = true;
+        self
+    }
+
+    /// `generateLabelsApplication`'s basic auth arguments. A password that cannot be decrypted
+    /// gives an error, as the `encrypted` cast throws.
+    pub fn with_basic_auth(
+        mut self,
+        a: &coolify_db::applications::ApplicationRow,
+        server: &coolify_db::servers::ServerRow,
+        enc: &coolify_compat::Encrypter,
+    ) -> Result<Self, String> {
+        let (Some(username), Some(cipher), true) = (
+            a.str("http_basic_auth_username"),
+            a.str("http_basic_auth_password"),
+            a.bool("is_http_basic_auth_enabled"),
+        ) else {
+            return Ok(self);
+        };
+        let password = enc.decrypt_string(cipher).map_err(|e| e.to_string())?;
+        let argon2id = (a.str("http_basic_auth_hash_algorithm") == Some("argon2id")
+            && caddy_supports_argon2id(server))
+        .then(|| {
+            (
+                a.int("http_basic_auth_argon2id_memory_cost")
+                    .unwrap_or(65536) as u32,
+                a.int("http_basic_auth_argon2id_time_cost").unwrap_or(4) as u32,
+            )
+        });
+        self.basic_auth = Some(BasicAuth {
+            username: username.to_owned(),
+            password,
+            bcrypt_cost: a.int("http_basic_auth_bcrypt_cost").unwrap_or(10) as u32,
+            argon2id,
+            supports_directive: caddy_supports_basic_auth_directive(server),
+        });
+        Ok(self)
     }
 }
 
@@ -152,11 +317,19 @@ fn sorted(mut labels: Vec<String>) -> Vec<String> {
     labels
 }
 
-/// `fqdnLabelsForTraefik` for an application (no service labels, no unique uuids, no ghost image,
-/// no basic auth), with `escape_redirect_replacement_for_compose` as given.
+/// `fqdnLabelsForTraefik` for an application (no service labels, no unique uuids, no ghost image),
+/// with `escape_redirect_replacement_for_compose` as given.
 pub fn traefik(input: &LabelInput, domains: &[String], escape_redirect: bool) -> Vec<String> {
     let u = &input.uuid;
     let mut labels: Vec<String> = vec!["traefik.enable=true".into()];
+    let basic_auth_label = format!("http-basic-auth-{u}");
+    if let Some(auth) = &input.basic_auth {
+        labels.push(format!(
+            "traefik.http.middlewares.{basic_auth_label}.basicauth.users={}:{}",
+            auth.username,
+            auth.bcrypt()
+        ));
+    }
     if input.gzip {
         labels.push(
             "traefik.http.middlewares.gzip-sse.compress.excludedcontenttypes=text/event-stream"
@@ -182,10 +355,13 @@ pub fn traefik(input: &LabelInput, domains: &[String], escape_redirect: bool) ->
         "false"
     };
     // is_retry_enabled
-    labels.push(format!(
-        "traefik.http.middlewares.retry-{u}.retry.attempts=5"
-    ));
-    let from_labels = [format!("retry-{u}")];
+    let mut from_labels: Vec<String> = Vec::new();
+    if !input.preview {
+        labels.push(format!(
+            "traefik.http.middlewares.retry-{u}.retry.attempts=5"
+        ));
+        from_labels.push(format!("retry-{u}"));
+    }
     for (i, domain) in domains.iter().enumerate() {
         let Some(url) = UrlParts::parse(domain) else {
             continue;
@@ -247,6 +423,9 @@ pub fn traefik(input: &LabelInput, domains: &[String], escape_redirect: bool) ->
             if input.redirect == "www" && !host.starts_with("www.") {
                 labels.extend(redirect_to_www.iter().cloned());
                 m.push(to_www.clone());
+            }
+            if input.basic_auth.is_some() {
+                m.push(basic_auth_label.clone());
             }
             if noindex {
                 m.push(noindex_name.clone());
@@ -346,10 +525,11 @@ fn caddy_site_address(scheme: &str, host: &str, force_https: bool) -> String {
     }
 }
 
-/// `fqdnLabelsForCaddy` for an application (no basic auth; `log_append` is not detected).
+/// `fqdnLabelsForCaddy` for an application (`log_append` is not detected).
 pub fn caddy(input: &LabelInput, domains: &[String]) -> Vec<String> {
     let mut labels: Vec<String> = vec![format!("caddy_ingress_network={}", input.network)];
     let app_key = input.uuid.clone();
+    let caddy_hash = input.basic_auth.as_ref().map(BasicAuth::caddy_hash);
     for (i, domain) in domains.iter().enumerate() {
         let Some(url) = UrlParts::parse(domain) else {
             continue;
@@ -384,9 +564,11 @@ pub fn caddy(input: &LabelInput, domains: &[String]) -> Vec<String> {
                 "caddy_{i}.{handle}.{i}_reverse_proxy={{{{upstreams}}}}"
             )),
         }
-        labels.push(format!(
-            "caddy_{i}.{handle}.{i}_reverse_proxy.lb_try_duration=5s"
-        ));
+        if !input.preview {
+            labels.push(format!(
+                "caddy_{i}.{handle}.{i}_reverse_proxy.lb_try_duration=5s"
+            ));
+        }
         labels.push(format!("caddy_{i}.{handle}={path}*"));
         if input.gzip {
             labels.push(format!("caddy_{i}.encode=zstd gzip"));
@@ -411,6 +593,20 @@ pub fn caddy(input: &LabelInput, domains: &[String]) -> Vec<String> {
                 "caddy_{i}.redir={redirect_scheme}://{host_without_www}{{uri}}{code}"
             ));
         }
+        if let (Some(auth), Some(hash)) = (&input.basic_auth, &caddy_hash) {
+            let directive = if auth.supports_directive {
+                "basic_auth"
+            } else {
+                "basicauth"
+            };
+            if auth.argon2id.is_some() {
+                labels.push(format!("caddy_{i}.{directive}=argon2id"));
+            }
+            labels.push(format!(
+                "caddy_{i}.{directive}.{}=\"{hash}\"",
+                auth.username
+            ));
+        }
         if input.traffic_analytics {
             labels.push(format!("caddy_{i}.log.output=file /traffic/access.log"));
             labels.push(format!("caddy_{i}.log.output.roll_size=20MiB"));
@@ -430,7 +626,7 @@ pub fn application(input: &LabelInput) -> Vec<String> {
     };
     let domains: Vec<String> = fqdn.split(',').map(str::to_owned).collect();
     match input.exact_labels.as_deref() {
-        Some("TRAEFIK") => traefik(input, &domains, true),
+        Some("TRAEFIK") => traefik(input, &domains, !input.preview),
         Some("CADDY") => caddy(input, &domains),
         Some(_) => Vec::new(),
         None => {
@@ -448,6 +644,7 @@ pub fn default_labels(
     name: &str,
     environment: &str,
     version: &str,
+    pull_request_id: i64,
 ) -> Vec<String> {
     vec![
         "coolify.managed=true".into(),
@@ -459,7 +656,7 @@ pub fn default_labels(
         format!("coolify.projectName={}", slug(project)),
         format!("coolify.serviceName={}", slug(name)),
         format!("coolify.environmentName={}", slug(environment)),
-        "coolify.pullRequestId=0".into(),
+        format!("coolify.pullRequestId={pull_request_id}"),
     ]
 }
 
@@ -483,6 +680,8 @@ mod tests {
             network: "coolify".into(),
             exact_labels: None,
             traffic_analytics: false,
+            basic_auth: None,
+            preview: false,
         }
     }
 

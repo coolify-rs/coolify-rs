@@ -12,7 +12,7 @@ use coolify_db::applications::{self as apps, ApplicationRow, NewApplication};
 use coolify_db::servers::{self, ColumnValue};
 use coolify_domain::naming::strip_tags;
 use coolify_jobs::applications::queue::{QueueOptions, Queued};
-use coolify_jobs::applications::{domains, labels, snapshot};
+use coolify_jobs::applications::{domains, snapshot};
 use serde_json::{Map, Value, json};
 
 use crate::auth::AuthCtx;
@@ -337,7 +337,8 @@ pub async fn state(
             .and_then(Value::as_str)
             .is_some_and(|t| t != "NONE")
     {
-        let generated = labels::application(&labels::LabelInput::new(&a, &server)).join("\n");
+        let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+        let generated = crate::routes::application_fields::generated_labels(&a, &server, enc)?;
         use base64::Engine as _;
         let stored = base64::engine::general_purpose::STANDARD.encode(generated);
         apps::update_if_changed(
@@ -465,10 +466,7 @@ async fn queue(
         a.str("build_pack"),
         Some("dockerimage" | "dockerfile" | "static" | "nixpacks" | "railpack" | "dockercompose")
     );
-    if !built
-        || a.str("dockerfile").is_some_and(|d| !d.is_empty())
-        || !apps::unported_parts(&state.db, a.id).await?.is_empty()
-    {
+    if !built || !apps::unported_parts(&state.db, a.id).await?.is_empty() {
         return Err(ApiError::NotPorted);
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
@@ -854,6 +852,30 @@ pub async fn cancel(
     Ok(ok(json!({"status": "cancelled-by-user"})).into_response())
 }
 
+/// `DeploymentNavbar::force_start`.
+pub async fn force_start(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path((uuid, dep)): Path<(String, String)>,
+) -> ApiResult {
+    let a = find(&state, &ctx, &uuid).await?;
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Unauthorized);
+    }
+    let d = apps::deployment_by_uuid(&state.db, &dep)
+        .await?
+        .filter(|d| d.application_id == a.id)
+        .ok_or(ApiError::Message(
+            StatusCode::NOT_FOUND,
+            "Deployment not found.",
+        ))?;
+    let started = match &state.jobs {
+        Some(jobs) => jobs.force_start_deployment(d.id).await,
+        None => false,
+    };
+    Ok(ok(json!({"started": started})).into_response())
+}
+
 /// `InternalAccess::loadCurrentInternalHostname`: the name of the running (else first) container.
 pub async fn internal_hostname(
     State(state): State<AppState>,
@@ -1198,7 +1220,8 @@ pub(crate) async fn regenerate_labels(
         return Ok(());
     };
     use base64::Engine as _;
-    let generated = labels::application(&labels::LabelInput::new(&a, &server)).join("\n");
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    let generated = crate::routes::application_fields::generated_labels(&a, &server, enc)?;
     let stored = base64::engine::general_purpose::STANDARD.encode(generated);
     apps::update_if_changed(
         &state.db,

@@ -10,6 +10,7 @@
 //! same (heap) order upstream returns, which differential tests compare byte
 //! for byte.
 
+pub mod application_ops;
 pub mod applications;
 pub mod audit;
 pub mod auth;
@@ -35,12 +36,17 @@ pub mod projects;
 pub mod records;
 pub mod resource_envs;
 pub mod resource_ops;
+pub mod scheduled_jobs;
+pub mod scheduled_tasks;
 pub mod schema;
+pub mod secret_managers;
 pub mod server_ops;
 pub mod servers;
 pub mod services;
 pub mod shared_variables;
+pub mod storages;
 pub mod tag_pages;
+pub mod tags;
 pub mod team_pages;
 pub mod teams;
 #[cfg(feature = "testing")]

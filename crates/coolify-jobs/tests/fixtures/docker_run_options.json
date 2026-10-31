@@ -1,0 +1,612 @@
+[
+    [
+        "",
+        "{}",
+        [],
+        ""
+    ],
+    [
+        "--init",
+        "init: true\n",
+        [],
+        ""
+    ],
+    [
+        "--init --privileged",
+        "init: true\nprivileged: true\n",
+        [],
+        ""
+    ],
+    [
+        "--privileged=false",
+        "privileged: false\n",
+        [],
+        ""
+    ],
+    [
+        "--init=FALSE --read-only=true",
+        "init: false\nread_only: true\n",
+        [],
+        ""
+    ],
+    [
+        "--read-only foo",
+        "read_only: true\n",
+        [],
+        ""
+    ],
+    [
+        "--cap-add=NET_ADMIN --cap-add SYS_TIME",
+        "cap_add:\n    - NET_ADMIN\n    - SYS_TIME\n",
+        [],
+        ""
+    ],
+    [
+        "--cap-add A --cap-add A --cap-add B --cap-add A --cap-add C",
+        "cap_add:\n    - A\n    - B\n    - C\n",
+        [],
+        ""
+    ],
+    [
+        "--cap-drop ALL",
+        "cap_drop:\n    - ALL\n",
+        [],
+        ""
+    ],
+    [
+        "--security-opt seccomp=/opt/p.json",
+        "security_opt:\n    - seccomp=/opt/p.json\n",
+        [],
+        "--mount 'type=bind,source=/opt/p.json,target=/opt/p.json,readonly'"
+    ],
+    [
+        "--security-opt seccomp:/opt/p.json --security-opt seccomp=/opt/p.json --security-opt apparmor=unconfined",
+        "security_opt:\n    - 'seccomp:/opt/p.json'\n    - seccomp=/opt/p.json\n    - apparmor=unconfined\n",
+        [],
+        "--mount 'type=bind,source=/opt/p.json,target=/opt/p.json,readonly'"
+    ],
+    [
+        "--security-opt seccomp=/a/../p.json",
+        "security_opt:\n    - seccomp=/a/../p.json\n",
+        [],
+        ""
+    ],
+    [
+        "--security-opt seccomp=unconfined",
+        "security_opt:\n    - seccomp=unconfined\n",
+        [],
+        ""
+    ],
+    [
+        "--security-opt=no-new-privileges",
+        "security_opt:\n    - no-new-privileges\n",
+        [],
+        ""
+    ],
+    [
+        "--sysctl net.ipv4.ip_forward=1 --sysctl kernel.shmmax=1",
+        "sysctls:\n    - net.ipv4.ip_forward=1\n    - kernel.shmmax=1\n",
+        [],
+        ""
+    ],
+    [
+        "--device /dev/fuse",
+        "devices:\n    - /dev/fuse\n",
+        [],
+        ""
+    ],
+    [
+        "--device=/dev/kvm:/dev/kvm:rwm",
+        "devices:\n    - '/dev/kvm:/dev/kvm:rwm'\n",
+        [],
+        ""
+    ],
+    [
+        "--ulimit nofile=1024:2048",
+        "ulimits:\n    nofile:\n        soft: '1024'\n        hard: '2048'\n",
+        [],
+        ""
+    ],
+    [
+        "--ulimit nofile=1024",
+        "ulimits:\n    nofile: '1024'\n",
+        [],
+        ""
+    ],
+    [
+        "--ulimit nofile=1:2 --ulimit nproc=3 --ulimit nofile=5",
+        "ulimits:\n    nofile: '5'\n    nproc: '3'\n",
+        [],
+        ""
+    ],
+    [
+        "--ulimit bad",
+        "{}",
+        [],
+        ""
+    ],
+    [
+        "--ulimit 1=2:3",
+        "ulimits:\n    1:\n        soft: '2'\n        hard: '3'\n",
+        [],
+        ""
+    ],
+    [
+        "--ulimit a=1:2:3",
+        "ulimits:\n    a: '1:2:3'\n",
+        [],
+        ""
+    ],
+    [
+        "--ip 10.0.0.5",
+        "ip:\n    - 10.0.0.5\n",
+        [],
+        ""
+    ],
+    [
+        "--ip6 fe80::1",
+        "ip6:\n    - 'fe80::1'\n",
+        [],
+        ""
+    ],
+    [
+        "--ip=10.0.0.5 --ip6=fe80::1",
+        "ip:\n    - 10.0.0.5\nip6:\n    - 'fe80::1'\n",
+        [],
+        ""
+    ],
+    [
+        "--shm-size 64m",
+        "shm_size: 64m\n",
+        [],
+        ""
+    ],
+    [
+        "--shm-size=0",
+        "{}",
+        [],
+        ""
+    ],
+    [
+        "--shm-size 1g --shm-size 2g",
+        "shm_size: 1g\n",
+        [],
+        ""
+    ],
+    [
+        "--dns 1.1.1.1 --dns=8.8.8.8",
+        "dns:\n    - 1.1.1.1\n    - 8.8.8.8\n",
+        [],
+        ""
+    ],
+    [
+        "--gpus all",
+        "deploy:\n    resources:\n        reservations:\n            devices:\n                -\n                    driver: nvidia\n                    capabilities:\n                        - gpu\n",
+        [],
+        ""
+    ],
+    [
+        "--gpus 2",
+        "deploy:\n    resources:\n        reservations:\n            devices:\n                -\n                    driver: nvidia\n                    capabilities:\n                        - gpu\n                    count: 2\n",
+        [],
+        ""
+    ],
+    [
+        "--gpus \"device=0,1\"",
+        "deploy:\n    resources:\n        reservations:\n            devices:\n                -\n                    driver: nvidia\n                    capabilities:\n                        - gpu\n                    device_ids:\n                        - '0'\n                        - '1'\n",
+        [],
+        ""
+    ],
+    [
+        "--gpus='\"device=0,GPU-a\"'",
+        "deploy:\n    resources:\n        reservations:\n            devices:\n                -\n                    driver: nvidia\n                    capabilities:\n                        - gpu\n                    device_ids:\n                        - '0'\n                        - GPU-a\n",
+        [],
+        ""
+    ],
+    [
+        "--gpus",
+        "deploy:\n    resources:\n        reservations:\n            devices:\n                -\n                    driver: nvidia\n                    capabilities:\n                        - gpu\n",
+        [],
+        ""
+    ],
+    [
+        "--hostname foo",
+        "hostname: foo\n",
+        [],
+        ""
+    ],
+    [
+        "--hostname \"a b\"",
+        "hostname: 'a b'\n",
+        [],
+        ""
+    ],
+    [
+        "--hostname=0",
+        "{}",
+        [],
+        ""
+    ],
+    [
+        "--entrypoint sh",
+        "entrypoint: sh\n",
+        [],
+        ""
+    ],
+    [
+        "--entrypoint=/bin/sh",
+        "entrypoint: /bin/sh\n",
+        [],
+        ""
+    ],
+    [
+        "--entrypoint \"python -c \\\"print('hi')\\\"\"",
+        "entrypoint: 'python -c \"print(''hi'')\"'\n",
+        [],
+        ""
+    ],
+    [
+        "--entrypoint 'a b'",
+        "entrypoint: 'a b'\n",
+        [],
+        ""
+    ],
+    [
+        "--entrypoint \"\" --init",
+        "init: true\n",
+        [],
+        ""
+    ],
+    [
+        "--entrypoint",
+        "{}",
+        [],
+        ""
+    ],
+    [
+        "--entrypoint a --entrypoint b",
+        "entrypoint: a\n",
+        [],
+        ""
+    ],
+    [
+        "--entrypoint=0",
+        "{}",
+        [],
+        ""
+    ],
+    [
+        "--entrypoint \"sleep -i -t 5\"",
+        "entrypoint: 'sleep -i -t 5'\n",
+        [],
+        ""
+    ],
+    [
+        "--pids-limit -1",
+        "pids_limit: -1\n",
+        [],
+        ""
+    ],
+    [
+        "--pids-limit 100",
+        "pids_limit: 100\n",
+        [],
+        ""
+    ],
+    [
+        "--pids-limit=abc",
+        "{}",
+        [],
+        ""
+    ],
+    [
+        "--pids-limit 1e3",
+        "pids_limit: 1000\n",
+        [],
+        ""
+    ],
+    [
+        "--pids-limit 1.9",
+        "pids_limit: 1\n",
+        [],
+        ""
+    ],
+    [
+        "--runtime nvidia",
+        "runtime: nvidia\n",
+        [],
+        ""
+    ],
+    [
+        "--tmpfs /run",
+        "tmpfs:\n    - /run\n",
+        [],
+        ""
+    ],
+    [
+        "--tmpfs /run:rw,size=64m --tmpfs /tmp",
+        "tmpfs:\n    - '/run:rw,size=64m'\n    - /tmp\n",
+        [],
+        ""
+    ],
+    [
+        "--add-host a:1.2.3.4 --add-host=b:5.6.7.8",
+        "extra_hosts:\n    - 'a:1.2.3.4'\n    - 'b:5.6.7.8'\n",
+        [],
+        ""
+    ],
+    [
+        "--add-host \"host.docker.internal:host-gateway\"",
+        "extra_hosts:\n    - 'host.docker.internal:host-gateway'\n",
+        [],
+        ""
+    ],
+    [
+        "-i",
+        "stdin_open: true\n",
+        [],
+        ""
+    ],
+    [
+        "-t",
+        "tty: true\n",
+        [],
+        ""
+    ],
+    [
+        "-it",
+        "stdin_open: true\ntty: true\n",
+        [],
+        ""
+    ],
+    [
+        "-ti",
+        "stdin_open: true\ntty: true\n",
+        [],
+        ""
+    ],
+    [
+        "-d",
+        "{}",
+        [],
+        ""
+    ],
+    [
+        "-dit",
+        "stdin_open: true\ntty: true\n",
+        [],
+        ""
+    ],
+    [
+        "--interactive",
+        "stdin_open: true\n",
+        [],
+        ""
+    ],
+    [
+        "--tty",
+        "tty: true\n",
+        [],
+        ""
+    ],
+    [
+        "--interactive --tty -x",
+        "stdin_open: true\ntty: true\n",
+        [
+            "-x"
+        ],
+        ""
+    ],
+    [
+        "--network host",
+        "{}",
+        [
+            "--network"
+        ],
+        ""
+    ],
+    [
+        "-e FOO=bar",
+        "{}",
+        [
+            "-e"
+        ],
+        ""
+    ],
+    [
+        "-e \"a b\" -p 80:80 --name=x",
+        "{}",
+        [
+            "-e",
+            "-p",
+            "--name"
+        ],
+        ""
+    ],
+    [
+        "--unknown-opt value --another",
+        "{}",
+        [
+            "--unknown-opt",
+            "--another"
+        ],
+        ""
+    ],
+    [
+        "---weird=1",
+        "{}",
+        [
+            "--weird"
+        ],
+        ""
+    ],
+    [
+        "-",
+        "{}",
+        [
+            "-"
+        ],
+        ""
+    ],
+    [
+        "--",
+        "{}",
+        [
+            "--"
+        ],
+        ""
+    ],
+    [
+        "-5",
+        "{}",
+        [],
+        ""
+    ],
+    [
+        "--foo \"--bar baz\"",
+        "{}",
+        [
+            "--foo"
+        ],
+        ""
+    ],
+    [
+        "--foo '--init'",
+        "{}",
+        [
+            "--foo"
+        ],
+        ""
+    ],
+    [
+        "--hostname -foo",
+        "{}",
+        [
+            "-foo"
+        ],
+        ""
+    ],
+    [
+        "--hostname --init",
+        "init: true\n",
+        [],
+        ""
+    ],
+    [
+        "--cap-add \"NET ADMIN\" --dns '1.1.1.1'",
+        "cap_add:\n    - 'NET ADMIN'\ndns:\n    - 1.1.1.1\n",
+        [],
+        ""
+    ],
+    [
+        "--cap-add a\"b",
+        "cap_add:\n    - 'a\"b'\n",
+        [],
+        ""
+    ],
+    [
+        "word --init word",
+        "init: true\n",
+        [],
+        ""
+    ],
+    [
+        "--init\n--privileged",
+        "init: true\nprivileged: true\n",
+        [],
+        ""
+    ],
+    [
+        "--cap-add\tX",
+        "cap_add:\n    - X\n",
+        [],
+        ""
+    ],
+    [
+        "--label a=b --label c=d",
+        "{}",
+        [
+            "--label"
+        ],
+        ""
+    ],
+    [
+        "--dns=",
+        "{}",
+        [],
+        ""
+    ],
+    [
+        "--dns \"\" --dns ''",
+        "{}",
+        [],
+        ""
+    ],
+    [
+        "--dns \" \"",
+        "{}",
+        [],
+        ""
+    ],
+    [
+        "--hostname é --cap-add ñ",
+        "hostname: é\ncap_add:\n    - ñ\n",
+        [],
+        ""
+    ],
+    [
+        "--ip",
+        "{}",
+        [],
+        ""
+    ],
+    [
+        "--ulimit",
+        "{}",
+        [],
+        ""
+    ],
+    [
+        "--cap-add",
+        "{}",
+        [],
+        ""
+    ],
+    [
+        "--memory=1g --cpus 2",
+        "{}",
+        [
+            "--memory",
+            "--cpus"
+        ],
+        ""
+    ],
+    [
+        "--foo\\ bar",
+        "{}",
+        [
+            "--foo\\"
+        ],
+        ""
+    ],
+    [
+        "\"--init\"",
+        "init: true\n",
+        [],
+        ""
+    ],
+    [
+        "--shm-size \"1\\$g\"",
+        "shm_size: 1$g\n",
+        [],
+        ""
+    ],
+    [
+        "--mount type=bind,source=/a,target=/b",
+        "{}",
+        [
+            "--mount"
+        ],
+        ""
+    ]
+]

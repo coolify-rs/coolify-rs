@@ -245,8 +245,17 @@ async fn shutdown_signal() {
     tracing::info!("shutdown signal received, draining connections");
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // The deployment job is a deep chain of large futures; an unoptimized build overflows the
+    // default 2 MiB worker stack while polling it.
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(16 * 1024 * 1024)
+        .build()?
+        .block_on(run())
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::from_env()?;
     init_tracing(cfg.json_logs);
@@ -346,6 +355,15 @@ async fn main() -> Result<()> {
                 // Several dev instances on one host must not fail each other's deployments.
                 if env("COOLIFY_RS_SKIP_STARTUP_CLEANUP").is_none() {
                     jobs.fail_interrupted_deployments().await;
+                    jobs.fail_interrupted_scheduled_tasks().await;
+                }
+                // `ScheduledJobManager`. Off in dev: the reference shares the database.
+                let scheduler_setting = env("COOLIFY_RS_SCHEDULER");
+                if coolify_jobs::scheduler::enabled_by_setting(scheduler_setting.as_deref()) {
+                    coolify_jobs::scheduler::Scheduler::with_default_sources(jobs.clone()).spawn();
+                    tracing::info!("scheduler started");
+                } else {
+                    tracing::info!("scheduler is off (COOLIFY_RS_SCHEDULER)");
                 }
             }
             let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
