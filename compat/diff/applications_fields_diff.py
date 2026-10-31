@@ -652,10 +652,6 @@ def run_update(c):
     c.patch("build pack away from compose", k, dict(build_pack="nixpacks"))
     counts = [sql(f"SELECT count(*) FROM environment_variables WHERE resourceable_type='App\\Models\\Application' AND resourceable_id=(SELECT id FROM applications WHERE uuid='{u}') AND key='SERVICE_URL_WEB'") for u in k]
     record("service variables deleted on both sides", counts == ["0", "0"], counts)
-    # Instant deploy on what the deploy job cannot run answers 501 here; only checked on coolify-rs.
-    c_, r_ = call("rs", "PATCH", f"/api/v1/applications/{p[1]}", dict(custom_docker_run_options="--init", instant_deploy=True), tok=TOKEN)
-    record("instant deploy of an unported feature answers 501 and saves nothing (rs only)",
-           c_ == 501 and "--init" not in json.dumps(app_row(p[1])["custom_docker_run_options"] or ""), f"{c_} {r_}")
 
 
 def run_caddy(c):

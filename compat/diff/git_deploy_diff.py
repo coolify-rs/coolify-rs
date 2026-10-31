@@ -420,6 +420,11 @@ def main():
         for u in created:
             call("ref", "DELETE", f"/api/v1/applications/{u}?delete_volumes=true", tok="acme_owner_root")
         time.sleep(5)
+        # DeleteResourceJob reads the project: without it the job skips deleteConfigurations() and the directory stays.
+        for _ in range(180):
+            if not created or sql("SELECT count(*) FROM applications WHERE uuid IN ({})".format(", ".join(f"'{u}'" for u in created))) == "0":
+                break
+            time.sleep(5)
         call("ref", "DELETE", f"/api/v1/projects/{project}", tok="acme_owner_root")
         vm(f"rm -f {seccomp}")
         if key_uuid:
