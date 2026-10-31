@@ -299,7 +299,7 @@ pub async fn create_docker_image(
     Ok(created(json!({"uuid": uuid})).into_response())
 }
 
-fn random_str(n: usize) -> String {
+pub(crate) fn random_str(n: usize) -> String {
     use rand::Rng as _;
     const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let mut rng = rand::thread_rng();
@@ -1312,7 +1312,7 @@ pub async fn delete(
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
-    if a.destination.is_none() || !apps::unported_parts(&state.db, a.id).await?.is_empty() {
+    if a.destination.is_none() {
         return Err(ApiError::NotPorted);
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;

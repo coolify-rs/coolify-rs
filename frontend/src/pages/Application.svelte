@@ -23,6 +23,7 @@
   import Metrics from '../components/shared/Metrics.svelte';
   import Tags from '../components/shared/Tags.svelte';
   import Webhooks from '../components/shared/Webhooks.svelte';
+  import ResourceOperations from '../components/shared/ResourceOperations.svelte';
   import Unported from './Unported.svelte';
   import { appUi, dbUi, uiApi, ApiError, type ApplicationRecord, type ApplicationState, type DeploymentDetail } from '../lib/api';
   import { applicationNavContext, applicationSection } from '../lib/applicationMenu';
@@ -199,6 +200,8 @@
               <HealthChecks kind="application" uuid={app} onchange={() => refresh().catch(() => {})} />
             {:else if active === 'resource-limits'}
               <ResourceLimits kind="application" uuid={app} />
+            {:else if active === 'resource-operations'}
+              <ResourceOperations kind="application" uuid={app} />
             {:else if active === 'tags'}
               <Tags kind="application" uuid={app} />
             {:else if active === 'deployment'}

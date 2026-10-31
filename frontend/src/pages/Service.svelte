@@ -14,6 +14,8 @@
   import ServiceHeading from '../components/ServiceHeading.svelte';
   import ServiceResourceCard from '../components/ServiceResourceCard.svelte';
   import ServiceSharedPlaceholder from '../components/ServiceSharedPlaceholder.svelte';
+  import ResourceOperations from '../components/shared/ResourceOperations.svelte';
+  import DatabaseDanger from '../components/DatabaseDanger.svelte';
   import ServiceStackForm from '../components/ServiceStackForm.svelte';
   import ServiceStorage from '../components/ServiceStorage.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
@@ -185,11 +187,11 @@
           {:else if section === 'webhooks'}
             <Webhooks kind="service" uuid={service} />
           {:else if section === 'resource-operations'}
-            <ServiceSharedPlaceholder section="Project/Shared/ResourceOperations" />
+            <ResourceOperations kind="service" uuid={service} />
           {:else if section === 'tags'}
             <Tags kind="service" uuid={service} />
           {:else if section === 'danger'}
-            <ServiceSharedPlaceholder section="Project/Shared/Danger" />
+            <DatabaseDanger kind="service" record={{ uuid: service, name: data.service.name }} canDelete={data.can_update} back="/project/{uuid}/environment/{env}" />
           {:else if section === 'logs'}
             <div class="runtime-logs-column min-w-0"><RuntimeLogs kind="service" uuid={service} /></div>
           {:else if section === 'terminal'}

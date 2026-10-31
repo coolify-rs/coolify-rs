@@ -18,6 +18,7 @@
   import ProjectEdit from './pages/ProjectEdit.svelte';
   import Environment from './pages/Environment.svelte';
   import EnvironmentEdit from './pages/EnvironmentEdit.svelte';
+  import CloneMe from './pages/CloneMe.svelte';
   import Keys from './pages/Keys.svelte';
   import Key from './pages/Key.svelte';
   import Team from './pages/Team.svelte';
@@ -224,6 +225,8 @@
       {#key router.path}<Environment uuid={params.uuid} env={params['env']} />{/key}
     {:else if router.current.name === 'environment-edit'}
       {#key router.path}<EnvironmentEdit uuid={params.uuid} env={params['env']} />{/key}
+    {:else if router.current.name === 'environment-clone'}
+      {#key router.path}<CloneMe uuid={params.uuid} env={params['env']} />{/key}
     {:else if router.current.name === 'resource-new'}
       {#key router.path + router.search}<ResourceNew uuid={params.uuid} env={params['env']} />{/key}
     {:else if router.current.name === 'database' || router.current.name === 'database-section' || router.current.name === 'database-backup'}

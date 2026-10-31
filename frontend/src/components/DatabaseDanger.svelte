@@ -1,11 +1,11 @@
 <script lang="ts">
   // Port of upstream livewire/project/shared/danger.blade.php (+ Shared\Danger)
-  // for a standalone database or an application.
+  // for a standalone database, an application or a service.
   import Callout from './Callout.svelte';
   import DangerZone from './DangerZone.svelte';
   import ConfirmModal from './ConfirmModal.svelte';
   import SettingsSection from './SettingsSection.svelte';
-  import { dbUi, appUi, ApiError } from '../lib/api';
+  import { dbUi, appUi, ApiError, request } from '../lib/api';
   import { router } from '../lib/router.svelte';
 
   let {
@@ -17,11 +17,13 @@
     record: { uuid: string; name: string | null; server_status?: unknown };
     canDelete: boolean;
     back: string;
-    kind?: 'database' | 'application';
+    kind?: 'database' | 'application' | 'service';
   } = $props();
 
   let deleting = $state(false);
-  const resourceName = $derived(record.name ?? (kind === 'application' ? 'Application' : 'Database'));
+  const resourceName = $derived(record.name ?? (kind === 'application' ? 'Application' : kind === 'service' ? 'Service' : 'Database'));
+  // `$resourceLabel` of the view.
+  const resourceLabel = $derived(kind === 'application' ? 'application' : kind === 'service' ? 'service' : 'resource');
   const functional = $derived(record.server_status !== false);
 
   // Livewire `Shared\Danger`: every option starts selected. Connected networks only
@@ -42,6 +44,8 @@
         docker_cleanup: selected.includes('docker_cleanup'),
       };
       if (kind === 'application') await appUi.remove(record.uuid, { ...body, delete_connected_networks: selected.includes('delete_connected_networks') });
+      else if (kind === 'service')
+        await request('POST', `/ui/resources/service/${encodeURIComponent(record.uuid)}/delete`, { ...body, delete_connected_networks: selected.includes('delete_connected_networks') });
       else await dbUi.remove(record.uuid, body);
       router.go(back);
     } catch (e) {
@@ -54,12 +58,12 @@
 <div>
   {#if !functional}
     <Callout type="warning" title="Server is not reachable" class="mb-4">
-      Coolify cannot stop or remove Docker resources on this server. Deleting removes this resource from Coolify only. Its containers, volumes, networks, and
+      Coolify cannot stop or remove Docker resources on this server. Deleting removes this {resourceLabel} from Coolify only. Its containers, volumes, networks, and
       configuration files remain on the server and can start again when the server is back.
     </Callout>
   {/if}
-  <SettingsSection title="Danger zone" description="Destructive resource actions cannot be undone.">
-    <DangerZone title="Delete resource">
+  <SettingsSection id="danger-zone-section" title="Danger zone" description="Destructive resource actions cannot be undone.">
+    <DangerZone title="Delete {resourceLabel}">
       <p>
         Permanently delete
         <strong class="font-semibold text-black dark:text-fg">{resourceName}</strong>, stop its containers, and remove the selected Docker resources and
@@ -68,15 +72,15 @@
       <ul class="space-y-1 text-xs">
         <li>• Active deployments will be stopped.</li>
         <li>• Selected volumes and stored data may be permanently removed.</li>
-        <li>• This resource cannot be restored from Coolify after deletion.</li>
+        <li>• This {resourceLabel} cannot be restored from Coolify after deletion.</li>
       </ul>
       {#snippet action()}
         {#if canDelete}
           <div class="relative h-auto max-w-full inline-flex w-auto">
-            <button class="button button-error" type="button" onclick={() => (deleting = true)}>Delete resource</button>
+            <button class="button button-error" type="button" onclick={() => (deleting = true)}>Delete {resourceLabel}</button>
           </div>
         {:else}
-          <button class="button button-error" type="button" disabled title="You do not have permission to delete this resource.">Delete resource</button>
+          <button class="button button-error" type="button" disabled title="You do not have permission to delete this resource.">Delete {resourceLabel}</button>
         {/if}
       {/snippet}
     </DangerZone>
@@ -91,7 +95,7 @@
 
 {#if deleting}
   <ConfirmModal
-    title="Delete resource?"
+    title="Delete {resourceLabel}?"
     actions={['Permanently delete this resource and its selected Docker resources.']}
     {checkboxes}
     confirmWithText

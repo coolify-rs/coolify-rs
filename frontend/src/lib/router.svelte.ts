@@ -34,6 +34,7 @@ const routes: { name: string; pattern: string }[] = [
   { name: 'project-edit', pattern: '/project/:uuid/edit' },
   { name: 'environment', pattern: '/project/:uuid/environment/:env' },
   { name: 'environment-edit', pattern: '/project/:uuid/environment/:env/edit' },
+  { name: 'environment-clone', pattern: '/project/:uuid/environment/:env/clone' },
   { name: 'resource-new', pattern: '/project/:uuid/environment/:env/new' },
   { name: 'application', pattern: '/project/:uuid/environment/:env/application/:app' },
   { name: 'application-deployment', pattern: '/project/:uuid/environment/:env/application/:app/deployment/:dep' },
