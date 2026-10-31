@@ -253,12 +253,29 @@ def main():
     key_uuid = None
     run_id = f"{os.getpid()}-{int(time.time())}"
     seccomp = f"/tmp/git-deploy-diff-{run_id}.json"
+
+    def release(uuids):
+        """Deletes a finished case's applications and their networks: a whole run would use up Docker's address pools."""
+        for u in uuids:
+            call("ref", "DELETE", f"/api/v1/applications/{u}?delete_volumes=true", tok="acme_owner_root")
+        time.sleep(5)
+        # DeleteResourceJob reads the project: without it the job skips deleteConfigurations() and the directory stays.
+        for _ in range(180):
+            if not uuids or sql("SELECT count(*) FROM applications WHERE uuid IN ({})".format(", ".join(f"'{u}'" for u in uuids))) == "0":
+                break
+            time.sleep(5)
+        for u in uuids:
+            for n in vm(f"docker network ls --format '{{{{.Name}}}}' --filter name=^{u}").split():
+                vm(f"docker network disconnect {n} coolify-proxy; docker network rm {n}")
+        uuids.clear()
+
     try:
         if "deploykey" in a.case.split(","):
             c, r = call("ref", "POST", "/api/v1/security/keys",
                         {"name": "git-deploy-diff", "private_key": open(a.deploy_key).read()}, tok="acme_owner_root")
             key_uuid = json.loads(r)["uuid"]
         for case in a.case.split(","):
+            release(created)
             template = CASES[case]
             # A pull request whose tree has the Compose files of the repository's main branch.
             preview_pr = 75 if case.startswith("preview-compose") else PREVIEW_PR
@@ -562,14 +579,7 @@ def main():
             record(f"[{case}] application health and status columns alike",
                    all(ar[k] == as_[k] for k in keys if k != "config_hash"), {k: (ar[k], as_[k]) for k in keys if k != "config_hash" and ar[k] != as_[k]})
     finally:
-        for u in created:
-            call("ref", "DELETE", f"/api/v1/applications/{u}?delete_volumes=true", tok="acme_owner_root")
-        time.sleep(5)
-        # DeleteResourceJob reads the project: without it the job skips deleteConfigurations() and the directory stays.
-        for _ in range(180):
-            if not created or sql("SELECT count(*) FROM applications WHERE uuid IN ({})".format(", ".join(f"'{u}'" for u in created))) == "0":
-                break
-            time.sleep(5)
+        release(created)
         call("ref", "DELETE", f"/api/v1/projects/{project}", tok="acme_owner_root")
         vm(f"rm -f {seccomp}")
         if key_uuid:

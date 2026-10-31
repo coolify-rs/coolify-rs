@@ -296,28 +296,32 @@ def preview_cases():
     both("previews patch: taken by this application's other preview", "PATCH", P + "/5", {"domains": "https://<shared_dom>"})
     both("previews patch: clear", "PATCH", P + "/6", {"domains": None})
     same_rows("previews: cleared row", PREVIEW_ROWS, *PREVIEW_DROP)
-    # A real queued deployment: the same row, in_progress on both sides at first. The job differs.
+    # A real queued deployment: the same row, in_progress on both sides at first.
     out = both("previews store: queue a deployment", "POST", P, {"pull_request_id": 7, "docker_tag": "1.27-alpine", "force": True})
     for side in SIDES:
         ctx[side]["dep"] = out[side].get("deployment_uuid")
     queue_rows("previews: queue row", "application_id='<pv_id>' AND pull_request_id=7")
     same_rows("previews: row of the queued preview", PREVIEW_ROWS, *PREVIEW_DROP)
-    rs_status = wait_deployment(ctx["rs"]["dep"])
-    record("previews: the rs job refuses the row instead of deploying production", rs_status == "failed",
-           f"status {rs_status}")
-    log = sql(f"SELECT logs FROM application_deployment_queues WHERE deployment_uuid='{ctx['rs']['dep']}'")
-    record("previews: the rs row says why", "not ported" in log, log[:300])
-    record("previews: rs started no container for the preview", vm(f"docker ps -a --filter label=coolify.applicationUuid={ctx['rs']['pv']} --format '{{{{.Names}}}}'") == "", "")
-    # The reference's job really runs; wait for it so that deletion does not race the worker.
-    wait_deployment(ctx["ref"]["dep"])
-    print("  reference preview deployment:", deployment_status(ctx["ref"]["dep"]))
+    statuses = {side: wait_deployment(ctx[side]["dep"]) for side in SIDES}
+    record("previews: both jobs deploy the preview", statuses["ref"] == statuses["rs"] == "finished", statuses)
+    names = {side: vm(f"docker ps --filter label=coolify.applicationUuid={ctx[side]['pv']} --filter label=coolify.pullRequestId=7 --format '{{{{.Names}}}}'").replace(ctx[side]["pv"], "U") for side in SIDES}
+    record("previews: both run the preview container", names["ref"] == names["rs"] == "U-pr-7", names)
+    # POST /deploy with a pull request.
+    both("deploy pr: no preview", "POST", "/deploy?uuid=<pv>&pr=999", {})
+    both("deploy pr: tag and pr", "POST", "/deploy?tag=x&pr=7", {})
+    both("deploy pr: docker_tag without pr", "POST", "/deploy?uuid=<pv>&docker_tag=1", {})
+    both("deploy pr: too big", "POST", "/deploy?uuid=<pv>&pr=2147483648", {})
+    out = both("deploy pr: a tag creates the preview", "POST", "/deploy?uuid=<pv>&pr=11&docker_tag=1.27-alpine", {})
+    same_rows("deploy pr: the created preview", PREVIEW_ROWS, *PREVIEW_DROP)
+    for side in SIDES:
+        wait_deployment(out[side]["deployments"][0]["deployment_uuid"])
+    queue_rows("deploy pr: queue row", "application_id='<pv_id>' AND pull_request_id=11")
     # Preview logs: the container the reference ran, through both implementations.
     pr_logs = fill("ref", "/api/v1/applications/<pv>/previews/7/logs")
     a, b = call("ref", "GET", pr_logs, None, ROOT_TOK), call("rs", "GET", pr_logs, None, ROOT_TOK)
     record("previews: logs of the running preview", a == b, f"ref {a}\n  rs  {b}")
     both("previews: logs not found", "GET", P + "/9/logs")
-    # The same deployment while one is running is skipped. The rs job fails the row at once, so a
-    # running row is written by hand for both sides.
+    # The same deployment while one is running is skipped: a running row is written by hand for both sides.
     both("previews store: for the skip check", "POST", P, {"pull_request_id": 9, "docker_tag": "1.27-alpine", "instant_deploy": False})
     for side in SIDES:
         uuid = f"opsdiff-{RUN}-{side}-running"
@@ -399,8 +403,8 @@ def compose_preview_cases():
     same_rows("previews compose: row", rows, *PREVIEW_DROP)
     same_rows("previews compose: volumes after create", "SELECT name, mount_path, host_path, is_preview_suffix_enabled FROM local_persistent_volumes "
               "WHERE resource_type='App\\Models\\Application' AND resource_id=<cp_id> ORDER BY name")
-    # Known gap, not compared: upstream's parse with the pull request id leaves the rendered preview
-    # file in `docker_compose`. That branch of the parser is not ported (KNOWN_LIMITATIONS.md).
+    # Not compared: the preview routes read the names from the raw file (KNOWN_LIMITATIONS.md), so
+    # `docker_compose` holds the rendered preview file only after a deployment here.
     same_rows("previews compose: application row after create", "SELECT * FROM applications WHERE id=<cp_id>", "id", "uuid", "created_at", "updated_at", "last_online_at", "docker_compose",
               "manual_webhook_secret_github", "manual_webhook_secret_gitlab", "manual_webhook_secret_bitbucket", "manual_webhook_secret_gitea", "custom_labels")
     same_rows("previews compose: variables after create", "SELECT key, is_preview, is_buildtime, is_runtime FROM environment_variables "
