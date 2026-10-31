@@ -68,7 +68,17 @@ VERSIONS_REASON = (
 
 
 def shape(table, key, value):
+    if isinstance(value, dict):
+        return {k: shape(table, k, v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [shape(table, key, v) for v in value]
     if isinstance(value, str):
+        if key == "password" and value.startswith("$2y$10$"):
+            return "<bcrypt>"
+        if key in ("ip_address", "user_agent"):
+            return "<client>"
+        if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", value) and key == "ip":
+            return "<client>"
         if TS.match(value):
             return "<timestamp>"
         if CUID.match(value):
@@ -95,12 +105,15 @@ def load_rows(folder):
 
 
 up_rows, rs_rows = load_rows(up_dir), load_rows(rs_dir)
-same("tables with rows", sorted(up_rows), sorted(rs_rows))
+same("tables with rows", sorted(set(up_rows) - {"sessions"}), sorted(set(rs_rows) - {"sessions"}))
 # Log of the proxy start; the output depends on the image pull.
 for table in sorted(set(up_rows) | set(rs_rows)):
     a, b = up_rows.get(table, []), rs_rows.get(table, [])
     if table == "activity_log":
         same("activity_log row count", len(a), len(b))
+        continue
+    if table == "sessions":
+        same("sessions row count", len(a), len(b), "coolify-rs keeps browser sessions in memory, so a restart signs users out")
         continue
     if not same(f"{table}: row count", len(a), len(b)):
         continue

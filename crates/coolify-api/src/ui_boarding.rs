@@ -332,7 +332,9 @@ async fn validate_server(state: &AppState, ctx: &AuthCtx, meta: &Meta, s: Server
         let Ok(mut srv) = Srv::load(&j, id).await else {
             return;
         };
-        if !srv.is_proxy_should_run() {
+        // The localhost path of `continueValidation` only saves the proxy type: its proxy already
+        // runs since the first start.
+        if !srv.is_proxy_should_run() || srv.is_localhost() {
             return;
         }
         if let Err(e) =
