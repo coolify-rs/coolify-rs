@@ -15,6 +15,26 @@ use crate::Jobs;
 use crate::notifications::{RestartKind, lookup, notify};
 use crate::server::ServerInfo;
 
+/// What a list of containers can say about the resources missing from it.
+#[derive(Debug, Clone, Copy)]
+pub struct Snapshot {
+    /// `isCompleteSnapshot()`.
+    pub complete: bool,
+    /// `GetContainersStatus`: no containers at all may be a failed Docker query.
+    pub query_may_have_failed: bool,
+}
+
+impl Snapshot {
+    pub const POLLED: Self = Self {
+        complete: true,
+        query_may_have_failed: true,
+    };
+
+    pub fn not_found_counts(self, containers: &[Value]) -> bool {
+        self.complete && !(self.query_may_have_failed && containers.is_empty())
+    }
+}
+
 /// `ContainerStatusAggregator::containerStatus()`.
 pub fn container_status(c: &Value) -> String {
     let state = c
@@ -174,6 +194,19 @@ impl Jobs {
             .lines()
             .filter_map(|l| serde_json::from_str(l.trim()).ok())
             .collect();
+        self.apply_application_containers(&applications, &containers, Snapshot::POLLED)
+            .await;
+    }
+
+    /// The application part of `GetContainersStatus` and `PushServerUpdateJob`.
+    pub async fn apply_application_containers(
+        &self,
+        applications: &[ApplicationRow],
+        containers: &[Value],
+        snapshot: Snapshot,
+    ) {
+        let db = &self.0.db;
+        let not_found_counts = snapshot.not_found_counts(containers);
         let now = Utc::now().naive_utc();
         let mut statuses: BTreeMap<i64, Vec<(String, i64)>> = BTreeMap::new();
         let mut found: Vec<i64> = Vec::new();
@@ -181,7 +214,7 @@ impl Jobs {
         // $previewContainerRestartCounts: the preview, its application and the highest count of its
         // containers.
         let mut preview_restarts: BTreeMap<i64, (Record, i64, i64)> = BTreeMap::new();
-        for c in &containers {
+        for c in containers {
             let Some(labels) = c.pointer("/Config/Labels").and_then(Value::as_object) else {
                 continue;
             };
@@ -218,7 +251,7 @@ impl Jobs {
                     .get("coolify.pullRequestId")
                     .and_then(Value::as_str)
                     .and_then(|v| v.parse::<i64>().ok());
-                if let (Some(a), Some(pr)) = (owner(&applications, labels), pull_request_id)
+                if let (Some(a), Some(pr)) = (owner(applications, labels), pull_request_id)
                     && let Ok(Some(preview)) =
                         coolify_db::application_ops::preview(db, a.id, pr).await
                 {
@@ -244,7 +277,7 @@ impl Jobs {
                 }
                 continue;
             }
-            let Some(a) = owner(&applications, labels) else {
+            let Some(a) = owner(applications, labels) else {
                 continue;
             };
             found.push(a.id);
@@ -268,6 +301,10 @@ impl Jobs {
                     .or_default()
                     .push((container_status(c), restarts));
             }
+        }
+        // `! isCompleteSnapshot()`: only what the containers themselves say.
+        if !snapshot.complete {
+            return;
         }
         // trackPreviewRestartCounts()
         for (id, (preview, application_id, observed)) in preview_restarts {
@@ -337,8 +374,8 @@ impl Jobs {
             }
         }
         // $notRunningApplicationPreviews
-        if !containers.is_empty() {
-            for a in &applications {
+        if not_found_counts {
+            for a in applications {
                 for preview in coolify_db::application_ops::previews(db, a.id)
                     .await
                     .unwrap_or_default()
@@ -364,7 +401,7 @@ impl Jobs {
             }
         }
         for a in applications.iter().filter(|a| !found.contains(&a.id)) {
-            if containers.is_empty() {
+            if !not_found_counts {
                 break;
             }
             let status = a.str("status").unwrap_or_default();

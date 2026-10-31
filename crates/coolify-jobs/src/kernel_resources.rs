@@ -219,6 +219,40 @@ impl Jobs {
         }))
     }
 
+    /// The `catch` of `DeleteResourceJob`: the rows go anyway, so the team hears what may remain.
+    pub(crate) async fn notify_remote_cleanup_failed(
+        &self,
+        name: &str,
+        environment_id: Option<i64>,
+        server_id: i64,
+        error: &str,
+    ) {
+        let db = &self.0.db;
+        let team = match environment_id {
+            Some(id) => lookup::environment(db, id).await.and_then(|e| e.team_id),
+            None => None,
+        };
+        let (Some(team_id), Some((_, server))) = (team, lookup::server(db, server_id).await) else {
+            return;
+        };
+        notifications::spawn_team_general(
+            db,
+            self.0.encrypter.as_ref(),
+            team_id,
+            format!(
+                "'{name}' was removed from Coolify, but its Docker resources could not be removed from server '{}' and may still exist there. Error: {}",
+                server.name,
+                coolify_compat::redact::redact_text(error, &[], &[]),
+            ),
+            false,
+        );
+    }
+
+    /// `send_internal_notification($message)`: the root team.
+    pub(crate) fn send_internal_notification(&self, message: String) {
+        notifications::spawn_team_general(&self.0.db, self.0.encrypter.as_ref(), 0, message, true);
+    }
+
     /// `dispatch(new RegenerateSslCertJob(server_id: ..., force_regeneration: true))`.
     pub fn spawn_regenerate_ssl_certificates(&self, server_id: i64) {
         let jobs = self.clone();
@@ -304,7 +338,13 @@ async fn application_id(db: &coolify_db::Db, labels: &str) -> Option<i64> {
 /// `CleanupOrphanedPreviewContainersJob::handle`.
 pub(crate) async fn cleanup_orphaned_preview_containers(jobs: &Jobs) -> Result<(), String> {
     let db = &jobs.0.db;
-    for row in servers::all(db).await.map_err(|e| e.to_string())? {
+    let rows = servers::all(db).await.map_err(|e| {
+        jobs.send_internal_notification(format!(
+            "CleanupOrphanedPreviewContainersJob failed with error: {e}"
+        ));
+        e.to_string()
+    })?;
+    for row in rows {
         if !allowed(&format!("server:{}", row.id)) {
             continue;
         }
@@ -478,7 +518,9 @@ pub(crate) async fn cleanup_stucked_resources(jobs: &Jobs) {
                 let jobs = jobs.clone();
                 tokio::spawn(async move {
                     if let Err(e) = jobs.cleanup_helper_containers(&row).await {
-                        tracing::warn!(error = %e, "CleanupHelperContainersJob failed");
+                        jobs.send_internal_notification(format!(
+                            "CleanupHelperContainersJob failed with error: {e}"
+                        ));
                     }
                 });
             }

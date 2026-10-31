@@ -705,25 +705,40 @@ async fn cdn_get(url: &str, tries: u32, timeout_seconds: u64) -> Result<(u16, St
 
 /// `PullTemplatesFromCDN::handle` and `store_service_templates_bundle`.
 pub async fn pull_templates_from_cdn() {
-    match cdn_get(&templates_url(), 3, 60).await {
+    fetch_templates_bundle(&templates_url()).await;
+}
+
+/// `handle()` for one URL: whether a bundle was stored.
+pub async fn fetch_templates_bundle(url: &str) -> bool {
+    match cdn_get(url, 3, 60).await {
         Ok((status, body)) if (200..300).contains(&status) => {
-            if !crate::services::templates::store_bundle(&body) {
+            let stored = crate::services::templates::store_bundle(&body);
+            if !stored {
                 let limited: String = body.chars().take(500).collect();
                 tracing::error!(body = %limited, "PullTemplatesFromCDN received an invalid bundle");
             }
+            stored
         }
         Ok((status, body)) => {
             let limited: String = body.chars().take(500).collect();
             tracing::error!(status, body = %limited, "PullTemplatesFromCDN failed");
+            false
         }
-        Err(e) => tracing::error!(message = %e, "PullTemplatesFromCDN exception"),
+        Err(e) => {
+            tracing::error!(message = %e, "PullTemplatesFromCDN exception");
+            false
+        }
     }
 }
 
 /// `PullChangelog::handle`.
 pub async fn pull_changelog(now: DateTime<Utc>) {
-    let url = releases_url();
-    let body = match cdn_get(&url, 3, 30).await {
+    fetch_changelog(&releases_url(), &data_dir(), now).await;
+}
+
+/// `handle()` for one URL and directory.
+pub async fn fetch_changelog(url: &str, dir: &std::path::Path, now: DateTime<Utc>) {
+    let body = match cdn_get(url, 3, 30).await {
         Ok((status, body)) if (200..300).contains(&status) => body,
         Ok((status, _)) => {
             tracing::error!(status, url = %url, "PullChangelogFromGitHub: Failed to fetch from CDN");
@@ -738,7 +753,7 @@ pub async fn pull_changelog(now: DateTime<Utc>) {
         tracing::error!("PullChangelogFromGitHub: Exception occurred");
         return;
     };
-    if let Err(e) = save_changelog_entries(&data_dir(), &releases, now) {
+    if let Err(e) = save_changelog_entries(dir, &releases, now) {
         tracing::error!(message = %e, "PullChangelogFromGitHub: Exception occurred");
     }
 }
@@ -795,7 +810,17 @@ pub fn save_changelog_entries(
 
 /// `refresh_versions_file($tries)`: the data that was stored, or `None` when the CDN failed.
 pub async fn refresh_versions_file(jobs: &Jobs, tries: u32) -> Option<Value> {
-    let (status, body) = match cdn_get(&versions_url(), tries, 10).await {
+    refresh_versions_from(jobs, &versions_url(), &data_dir(), tries).await
+}
+
+/// `refresh_versions_file` for one URL and directory.
+pub async fn refresh_versions_from(
+    jobs: &Jobs,
+    url: &str,
+    dir: &std::path::Path,
+    tries: u32,
+) -> Option<Value> {
+    let (status, body) = match cdn_get(url, tries, 10).await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "Could not fetch versions.json from the CDN, using the local file");
@@ -813,7 +838,7 @@ pub async fn refresh_versions_file(jobs: &Jobs, tries: u32) -> Option<Value> {
         return None;
     };
     let current = jobs.version();
-    let path = data_dir().join("versions.json");
+    let path = dir.join("versions.json");
     let existing = std::fs::read_to_string(&path)
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())

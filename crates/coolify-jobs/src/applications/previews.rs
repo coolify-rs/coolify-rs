@@ -420,3 +420,42 @@ impl Jobs {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn record(v: Value) -> Record {
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn status_lines_match_the_job() {
+        let p = record(json!({"fqdn": "https://pr.test"}));
+        assert_eq!(
+            pull_request_status_line(PullRequestStatus::Finished, "web", None, &p),
+            "The preview deployment for **web** is ready. 🟢\n\n[Open Preview](https://pr.test) | "
+        );
+        assert_eq!(
+            pull_request_status_line(PullRequestStatus::Killed, "web", None, &p),
+            "The preview deployment for **web** was killed. ⚫\n\n"
+        );
+        assert_eq!(
+            pull_request_status_line(PullRequestStatus::Cancelled, "web", None, &p),
+            "The preview deployment for **web** was cancelled. 🚫\n\n"
+        );
+    }
+
+    #[test]
+    fn compose_previews_link_every_domain() {
+        let domains = json!({"api": {"domain": "https://a.test,https://b.test"}, "db": {"domain": ""},
+            "web": {"domain": "https://w.test"}});
+        let p = record(json!({"docker_compose_domains": domains.to_string()}));
+        assert_eq!(
+            preview_links(Some("dockercompose"), &p),
+            "[Open api](https://a.test) | [Open web](https://w.test) | "
+        );
+        assert_eq!(preview_links(Some("dockercompose"), &record(json!({}))), "");
+    }
+}

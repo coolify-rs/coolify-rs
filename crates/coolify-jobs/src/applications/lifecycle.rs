@@ -279,7 +279,18 @@ impl Jobs {
         let jobs = self.clone();
         tokio::spawn(async move {
             let db = jobs.0.db.clone();
-            let _ = jobs.stop_application(&a, true, true, true).await;
+            if let Some(e) = jobs.stop_application(&a, true, true, true).await
+                && e != "Server is not functional"
+                && let Some(server_id) = a.server_id()
+            {
+                jobs.notify_remote_cleanup_failed(
+                    a.str("name").unwrap_or_default(),
+                    a.int("environment_id"),
+                    server_id,
+                    &e,
+                )
+                .await;
+            }
             if let Some(server_id) = a.server_id()
                 && let Ok(Some(row)) = servers::find_by_id(&db, server_id).await
                 && let Ok(t) = ServerInfo::from_row(&row).target(&jobs).await

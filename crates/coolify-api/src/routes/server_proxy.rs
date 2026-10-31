@@ -1126,7 +1126,7 @@ pub async fn sentinel_push(
             j.spawn_check_sentinel(row.id);
         }
     }
-    // `shouldDispatchUpdate`: `PushServerUpdateJob` follows with the resources port.
+    // `shouldDispatchUpdate`, then `PushServerUpdateJob::dispatch($server, $data)`.
     let hash = container_state_hash(&input.0);
     let marks = &coolify_jobs::server_ops::MARKS;
     let hash_key = format!("sentinel:push-hash:{}", row.id);
@@ -1139,6 +1139,9 @@ pub async fn sentinel_push(
             std::time::Duration::from_secs(86_400),
         );
         marks.put(force_key, "1".into(), std::time::Duration::from_secs(300));
+        if let Some(j) = jobs {
+            j.spawn_push_server_update(row.id, Value::Object(input.0.clone()));
+        }
     }
     Ok(ok(json!({"message": "ok"})).into_response())
 }

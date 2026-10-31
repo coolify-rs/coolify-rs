@@ -12,6 +12,7 @@ pub mod log_drain;
 pub mod patches;
 pub mod proxy;
 pub mod proxy_config;
+pub mod push_update;
 pub mod registries;
 pub mod scheduler;
 pub mod sentinel;

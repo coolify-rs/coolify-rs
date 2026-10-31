@@ -692,6 +692,15 @@ impl Jobs {
             {
                 // A resource can always be deleted from Coolify, also when its server does not respond.
                 tracing::warn!(service = %s.uuid, error = %e, "remote cleanup failed while deleting service");
+                if let Some(server_id) = s.server_id() {
+                    jobs.notify_remote_cleanup_failed(
+                        s.str("name").unwrap_or_default(),
+                        s.int("environment_id"),
+                        server_id,
+                        &e,
+                    )
+                    .await;
+                }
             }
             if let Err(e) = svc::force_delete(&jobs.0.db, s.id).await {
                 tracing::warn!(service = %s.uuid, error = %e, "deleting service rows failed");

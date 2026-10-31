@@ -200,6 +200,13 @@ pub async fn server_storage_check(jobs: &Jobs, server_id: i64) -> Result<Option<
     if percentage == 0 {
         return Ok(usage);
     }
+    report_storage_usage(jobs, &srv, percentage).await?;
+    Ok(usage)
+}
+
+/// `ServerStorageCheckJob::handle` from the point it knows the percentage, which a Sentinel push
+/// brings along.
+pub async fn report_storage_usage(jobs: &Jobs, srv: &Srv, percentage: i64) -> Result<(), String> {
     let threshold = srv
         .setting_int("server_disk_usage_notification_threshold")
         .unwrap_or(80);
@@ -225,7 +232,7 @@ pub async fn server_storage_check(jobs: &Jobs, server_id: i64) -> Result<Option<
         // `HighDiskUsage::hasRecovered`: the next spike should alert again.
         notifications::release_high_disk_usage(srv.db(), srv.id()).await;
     }
-    Ok(usage)
+    Ok(())
 }
 
 /// `ServerCheckJob::handle` for the proxy, Sentinel and log drain (container status
