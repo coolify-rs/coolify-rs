@@ -639,7 +639,10 @@ impl Jobs {
         let server = ServerInfo::from_row(&row);
         let t = server.target(self).await?;
         if server.is_swarm() {
-            let stack = format!("docker stack rm {}", quote(&format!("{}-{pull_request_id}", a.uuid)));
+            let stack = format!(
+                "docker stack rm {}",
+                quote(&format!("{}-{pull_request_id}", a.uuid))
+            );
             self.remote()
                 .run(&t, &[&stack], RunOptions::op("preview.stop"))
                 .await

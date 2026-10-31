@@ -384,7 +384,8 @@ pub async fn pull_requests(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let request = if is_public {
-        http.get(&url).header("Accept", "application/vnd.github.v3+json")
+        http.get(&url)
+            .header("Accept", "application/vnd.github.v3+json")
     } else {
         let token = installation_token(db, enc, Some(source)).await?;
         authed(http.get(&url), &token)
