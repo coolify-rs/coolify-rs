@@ -66,8 +66,6 @@ const R: &[&[Ability]] = &[&[Read]];
 /// `api.ability:read:sensitive`.
 const RS: &[&[Ability]] = &[&[ReadSensitive]];
 const W: &[&[Ability]] = &[&[Write]];
-/// `api.ability:read,write`.
-const RW: &[&[Ability]] = &[&[Read, Write]];
 const NONE: &[&[Ability]] = &[];
 /// `api.ability:write:sensitive`.
 const WS: &[&[Ability]] = &[&[Ability::WriteSensitive]];
@@ -467,12 +465,6 @@ pub const ROUTES: &[RouteSpec] = &[
         uri: "api/v1/servers/import",
         group: Group::Main,
         abilities: WD,
-    },
-    RouteSpec {
-        method: "GET",
-        uri: "api/v1/servers/{uuid}/transfer",
-        group: Group::Main,
-        abilities: RW,
     },
     RouteSpec {
         method: "POST",
@@ -2411,15 +2403,26 @@ pub fn router(state: AppState) -> Router {
             "api/v1/databases/{uuid}/stop",
             on_post(databases::stop),
         ),
-        ("GET", "api/v1/servers/import/check", on_get(server_transfer::check)),
-        ("POST", "api/v1/servers/import", on_post(server_transfer::import)),
-        ("GET", "api/v1/servers/{uuid}/transfer", on_get(server_transfer::status)),
+        (
+            "GET",
+            "api/v1/servers/import/check",
+            on_get(server_transfer::check),
+        ),
+        (
+            "POST",
+            "api/v1/servers/import",
+            on_post(server_transfer::import),
+        ),
         (
             "POST",
             "api/v1/servers/{uuid}/transfer/complete",
             on_post(server_transfer::complete),
         ),
-        ("POST", "api/v1/servers/{uuid}/migrate", on_post(server_transfer::migrate)),
+        (
+            "POST",
+            "api/v1/servers/{uuid}/migrate",
+            on_post(server_transfer::migrate),
+        ),
         ("GET", "api/v1/servers", on_get(servers::list)),
         ("POST", "api/v1/servers", on_post(servers::create)),
         ("GET", "api/v1/servers/{uuid}", on_get(servers::show)),

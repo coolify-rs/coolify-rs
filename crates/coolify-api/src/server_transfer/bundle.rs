@@ -339,26 +339,16 @@ fn check_domains(errors: &mut Vec<String>, at: &str, value: Option<&Value>) {
             errors.push(format!("{at}: Invalid URL: {url}"));
             continue;
         }
-        let Some((scheme, host, port)) = split_url(url) else {
+        // `isValidDomainUrl`: an http or https URL that `parse_url` can read.
+        let parsed = split_url(url).filter(|(scheme, host, port)| {
+            matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https")
+                && !host.is_empty()
+                && port.is_none_or(|p| (1..=65535).contains(&p))
+        });
+        let Some((_, host, _)) = parsed else {
             errors.push(format!("{at}: Invalid URL: {url}"));
             continue;
         };
-        if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
-            errors.push(format!(
-                "{at}: Invalid URL scheme: {scheme} for URL: {url}. Only http and https are supported."
-            ));
-            continue;
-        }
-        if host.is_empty() {
-            errors.push(format!("{at}: Invalid URL: {url}"));
-            continue;
-        }
-        if port.is_some_and(|p| !(1..=65535).contains(&p)) {
-            errors.push(format!(
-                "{at}: Invalid port for URL: {url}. The port must be between 1 and 65535."
-            ));
-            continue;
-        }
         let unwrapped = host.trim_matches(['[', ']']);
         if !unwrapped.contains('.') && unwrapped.parse::<std::net::IpAddr>().is_err() {
             errors.push(format!(

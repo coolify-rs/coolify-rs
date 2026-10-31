@@ -33,104 +33,301 @@ const FILE_MORPH: &str = "App\\Models\\LocalFileVolume";
 const STANDALONE_DOCKER_MORPH: &str = "App\\Models\\StandaloneDocker";
 const SWARM_DOCKER_MORPH: &str = "App\\Models\\SwarmDocker";
 
+/// The models that use `HasSafeStringAttribute`.
+const SAFE_STRING_TABLES: &[&str] = &[
+    "applications",
+    "environments",
+    "projects",
+    "s3_storages",
+    "scheduled_tasks",
+    "private_keys",
+    "servers",
+    "services",
+    "standalone_clickhouses",
+    "standalone_dragonflies",
+    "standalone_mariadbs",
+    "standalone_keydbs",
+    "standalone_dockers",
+    "standalone_mysqls",
+    "standalone_redis",
+    "standalone_postgresqls",
+    "standalone_mongodbs",
+    "tags",
+    "standalone_sqlites",
+];
+
 /// `Application::$parserVersion` and `Service::$parserVersion`.
 const PARSER_VERSION: &str = "5";
 
 /// `DATABASE_MODELS`: type, table, encrypted columns.
 const DATABASE_MODELS: &[(&str, &str, &[&str])] = &[
-    ("StandalonePostgresql", "standalone_postgresqls", &["postgres_password"]),
-    ("StandaloneMysql", "standalone_mysqls", &["mysql_password", "mysql_root_password"]),
-    ("StandaloneMariadb", "standalone_mariadbs", &["mariadb_password", "mariadb_root_password"]),
-    ("StandaloneMongodb", "standalone_mongodbs", &["mongo_initdb_root_password"]),
+    (
+        "StandalonePostgresql",
+        "standalone_postgresqls",
+        &["postgres_password"],
+    ),
+    (
+        "StandaloneMysql",
+        "standalone_mysqls",
+        &["mysql_password", "mysql_root_password"],
+    ),
+    (
+        "StandaloneMariadb",
+        "standalone_mariadbs",
+        &["mariadb_password", "mariadb_root_password"],
+    ),
+    (
+        "StandaloneMongodb",
+        "standalone_mongodbs",
+        &["mongo_initdb_root_password"],
+    ),
     ("StandaloneRedis", "standalone_redis", &[]),
     ("StandaloneKeydb", "standalone_keydbs", &["keydb_password"]),
-    ("StandaloneDragonfly", "standalone_dragonflies", &["dragonfly_password"]),
-    ("StandaloneClickhouse", "standalone_clickhouses", &["clickhouse_admin_password"]),
+    (
+        "StandaloneDragonfly",
+        "standalone_dragonflies",
+        &["dragonfly_password"],
+    ),
+    (
+        "StandaloneClickhouse",
+        "standalone_clickhouses",
+        &["clickhouse_admin_password"],
+    ),
     ("StandaloneSqlite", "standalone_sqlites", &[]),
 ];
 
 /// `Application::$fillable`.
 pub const APPLICATION_FILLABLE: &[&str] = &[
-    "name", "description", "fqdn", "noindex_domains", "domain_port_overrides", "git_repository",
-    "git_branch", "git_commit_sha", "git_full_url", "docker_registry_image_name",
-    "docker_registry_image_tag", "build_pack", "static_image", "install_command", "build_command",
-    "start_command", "ports_exposes", "ports_mappings", "base_directory", "publish_directory",
-    "health_check_enabled", "health_check_path", "health_check_port", "health_check_host",
-    "health_check_method", "health_check_return_code", "health_check_scheme",
-    "health_check_response_text", "health_check_interval", "health_check_timeout",
-    "health_check_retries", "health_check_start_period", "health_check_type",
-    "health_check_command", "limits_memory", "limits_memory_swap", "limits_memory_swappiness",
-    "limits_memory_reservation", "limits_cpus", "limits_cpuset", "limits_cpu_shares", "status",
-    "preview_url_template", "dockerfile", "dockerfile_location", "dockerfile_target_build",
-    "custom_labels", "custom_docker_run_options", "post_deployment_command",
-    "post_deployment_command_container", "pre_deployment_command",
-    "pre_deployment_command_container", "manual_webhook_secret_github",
-    "manual_webhook_secret_gitlab", "manual_webhook_secret_bitbucket",
-    "manual_webhook_secret_gitea", "docker_compose_location", "docker_compose",
-    "docker_compose_raw", "docker_compose_domains", "domain_dns_statuses",
-    "docker_compose_custom_start_command", "docker_compose_custom_build_command",
-    "swarm_replicas", "swarm_placement_constraints", "watch_paths", "redirect",
-    "compose_parsing_version", "custom_nginx_configuration", "custom_network_aliases",
-    "custom_healthcheck_found", "nixpkgsarchive", "is_http_basic_auth_enabled",
-    "http_basic_auth_username", "http_basic_auth_password", "http_basic_auth_hash_algorithm",
-    "http_basic_auth_bcrypt_cost", "http_basic_auth_argon2id_memory_cost",
-    "http_basic_auth_argon2id_time_cost", "connect_to_docker_network", "force_domain_override",
-    "is_container_label_escape_enabled", "use_build_server", "config_hash", "last_online_at",
-    "restart_count", "max_restart_count", "restart_limit_reached", "container_present",
-    "last_restart_at", "last_restart_type", "uuid", "environment_id", "destination_id",
-    "destination_type", "source_id", "source_type", "repository_project_id", "private_key_id",
+    "name",
+    "description",
+    "fqdn",
+    "noindex_domains",
+    "domain_port_overrides",
+    "git_repository",
+    "git_branch",
+    "git_commit_sha",
+    "git_full_url",
+    "docker_registry_image_name",
+    "docker_registry_image_tag",
+    "build_pack",
+    "static_image",
+    "install_command",
+    "build_command",
+    "start_command",
+    "ports_exposes",
+    "ports_mappings",
+    "base_directory",
+    "publish_directory",
+    "health_check_enabled",
+    "health_check_path",
+    "health_check_port",
+    "health_check_host",
+    "health_check_method",
+    "health_check_return_code",
+    "health_check_scheme",
+    "health_check_response_text",
+    "health_check_interval",
+    "health_check_timeout",
+    "health_check_retries",
+    "health_check_start_period",
+    "health_check_type",
+    "health_check_command",
+    "limits_memory",
+    "limits_memory_swap",
+    "limits_memory_swappiness",
+    "limits_memory_reservation",
+    "limits_cpus",
+    "limits_cpuset",
+    "limits_cpu_shares",
+    "status",
+    "preview_url_template",
+    "dockerfile",
+    "dockerfile_location",
+    "dockerfile_target_build",
+    "custom_labels",
+    "custom_docker_run_options",
+    "post_deployment_command",
+    "post_deployment_command_container",
+    "pre_deployment_command",
+    "pre_deployment_command_container",
+    "manual_webhook_secret_github",
+    "manual_webhook_secret_gitlab",
+    "manual_webhook_secret_bitbucket",
+    "manual_webhook_secret_gitea",
+    "docker_compose_location",
+    "docker_compose",
+    "docker_compose_raw",
+    "docker_compose_domains",
+    "domain_dns_statuses",
+    "docker_compose_custom_start_command",
+    "docker_compose_custom_build_command",
+    "swarm_replicas",
+    "swarm_placement_constraints",
+    "watch_paths",
+    "redirect",
+    "compose_parsing_version",
+    "custom_nginx_configuration",
+    "custom_network_aliases",
+    "custom_healthcheck_found",
+    "nixpkgsarchive",
+    "is_http_basic_auth_enabled",
+    "http_basic_auth_username",
+    "http_basic_auth_password",
+    "http_basic_auth_hash_algorithm",
+    "http_basic_auth_bcrypt_cost",
+    "http_basic_auth_argon2id_memory_cost",
+    "http_basic_auth_argon2id_time_cost",
+    "connect_to_docker_network",
+    "force_domain_override",
+    "is_container_label_escape_enabled",
+    "use_build_server",
+    "config_hash",
+    "last_online_at",
+    "restart_count",
+    "max_restart_count",
+    "restart_limit_reached",
+    "container_present",
+    "last_restart_at",
+    "last_restart_type",
+    "uuid",
+    "environment_id",
+    "destination_id",
+    "destination_type",
+    "source_id",
+    "source_type",
+    "repository_project_id",
+    "private_key_id",
 ];
 
 /// `ApplicationSetting::$fillable`.
 pub const APPLICATION_SETTING_FILLABLE: &[&str] = &[
-    "is_static", "is_git_submodules_enabled", "is_git_lfs_enabled", "is_auto_deploy_enabled",
-    "is_force_https_enabled", "is_debug_enabled", "is_preview_deployments_enabled",
-    "is_log_drain_enabled", "is_gpu_enabled", "gpu_driver", "gpu_count", "gpu_device_ids",
-    "gpu_options", "is_include_timestamps", "is_swarm_only_worker_nodes",
-    "is_raw_compose_deployment_enabled", "is_build_server_enabled",
-    "is_consistent_container_name_enabled", "is_gzip_enabled", "traefik_certificate_resolver",
-    "is_stripprefix_enabled", "is_permanent_redirect_enabled", "connect_to_docker_network",
-    "custom_internal_name", "custom_container_name_prefix", "is_container_label_escape_enabled",
-    "is_env_sorting_enabled", "include_coolify_default_variables",
-    "is_container_label_readonly_enabled", "is_preserve_repository_enabled",
-    "disable_build_cache", "is_spa", "is_git_shallow_clone_enabled",
-    "is_pr_deployments_public_enabled", "use_build_secrets", "redact_all_env_values_in_logs",
-    "inject_build_args_to_dockerfile", "include_source_commit_in_build", "docker_images_to_keep",
-    "stop_grace_period", "rolling_update_drain_seconds",
+    "is_static",
+    "is_git_submodules_enabled",
+    "is_git_lfs_enabled",
+    "is_auto_deploy_enabled",
+    "is_force_https_enabled",
+    "is_debug_enabled",
+    "is_preview_deployments_enabled",
+    "is_log_drain_enabled",
+    "is_gpu_enabled",
+    "gpu_driver",
+    "gpu_count",
+    "gpu_device_ids",
+    "gpu_options",
+    "is_include_timestamps",
+    "is_swarm_only_worker_nodes",
+    "is_raw_compose_deployment_enabled",
+    "is_build_server_enabled",
+    "is_consistent_container_name_enabled",
+    "is_gzip_enabled",
+    "traefik_certificate_resolver",
+    "is_stripprefix_enabled",
+    "is_permanent_redirect_enabled",
+    "connect_to_docker_network",
+    "custom_internal_name",
+    "custom_container_name_prefix",
+    "is_container_label_escape_enabled",
+    "is_env_sorting_enabled",
+    "include_coolify_default_variables",
+    "is_container_label_readonly_enabled",
+    "is_preserve_repository_enabled",
+    "disable_build_cache",
+    "is_spa",
+    "is_git_shallow_clone_enabled",
+    "is_pr_deployments_public_enabled",
+    "use_build_secrets",
+    "redact_all_env_values_in_logs",
+    "inject_build_args_to_dockerfile",
+    "include_source_commit_in_build",
+    "docker_images_to_keep",
+    "stop_grace_period",
+    "rolling_update_drain_seconds",
 ];
 
 /// `Service::$fillable`.
 pub const SERVICE_FILLABLE: &[&str] = &[
-    "uuid", "name", "description", "docker_compose_raw", "docker_compose",
-    "connect_to_docker_network", "service_type", "config_hash", "compose_parsing_version",
-    "is_container_label_escape_enabled", "redact_all_env_values_in_logs", "environment_id",
-    "server_id", "destination_id", "destination_type",
+    "uuid",
+    "name",
+    "description",
+    "docker_compose_raw",
+    "docker_compose",
+    "connect_to_docker_network",
+    "service_type",
+    "config_hash",
+    "compose_parsing_version",
+    "is_container_label_escape_enabled",
+    "redact_all_env_values_in_logs",
+    "environment_id",
+    "server_id",
+    "destination_id",
+    "destination_type",
 ];
 
 /// `ServerSetting::$fillable`, without the columns the import never takes.
 const SERVER_SETTING_FILLABLE: &[&str] = &[
-    "is_swarm_manager", "is_jump_server", "is_build_server", "server_role", "wildcard_domain",
-    "is_cloudflare_tunnel", "cloudflare_tunnel_id", "cloudflare_tunnel_account_id",
-    "is_logdrain_newrelic_enabled", "logdrain_newrelic_license_key", "logdrain_newrelic_base_uri",
-    "is_logdrain_highlight_enabled", "logdrain_highlight_project_id", "is_logdrain_axiom_enabled",
-    "logdrain_axiom_dataset_name", "logdrain_axiom_api_key", "is_swarm_worker",
-    "is_logdrain_custom_enabled", "logdrain_custom_config", "logdrain_custom_config_parser",
-    "is_logdrain_cloudwatch_enabled", "logdrain_cloudwatch_region", "logdrain_cloudwatch_group",
-    "logdrain_cloudwatch_stream_prefix", "concurrent_builds", "dynamic_timeout",
-    "is_metrics_enabled", "generate_exact_labels", "force_docker_cleanup",
-    "docker_cleanup_frequency", "docker_cleanup_threshold", "server_timezone",
-    "delete_unused_volumes", "delete_unused_networks", "is_sentinel_enabled",
-    "sentinel_metrics_refresh_rate_seconds", "sentinel_metrics_history_days",
-    "sentinel_push_interval_seconds", "server_disk_usage_notification_threshold",
-    "is_sentinel_debug_enabled", "server_disk_usage_check_frequency",
-    "server_disk_usage_notification_interval_hours", "is_terminal_enabled",
-    "deployment_queue_limit", "backup_compression_cpu_percentage",
-    "disable_application_image_retention", "connection_timeout", "is_traffic_analytics_enabled",
-    "traffic_topn", "traffic_sample_threshold", "traffic_retention_1h_days",
-    "traffic_retention_1d_days", "is_geoip_enabled", "geoip_refresh_days",
-    "geoip_maxmind_license_key", "traffic_ip_mode", "traefik_certificate_resolver",
-    "docker_version", "docker_version_checked_at", "compose_version",
-    "compose_version_checked_at", "patch_check_frequency", "is_auto_security_updates_enabled",
+    "is_swarm_manager",
+    "is_jump_server",
+    "is_build_server",
+    "server_role",
+    "wildcard_domain",
+    "is_cloudflare_tunnel",
+    "cloudflare_tunnel_id",
+    "cloudflare_tunnel_account_id",
+    "is_logdrain_newrelic_enabled",
+    "logdrain_newrelic_license_key",
+    "logdrain_newrelic_base_uri",
+    "is_logdrain_highlight_enabled",
+    "logdrain_highlight_project_id",
+    "is_logdrain_axiom_enabled",
+    "logdrain_axiom_dataset_name",
+    "logdrain_axiom_api_key",
+    "is_swarm_worker",
+    "is_logdrain_custom_enabled",
+    "logdrain_custom_config",
+    "logdrain_custom_config_parser",
+    "is_logdrain_cloudwatch_enabled",
+    "logdrain_cloudwatch_region",
+    "logdrain_cloudwatch_group",
+    "logdrain_cloudwatch_stream_prefix",
+    "concurrent_builds",
+    "dynamic_timeout",
+    "is_metrics_enabled",
+    "generate_exact_labels",
+    "force_docker_cleanup",
+    "docker_cleanup_frequency",
+    "docker_cleanup_threshold",
+    "server_timezone",
+    "delete_unused_volumes",
+    "delete_unused_networks",
+    "is_sentinel_enabled",
+    "sentinel_metrics_refresh_rate_seconds",
+    "sentinel_metrics_history_days",
+    "sentinel_push_interval_seconds",
+    "server_disk_usage_notification_threshold",
+    "is_sentinel_debug_enabled",
+    "server_disk_usage_check_frequency",
+    "server_disk_usage_notification_interval_hours",
+    "is_terminal_enabled",
+    "deployment_queue_limit",
+    "backup_compression_cpu_percentage",
+    "disable_application_image_retention",
+    "connection_timeout",
+    "is_traffic_analytics_enabled",
+    "traffic_topn",
+    "traffic_sample_threshold",
+    "traffic_retention_1h_days",
+    "traffic_retention_1d_days",
+    "is_geoip_enabled",
+    "geoip_refresh_days",
+    "geoip_maxmind_license_key",
+    "traffic_ip_mode",
+    "traefik_certificate_resolver",
+    "docker_version",
+    "docker_version_checked_at",
+    "compose_version",
+    "compose_version_checked_at",
+    "patch_check_frequency",
+    "is_auto_security_updates_enabled",
     "auto_security_updates_time",
 ];
 
@@ -288,6 +485,18 @@ impl Import<'_> {
             }
         }
         attrs.retain(|k, _| columns.contains(k));
+        // `HasSafeStringAttribute`: `strip_tags()`, also of null.
+        if SAFE_STRING_TABLES.contains(&table) {
+            for field in ["name", "description"] {
+                if let Some(v) = attrs.get(field) {
+                    let stripped = match v {
+                        Value::Null => String::new(),
+                        other => coolify_domain::naming::strip_tags(Some(&text(other))),
+                    };
+                    attrs.insert(field.to_owned(), json!(stripped));
+                }
+            }
+        }
         let names = attrs
             .keys()
             .map(|k| format!("\"{k}\""))
@@ -421,8 +630,12 @@ impl Import<'_> {
             .unwrap_or((None, None, None));
         let sentinel = fqdn
             .filter(|s| !s.trim().is_empty())
-            .or(v4.filter(|s| !s.trim().is_empty()).map(|v| format!("http://{v}:8000")))
-            .or(v6.filter(|s| !s.trim().is_empty()).map(|v| format!("http://[{v}]:8000")))
+            .or(v4
+                .filter(|s| !s.trim().is_empty())
+                .map(|v| format!("http://{v}:8000")))
+            .or(v6
+                .filter(|s| !s.trim().is_empty())
+                .map(|v| format!("http://[{v}]:8000")))
             .or_else(|| Some(instance_url_sync()));
         self.insert(
             conn,
@@ -436,7 +649,10 @@ impl Import<'_> {
             obj(json!({"uuid": new_public_id(), "name": "coolify", "network": "coolify", "server_id": id})),
         )
         .await?;
-        for (key, value) in [("COOLIFY_SERVER_UUID", &uuid), ("COOLIFY_SERVER_NAME", &name)] {
+        for (key, value) in [
+            ("COOLIFY_SERVER_UUID", &uuid),
+            ("COOLIFY_SERVER_NAME", &name),
+        ] {
             self.insert(
                 conn,
                 "shared_environment_variables",
@@ -463,7 +679,8 @@ impl Import<'_> {
         }
 
         // Proxy.
-        let mut proxy = obj(json!({"redirect_enabled": true, "type": "TRAEFIK", "status": "exited"}));
+        let mut proxy =
+            obj(json!({"redirect_enabled": true, "type": "TRAEFIK", "status": "exited"}));
         if let Some(Value::Object(p)) = dg(payload, "proxy") {
             for (k, v) in p {
                 proxy.insert(k.clone(), v.clone());
@@ -497,7 +714,10 @@ impl Import<'_> {
                 token_uuid,
                 "The Cloudflare tunnel of this server: its Cloudflare API token was not found on this instance; select it again in the Cloudflare tunnel settings.",
             );
-            settings.insert("cloudflare_tunnel_integration_token_id".into(), json!(tunnel_token));
+            settings.insert(
+                "cloudflare_tunnel_integration_token_id".into(),
+                json!(tunnel_token),
+            );
         }
         settings.insert("server_role".into(), json!(role));
         settings.insert("is_build_server".into(), json!(role == "build"));
@@ -505,9 +725,16 @@ impl Import<'_> {
         settings.insert("is_usable".into(), json!(false));
         settings.insert("force_disabled".into(), json!(false));
         settings.insert("is_sentinel_enabled".into(), json!(false));
-        self.update(conn, "server_settings", "server_id", id, settings).await?;
+        self.update(conn, "server_settings", "server_id", id, settings)
+            .await?;
 
-        Ok(Res { id, uuid, morph: SERVER_MORPH, name, environment_id: 0 })
+        Ok(Res {
+            id,
+            uuid,
+            morph: SERVER_MORPH,
+            name,
+            environment_id: 0,
+        })
     }
 
     /// `importDestinations`: original uuid to (id, morph). The first one is the fallback.
@@ -517,11 +744,12 @@ impl Import<'_> {
         destinations: Vec<&Value>,
         server_id: i64,
     ) -> R<Vec<(String, i64, &'static str)>> {
-        let standalone: Vec<(i64, String)> =
-            sqlx::query_as("SELECT id, uuid FROM standalone_dockers WHERE server_id = $1 ORDER BY id")
-                .bind(server_id)
-                .fetch_all(&mut *conn)
-                .await?;
+        let standalone: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT id, uuid FROM standalone_dockers WHERE server_id = $1 ORDER BY id",
+        )
+        .bind(server_id)
+        .fetch_all(&mut *conn)
+        .await?;
         if destinations.is_empty() {
             return Ok(standalone
                 .first()
@@ -573,8 +801,13 @@ impl Import<'_> {
                 if let Some(n) = network {
                     attrs.insert("network".into(), n.clone());
                 }
-                self.update(conn, "standalone_dockers", "id", *id, attrs).await?;
-                let key = if original.is_empty() { target } else { original };
+                self.update(conn, "standalone_dockers", "id", *id, attrs)
+                    .await?;
+                let key = if original.is_empty() {
+                    target
+                } else {
+                    original
+                };
                 map.push((key, *id, STANDALONE_DOCKER_MORPH));
             } else {
                 standalone_index += 1;
@@ -623,7 +856,8 @@ impl Import<'_> {
             "comment": get_or_null(variable, "comment"),
         }));
         attrs.extend(obj(scope));
-        self.insert(conn, "shared_environment_variables", attrs).await?;
+        self.insert(conn, "shared_environment_variables", attrs)
+            .await?;
         Ok(())
     }
 
@@ -692,12 +926,8 @@ impl Import<'_> {
                 )
                 .await?;
             // `Project::created`.
-            self.insert(
-                conn,
-                "project_settings",
-                obj(json!({"project_id": id})),
-            )
-            .await?;
+            self.insert(conn, "project_settings", obj(json!({"project_id": id})))
+                .await?;
             self.insert(
                 conn,
                 "environments",
@@ -743,7 +973,8 @@ impl Import<'_> {
             .await?;
             if let Some(id) = by_name {
                 let mut attrs = Map::new();
-                if self.preserve && !uuid.is_empty() && !exists(conn, "environments", &uuid).await? {
+                if self.preserve && !uuid.is_empty() && !exists(conn, "environments", &uuid).await?
+                {
                     attrs.insert("uuid".into(), json!(uuid));
                 }
                 if !blank(dg(payload, "description")) {
@@ -809,7 +1040,8 @@ impl Import<'_> {
             return Ok(());
         }
         let mut uuid = str_of(payload, "uuid");
-        if !self.preserve || uuid.is_empty() || exists(conn, "github_runner_configs", &uuid).await? {
+        if !self.preserve || uuid.is_empty() || exists(conn, "github_runner_configs", &uuid).await?
+        {
             uuid = new_public_id();
         }
         let attrs = obj(json!({
@@ -881,17 +1113,27 @@ impl Import<'_> {
     ) -> R<Res> {
         let destination = resolve_destination(dg(payload, "destination_uuid"), destinations)?;
         let uuid = self.preserved_uuid(payload);
-        let uuid = self.resource_uuid(conn, "applications", uuid, "application").await?;
+        let uuid = self
+            .resource_uuid(conn, "applications", uuid, "application")
+            .await?;
 
         let columns = self.columns(conn, "applications").await?;
-        let source_attrs = dg(payload, "attributes").and_then(Value::as_object).cloned().unwrap_or_default();
+        let source_attrs = dg(payload, "attributes")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
         let mut attrs: Map<String, Value> = source_attrs
             .iter()
             .filter(|(k, _)| {
                 columns.contains(*k)
                     && !matches!(
                         k.as_str(),
-                        "id" | "environment_id" | "destination_id" | "destination_type" | "source_id" | "source_type" | "private_key_id"
+                        "id" | "environment_id"
+                            | "destination_id"
+                            | "destination_type"
+                            | "source_id"
+                            | "source_type"
+                            | "private_key_id"
                     )
                     && (APPLICATION_FILLABLE.contains(&k.as_str())
                         || matches!(k.as_str(), "is_maintenance_enabled" | "maintenance_page"))
@@ -912,15 +1154,24 @@ impl Import<'_> {
             let found = match source_type.as_str() {
                 "github_app" => match self.m.github.get(&source_uuid).copied() {
                     Some(id) => Some((id, GITHUB_MORPH)),
-                    None => self.git_source(conn, "github_apps", &source_uuid).await?.map(|id| (id, GITHUB_MORPH)),
+                    None => self
+                        .git_source(conn, "github_apps", &source_uuid)
+                        .await?
+                        .map(|id| (id, GITHUB_MORPH)),
                 },
                 "gitlab_app" => match self.m.gitlab.get(&source_uuid).copied() {
                     Some(id) => Some((id, GITLAB_MORPH)),
-                    None => self.git_source(conn, "gitlab_apps", &source_uuid).await?.map(|id| (id, GITLAB_MORPH)),
+                    None => self
+                        .git_source(conn, "gitlab_apps", &source_uuid)
+                        .await?
+                        .map(|id| (id, GITLAB_MORPH)),
                 },
                 "gitea_app" => match self.m.gitea.get(&source_uuid).copied() {
                     Some(id) => Some((id, GITEA_MORPH)),
-                    None => self.git_source(conn, "gitea_apps", &source_uuid).await?.map(|id| (id, GITEA_MORPH)),
+                    None => self
+                        .git_source(conn, "gitea_apps", &source_uuid)
+                        .await?
+                        .map(|id| (id, GITEA_MORPH)),
                 },
                 _ => None,
             };
@@ -959,7 +1210,10 @@ impl Import<'_> {
         }
 
         let status = if self.adopt {
-            attrs.get("status").filter(|s| crate::serialize::php_truthy(s)).map_or_else(|| "exited".to_owned(), text)
+            attrs
+                .get("status")
+                .filter(|s| crate::serialize::php_truthy(s))
+                .map_or_else(|| "exited".to_owned(), text)
         } else {
             "exited".to_owned()
         };
@@ -984,17 +1238,40 @@ impl Import<'_> {
                 }
             }
         }
-        self.insert(conn, "application_settings", settings_attrs).await?;
+        self.insert(conn, "application_settings", settings_attrs)
+            .await?;
 
-        let res = Res { id, uuid, morph: APPLICATION_MORPH, name: name.clone(), environment_id };
-        self.env_vars(conn, list(payload, "environment_variables"), &res, false).await?;
-        self.env_vars(conn, list(payload, "environment_variables_preview"), &res, true).await?;
-        self.persistent_storages(conn, list(payload, "persistent_storages"), &res).await?;
-        self.file_storages(conn, list(payload, "file_storages"), &res).await?;
-        self.scheduled_tasks(conn, list(payload, "scheduled_tasks"), "application_id", id).await?;
+        let res = Res {
+            id,
+            uuid,
+            morph: APPLICATION_MORPH,
+            name: name.clone(),
+            environment_id,
+        };
+        self.env_vars(conn, list(payload, "environment_variables"), &res, false)
+            .await?;
+        self.env_vars(
+            conn,
+            list(payload, "environment_variables_preview"),
+            &res,
+            true,
+        )
+        .await?;
+        self.persistent_storages(conn, list(payload, "persistent_storages"), &res)
+            .await?;
+        self.file_storages(conn, list(payload, "file_storages"), &res)
+            .await?;
+        self.scheduled_tasks(conn, list(payload, "scheduled_tasks"), "application_id", id)
+            .await?;
         self.tags(conn, list(payload, "tags"), &res).await?;
         self.previews(conn, list(payload, "previews"), &res).await?;
-        self.secret_manager_link(conn, dg(payload, "secret_manager_link"), &res, &format!("Application {name}")).await?;
+        self.secret_manager_link(
+            conn,
+            dg(payload, "secret_manager_link"),
+            &res,
+            &format!("Application {name}"),
+        )
+        .await?;
         Ok(res)
     }
 
@@ -1010,14 +1287,19 @@ impl Import<'_> {
             let value = match attrs.get(field) {
                 Some(v) if !v.is_null() => self.encrypt(Some(v)),
                 // `$application->manual_webhook_secret_* ??= Str::random(40)`.
-                _ if field != "http_basic_auth_password" => json!(self.enc.encrypt_string(&random_string(40))),
+                _ if field != "http_basic_auth_password" => {
+                    json!(self.enc.encrypt_string(&random_string(40)))
+                }
                 _ => Value::Null,
             };
             if field != "http_basic_auth_password" || attrs.contains_key(field) {
                 attrs.insert(field.to_owned(), value);
             }
         }
-        if let Some(v) = attrs.get("custom_nginx_configuration").filter(|v| !v.is_null()) {
+        if let Some(v) = attrs
+            .get("custom_nginx_configuration")
+            .filter(|v| !v.is_null())
+        {
             use base64::Engine;
             let encoded = base64::engine::general_purpose::STANDARD.encode(text(v));
             attrs.insert("custom_nginx_configuration".into(), json!(encoded));
@@ -1040,7 +1322,14 @@ impl Import<'_> {
         if attrs.get("fqdn").and_then(Value::as_str) == Some("") {
             attrs.insert("fqdn".into(), Value::Null);
         }
-        for field in ["install_command", "build_command", "start_command", "ports_exposes", "ports_mappings", "custom_network_aliases"] {
+        for field in [
+            "install_command",
+            "build_command",
+            "start_command",
+            "ports_exposes",
+            "ports_mappings",
+            "custom_network_aliases",
+        ] {
             if let Some(Value::String(s)) = attrs.get(field) {
                 let trimmed = s.trim().to_owned();
                 attrs.insert(field.to_owned(), json!(trimmed));
@@ -1060,16 +1349,27 @@ impl Import<'_> {
         let Some(&(type_name, table, encrypted)) =
             DATABASE_MODELS.iter().find(|(t, _, _)| *t == kind)
         else {
-            return Err(TransferError::Message(format!("Unsupported database type: {kind}")));
+            return Err(TransferError::Message(format!(
+                "Unsupported database type: {kind}"
+            )));
         };
         let destination = resolve_destination(dg(payload, "destination_uuid"), destinations)?;
         let uuid = self.preserved_uuid(payload);
         let uuid = self.resource_uuid(conn, table, uuid, "database").await?;
         let columns = self.columns(conn, table).await?;
-        let source_attrs = dg(payload, "attributes").and_then(Value::as_object).cloned().unwrap_or_default();
+        let source_attrs = dg(payload, "attributes")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
         let mut attrs: Map<String, Value> = source_attrs
             .iter()
-            .filter(|(k, _)| columns.contains(*k) && !matches!(k.as_str(), "id" | "environment_id" | "destination_id" | "destination_type"))
+            .filter(|(k, _)| {
+                columns.contains(*k)
+                    && !matches!(
+                        k.as_str(),
+                        "id" | "environment_id" | "destination_id" | "destination_type"
+                    )
+            })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         for column in encrypted {
@@ -1082,7 +1382,10 @@ impl Import<'_> {
             attrs.insert("ports_mappings".into(), Value::Null);
         }
         let status = if self.adopt {
-            attrs.get("status").filter(|s| crate::serialize::php_truthy(s)).map_or_else(|| "exited".to_owned(), text)
+            attrs
+                .get("status")
+                .filter(|s| crate::serialize::php_truthy(s))
+                .map_or_else(|| "exited".to_owned(), text)
         } else {
             "exited".to_owned()
         };
@@ -1094,13 +1397,29 @@ impl Import<'_> {
         let name = attrs.get("name").map(text).unwrap_or_default();
         let id = self.insert(conn, table, attrs).await?;
         let morph: &'static str = morph_of(type_name);
-        let res = Res { id, uuid, morph, name: name.clone(), environment_id };
-        self.env_vars(conn, list(payload, "environment_variables"), &res, false).await?;
-        self.persistent_storages(conn, list(payload, "persistent_storages"), &res).await?;
-        self.file_storages(conn, list(payload, "file_storages"), &res).await?;
+        let res = Res {
+            id,
+            uuid,
+            morph,
+            name: name.clone(),
+            environment_id,
+        };
+        self.env_vars(conn, list(payload, "environment_variables"), &res, false)
+            .await?;
+        self.persistent_storages(conn, list(payload, "persistent_storages"), &res)
+            .await?;
+        self.file_storages(conn, list(payload, "file_storages"), &res)
+            .await?;
         self.tags(conn, list(payload, "tags"), &res).await?;
-        self.scheduled_backups(conn, list(payload, "scheduled_backups"), &res).await?;
-        self.secret_manager_link(conn, dg(payload, "secret_manager_link"), &res, &format!("Database {name}")).await?;
+        self.scheduled_backups(conn, list(payload, "scheduled_backups"), &res)
+            .await?;
+        self.secret_manager_link(
+            conn,
+            dg(payload, "secret_manager_link"),
+            &res,
+            &format!("Database {name}"),
+        )
+        .await?;
         Ok(res)
     }
 
@@ -1115,15 +1434,25 @@ impl Import<'_> {
     ) -> R<Res> {
         let destination = resolve_destination(dg(payload, "destination_uuid"), destinations)?;
         let uuid = self.preserved_uuid(payload);
-        let uuid = self.resource_uuid(conn, "services", uuid, "service").await?;
+        let uuid = self
+            .resource_uuid(conn, "services", uuid, "service")
+            .await?;
         let columns = self.columns(conn, "services").await?;
-        let source_attrs = dg(payload, "attributes").and_then(Value::as_object).cloned().unwrap_or_default();
+        let source_attrs = dg(payload, "attributes")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
         let mut attrs: Map<String, Value> = source_attrs
             .iter()
             .filter(|(k, _)| {
                 columns.contains(*k)
                     && (SERVICE_FILLABLE.contains(&k.as_str())
-                        || matches!(k.as_str(), "is_maintenance_enabled" | "maintenance_page" | "include_coolify_default_variables"))
+                        || matches!(
+                            k.as_str(),
+                            "is_maintenance_enabled"
+                                | "maintenance_page"
+                                | "include_coolify_default_variables"
+                        ))
             })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
@@ -1140,24 +1469,77 @@ impl Import<'_> {
         attrs.insert("compose_parsing_version".into(), parser);
         let name = attrs.get("name").map(text).unwrap_or_default();
         let id = self.insert(conn, "services", attrs).await?;
-        let res = Res { id, uuid, morph: SERVICE_MORPH, name: name.clone(), environment_id };
-        self.env_vars(conn, list(payload, "environment_variables"), &res, false).await?;
-        self.scheduled_tasks(conn, list(payload, "scheduled_tasks"), "service_id", id).await?;
+        let res = Res {
+            id,
+            uuid,
+            morph: SERVICE_MORPH,
+            name: name.clone(),
+            environment_id,
+        };
+        self.env_vars(conn, list(payload, "environment_variables"), &res, false)
+            .await?;
+        self.scheduled_tasks(conn, list(payload, "scheduled_tasks"), "service_id", id)
+            .await?;
         self.tags(conn, list(payload, "tags"), &res).await?;
-        self.secret_manager_link(conn, dg(payload, "secret_manager_link"), &res, &format!("Service {name}")).await?;
+        self.secret_manager_link(
+            conn,
+            dg(payload, "secret_manager_link"),
+            &res,
+            &format!("Service {name}"),
+        )
+        .await?;
         for app in list(payload, "applications") {
-            let sa = self.service_child(conn, app, id, "service_applications", SERVICE_APP_MORPH, "service-app", &["uuid", "environment_variables", "persistent_storages", "file_storages", "attributes"]).await?;
-            self.env_vars(conn, list(app, "environment_variables"), &sa, false).await?;
-            self.persistent_storages(conn, list(app, "persistent_storages"), &sa).await?;
-            self.file_storages(conn, list(app, "file_storages"), &sa).await?;
+            let sa = self
+                .service_child(
+                    conn,
+                    app,
+                    id,
+                    "service_applications",
+                    SERVICE_APP_MORPH,
+                    "service-app",
+                    &[
+                        "uuid",
+                        "environment_variables",
+                        "persistent_storages",
+                        "file_storages",
+                        "attributes",
+                    ],
+                )
+                .await?;
+            self.env_vars(conn, list(app, "environment_variables"), &sa, false)
+                .await?;
+            self.persistent_storages(conn, list(app, "persistent_storages"), &sa)
+                .await?;
+            self.file_storages(conn, list(app, "file_storages"), &sa)
+                .await?;
             let key = dg(app, "uuid").map_or_else(|| sa.uuid.clone(), text);
             self.m.service_applications.insert(key, sa);
         }
         for db in list(payload, "databases") {
-            let sd = self.service_child(conn, db, id, "service_databases", SERVICE_DB_MORPH, "service-db", &["uuid", "environment_variables", "persistent_storages", "file_storages", "scheduled_backups", "attributes"]).await?;
-            self.persistent_storages(conn, list(db, "persistent_storages"), &sd).await?;
-            self.file_storages(conn, list(db, "file_storages"), &sd).await?;
-            self.scheduled_backups(conn, list(db, "scheduled_backups"), &sd).await?;
+            let sd = self
+                .service_child(
+                    conn,
+                    db,
+                    id,
+                    "service_databases",
+                    SERVICE_DB_MORPH,
+                    "service-db",
+                    &[
+                        "uuid",
+                        "environment_variables",
+                        "persistent_storages",
+                        "file_storages",
+                        "scheduled_backups",
+                        "attributes",
+                    ],
+                )
+                .await?;
+            self.persistent_storages(conn, list(db, "persistent_storages"), &sd)
+                .await?;
+            self.file_storages(conn, list(db, "file_storages"), &sd)
+                .await?;
+            self.scheduled_backups(conn, list(db, "scheduled_backups"), &sd)
+                .await?;
         }
         Ok(res)
     }
@@ -1175,7 +1557,10 @@ impl Import<'_> {
         thin_except: &[&str],
     ) -> R<Res> {
         let uuid = free_uuid(conn, table, self.preserved_uuid(payload)).await?;
-        let mut source = dg(payload, "attributes").and_then(Value::as_object).cloned().unwrap_or_default();
+        let mut source = dg(payload, "attributes")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
         if source.is_empty() {
             source = payload.as_object().cloned().unwrap_or_default();
             source.retain(|k, _| !thin_except.contains(&k.as_str()));
@@ -1183,7 +1568,13 @@ impl Import<'_> {
         let columns = self.columns(conn, table).await?;
         let mut attrs: Map<String, Value> = source
             .into_iter()
-            .filter(|(k, _)| columns.contains(k) && !matches!(k.as_str(), "id" | "service_id" | "created_at" | "updated_at" | "deleted_at"))
+            .filter(|(k, _)| {
+                columns.contains(k)
+                    && !matches!(
+                        k.as_str(),
+                        "id" | "service_id" | "created_at" | "updated_at" | "deleted_at"
+                    )
+            })
             .collect();
         attrs.insert("service_id".into(), json!(service_id));
         let name = attrs
@@ -1204,7 +1595,13 @@ impl Import<'_> {
         attrs.insert("status".into(), json!(status));
         attrs.insert("uuid".into(), json!(uuid));
         let id = self.insert(conn, table, attrs).await?;
-        Ok(Res { id, uuid, morph, name, environment_id: 0 })
+        Ok(Res {
+            id,
+            uuid,
+            morph,
+            name,
+            environment_id: 0,
+        })
     }
 
     /// `importEnvVars`.
@@ -1259,7 +1656,11 @@ impl Import<'_> {
             let uuid = free_uuid(conn, "local_persistent_volumes", uuid_or_new(v)).await?;
             let start = |s: String| {
                 let t = s.trim();
-                if t.starts_with('/') { t.to_owned() } else { format!("/{t}") }
+                if t.starts_with('/') {
+                    t.to_owned()
+                } else {
+                    format!("/{t}")
+                }
             };
             let host_path = match dg(v, "host_path") {
                 Some(h) if crate::serialize::php_truthy(h) => json!(start(text(h))),
@@ -1288,7 +1689,9 @@ impl Import<'_> {
                 self.m.volumes.insert(str_of(v, "uuid"), entry);
             }
             if !blank(dg(v, "standalone_sqlite_uuid")) {
-                self.m.pending_sqlite.push((id, text(&name), str_of(v, "standalone_sqlite_uuid")));
+                self.m
+                    .pending_sqlite
+                    .push((id, text(&name), str_of(v, "standalone_sqlite_uuid")));
             }
         }
         Ok(())
@@ -1302,14 +1705,19 @@ impl Import<'_> {
         resource: &Res,
     ) -> R<()> {
         static CHOWN: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(r"\A(?:[A-Za-z_][A-Za-z0-9_.-]*|[0-9]+)(?::(?:[A-Za-z_][A-Za-z0-9_.-]*|[0-9]+))?\z").expect("regex")
+            Regex::new(
+                r"\A(?:[A-Za-z_][A-Za-z0-9_.-]*|[0-9]+)(?::(?:[A-Za-z_][A-Za-z0-9_.-]*|[0-9]+))?\z",
+            )
+            .expect("regex")
         });
         static CHMOD: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"\A[0-7]{3,4}\z").expect("regex"));
         for s in storages {
             let is_host = truthy(dg(s, "is_host_file"));
             let Some(fs_path) = dg(s, "fs_path").and_then(Value::as_str) else {
-                return Err(TransferError::Message("Invalid imported file storage path.".into()));
+                return Err(TransferError::Message(
+                    "Invalid imported file storage path.".into(),
+                ));
             };
             let fs_path = if is_host {
                 coolify_jobs::services::storage::validate_host_file_mount_path(
@@ -1320,10 +1728,20 @@ impl Import<'_> {
                 fs_path.to_owned()
             };
             let (chown, chmod) = (dg(s, "chown"), dg(s, "chmod"));
-            if !blank(chown) && !chown.and_then(Value::as_str).is_some_and(|c| CHOWN.is_match(c)) {
-                return Err(TransferError::Message("Invalid imported file owner.".into()));
+            if !blank(chown)
+                && !chown
+                    .and_then(Value::as_str)
+                    .is_some_and(|c| CHOWN.is_match(c))
+            {
+                return Err(TransferError::Message(
+                    "Invalid imported file owner.".into(),
+                ));
             }
-            if !blank(chmod) && !chmod.and_then(Value::as_str).is_some_and(|c| CHMOD.is_match(c)) {
+            if !blank(chmod)
+                && !chmod
+                    .and_then(Value::as_str)
+                    .is_some_and(|c| CHMOD.is_match(c))
+            {
                 return Err(TransferError::Message("Invalid imported file mode.".into()));
             }
             let uuid = free_uuid(conn, "local_file_volumes", uuid_or_new(s)).await?;
@@ -1334,8 +1752,8 @@ impl Import<'_> {
                     "local_file_volumes",
                     obj(json!({
                         "uuid": uuid,
-                        "fs_path": self.enc.encrypt_string(&fs_path),
-                        "mount_path": self.encrypt(mount),
+                        "fs_path": fs_path,
+                        "mount_path": mount,
                         "content": self.encrypt(dg(s, "content")),
                         "is_directory": bool_of(s, "is_directory", false),
                         "is_host_file": is_host,
@@ -1441,7 +1859,9 @@ impl Import<'_> {
             return;
         }
         self.m.warnings.push(if truthy(dg(backup, "save_s3")) {
-            format!("Backup of {of}: S3 upload was turned off because its S3 storage was not found.")
+            format!(
+                "Backup of {of}: S3 upload was turned off because its S3 storage was not found."
+            )
         } else {
             format!("Backup of {of}: its S3 storage was not found; select it again.")
         });
@@ -1509,7 +1929,14 @@ impl Import<'_> {
                     })),
                 )
                 .await?;
-            self.sync_s3(conn, "scheduled_database_backup_s3_storage", "scheduled_database_backup_id", id, &s3_ids).await?;
+            self.sync_s3(
+                conn,
+                "scheduled_database_backup_s3_storage",
+                "scheduled_database_backup_id",
+                id,
+                &s3_ids,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -1645,13 +2072,23 @@ impl Import<'_> {
                 if self.preserve && !blank(dg(p, "uuid")) {
                     attrs.insert("uuid".into(), json!(uuid));
                 }
-                self.update(conn, "application_previews", "id", id, attrs).await?;
+                self.update(conn, "application_previews", "id", id, attrs)
+                    .await?;
                 (id, false)
             } else {
                 attrs.insert("uuid".into(), json!(uuid));
-                (self.insert(conn, "application_previews", attrs).await?, true)
+                (
+                    self.insert(conn, "application_previews", attrs).await?,
+                    true,
+                )
             };
-            let res = Res { id, uuid: uuid.clone(), morph: PREVIEW_MORPH, name: String::new(), environment_id: 0 };
+            let res = Res {
+                id,
+                uuid: uuid.clone(),
+                morph: PREVIEW_MORPH,
+                name: String::new(),
+                environment_id: 0,
+            };
             let key = dg(p, "uuid").map_or_else(|| uuid.clone(), text);
             self.m.previews.insert(key, res.clone());
             // Avoid duplicating volumes when re-importing the same preview.
@@ -1663,7 +2100,8 @@ impl Import<'_> {
             .fetch_one(&mut *conn)
             .await?;
             if was_created || count == 0 {
-                self.persistent_storages(conn, list(p, "persistent_storages"), &res).await?;
+                self.persistent_storages(conn, list(p, "persistent_storages"), &res)
+                    .await?;
             }
         }
         Ok(())
@@ -1791,23 +2229,44 @@ impl Import<'_> {
                 .bind(environment_id)
                 .fetch_one(&mut *conn)
                 .await?;
-        let mut merged = current.and_then(|v| v.as_object().cloned()).unwrap_or_default();
+        let mut merged = current
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
         merged.extend(imported);
-        self.update(conn, "environments", "id", environment_id, obj(json!({"canvas_positions": merged}))).await
+        self.update(
+            conn,
+            "environments",
+            "id",
+            environment_id,
+            obj(json!({"canvas_positions": merged})),
+        )
+        .await
     }
 
     /// `linkSqliteVolumes`.
     async fn link_sqlite(&mut self, conn: &mut PgConnection) -> R<Vec<String>> {
         let mut warnings = Vec::new();
         for (volume, name, sqlite_uuid) in std::mem::take(&mut self.m.pending_sqlite) {
-            let Some(sqlite) = self.m.databases.get(&sqlite_uuid).filter(|d| d.morph == "App\\Models\\StandaloneSqlite") else {
+            let Some(sqlite) = self
+                .m
+                .databases
+                .get(&sqlite_uuid)
+                .filter(|d| d.morph == "App\\Models\\StandaloneSqlite")
+            else {
                 warnings.push(format!(
                     "Volume {name} mounts a SQLite database that is not part of this transfer. Coolify does not protect it when that database or its applications are deleted."
                 ));
                 continue;
             };
             let id = sqlite.id;
-            self.update(conn, "local_persistent_volumes", "id", volume, obj(json!({"standalone_sqlite_id": id}))).await?;
+            self.update(
+                conn,
+                "local_persistent_volumes",
+                "id",
+                volume,
+                obj(json!({"standalone_sqlite_id": id})),
+            )
+            .await?;
         }
         Ok(warnings)
     }
@@ -1821,12 +2280,13 @@ impl Import<'_> {
         mut attrs: Map<String, Value>,
     ) -> R<(i64, String)> {
         let uuid = self.preserved_uuid(payload);
-        let existing: Option<i64> =
-            sqlx::query_scalar(&format!("SELECT id FROM {table} WHERE uuid = $1 AND team_id = $2"))
-                .bind(&uuid)
-                .bind(self.team_id)
-                .fetch_optional(&mut *conn)
-                .await?;
+        let existing: Option<i64> = sqlx::query_scalar(&format!(
+            "SELECT id FROM {table} WHERE uuid = $1 AND team_id = $2"
+        ))
+        .bind(&uuid)
+        .bind(self.team_id)
+        .fetch_optional(&mut *conn)
+        .await?;
         if let Some(id) = existing {
             return Ok((id, uuid));
         }
@@ -1867,7 +2327,9 @@ impl Import<'_> {
         }
         for payload in key_payloads {
             let (id, uuid) = self.private_key(conn, payload).await?;
-            self.m.private_keys.insert(dg(payload, "uuid").map_or_else(|| uuid.clone(), text), id);
+            self.m
+                .private_keys
+                .insert(dg(payload, "uuid").map_or_else(|| uuid.clone(), text), id);
             self.m.private_keys.insert(uuid, id);
             bump(created, "private_keys", 1);
         }
@@ -1875,12 +2337,39 @@ impl Import<'_> {
             if truthy(dg(p, "is_system_wide")) {
                 continue;
             }
-            let mut attrs = self.copy(p, &["organization", "custom_user", "custom_port", "app_id", "installation_id", "client_id", "contents", "metadata", "pull_requests", "administration", "organization_self_hosted_runners", "actions", "webhook_events", "runner_group_id"], &["client_secret", "webhook_secret"]);
+            let mut attrs = self.copy(
+                p,
+                &[
+                    "organization",
+                    "custom_user",
+                    "custom_port",
+                    "app_id",
+                    "installation_id",
+                    "client_id",
+                    "contents",
+                    "metadata",
+                    "pull_requests",
+                    "administration",
+                    "organization_self_hosted_runners",
+                    "actions",
+                    "webhook_events",
+                    "runner_group_id",
+                ],
+                &["client_secret", "webhook_secret"],
+            );
             attrs.insert("name".into(), or(dg(p, "name"), "Imported GitHub App"));
-            attrs.insert("api_url".into(), or(dg(p, "api_url"), "https://api.github.com"));
-            attrs.insert("html_url".into(), or(dg(p, "html_url"), "https://github.com"));
+            attrs.insert(
+                "api_url".into(),
+                or(dg(p, "api_url"), "https://api.github.com"),
+            );
+            attrs.insert(
+                "html_url".into(),
+                or(dg(p, "html_url"), "https://github.com"),
+            );
             let (id, uuid) = self.git_app(conn, "github_apps", p, attrs).await?;
-            self.m.github.insert(dg(p, "uuid").map_or_else(|| uuid.clone(), text), id);
+            self.m
+                .github
+                .insert(dg(p, "uuid").map_or_else(|| uuid.clone(), text), id);
             self.m.github.insert(uuid, id);
             bump(created, "github_apps", 1);
         }
@@ -1888,10 +2377,36 @@ impl Import<'_> {
             if truthy(dg(p, "is_system_wide")) {
                 continue;
             }
-            let mut attrs = self.copy(p, &["organization", "api_url", "html_url", "custom_port", "custom_user", "app_id", "oauth_id", "client_id", "expires_at", "redirect_uri", "group_name", "public_key", "webhook_token", "deploy_key_id"], &["app_secret", "client_secret", "access_token", "refresh_token"]);
+            let mut attrs = self.copy(
+                p,
+                &[
+                    "organization",
+                    "api_url",
+                    "html_url",
+                    "custom_port",
+                    "custom_user",
+                    "app_id",
+                    "oauth_id",
+                    "client_id",
+                    "expires_at",
+                    "redirect_uri",
+                    "group_name",
+                    "public_key",
+                    "webhook_token",
+                    "deploy_key_id",
+                ],
+                &[
+                    "app_secret",
+                    "client_secret",
+                    "access_token",
+                    "refresh_token",
+                ],
+            );
             attrs.insert("name".into(), or(dg(p, "name"), "Imported GitLab App"));
             let (id, uuid) = self.git_app(conn, "gitlab_apps", p, attrs).await?;
-            self.m.gitlab.insert(dg(p, "uuid").map_or_else(|| uuid.clone(), text), id);
+            self.m
+                .gitlab
+                .insert(dg(p, "uuid").map_or_else(|| uuid.clone(), text), id);
             self.m.gitlab.insert(uuid, id);
             bump(created, "gitlab_apps", 1);
         }
@@ -1899,18 +2414,50 @@ impl Import<'_> {
             if truthy(dg(p, "is_system_wide")) {
                 continue;
             }
-            let mut attrs = self.copy(p, &["organization", "api_url", "html_url", "client_id", "expires_at", "redirect_uri"], &["client_secret", "access_token", "refresh_token", "webhook_secret"]);
+            let mut attrs = self.copy(
+                p,
+                &[
+                    "organization",
+                    "api_url",
+                    "html_url",
+                    "client_id",
+                    "expires_at",
+                    "redirect_uri",
+                ],
+                &[
+                    "client_secret",
+                    "access_token",
+                    "refresh_token",
+                    "webhook_secret",
+                ],
+            );
             attrs.insert("name".into(), or(dg(p, "name"), "Imported Gitea App"));
-            attrs.insert("custom_port".into(), dg(p, "custom_port").filter(|v| !v.is_null()).cloned().unwrap_or(json!(22)));
-            attrs.insert("custom_user".into(), dg(p, "custom_user").filter(|v| !v.is_null()).cloned().unwrap_or(json!("git")));
+            attrs.insert(
+                "custom_port".into(),
+                dg(p, "custom_port")
+                    .filter(|v| !v.is_null())
+                    .cloned()
+                    .unwrap_or(json!(22)),
+            );
+            attrs.insert(
+                "custom_user".into(),
+                dg(p, "custom_user")
+                    .filter(|v| !v.is_null())
+                    .cloned()
+                    .unwrap_or(json!("git")),
+            );
             let (id, uuid) = self.git_app(conn, "gitea_apps", p, attrs).await?;
-            self.m.gitea.insert(dg(p, "uuid").map_or_else(|| uuid.clone(), text), id);
+            self.m
+                .gitea
+                .insert(dg(p, "uuid").map_or_else(|| uuid.clone(), text), id);
             self.m.gitea.insert(uuid, id);
             bump(created, "gitea_apps", 1);
         }
         for p in list(bundle, "s3_storages") {
             let (id, uuid) = self.s3_storage(conn, p).await?;
-            self.m.s3.insert(dg(p, "uuid").map_or_else(|| uuid.clone(), text), id);
+            self.m
+                .s3
+                .insert(dg(p, "uuid").map_or_else(|| uuid.clone(), text), id);
             self.m.s3.insert(uuid, id);
             bump(created, "s3_storages", 1);
         }
@@ -1929,9 +2476,14 @@ impl Import<'_> {
                     "name": or(dg(p, "name"), "Imported cloud token"),
                     "description": get_or_null(p, "description"),
                 }));
-                (self.insert(conn, "cloud_provider_tokens", attrs).await?, uuid)
+                (
+                    self.insert(conn, "cloud_provider_tokens", attrs).await?,
+                    uuid,
+                )
             };
-            self.m.cloud_tokens.insert(dg(p, "uuid").map_or_else(|| final_uuid.clone(), text), id);
+            self.m
+                .cloud_tokens
+                .insert(dg(p, "uuid").map_or_else(|| final_uuid.clone(), text), id);
             self.m.cloud_tokens.insert(final_uuid, id);
             bump(created, "cloud_provider_tokens", 1);
         }
@@ -1953,7 +2505,9 @@ impl Import<'_> {
                 }));
                 (self.insert(conn, "integration_tokens", attrs).await?, uuid)
             };
-            self.m.integration_tokens.insert(dg(p, "uuid").map_or_else(|| final_uuid.clone(), text), id);
+            self.m
+                .integration_tokens
+                .insert(dg(p, "uuid").map_or_else(|| final_uuid.clone(), text), id);
             self.m.integration_tokens.insert(final_uuid, id);
             bump(created, "integration_tokens", 1);
         }
@@ -1961,11 +2515,13 @@ impl Import<'_> {
     }
 
     async fn team_row(&self, conn: &mut PgConnection, table: &str, uuid: &str) -> R<Option<i64>> {
-        Ok(sqlx::query_scalar(&format!("SELECT id FROM {table} WHERE uuid = $1 AND team_id = $2"))
-            .bind(uuid)
-            .bind(self.team_id)
-            .fetch_optional(&mut *conn)
-            .await?)
+        Ok(sqlx::query_scalar(&format!(
+            "SELECT id FROM {table} WHERE uuid = $1 AND team_id = $2"
+        ))
+        .bind(uuid)
+        .bind(self.team_id)
+        .fetch_optional(&mut *conn)
+        .await?)
     }
 
     /// `importS3Storage`.
@@ -1991,7 +2547,12 @@ impl Import<'_> {
             return Ok((r.try_get("id")?, r.try_get("uuid")?));
         }
         let uuid = free_uuid(conn, "s3_storages", uuid).await?;
-        let secret = |key: &str| dg(p, key).filter(|v| !v.is_null()).map(|v| json!(self.enc.encrypt_string(text(v).trim()))).unwrap_or(Value::Null);
+        let secret = |key: &str| {
+            dg(p, key)
+                .filter(|v| !v.is_null())
+                .map(|v| json!(self.enc.encrypt_string(text(v).trim())))
+                .unwrap_or(Value::Null)
+        };
         let attrs = obj(json!({
             "uuid": uuid,
             "team_id": self.team_id,
@@ -2011,7 +2572,12 @@ impl Import<'_> {
     /// `importDnsZones`.
     async fn dns_zones(&mut self, conn: &mut PgConnection, zones: Vec<&Value>) -> R<()> {
         for p in zones {
-            let Some(token) = self.m.integration_tokens.get(&str_of(p, "integration_token_uuid")).copied() else {
+            let Some(token) = self
+                .m
+                .integration_tokens
+                .get(&str_of(p, "integration_token_uuid"))
+                .copied()
+            else {
                 continue;
             };
             let provider_zone = str_of(p, "provider_zone_id");
@@ -2052,7 +2618,11 @@ impl Import<'_> {
         let mut total = 0;
         for p in records {
             let name = str_of(p, "name");
-            let zone = self.m.dns_zones.get(&str_of(p, "dns_provider_zone_uuid")).copied();
+            let zone = self
+                .m
+                .dns_zones
+                .get(&str_of(p, "dns_provider_zone_uuid"))
+                .copied();
             let mut resources = Vec::new();
             for reference in list(p, "references") {
                 let uuid = str_of(reference, "uuid");
@@ -2085,7 +2655,10 @@ impl Import<'_> {
                 id
             } else {
                 let uuid = free_uuid(conn, "managed_dns_records", self.preserved_uuid(p)).await?;
-                let previous = dg(p, "ownership_comment").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let previous = dg(p, "ownership_comment")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
                 // Without the source comment there is no proof of ownership at the provider.
                 let owned = truthy(dg(p, "owned")) && !previous.is_empty();
                 let id = self
@@ -2128,7 +2701,12 @@ impl Import<'_> {
     }
 
     /// `importSslCertificates`.
-    async fn ssl_certificates(&mut self, conn: &mut PgConnection, certs: Vec<&Value>, server_id: i64) -> R<i64> {
+    async fn ssl_certificates(
+        &mut self,
+        conn: &mut PgConnection,
+        certs: Vec<&Value>,
+        server_id: i64,
+    ) -> R<i64> {
         let mut total = 0;
         for c in certs {
             let uuid = str_of(c, "resource_uuid");
@@ -2141,7 +2719,13 @@ impl Import<'_> {
             let valid_until = dg(c, "valid_until")
                 .filter(|v| crate::serialize::php_truthy(v))
                 .cloned()
-                .unwrap_or_else(|| json!((Utc::now() + chrono::Months::new(12)).format("%Y-%m-%dT%H:%M:%S").to_string()));
+                .unwrap_or_else(|| {
+                    json!(
+                        (Utc::now() + chrono::Months::new(12))
+                            .format("%Y-%m-%dT%H:%M:%S")
+                            .to_string()
+                    )
+                });
             let attrs = obj(json!({
                 "ssl_certificate": self.encrypt(dg(c, "ssl_certificate")),
                 "ssl_private_key": self.encrypt(dg(c, "ssl_private_key")),
@@ -2165,7 +2749,9 @@ impl Import<'_> {
     async fn volume_backups(&mut self, conn: &mut PgConnection, backups: Vec<&Value>) -> R<i64> {
         let mut total = 0;
         for b in backups {
-            let Some((volume, morph, label)) = self.m.volumes.get(&str_of(b, "backupable_uuid")).cloned() else {
+            let Some((volume, morph, label)) =
+                self.m.volumes.get(&str_of(b, "backupable_uuid")).cloned()
+            else {
                 continue;
             };
             let uuid = free_uuid(conn, "scheduled_volume_backups", uuid_or_new(b)).await?;
@@ -2198,7 +2784,14 @@ impl Import<'_> {
                     })),
                 )
                 .await?;
-            self.sync_s3(conn, "scheduled_volume_backup_s3_storage", "scheduled_volume_backup_id", id, &s3_ids).await?;
+            self.sync_s3(
+                conn,
+                "scheduled_volume_backup_s3_storage",
+                "scheduled_volume_backup_id",
+                id,
+                &s3_ids,
+            )
+            .await?;
             total += 1;
         }
         Ok(total)
@@ -2347,7 +2940,10 @@ fn assert_valid_server_payload(server: &Value) -> R<()> {
     let mut errors: Vec<(String, Vec<String>)> = Vec::new();
     if let Some(n) = dg(server, "name").filter(|v| !v.is_null()) {
         match n.as_str() {
-            None => errors.push(("name".into(), vec!["The name field must be a string.".into()])),
+            None => errors.push((
+                "name".into(),
+                vec!["The name field must be a string.".into()],
+            )),
             Some(s) if s.chars().count() > 255 => errors.push((
                 "name".into(),
                 vec!["The name field must not be greater than 255 characters.".into()],
@@ -2356,9 +2952,14 @@ fn assert_valid_server_payload(server: &Value) -> R<()> {
         }
     }
     match dg(server, "ip") {
-        v if blank(v) => errors.push(("ip".into(), vec!["The server.ip field is required.".into()])),
+        v if blank(v) => {
+            errors.push(("ip".into(), vec!["The server.ip field is required.".into()]))
+        }
         Some(v) if !v.is_string() => {
-            errors.push(("ip".into(), vec!["The server.ip field must be a string.".into()]));
+            errors.push((
+                "ip".into(),
+                vec!["The server.ip field must be a string.".into()],
+            ));
         }
         Some(v) => {
             if let Some(m) = crate::routes::servers::valid_server_ip(v) {
@@ -2368,7 +2969,10 @@ fn assert_valid_server_payload(server: &Value) -> R<()> {
         None => {}
     }
     match dg(server, "port") {
-        v if blank(v) => errors.push(("port".into(), vec!["The server.port field is required.".into()])),
+        v if blank(v) => errors.push((
+            "port".into(),
+            vec!["The server.port field is required.".into()],
+        )),
         Some(v) => {
             let n = match v {
                 Value::Number(n) => n.as_i64(),
@@ -2376,10 +2980,10 @@ fn assert_valid_server_payload(server: &Value) -> R<()> {
                 _ => None,
             };
             match n {
-                None => errors.push(("port".into(), vec![
-                    "The server.port field must be an integer.".into(),
-                    "The server.port field must be between 1 and 65535.".into(),
-                ])),
+                None => errors.push((
+                    "port".into(),
+                    vec!["The server.port field must be an integer.".into()],
+                )),
                 Some(p) if !(1..=65535).contains(&p) => errors.push((
                     "port".into(),
                     vec!["The server.port field must be between 1 and 65535.".into()],
@@ -2391,9 +2995,15 @@ fn assert_valid_server_payload(server: &Value) -> R<()> {
     }
     if let Some(u) = dg(server, "user").filter(|v| !v.is_null()) {
         match u.as_str() {
-            None => errors.push(("user".into(), vec!["The server.user field must be a string.".into()])),
+            None => errors.push((
+                "user".into(),
+                vec!["The server.user field must be a string.".into()],
+            )),
             Some(s) if !USER.is_match(s) => {
-                errors.push(("user".into(), vec!["The server.user field format is invalid.".into()]));
+                errors.push((
+                    "user".into(),
+                    vec!["The server.user field format is invalid.".into()],
+                ));
             }
             _ => {}
         }
@@ -2481,7 +3091,12 @@ async fn replaceable_archive(state: &AppState, uuid: &str, team_id: i64) -> R<Op
     .fetch_optional(state.db.pool())
     .await?;
     Ok(row.and_then(|(id, meta)| {
-        (meta.as_ref().and_then(|m| dg(m, "transfer.status")).and_then(Value::as_str) == Some("transferred")).then_some(id)
+        (meta
+            .as_ref()
+            .and_then(|m| dg(m, "transfer.status"))
+            .and_then(Value::as_str)
+            == Some("transferred"))
+        .then_some(id)
     }))
 }
 
@@ -2519,12 +3134,16 @@ pub async fn import(
     adopt: bool,
 ) -> R<Map<String, Value>> {
     let version = state.version.clone();
-    let enc = state.encrypter.as_ref().ok_or_else(|| {
-        TransferError::Message("APP_KEY is not configured.".to_owned())
-    })?;
+    let enc = state
+        .encrypter
+        .as_ref()
+        .ok_or_else(|| TransferError::Message("APP_KEY is not configured.".to_owned()))?;
     let validation = bundle::validate(bundle_map, &version);
     if !validation.errors.is_empty() {
-        return Err(TransferError::Validation(vec![("bundle".into(), validation.errors)]));
+        return Err(TransferError::Validation(vec![(
+            "bundle".into(),
+            validation.errors,
+        )]));
     }
     let bundle = Value::Object(bundle_map.clone());
     assert_valid_server_payload(dg(&bundle, "server").unwrap_or(&Value::Null))?;
@@ -2567,10 +3186,14 @@ pub async fn import(
         }
     }
     if uuid_conflict {
-        warnings.push(format!("A server with UUID {server_uuid} already exists on this instance."));
+        warnings.push(format!(
+            "A server with UUID {server_uuid} already exists on this instance."
+        ));
     }
     if ip_conflict {
-        warnings.push(format!("A server with IP/domain {server_ip} already exists on this instance."));
+        warnings.push(format!(
+            "A server with IP/domain {server_ip} already exists on this instance."
+        ));
     }
 
     let mut created = obj(json!({
@@ -2594,11 +3217,25 @@ pub async fn import(
                 }
             }
         }
-        for key in ["destinations", "github_apps", "gitlab_apps", "gitea_apps", "s3_storages", "cloud_provider_tokens", "integration_tokens", "managed_dns_records", "ssl_certificates", "volume_backups"] {
+        for key in [
+            "destinations",
+            "github_apps",
+            "gitlab_apps",
+            "gitea_apps",
+            "s3_storages",
+            "cloud_provider_tokens",
+            "integration_tokens",
+            "managed_dns_records",
+            "ssl_certificates",
+            "volume_backups",
+        ] {
             created.insert(key.to_owned(), json!(count(&bundle, key)));
         }
         let single = i64::from(truthy(dg(&bundle, "private_key")));
-        created.insert("private_keys".into(), json!(count(&bundle, "private_keys").max(single)));
+        created.insert(
+            "private_keys".into(),
+            json!(count(&bundle, "private_keys").max(single)),
+        );
         return Ok(obj(json!({
             "dry_run": true,
             "warnings": warnings,
@@ -2632,24 +3269,44 @@ pub async fn import(
         .execute(&mut *conn)
         .await?;
 
-    import.shared_dependencies(conn, &bundle, &mut created).await?;
+    import
+        .shared_dependencies(conn, &bundle, &mut created)
+        .await?;
     let key_payload = dg(&bundle, "private_key").unwrap_or(&Value::Null);
     let key_uuid = str_of(&bundle, "private_key.uuid");
     let key_id = match import.m.private_keys.get(&key_uuid).copied() {
         Some(id) => id,
         None => import.private_key(conn, key_payload).await?.0,
     };
-    let private_key_uuid: String = sqlx::query_scalar("SELECT uuid FROM private_keys WHERE id = $1")
-        .bind(key_id)
-        .fetch_one(&mut *conn)
+    let private_key_uuid: String =
+        sqlx::query_scalar("SELECT uuid FROM private_keys WHERE id = $1")
+            .bind(key_id)
+            .fetch_one(&mut *conn)
+            .await?;
+    let server = import
+        .server(
+            conn,
+            state,
+            dg(&bundle, "server").unwrap_or(&Value::Null),
+            key_id,
+        )
         .await?;
-    let server = import.server(conn, state, dg(&bundle, "server").unwrap_or(&Value::Null), key_id).await?;
-    let destinations = import.destinations(conn, list(&bundle, "destinations"), server.id).await?;
+    let destinations = import
+        .destinations(conn, list(&bundle, "destinations"), server.id)
+        .await?;
     created.insert("destinations".into(), json!(destinations.len()));
-    import.github_runner_config(conn, dg(&bundle, "github_runner_config"), server.id).await?;
+    import
+        .github_runner_config(conn, dg(&bundle, "github_runner_config"), server.id)
+        .await?;
 
     for v in list(&bundle, "shared_environment_variables.server") {
-        import.shared_variable(conn, v, json!({"type": "server", "server_id": server.id, "team_id": team_id})).await?;
+        import
+            .shared_variable(
+                conn,
+                v,
+                json!({"type": "server", "server_id": server.id, "team_id": team_id}),
+            )
+            .await?;
     }
     for v in list(&bundle, "shared_environment_variables.team") {
         let key = str_of(v, "key");
@@ -2666,42 +3323,67 @@ pub async fn import(
             ));
             continue;
         }
-        import.shared_variable(conn, v, json!({"type": "team", "team_id": team_id})).await?;
+        import
+            .shared_variable(conn, v, json!({"type": "team", "team_id": team_id}))
+            .await?;
     }
 
     for project_payload in list(&bundle, "projects") {
         let project_id = import.project(conn, project_payload, &mut created).await?;
         for env_payload in list(project_payload, "environments") {
-            let (env_id, env_name) = import.environment(conn, env_payload, project_id, &mut created).await?;
+            let (env_id, env_name) = import
+                .environment(conn, env_payload, project_id, &mut created)
+                .await?;
             for app in list(env_payload, "applications") {
                 let res = import.application(conn, app, env_id, &destinations).await?;
-                import.m.applications.insert(dg(app, "uuid").map_or_else(|| res.uuid.clone(), text), res);
+                import
+                    .m
+                    .applications
+                    .insert(dg(app, "uuid").map_or_else(|| res.uuid.clone(), text), res);
                 bump(&mut created, "applications", 1);
                 bump(&mut created, "previews", count(app, "previews"));
             }
             for db in list(env_payload, "databases") {
                 let res = import.database(conn, db, env_id, &destinations).await?;
-                import.m.databases.insert(dg(db, "uuid").map_or_else(|| res.uuid.clone(), text), res);
+                import
+                    .m
+                    .databases
+                    .insert(dg(db, "uuid").map_or_else(|| res.uuid.clone(), text), res);
                 bump(&mut created, "databases", 1);
             }
             for service in list(env_payload, "services") {
-                let res = import.service(conn, service, env_id, server.id, &destinations).await?;
-                import.m.services.insert(dg(service, "uuid").map_or_else(|| res.uuid.clone(), text), res);
+                let res = import
+                    .service(conn, service, env_id, server.id, &destinations)
+                    .await?;
+                import.m.services.insert(
+                    dg(service, "uuid").map_or_else(|| res.uuid.clone(), text),
+                    res,
+                );
                 bump(&mut created, "services", 1);
             }
-            import.canvas_positions(conn, dg(env_payload, "canvas_positions"), env_id).await?;
-            import.resource_links(conn, list(env_payload, "resource_links"), env_id, &env_name).await?;
+            import
+                .canvas_positions(conn, dg(env_payload, "canvas_positions"), env_id)
+                .await?;
+            import
+                .resource_links(conn, list(env_payload, "resource_links"), env_id, &env_name)
+                .await?;
         }
     }
     let sqlite_warnings = import.link_sqlite(conn).await?;
     warnings.extend(sqlite_warnings);
 
     import.dns_zones(conn, list(&bundle, "dns_zones")).await?;
-    let dns = import.managed_dns_records(conn, list(&bundle, "managed_dns_records"), &server).await?;
+    let dns = import
+        .managed_dns_records(conn, list(&bundle, "managed_dns_records"), &server)
+        .await?;
     created.insert("managed_dns_records".into(), json!(dns));
-    let ssl = import.ssl_certificates(conn, list(&bundle, "ssl_certificates"), server.id).await?;
+    let ssl = import
+        .ssl_certificates(conn, list(&bundle, "ssl_certificates"), server.id)
+        .await?;
     created.insert("ssl_certificates".into(), json!(ssl));
-    let backups = import.volume_backups(conn, list(&bundle, "volume_backups")).await?;
+    let backups = import
+        .volume_backups(conn, list(&bundle, "volume_backups"))
+        .await?;
     created.insert("volume_backups".into(), json!(backups));
     warnings.append(&mut import.m.warnings);
 
@@ -2775,7 +3457,9 @@ pub async fn import(
         }
         Err(e) => {
             if let Some(Value::Array(w)) = result.get_mut("warnings") {
-                w.push(json!(format!("Server imported, but automatic claim failed: {e}")));
+                w.push(json!(format!(
+                    "Server imported, but automatic claim failed: {e}"
+                )));
             }
         }
     }
@@ -2783,10 +3467,12 @@ pub async fn import(
 }
 
 async fn exists_any(state: &AppState, uuid: &str) -> R<bool> {
-    Ok(sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM servers WHERE uuid = $1)")
-        .bind(uuid)
-        .fetch_one(state.db.pool())
-        .await?)
+    Ok(
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM servers WHERE uuid = $1)")
+            .bind(uuid)
+            .fetch_one(state.db.pool())
+            .await?,
+    )
 }
 
 /// `ServerTransferClaimer::deleteArchive`: records only. Another instance manages the host, so
@@ -2833,11 +3519,15 @@ pub async fn delete_archive(conn: &mut PgConnection, server_id: i64) -> R<()> {
         .fetch_all(&mut *conn)
         .await?;
     for service in services {
-        for (table, morph) in [("service_applications", SERVICE_APP_MORPH), ("service_databases", SERVICE_DB_MORPH)] {
-            let ids: Vec<i64> = sqlx::query_scalar(&format!("SELECT id FROM {table} WHERE service_id = $1"))
-                .bind(service)
-                .fetch_all(&mut *conn)
-                .await?;
+        for (table, morph) in [
+            ("service_applications", SERVICE_APP_MORPH),
+            ("service_databases", SERVICE_DB_MORPH),
+        ] {
+            let ids: Vec<i64> =
+                sqlx::query_scalar(&format!("SELECT id FROM {table} WHERE service_id = $1"))
+                    .bind(service)
+                    .fetch_all(&mut *conn)
+                    .await?;
             for id in ids {
                 resources.push((table.to_owned(), id, morph));
             }
@@ -2862,12 +3552,7 @@ pub async fn delete_archive(conn: &mut PgConnection, server_id: i64) -> R<()> {
 }
 
 /// The relation deletes of `DeleteResourceJob(deleteFromCoolifyOnly: true)`.
-async fn delete_resource_rows(
-    conn: &mut PgConnection,
-    table: &str,
-    id: i64,
-    morph: &str,
-) -> R<()> {
+async fn delete_resource_rows(conn: &mut PgConnection, table: &str, id: i64, morph: &str) -> R<()> {
     for sql in [
         "DELETE FROM scheduled_volume_backup_s3_storage WHERE scheduled_volume_backup_id IN (SELECT id FROM scheduled_volume_backups WHERE (backupable_type = 'App\\Models\\LocalPersistentVolume' AND backupable_id IN (SELECT id FROM local_persistent_volumes WHERE resource_type = $1 AND resource_id = $2)) OR (backupable_type = 'App\\Models\\LocalFileVolume' AND backupable_id IN (SELECT id FROM local_file_volumes WHERE resource_type = $1 AND resource_id = $2)))",
         "DELETE FROM scheduled_volume_backups WHERE (backupable_type = 'App\\Models\\LocalPersistentVolume' AND backupable_id IN (SELECT id FROM local_persistent_volumes WHERE resource_type = $1 AND resource_id = $2)) OR (backupable_type = 'App\\Models\\LocalFileVolume' AND backupable_id IN (SELECT id FROM local_file_volumes WHERE resource_type = $1 AND resource_id = $2))",
@@ -2880,7 +3565,11 @@ async fn delete_resource_rows(
         "DELETE FROM scheduled_database_backups WHERE database_type = $1 AND database_id = $2",
         "DELETE FROM resource_links WHERE (source_type = $1 AND source_id = $2) OR (target_type = $1 AND target_id = $2)",
     ] {
-        sqlx::query(sql).bind(morph).bind(id).execute(&mut *conn).await?;
+        sqlx::query(sql)
+            .bind(morph)
+            .bind(id)
+            .execute(&mut *conn)
+            .await?;
     }
     if morph == APPLICATION_MORPH {
         for sql in [

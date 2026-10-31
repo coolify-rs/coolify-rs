@@ -13,7 +13,7 @@ use crate::auth::AuthCtx;
 use crate::input::{Input, lenient_json, query_param, validated_json};
 use crate::response::{ApiError, ApiResult, PhpJson};
 use crate::routes::servers::{normalize_ip, valid_server_ip};
-use crate::server_transfer::{TransferError, bundle, dg, importer, migrator, text};
+use crate::server_transfer::{TransferError, bundle, importer, migrator, text};
 use crate::state::AppState;
 
 fn answer(code: StatusCode, value: Value) -> axum::response::Response {
@@ -53,7 +53,9 @@ pub async fn migrate(
             json!({"message": "Migrating a server requires a token with read:sensitive (or root) ability and the owner team role."}),
         ));
     }
-    let s = servers::find(&state.db, ctx.team_id, &uuid).await?.ok_or(NOT_FOUND)?;
+    let s = servers::find(&state.db, ctx.team_id, &uuid)
+        .await?
+        .ok_or(NOT_FOUND)?;
     // `ServerPolicy::transfer`: owner.
     if ctx.role != coolify_domain::Role::Owner {
         return Err(ApiError::Unauthorized);
@@ -64,14 +66,17 @@ pub async fn migrate(
         let name = field.replace('_', " ");
         match input.get(field) {
             None | Some(Value::Null) => {
-                errors.insert(field.to_owned(), json!([format!("The {name} field is required.")]));
+                errors.insert(field.to_owned(), json!(["This field is required."]));
             }
             Some(Value::String(v)) if v.trim().is_empty() => {
-                errors.insert(field.to_owned(), json!([format!("The {name} field is required.")]));
+                errors.insert(field.to_owned(), json!(["This field is required."]));
             }
             Some(Value::String(v)) => {
                 if field == "target_url" && !crate::laravel_url::is_url(v) {
-                    errors.insert(field.to_owned(), json!([format!("The {name} field must be a valid URL.")]));
+                    errors.insert(
+                        field.to_owned(),
+                        json!([format!("The {name} field must be a valid URL.")]),
+                    );
                 }
             }
             Some(_) => {
@@ -100,9 +105,14 @@ pub async fn migrate(
     )
     .await
     {
-        return Ok(answer(StatusCode::UNPROCESSABLE_ENTITY, json!({"message": e})));
+        return Ok(answer(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"message": e}),
+        ));
     }
-    let fresh = servers::find(&state.db, ctx.team_id, &uuid).await?.ok_or(NOT_FOUND)?;
+    let fresh = servers::find(&state.db, ctx.team_id, &uuid)
+        .await?
+        .ok_or(NOT_FOUND)?;
     let migration = fresh
         .record
         .get("server_metadata")
@@ -124,41 +134,6 @@ pub async fn migrate(
             "server_uuid": s.uuid,
             "migration": migration,
             "message": format!("Transfer started. Follow it with GET /api/v1/servers/{}/transfer.", s.uuid),
-        }),
-    ))
-}
-
-/// `GET /servers/{uuid}/transfer`.
-pub async fn status(
-    State(state): State<AppState>,
-    Extension(ctx): Extension<AuthCtx>,
-    Path(uuid): Path<String>,
-) -> ApiResult {
-    let s = servers::find(&state.db, ctx.team_id, &uuid).await?.ok_or(NOT_FOUND)?;
-    let metadata = s.record.get("server_metadata").cloned().unwrap_or(Value::Null);
-    // The log and the error can name hosts and credentials problems, so members see only the state.
-    let mut migration = dg(&metadata, "migration").cloned().unwrap_or(Value::Null);
-    if !ctx.is_team_admin()
-        && let Value::Object(m) = &mut migration
-    {
-        m.remove("log");
-        m.remove("error");
-    }
-    let mut transfer = Map::new();
-    if let Some(Value::Object(t)) = dg(&metadata, "transfer") {
-        // `only()` keeps the order of its list.
-        for key in ["status", "export_id", "imported_at", "claimed_at", "transferred_at", "target_instance_url"] {
-            if let Some(v) = t.get(key) {
-                transfer.insert(key.to_owned(), v.clone());
-            }
-        }
-    }
-    Ok(answer(
-        StatusCode::OK,
-        json!({
-            "server_uuid": s.uuid,
-            "transfer": if transfer.is_empty() { json!([]) } else { Value::Object(transfer) },
-            "migration": migration,
         }),
     ))
 }
@@ -211,14 +186,14 @@ pub async fn check(
     let schema = query_param(&uri, "schema_version");
     let mut errors = Map::new();
     if server_uuid.as_deref().is_none_or(|s| s.trim().is_empty()) {
-        errors.insert("server_uuid".into(), json!(["The server uuid field is required."]));
+        errors.insert("server_uuid".into(), json!(["This field is required."]));
     }
     match ip.as_deref() {
         None => {
-            errors.insert("ip".into(), json!(["The ip field is required."]));
+            errors.insert("ip".into(), json!(["This field is required."]));
         }
         Some(v) if v.trim().is_empty() => {
-            errors.insert("ip".into(), json!(["The ip field is required."]));
+            errors.insert("ip".into(), json!(["This field is required."]));
         }
         Some(v) => {
             if let Some(m) = valid_server_ip(&json!(v)) {
@@ -229,26 +204,49 @@ pub async fn check(
     if let Some(p) = port.as_deref().filter(|p| !p.is_empty()) {
         match p.parse::<i64>() {
             Err(_) => {
-                errors.insert("port".into(), json!(["The port field must be an integer.", "The port field must be between 1 and 65535."]));
+                errors.insert("port".into(), json!(["The port field must be an integer."]));
             }
             Ok(n) if !(1..=65535).contains(&n) => {
-                errors.insert("port".into(), json!(["The port field must be between 1 and 65535."]));
+                errors.insert(
+                    "port".into(),
+                    json!(["The port field must be between 1 and 65535."]),
+                );
             }
             Ok(_) => {}
         }
     }
-    if schema.as_deref().filter(|s| !s.is_empty()).is_some_and(|s| s.parse::<i64>().is_err()) {
-        errors.insert("schema_version".into(), json!(["The schema version field must be an integer."]));
+    if schema
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .is_some_and(|s| s.parse::<i64>().is_err())
+    {
+        errors.insert(
+            "schema_version".into(),
+            json!(["The schema version field must be an integer."]),
+        );
     }
     let github = query_list(&uri, "system_github_apps").unwrap_or_default();
     let gitlab = query_list(&uri, "system_gitlab_apps").unwrap_or_default();
-    for (name, label, list) in [("system_github_apps", "system github apps", &github), ("system_gitlab_apps", "system gitlab apps", &gitlab)] {
+    for (name, label, list) in [
+        ("system_github_apps", "system github apps", &github),
+        ("system_gitlab_apps", "system gitlab apps", &gitlab),
+    ] {
         if list.len() > 100 {
-            errors.insert(name.to_owned(), json!([format!("The {label} field must not have more than 100 items.")]));
+            errors.insert(
+                name.to_owned(),
+                json!([format!(
+                    "The {label} field must not have more than 100 items."
+                )]),
+            );
         }
         for (i, v) in list.iter().enumerate() {
             if v.chars().count() > 64 {
-                errors.insert(format!("{name}.{i}"), json!([format!("The {name}.{i} field must not be greater than 64 characters.")]));
+                errors.insert(
+                    format!("{name}.{i}"),
+                    json!([format!(
+                        "The {name}.{i} field must not be greater than 64 characters."
+                    )]),
+                );
             }
         }
     }
@@ -282,9 +280,14 @@ pub async fn check(
         "gitlab": missing("gitlab_apps", gitlab).await,
     });
 
-    let version = schema.filter(|s| !s.is_empty()).map_or(bundle::SCHEMA_VERSION, |s| s.parse().unwrap_or(0));
+    let version = schema
+        .filter(|s| !s.is_empty())
+        .map_or(bundle::SCHEMA_VERSION, |s| s.parse().unwrap_or(0));
     let ip = ip.trim().to_owned();
-    let port = port.filter(|p| !p.is_empty()).and_then(|p| p.parse::<i64>().ok()).unwrap_or(22);
+    let port = port
+        .filter(|p| !p.is_empty())
+        .and_then(|p| p.parse::<i64>().ok())
+        .unwrap_or(22);
 
     // The target connects to the server over SSH when it takes over management.
     let probe_ip = normalize_ip(&ip);
@@ -324,7 +327,11 @@ pub async fn check(
         .filter(|c| c["ok"] == json!(false))
         .map(|c| text(&c["message"]))
         .collect();
-    let code = if failed.is_empty() { StatusCode::OK } else { StatusCode::UNPROCESSABLE_ENTITY };
+    let code = if failed.is_empty() {
+        StatusCode::OK
+    } else {
+        StatusCode::UNPROCESSABLE_ENTITY
+    };
     Ok(answer(
         code,
         json!({
@@ -341,7 +348,10 @@ fn request_boolean(input: &Input, key: &str, default: bool) -> bool {
         None => default,
         Some(Value::Bool(b)) => *b,
         Some(Value::Null) => false,
-        Some(v) => matches!(text(v).to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"),
+        Some(v) => matches!(
+            text(v).to_ascii_lowercase().as_str(),
+            "1" | "true" | "on" | "yes"
+        ),
     }
 }
 
@@ -363,13 +373,16 @@ pub async fn import(
         Some(Value::Object(m)) if !m.is_empty() => {}
         Some(Value::Array(a)) if !a.is_empty() => {}
         None | Some(Value::Null) | Some(Value::Array(_)) | Some(Value::Object(_)) => {
-            errors.insert("bundle".into(), json!(["The bundle field is required."]));
+            errors.insert("bundle".into(), json!(["This field is required."]));
         }
         Some(Value::String(s)) if s.trim().is_empty() => {
-            errors.insert("bundle".into(), json!(["The bundle field is required."]));
+            errors.insert("bundle".into(), json!(["This field is required."]));
         }
         Some(_) => {
-            errors.insert("bundle".into(), json!(["The bundle field must be an array."]));
+            errors.insert(
+                "bundle".into(),
+                json!(["The bundle field must be an array."]),
+            );
         }
     }
     for field in ["dry_run", "preserve_uuids", "adopt_mode"] {
@@ -378,10 +391,20 @@ pub async fn import(
             && !matches!(v, Value::Bool(_))
             && !matches!(text(v).as_str(), "0" | "1")
         {
-            errors.insert(field.to_owned(), json!([format!("The {} field must be true or false.", field.replace('_', " "))]));
+            errors.insert(
+                field.to_owned(),
+                json!([format!(
+                    "The {} field must be true or false.",
+                    field.replace('_', " ")
+                )]),
+            );
         }
     }
-    extra_fields(&input, &["bundle", "dry_run", "preserve_uuids", "adopt_mode"], &mut errors);
+    extra_fields(
+        &input,
+        &["bundle", "dry_run", "preserve_uuids", "adopt_mode"],
+        &mut errors,
+    );
     if !errors.is_empty() {
         return Ok(validation_failed(errors));
     }
@@ -403,9 +426,15 @@ pub async fn import(
             let mut payload = Map::new();
             payload.insert("message".into(), json!(e.message()));
             if let TransferError::Validation(_) = e {
-                payload.insert("errors".into(), Value::Object(e.errors().unwrap_or_default()));
+                payload.insert(
+                    "errors".into(),
+                    Value::Object(e.errors().unwrap_or_default()),
+                );
             }
-            Ok(answer(StatusCode::UNPROCESSABLE_ENTITY, Value::Object(payload)))
+            Ok(answer(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Value::Object(payload),
+            ))
         }
         Ok(result) => {
             let dry = result.get("dry_run") == Some(&json!(true));
@@ -419,7 +448,11 @@ pub async fn import(
             )
             .await;
             Ok(answer(
-                if dry { StatusCode::OK } else { StatusCode::CREATED },
+                if dry {
+                    StatusCode::OK
+                } else {
+                    StatusCode::CREATED
+                },
                 Value::Object(result),
             ))
         }
@@ -436,7 +469,9 @@ pub async fn complete(
     uri: Uri,
     body: Bytes,
 ) -> ApiResult {
-    let s = servers::find(&state.db, ctx.team_id, &uuid).await?.ok_or(NOT_FOUND)?;
+    let s = servers::find(&state.db, ctx.team_id, &uuid)
+        .await?
+        .ok_or(NOT_FOUND)?;
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
@@ -447,13 +482,21 @@ pub async fn complete(
             && !v.is_null()
             && !v.is_string()
         {
-            errors.insert(field.to_owned(), json!([format!("The {} field must be a string.", field.replace('_', " "))]));
+            errors.insert(
+                field.to_owned(),
+                json!([format!(
+                    "The {} field must be a string.",
+                    field.replace('_', " ")
+                )]),
+            );
         }
     }
     if !errors.is_empty() {
         return Ok(validation_failed(errors));
     }
-    let url = input.str("target_instance_url").filter(|u| !u.trim().is_empty());
+    let url = input
+        .str("target_instance_url")
+        .filter(|u| !u.trim().is_empty());
     let target = match url {
         None => None,
         Some(u) => match migrator::validate_instance_url(&state, u).await {
@@ -467,9 +510,19 @@ pub async fn complete(
     };
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let export_id = input.str("export_id");
-    let result = coolify_jobs::server_transfer::mark_transferred(jobs, s.id, export_id, target.as_deref(), false).await;
+    let result = coolify_jobs::server_transfer::mark_transferred(
+        jobs,
+        s.id,
+        export_id,
+        target.as_deref(),
+        false,
+    )
+    .await;
     match result {
-        Err(e) => Ok(answer(StatusCode::UNPROCESSABLE_ENTITY, json!({"message": e}))),
+        Err(e) => Ok(answer(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"message": e}),
+        )),
         Ok(v) => {
             audit::log(
                 &state,

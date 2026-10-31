@@ -83,7 +83,12 @@ fn host_of(url: &str) -> Option<String> {
 }
 
 /// `buildItems`.
-async fn build_items(state: &AppState, server_id: i64, uuid: &str, metadata: &Value) -> Result<Vec<Value>, String> {
+async fn build_items(
+    state: &AppState,
+    server_id: i64,
+    uuid: &str,
+    metadata: &Value,
+) -> Result<Vec<Value>, String> {
     let url = instance_url(&state.db).await;
     let webhook = format!("{url}/webhooks/source/github/events");
     let applications = query_rows(state, APPLICATIONS, server_id).await?;
@@ -92,14 +97,32 @@ async fn build_items(state: &AppState, server_id: i64, uuid: &str, metadata: &Va
     let runner = runner.first();
 
     let mut items = vec![
-        item("server_connection", "server", "Connection to the server".into(), None, json!([]), None, None),
-        item("sentinel", "server", "Sentinel sends its data to this instance".into(), None, json!([]), None, None),
+        item(
+            "server_connection",
+            "server",
+            "Connection to the server".into(),
+            None,
+            json!([]),
+            None,
+            None,
+        ),
+        item(
+            "sentinel",
+            "server",
+            "Sentinel sends its data to this instance".into(),
+            None,
+            json!([]),
+            None,
+            None,
+        ),
         // The SSH key moved with the server, so the previous instance still has a copy of it.
         item(
             "previous_ssh_key",
             "server",
             "Remove the SSH key of the previous instance from the server".into(),
-            Some("The previous instance keeps a copy of the SSH key. Add a new key of this instance to the server and select it here, then remove the old public key from ~/.ssh/authorized_keys on the server."),
+            Some(
+                "The previous instance keeps a copy of the SSH key. Add a new key of this instance to the server and select it here, then remove the old public key from ~/.ssh/authorized_keys on the server.",
+            ),
             json!([]),
             Some(format!("/server/{uuid}/private-key")),
             Some("Open private key"),
@@ -151,7 +174,8 @@ async fn build_items(state: &AppState, server_id: i64, uuid: &str, metadata: &Va
     }
     let mut seen = Vec::new();
     for a in applications.iter().filter(|a| {
-        a["source_type"].as_str() == Some("App\\Models\\GitlabApp") && a["source_system"] == json!(false)
+        a["source_type"].as_str() == Some("App\\Models\\GitlabApp")
+            && a["source_system"] == json!(false)
     }) {
         let source = text(&a["source_uuid"]);
         if seen.contains(&source) {
@@ -201,11 +225,22 @@ async fn build_items(state: &AppState, server_id: i64, uuid: &str, metadata: &Va
         (x.resource_type = 'App\\Models\\Application' AND x.resource_id IN (SELECT a.id FROM applications a WHERE (a.destination_type = 'App\\Models\\StandaloneDocker' AND a.destination_id IN (SELECT id FROM standalone_dockers WHERE server_id = $1)) OR (a.destination_type = 'App\\Models\\SwarmDocker' AND a.destination_id IN (SELECT id FROM swarm_dockers WHERE server_id = $1)))) \
         OR (x.resource_type = 'App\\Models\\ServiceApplication' AND x.resource_id IN (SELECT sa.id FROM service_applications sa JOIN services s ON s.id = sa.service_id WHERE s.server_id = $1)) ORDER BY r.name", server_id).await?;
     for r in records {
-        items.push(item("dns_record", &text(&r["uuid"]), format!("DNS record {}", text(&r["name"])), None, json!([]), None, None));
+        items.push(item(
+            "dns_record",
+            &text(&r["uuid"]),
+            format!("DNS record {}", text(&r["name"])),
+            None,
+            json!([]),
+            None,
+            None,
+        ));
     }
 
     let mut hosts = Vec::new();
-    let fqdns = applications.iter().chain(service_apps.iter()).map(|a| text(&a["fqdn"]));
+    let fqdns = applications
+        .iter()
+        .chain(service_apps.iter())
+        .map(|a| text(&a["fqdn"]));
     for fqdn in fqdns {
         for part in fqdn.split(',') {
             if let Some(h) = host_of(part)
@@ -216,17 +251,45 @@ async fn build_items(state: &AppState, server_id: i64, uuid: &str, metadata: &Va
         }
     }
     for host in hosts {
-        items.push(item("domain", &host, format!("Domain {host} points to the server"), None, json!([]), None, None));
+        items.push(item(
+            "domain",
+            &host,
+            format!("Domain {host} points to the server"),
+            None,
+            json!([]),
+            None,
+            None,
+        ));
     }
 
     // `s3Storages`: the storages of the backups of this server's databases.
-    let mut database_ids = String::from("(b.database_type = 'App\\Models\\ServiceDatabase' AND b.database_id IN (SELECT sd.id FROM service_databases sd JOIN services sv ON sv.id = sd.service_id WHERE sv.server_id = $1))");
-    for (table, model) in [("standalone_postgresqls", "StandalonePostgresql"), ("standalone_redis", "StandaloneRedis"), ("standalone_mongodbs", "StandaloneMongodb"), ("standalone_mysqls", "StandaloneMysql"), ("standalone_mariadbs", "StandaloneMariadb"), ("standalone_keydbs", "StandaloneKeydb"), ("standalone_dragonflies", "StandaloneDragonfly"), ("standalone_clickhouses", "StandaloneClickhouse"), ("standalone_sqlites", "StandaloneSqlite")] {
+    let mut database_ids = String::from(
+        "(b.database_type = 'App\\Models\\ServiceDatabase' AND b.database_id IN (SELECT sd.id FROM service_databases sd JOIN services sv ON sv.id = sd.service_id WHERE sv.server_id = $1))",
+    );
+    for (table, model) in [
+        ("standalone_postgresqls", "StandalonePostgresql"),
+        ("standalone_redis", "StandaloneRedis"),
+        ("standalone_mongodbs", "StandaloneMongodb"),
+        ("standalone_mysqls", "StandaloneMysql"),
+        ("standalone_mariadbs", "StandaloneMariadb"),
+        ("standalone_keydbs", "StandaloneKeydb"),
+        ("standalone_dragonflies", "StandaloneDragonfly"),
+        ("standalone_clickhouses", "StandaloneClickhouse"),
+        ("standalone_sqlites", "StandaloneSqlite"),
+    ] {
         database_ids.push_str(&format!(" OR (b.database_type = 'App\\Models\\{model}' AND b.database_id IN (SELECT x.id FROM {table} x WHERE (x.destination_type = 'App\\Models\\StandaloneDocker' AND x.destination_id IN (SELECT id FROM standalone_dockers WHERE server_id = $1)) OR (x.destination_type = 'App\\Models\\SwarmDocker' AND x.destination_id IN (SELECT id FROM swarm_dockers WHERE server_id = $1))))"));
     }
     let s3 = query_rows(state, &format!("SELECT s.uuid, s.name FROM s3_storages s WHERE s.team_id = (SELECT team_id FROM servers WHERE id = $1) AND s.id IN (SELECT b.s3_storage_id FROM scheduled_database_backups b WHERE {database_ids} UNION SELECT j.s3_storage_id FROM scheduled_database_backup_s3_storage j JOIN scheduled_database_backups b ON b.id = j.scheduled_database_backup_id WHERE {database_ids})"), server_id).await?;
     for st in s3 {
-        items.push(item("s3_storage", &text(&st["uuid"]), format!("S3 storage {} works from this instance", text(&st["name"])), None, json!([]), None, None));
+        items.push(item(
+            "s3_storage",
+            &text(&st["uuid"]),
+            format!("S3 storage {} works from this instance", text(&st["name"])),
+            None,
+            json!([]),
+            None,
+            None,
+        ));
     }
 
     if let Some(r) = runner {
@@ -241,7 +304,10 @@ async fn build_items(state: &AppState, server_id: i64, uuid: &str, metadata: &Va
         ));
     }
 
-    for a in applications.iter().filter(|a| git_sources.contains(&text(&a["uuid"]))) {
+    for a in applications
+        .iter()
+        .filter(|a| git_sources.contains(&text(&a["uuid"])))
+    {
         let link = (!a["project_uuid"].is_null()).then(|| {
             format!(
                 "/project/{}/environment/{}/application/{}/source",
@@ -312,10 +378,14 @@ pub async fn start_after_import(state: &AppState, server_id: i64, team_id: i64, 
             &state.db,
             state.encrypter.as_ref(),
             team_id,
-            format!("Server '{name}' was transferred to this instance. Open the server to finish the transfer: {count} steps to check."),
+            format!(
+                "Server '{name}' was transferred to this instance. Open the server to finish the transfer: {count} steps to check."
+            ),
             true,
         ),
-        Err(e) => tracing::warn!(server = %uuid, error = %e, "Could not start the transfer finish checklist"),
+        Err(e) => {
+            tracing::warn!(server = %uuid, error = %e, "Could not start the transfer finish checklist")
+        }
     }
 }
 
@@ -323,7 +393,8 @@ pub async fn start_after_import(state: &AppState, server_id: i64, team_id: i64, 
 pub async fn view(state: &AppState, server_id: i64) -> Result<Value, String> {
     let metadata = metadata_of(state, server_id).await?;
     let finish = dg(&metadata, "transfer.finish");
-    let transferred = dg(&metadata, "transfer.status").and_then(Value::as_str) == Some("transferred");
+    let transferred =
+        dg(&metadata, "transfer.status").and_then(Value::as_str) == Some("transferred");
     let Some(finish) = finish.filter(|f| f["finished_at"].is_null() && !transferred) else {
         return Ok(Value::Null);
     };
@@ -333,7 +404,13 @@ pub async fn view(state: &AppState, server_id: i64) -> Result<Value, String> {
         let (link, label) = link_of(it);
         let o = it.as_object_mut().expect("item");
         o.insert("group".into(), json!(group_of(&kind)));
-        o.insert("can_check".into(), json!(!matches!(kind.as_str(), "github_app_urls" | "previous_ssh_key")));
+        o.insert(
+            "can_check".into(),
+            json!(!matches!(
+                kind.as_str(),
+                "github_app_urls" | "previous_ssh_key"
+            )),
+        );
         o.insert("fix_label".into(), json!(fix_label(&kind)));
         o.insert("resolved_link".into(), json!(link));
         o.insert("resolved_link_label".into(), json!(label));
@@ -346,7 +423,8 @@ pub async fn view(state: &AppState, server_id: i64) -> Result<Value, String> {
 
 fn group_of(kind: &str) -> &'static str {
     match kind {
-        "github_app_webhook" | "github_app_urls" | "gitlab_webhook" | "manual_webhook" | "git_source" | "github_runners" => "git",
+        "github_app_webhook" | "github_app_urls" | "gitlab_webhook" | "manual_webhook"
+        | "git_source" | "github_runners" => "git",
         "dns_record" | "domain" => "dns",
         _ => "server",
     }
@@ -379,14 +457,23 @@ fn parse(s: Option<&str>) -> Option<DateTime<FixedOffset>> {
 
 /// `runCheck`: status, message, error. GitHub, Cloudflare and S3 calls are not ported, so those
 /// steps stay `action` with the reason in the error.
-async fn run_check(state: &AppState, server_id: i64, item: &Value, started_at: Option<&str>) -> (String, String, Option<String>) {
+async fn run_check(
+    state: &AppState,
+    server_id: i64,
+    item: &Value,
+    started_at: Option<&str>,
+) -> (String, String, Option<String>) {
     let kind = text(&item["type"]);
     let subject = text(&item["subject"]);
     let done = |s: &str, m: String, e: Option<String>| (s.to_owned(), m, e);
     match kind.as_str() {
         "server_connection" => {
             let Some(jobs) = state.jobs.as_ref() else {
-                return done("action", "This instance cannot connect to the server over SSH.".into(), Some("Remote execution is not configured.".into()));
+                return done(
+                    "action",
+                    "This instance cannot connect to the server over SSH.".into(),
+                    Some("Remote execution is not configured.".into()),
+                );
             };
             let srv = coolify_jobs::server_ops::Srv::load(jobs, server_id).await;
             let result = match srv {
@@ -394,32 +481,56 @@ async fn run_check(state: &AppState, server_id: i64, item: &Value, started_at: O
                 Err(e) => Err(e),
             };
             match result {
-                Ok((true, _)) => done("ok", "This instance connects to the server over SSH.".into(), None),
-                Ok((false, e)) => done("action", "This instance cannot connect to the server over SSH.".into(), Some(e)),
-                Err(e) => done("action", "This instance cannot connect to the server over SSH.".into(), Some(e)),
+                Ok((true, _)) => done(
+                    "ok",
+                    "This instance connects to the server over SSH.".into(),
+                    None,
+                ),
+                Ok((false, e)) => done(
+                    "action",
+                    "This instance cannot connect to the server over SSH.".into(),
+                    Some(e),
+                ),
+                Err(e) => done(
+                    "action",
+                    "This instance cannot connect to the server over SSH.".into(),
+                    Some(e),
+                ),
             }
         }
         "sentinel" => {
-            let updated: Option<(Option<chrono::NaiveDateTime>,)> = sqlx::query_as("SELECT sentinel_updated_at FROM servers WHERE id = $1")
-                .bind(server_id)
-                .fetch_optional(state.db.pool())
-                .await
-                .unwrap_or(None);
+            let updated: Option<(Option<chrono::NaiveDateTime>,)> =
+                sqlx::query_as("SELECT sentinel_updated_at FROM servers WHERE id = $1")
+                    .bind(server_id)
+                    .fetch_optional(state.db.pool())
+                    .await
+                    .unwrap_or(None);
             let started = parse(started_at).map(|d| d.naive_utc());
             match (updated.and_then(|u| u.0), started) {
-                (Some(u), Some(s)) if u > s => done("ok", format!("Sentinel sent data at {}.", u.format("%H:%M")), None),
-                _ => done("action", "No data from Sentinel since the transfer.".into(), None),
+                (Some(u), Some(s)) if u > s => done(
+                    "ok",
+                    format!("Sentinel sent data at {}.", u.format("%H:%M")),
+                    None,
+                ),
+                _ => done(
+                    "action",
+                    "No data from Sentinel since the transfer.".into(),
+                    None,
+                ),
             }
         }
-        "github_app_webhook" | "gitlab_webhook" | "manual_webhook" => {
-            done("action", "No webhook arrived since the transfer.".into(), None)
-        }
+        "github_app_webhook" | "gitlab_webhook" | "manual_webhook" => done(
+            "action",
+            "No webhook arrived since the transfer.".into(),
+            None,
+        ),
         "dns_record" => {
-            let owned: Option<(bool,)> = sqlx::query_as("SELECT owned FROM managed_dns_records WHERE uuid = $1")
-                .bind(&subject)
-                .fetch_optional(state.db.pool())
-                .await
-                .unwrap_or(None);
+            let owned: Option<(bool,)> =
+                sqlx::query_as("SELECT owned FROM managed_dns_records WHERE uuid = $1")
+                    .bind(&subject)
+                    .fetch_optional(state.db.pool())
+                    .await
+                    .unwrap_or(None);
             match owned {
                 None => done("unchecked", "This instance does not track this record anymore.".into(), None),
                 Some((true,)) => done("action", "Cloudflare does not confirm the record.".into(), Some("The record changed at Cloudflare, or Cloudflare cannot be reached with the token.".into())),
@@ -427,7 +538,11 @@ async fn run_check(state: &AppState, server_id: i64, item: &Value, started_at: O
             }
         }
         "domain" => check_domain(state, server_id, &subject).await,
-        "s3_storage" => done("action", "This instance cannot use the S3 storage.".into(), None),
+        "s3_storage" => done(
+            "action",
+            "This instance cannot use the S3 storage.".into(),
+            None,
+        ),
         "git_source" => {
             let rows = query_rows(state, "SELECT a.source_type, COALESCE(gh.name, gl.name) AS name, COALESCE(gh.is_system_wide, gl.is_system_wide) AS system_wide FROM applications a LEFT JOIN github_apps gh ON a.source_type = 'App\\Models\\GithubApp' AND gh.id = a.source_id LEFT JOIN gitlab_apps gl ON a.source_type = 'App\\Models\\GitlabApp' AND gl.id = a.source_id WHERE a.uuid = (SELECT uuid FROM applications WHERE id = $1)", item_app_id(state, &subject).await).await.unwrap_or_default();
             match rows.first().filter(|r| !r["name"].is_null()) {
@@ -440,18 +555,23 @@ async fn run_check(state: &AppState, server_id: i64, item: &Value, started_at: O
             }
         }
         "github_runners" => {
-            let enabled: Option<(bool,)> = sqlx::query_as("SELECT is_enabled FROM github_runner_configs WHERE server_id = $1")
-                .bind(server_id)
-                .fetch_optional(state.db.pool())
-                .await
-                .unwrap_or(None);
+            let enabled: Option<(bool,)> =
+                sqlx::query_as("SELECT is_enabled FROM github_runner_configs WHERE server_id = $1")
+                    .bind(server_id)
+                    .fetch_optional(state.db.pool())
+                    .await
+                    .unwrap_or(None);
             if enabled.is_some_and(|e| e.0) {
                 done("ok", "GitHub runners are enabled.".into(), None)
             } else {
                 done("action", "Disabled after the transfer. Enable them when the GitHub App sends its webhooks here.".into(), None)
             }
         }
-        _ => done("action", "Coolify could not do this step.".into(), Some("Coolify cannot check this step. Do it by hand, then mark it as done.".into())),
+        _ => done(
+            "action",
+            "Coolify could not do this step.".into(),
+            Some("Coolify cannot check this step. Do it by hand, then mark it as done.".into()),
+        ),
     }
 }
 
@@ -466,7 +586,11 @@ async fn item_app_id(state: &AppState, uuid: &str) -> i64 {
 }
 
 /// `checkDomain`.
-async fn check_domain(state: &AppState, server_id: i64, host: &str) -> (String, String, Option<String>) {
+async fn check_domain(
+    state: &AppState,
+    server_id: i64,
+    host: &str,
+) -> (String, String, Option<String>) {
     let ip: Option<(String,)> = sqlx::query_as("SELECT ip FROM servers WHERE id = $1")
         .bind(server_id)
         .fetch_optional(state.db.pool())
@@ -491,7 +615,11 @@ async fn check_domain(state: &AppState, server_id: i64, host: &str) -> (String, 
     if ips.iter().any(|i| server_ips.contains(i)) {
         return ("ok".into(), "The domain points to the server.".into(), None);
     }
-    let shown = if server_ips.is_empty() { ip } else { server_ips.join(", ") };
+    let shown = if server_ips.is_empty() {
+        ip
+    } else {
+        server_ips.join(", ")
+    };
     (
         "action".into(),
         "The domain points to another address.".into(),
@@ -503,19 +631,30 @@ async fn check_domain(state: &AppState, server_id: i64, host: &str) -> (String, 
 }
 
 /// `update`.
-async fn update_item(state: &AppState, server_id: i64, key: &str, status: &str, message: &str, error: Option<String>) -> Result<Value, String> {
+async fn update_item(
+    state: &AppState,
+    server_id: i64,
+    key: &str,
+    status: &str,
+    message: &str,
+    error: Option<String>,
+) -> Result<Value, String> {
     let mut tx = state.db.pool().begin().await.map_err(db_error)?;
     let mut metadata = locked_metadata(&mut tx, server_id).await?;
     let finish = metadata
         .get_mut("transfer")
         .and_then(|t| t.get_mut("finish"))
         .ok_or("This server has no transfer to finish.")?;
-    let items = finish["items"].as_array_mut().ok_or("This step is not in the list.")?;
+    let items = finish["items"]
+        .as_array_mut()
+        .ok_or("This step is not in the list.")?;
     let found = items
         .iter_mut()
         .find(|i| i["key"].as_str() == Some(key))
         .ok_or("This step is not in the list.")?;
-    let o = found.as_object_mut().ok_or("This step is not in the list.")?;
+    let o = found
+        .as_object_mut()
+        .ok_or("This step is not in the list.")?;
     o.insert("status".into(), json!(status));
     o.insert("message".into(), json!(message));
     o.insert("error".into(), json!(error));
@@ -547,7 +686,12 @@ pub async fn check_all(state: &AppState, server_id: i64) -> Result<(), String> {
         .map(|a| {
             a.iter()
                 .filter(|i| OPEN.contains(&i["status"].as_str().unwrap_or("")))
-                .filter(|i| !matches!(i["type"].as_str(), Some("github_app_urls" | "previous_ssh_key")))
+                .filter(|i| {
+                    !matches!(
+                        i["type"].as_str(),
+                        Some("github_app_urls" | "previous_ssh_key")
+                    )
+                })
                 .map(|i| text(&i["key"]))
                 .collect()
         })
@@ -556,7 +700,9 @@ pub async fn check_all(state: &AppState, server_id: i64) -> Result<(), String> {
         check(state, server_id, &key).await?;
     }
     let metadata = metadata_of(state, server_id).await?;
-    let mut finish = dg(&metadata, "transfer.finish").cloned().unwrap_or(json!({}));
+    let mut finish = dg(&metadata, "transfer.finish")
+        .cloned()
+        .unwrap_or(json!({}));
     finish["last_checked_at"] = json!(now_iso());
     save(state, server_id, finish).await
 }
@@ -583,25 +729,56 @@ pub async fn check_when_stale(state: &AppState, server_id: i64) -> Result<(), St
 pub async fn fix(state: &AppState, server_id: i64, key: &str) -> Result<Value, String> {
     let kind = key.split(':').next().unwrap_or("");
     if fix_label(kind).is_none() {
-        return update_item(state, server_id, key, "action", "Coolify could not do this step.", Some("Coolify cannot fix this step. Do it by hand, then mark it as done.".into())).await;
+        return update_item(
+            state,
+            server_id,
+            key,
+            "action",
+            "Coolify could not do this step.",
+            Some("Coolify cannot fix this step. Do it by hand, then mark it as done.".into()),
+        )
+        .await;
     }
     if kind == "sentinel" {
         if let Some(jobs) = state.jobs.as_ref() {
             let (jobs, id) = (jobs.clone(), server_id);
             tokio::spawn(async move {
-                if let Err(e) = coolify_jobs::server_ops::sentinel::check_and_start_sentinel(&jobs, id).await {
+                if let Err(e) =
+                    coolify_jobs::server_ops::sentinel::check_and_start_sentinel(&jobs, id).await
+                {
                     tracing::warn!(error = %e, "Restart Sentinel failed");
                 }
             });
         }
-        return update_item(state, server_id, key, "pending", "Sentinel restarts. The step turns OK when Sentinel sends data.", None).await;
+        return update_item(
+            state,
+            server_id,
+            key,
+            "pending",
+            "Sentinel restarts. The step turns OK when Sentinel sends data.",
+            None,
+        )
+        .await;
     }
     update_item(state, server_id, key, "action", "Coolify could not do this step.", Some(if kind == "dns_record" { "Coolify could not take ownership: the record changed at Cloudflare, or Cloudflare cannot be reached.".to_owned() } else { "GitHub cannot be reached from this build.".to_owned() })).await
 }
 
 /// `markDone`.
-pub async fn mark_done(state: &AppState, server_id: i64, key: &str, user: &str) -> Result<Value, String> {
-    update_item(state, server_id, key, "done", &format!("Marked as done by {user}."), None).await
+pub async fn mark_done(
+    state: &AppState,
+    server_id: i64,
+    key: &str,
+    user: &str,
+) -> Result<Value, String> {
+    update_item(
+        state,
+        server_id,
+        key,
+        "done",
+        &format!("Marked as done by {user}."),
+        None,
+    )
+    .await
 }
 
 /// `finish`.

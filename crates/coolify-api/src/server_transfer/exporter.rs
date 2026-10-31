@@ -21,16 +21,35 @@ const OWNERSHIP_COMMENT_PREFIX: &str = "managed-by: coolify";
 
 /// `SKIP_SERVER_SETTINGS`.
 const SKIP_SERVER_SETTINGS: &[&str] = &[
-    "id", "server_id", "created_at", "updated_at", "is_reachable", "is_usable", "force_disabled",
-    "sentinel_token", "sentinel_custom_url", "is_sentinel_enabled", "is_sentinel_debug_enabled",
-    "cloudflare_tunnel_integration_token_id", "patch_check_result", "patch_check_error",
+    "id",
+    "server_id",
+    "created_at",
+    "updated_at",
+    "is_reachable",
+    "is_usable",
+    "force_disabled",
+    "sentinel_token",
+    "sentinel_custom_url",
+    "is_sentinel_enabled",
+    "is_sentinel_debug_enabled",
+    "cloudflare_tunnel_integration_token_id",
+    "patch_check_result",
+    "patch_check_error",
     "patch_checked_at",
 ];
 
 /// `SKIP_APPLICATION_ATTRS`.
 const SKIP_APPLICATION: &[&str] = &[
-    "id", "created_at", "updated_at", "deleted_at", "environment_id", "destination_id",
-    "destination_type", "source_id", "source_type", "private_key_id",
+    "id",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "environment_id",
+    "destination_id",
+    "destination_type",
+    "source_id",
+    "source_type",
+    "private_key_id",
 ];
 
 /// The standalone database tables: table, type, and `$fillable` is taken from the row.
@@ -48,8 +67,15 @@ const DATABASES: &[(&str, &str)] = &[
 
 /// Columns of the standalone databases that are not in their `$fillable`.
 const DATABASE_NOT_FILLABLE: &[&str] = &[
-    "id", "created_at", "updated_at", "deleted_at", "environment_id", "destination_id",
-    "destination_type", "legacy_password_quoting", "config_hash",
+    "id",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "environment_id",
+    "destination_id",
+    "destination_type",
+    "legacy_password_quoting",
+    "config_hash",
 ];
 
 const DEST: &str = "((x.destination_type = 'App\\Models\\StandaloneDocker' AND x.destination_id IN (SELECT id FROM standalone_dockers WHERE server_id = $1)) \
@@ -180,7 +206,10 @@ impl<'a> Exporter<'a> {
     /// `findGitSource`: `(row, is_system_wide)`.
     async fn git_source(&self, table: &str, id: i64) -> R<Option<Value>> {
         let row = self
-            .one(&format!("SELECT * FROM {table} WHERE id = $1"), &[Bind::I(id)])
+            .one(
+                &format!("SELECT * FROM {table} WHERE id = $1"),
+                &[Bind::I(id)],
+            )
             .await?;
         if let Some(r) = &row
             && !truthy(r.get("is_system_wide"))
@@ -281,7 +310,9 @@ impl<'a> Exporter<'a> {
     async fn shared_vars(&self, column: &str, kind: &str, id: i64) -> R<Vec<Value>> {
         let rows = self
             .rows(
-                &format!("SELECT * FROM shared_environment_variables WHERE type = $1 AND {column} = $2"),
+                &format!(
+                    "SELECT * FROM shared_environment_variables WHERE type = $1 AND {column} = $2"
+                ),
                 &[Bind::S(kind), Bind::I(id)],
             )
             .await?;
@@ -289,7 +320,10 @@ impl<'a> Exporter<'a> {
     }
 
     fn shared_var(&self, v: &Value) -> Option<Value> {
-        if matches!(v["key"].as_str(), Some("COOLIFY_SERVER_UUID" | "COOLIFY_SERVER_NAME")) {
+        if matches!(
+            v["key"].as_str(),
+            Some("COOLIFY_SERVER_UUID" | "COOLIFY_SERVER_NAME")
+        ) {
             return None;
         }
         Some(json!({
@@ -321,7 +355,13 @@ impl<'a> Exporter<'a> {
                 "ignores_compose_driver_options": truthy(v.get("ignores_compose_driver_options")),
                 "standalone_sqlite_uuid": v["sqlite_uuid"],
             }));
-            self.storage_backups("App\\Models\\LocalPersistentVolume", "persistent_volume", id_of(v), &v["uuid"]).await?;
+            self.storage_backups(
+                "App\\Models\\LocalPersistentVolume",
+                "persistent_volume",
+                id_of(v),
+                &v["uuid"],
+            )
+            .await?;
         }
         let files = self
             .rows(
@@ -333,8 +373,8 @@ impl<'a> Exporter<'a> {
         for f in &files {
             file_out.push(json!({
                 "uuid": f["uuid"],
-                "fs_path": self.dec(f.get("fs_path")),
-                "mount_path": self.dec(f.get("mount_path")),
+                "fs_path": f["fs_path"],
+                "mount_path": f["mount_path"],
                 "content": self.dec(f.get("content")),
                 "is_directory": truthy(f.get("is_directory")),
                 "is_host_file": truthy(f.get("is_host_file")),
@@ -343,12 +383,24 @@ impl<'a> Exporter<'a> {
                 "is_based_on_git": truthy(f.get("is_based_on_git")),
                 "is_preview_suffix_enabled": truthy(f.get("is_preview_suffix_enabled")),
             }));
-            self.storage_backups("App\\Models\\LocalFileVolume", "file_volume", id_of(f), &f["uuid"]).await?;
+            self.storage_backups(
+                "App\\Models\\LocalFileVolume",
+                "file_volume",
+                id_of(f),
+                &f["uuid"],
+            )
+            .await?;
         }
         Ok((json!(persistent), json!(file_out)))
     }
 
-    async fn s3_uuids(&mut self, table: &str, column: &str, id: i64, primary: Option<i64>) -> R<(Value, Vec<String>)> {
+    async fn s3_uuids(
+        &mut self,
+        table: &str,
+        column: &str,
+        id: i64,
+        primary: Option<i64>,
+    ) -> R<(Value, Vec<String>)> {
         let joined = self
             .rows(
                 &format!("SELECT s.id, s.uuid FROM {table} j JOIN s3_storages s ON s.id = j.s3_storage_id WHERE j.{column} = $1"),
@@ -359,7 +411,10 @@ impl<'a> Exporter<'a> {
         let mut primary_uuid = Value::Null;
         if let Some(p) = primary {
             push_unique(&mut self.s3_ids, p);
-            if let Some(r) = self.one("SELECT uuid FROM s3_storages WHERE id = $1", &[Bind::I(p)]).await? {
+            if let Some(r) = self
+                .one("SELECT uuid FROM s3_storages WHERE id = $1", &[Bind::I(p)])
+                .await?
+            {
                 primary_uuid = r["uuid"].clone();
             }
         }
@@ -384,7 +439,14 @@ impl<'a> Exporter<'a> {
             }
             self.seen_backups.push(backup_id);
             let primary = b["s3_storage_id"].as_i64();
-            let (s3_uuid, uuids) = self.s3_uuids("scheduled_volume_backup_s3_storage", "scheduled_volume_backup_id", backup_id, primary).await?;
+            let (s3_uuid, uuids) = self
+                .s3_uuids(
+                    "scheduled_volume_backup_s3_storage",
+                    "scheduled_volume_backup_id",
+                    backup_id,
+                    primary,
+                )
+                .await?;
             self.volume_backups.push(json!({
                 "uuid": b["uuid"],
                 "backupable_kind": kind,
@@ -421,14 +483,31 @@ impl<'a> Exporter<'a> {
         let mut out = Vec::new();
         for b in rows {
             let primary = b["s3_storage_id"].as_i64();
-            let (s3_uuid, uuids) = self.s3_uuids("scheduled_database_backup_s3_storage", "scheduled_database_backup_id", id_of(&b), primary).await?;
-            let mut item = pick(&b, &[
-                "uuid", "description", "frequency", "databases_to_backup",
-                "database_backup_retention_amount_locally", "database_backup_retention_days_locally",
-                "database_backup_retention_max_storage_locally", "database_backup_retention_amount_s3",
-                "database_backup_retention_days_s3", "database_backup_retention_max_storage_s3",
-                "timeout", "missing_backup_notification_days",
-            ]);
+            let (s3_uuid, uuids) = self
+                .s3_uuids(
+                    "scheduled_database_backup_s3_storage",
+                    "scheduled_database_backup_id",
+                    id_of(&b),
+                    primary,
+                )
+                .await?;
+            let mut item = pick(
+                &b,
+                &[
+                    "uuid",
+                    "description",
+                    "frequency",
+                    "databases_to_backup",
+                    "database_backup_retention_amount_locally",
+                    "database_backup_retention_days_locally",
+                    "database_backup_retention_max_storage_locally",
+                    "database_backup_retention_amount_s3",
+                    "database_backup_retention_days_s3",
+                    "database_backup_retention_max_storage_s3",
+                    "timeout",
+                    "missing_backup_notification_days",
+                ],
+            );
             for f in ["enabled", "save_s3", "dump_all", "disable_local_backup"] {
                 item.insert(f.to_owned(), json!(truthy(b.get(f))));
             }
@@ -442,7 +521,10 @@ impl<'a> Exporter<'a> {
 
     async fn scheduled_tasks(&self, column: &str, id: i64) -> R<Value> {
         let rows = self
-            .rows(&format!("SELECT * FROM scheduled_tasks WHERE {column} = $1"), &[Bind::I(id)])
+            .rows(
+                &format!("SELECT * FROM scheduled_tasks WHERE {column} = $1"),
+                &[Bind::I(id)],
+            )
             .await?;
         Ok(json!(rows.iter().map(|t| json!({
             "uuid": t["uuid"], "name": t["name"], "command": t["command"], "frequency": t["frequency"],
@@ -495,13 +577,18 @@ impl<'a> Exporter<'a> {
         for f in fields {
             let v = &row[f];
             let value = match f {
-                "http_basic_auth_password" | "manual_webhook_secret_github" | "manual_webhook_secret_gitlab"
-                | "manual_webhook_secret_bitbucket" | "manual_webhook_secret_gitea" => self.dec(Some(v)),
+                "http_basic_auth_password"
+                | "manual_webhook_secret_github"
+                | "manual_webhook_secret_gitlab"
+                | "manual_webhook_secret_bitbucket"
+                | "manual_webhook_secret_gitea" => self.dec(Some(v)),
                 "custom_nginx_configuration" => v
                     .as_str()
                     .map(|s| {
                         use base64::Engine;
-                        let bytes = base64::engine::general_purpose::STANDARD.decode(s).unwrap_or_default();
+                        let bytes = base64::engine::general_purpose::STANDARD
+                            .decode(s)
+                            .unwrap_or_default();
                         json!(String::from_utf8_lossy(&bytes))
                     })
                     .unwrap_or(Value::Null),
@@ -514,11 +601,18 @@ impl<'a> Exporter<'a> {
         attrs
     }
 
-    async fn export_application(&mut self, app: &Value, dest: &BTreeMap<String, String>) -> R<Value> {
+    async fn export_application(
+        &mut self,
+        app: &Value,
+        dest: &BTreeMap<String, String>,
+    ) -> R<Value> {
         let id = id_of(app);
         let morph = "App\\Models\\Application";
         let settings_row = self
-            .one("SELECT * FROM application_settings WHERE application_id = $1", &[Bind::I(id)])
+            .one(
+                "SELECT * FROM application_settings WHERE application_id = $1",
+                &[Bind::I(id)],
+            )
             .await?;
         let settings = settings_row.map_or(json!({}), |s| {
             Value::Object(pick(&s, APPLICATION_SETTING_FILLABLE))
@@ -565,7 +659,10 @@ impl<'a> Exporter<'a> {
             return Ok(Value::Null);
         };
         let row = self
-            .one(&format!("SELECT uuid, is_system_wide FROM {table} WHERE id = $1"), &[Bind::I(id)])
+            .one(
+                &format!("SELECT uuid, is_system_wide FROM {table} WHERE id = $1"),
+                &[Bind::I(id)],
+            )
             .await?;
         Ok(row.map_or(Value::Null, |r| {
             json!({"type": kind, "uuid": r["uuid"], "system_wide": truthy(r.get("is_system_wide"))})
@@ -581,7 +678,9 @@ impl<'a> Exporter<'a> {
             .await?;
         let mut out = Vec::new();
         for p in rows {
-            let (persistent, _files) = self.storages("App\\Models\\ApplicationPreview", id_of(&p)).await?;
+            let (persistent, _files) = self
+                .storages("App\\Models\\ApplicationPreview", id_of(&p))
+                .await?;
             out.push(json!({
                 "uuid": p["uuid"],
                 "pull_request_id": p["pull_request_id"],
@@ -600,7 +699,12 @@ impl<'a> Exporter<'a> {
         Ok(json!(out))
     }
 
-    async fn export_database(&mut self, db: &Value, type_name: &str, dest: &BTreeMap<String, String>) -> R<Value> {
+    async fn export_database(
+        &mut self,
+        db: &Value,
+        type_name: &str,
+        dest: &BTreeMap<String, String>,
+    ) -> R<Value> {
         let id = id_of(db);
         let morph = format!("App\\Models\\{type_name}");
         let mut attrs = Map::new();
@@ -637,32 +741,48 @@ impl<'a> Exporter<'a> {
         }))
     }
 
-    async fn export_service(&mut self, service: &Value, dest: &BTreeMap<String, String>) -> R<Value> {
+    async fn export_service(
+        &mut self,
+        service: &Value,
+        dest: &BTreeMap<String, String>,
+    ) -> R<Value> {
         let id = id_of(service);
         let morph = "App\\Models\\Service";
         let mut attrs = Map::new();
         for f in SERVICE_FILLABLE {
-            if !matches!(*f, "environment_id" | "destination_id" | "destination_type" | "server_id")
-                && service.get(*f).is_some()
+            if !matches!(
+                *f,
+                "environment_id" | "destination_id" | "destination_type" | "server_id"
+            ) && service.get(*f).is_some()
             {
                 attrs.insert((*f).to_owned(), service[*f].clone());
             }
         }
-        for f in ["is_maintenance_enabled", "maintenance_page", "include_coolify_default_variables"] {
+        for f in [
+            "is_maintenance_enabled",
+            "maintenance_page",
+            "include_coolify_default_variables",
+        ] {
             if service.get(f).is_some() {
                 attrs.insert(f.to_owned(), service[f].clone());
             }
         }
         let mut applications = Vec::new();
         for sa in self
-            .rows("SELECT * FROM service_applications WHERE service_id = $1", &[Bind::I(id)])
+            .rows(
+                "SELECT * FROM service_applications WHERE service_id = $1",
+                &[Bind::I(id)],
+            )
             .await?
         {
             applications.push(self.service_application(&sa).await?);
         }
         let mut databases = Vec::new();
         for sd in self
-            .rows("SELECT * FROM service_databases WHERE service_id = $1", &[Bind::I(id)])
+            .rows(
+                "SELECT * FROM service_databases WHERE service_id = $1",
+                &[Bind::I(id)],
+            )
             .await?
         {
             databases.push(self.service_database(&sd).await?);
@@ -684,13 +804,42 @@ impl<'a> Exporter<'a> {
     async fn service_application(&mut self, a: &Value) -> R<Value> {
         let morph = "App\\Models\\ServiceApplication";
         let id = id_of(a);
-        let mut attrs = pick(a, &[
-            "name", "human_name", "description", "fqdn", "noindex_domains", "redirect", "domain_dns_statuses",
-            "domain_port_overrides", "ports", "exposes", "status", "exclude_from_status", "required_fqdn", "image",
-            "is_log_drain_enabled", "is_include_timestamps", "is_gzip_enabled", "is_stripprefix_enabled",
-            "is_force_https_enabled", "is_permanent_redirect_enabled", "traefik_certificate_resolver", "is_migrated",
-        ]);
+        let mut attrs = pick(
+            a,
+            &[
+                "name",
+                "human_name",
+                "description",
+                "fqdn",
+                "noindex_domains",
+                "redirect",
+                "domain_dns_statuses",
+                "domain_port_overrides",
+                "ports",
+                "exposes",
+                "status",
+                "exclude_from_status",
+                "required_fqdn",
+                "image",
+                "is_log_drain_enabled",
+                "is_include_timestamps",
+                "is_gzip_enabled",
+                "is_stripprefix_enabled",
+                "is_force_https_enabled",
+                "is_permanent_redirect_enabled",
+                "traefik_certificate_resolver",
+                "is_migrated",
+                "restart_count",
+                "max_restart_count",
+                "restart_limit_reached",
+                "last_restart_type",
+            ],
+        );
         attrs.insert("last_online_at".into(), raw_timestamp(&a["last_online_at"]));
+        attrs.insert(
+            "last_restart_at".into(),
+            cast_datetime(&a["last_restart_at"]),
+        );
         let (persistent, files) = self.storages(morph, id).await?;
         Ok(json!({
             "uuid": a["uuid"], "attributes": attrs, "name": a["name"], "fqdn": a["fqdn"], "image": a["image"],
@@ -712,11 +861,28 @@ impl<'a> Exporter<'a> {
     async fn service_database(&mut self, d: &Value) -> R<Value> {
         let morph = "App\\Models\\ServiceDatabase";
         let id = id_of(d);
-        let mut attrs = pick(d, &[
-            "name", "human_name", "description", "fqdn", "ports", "exposes", "status", "exclude_from_status", "image",
-            "public_port", "is_public", "is_log_drain_enabled", "is_include_timestamps", "is_gzip_enabled",
-            "is_stripprefix_enabled", "is_migrated", "custom_type", "public_port_timeout",
-        ]);
+        let mut attrs = pick(
+            d,
+            &[
+                "name",
+                "human_name",
+                "description",
+                "ports",
+                "exposes",
+                "status",
+                "exclude_from_status",
+                "image",
+                "public_port",
+                "is_public",
+                "is_log_drain_enabled",
+                "is_include_timestamps",
+                "is_gzip_enabled",
+                "is_stripprefix_enabled",
+                "is_migrated",
+                "custom_type",
+                "public_port_timeout",
+            ],
+        );
         attrs.insert("last_online_at".into(), raw_timestamp(&d["last_online_at"]));
         let (persistent, files) = self.storages(morph, id).await?;
         Ok(json!({
@@ -746,7 +912,9 @@ impl<'a> Exporter<'a> {
                 let value = match k.as_str() {
                     "logdrain_custom_config" | "geoip_maxmind_license_key" => self.dec(Some(v)),
                     "docker_version_checked_at" | "compose_version_checked_at" => cast_datetime(v),
-                    "docker_cleanup_frequency" => json!(coolify_compat::cron::translate_cron_expression(&text(v))),
+                    "docker_cleanup_frequency" => {
+                        json!(coolify_compat::cron::translate_cron_expression(&text(v)))
+                    }
                     _ => v.clone(),
                 };
                 out.insert(k.clone(), value);
@@ -754,22 +922,38 @@ impl<'a> Exporter<'a> {
         }
         let token_uuid = match settings["cloudflare_tunnel_integration_token_id"].as_i64() {
             Some(t) => self
-                .one("SELECT uuid FROM integration_tokens WHERE id = $1", &[Bind::I(t)])
+                .one(
+                    "SELECT uuid FROM integration_tokens WHERE id = $1",
+                    &[Bind::I(t)],
+                )
                 .await?
                 .map_or(Value::Null, |r| r["uuid"].clone()),
             None => Value::Null,
         };
-        out.insert("cloudflare_tunnel_integration_token_uuid".into(), token_uuid);
+        out.insert(
+            "cloudflare_tunnel_integration_token_uuid".into(),
+            token_uuid,
+        );
         let cloud = match server["cloud_provider_token_id"].as_i64() {
             Some(t) => self
-                .one("SELECT uuid FROM cloud_provider_tokens WHERE id = $1", &[Bind::I(t)])
+                .one(
+                    "SELECT uuid FROM cloud_provider_tokens WHERE id = $1",
+                    &[Bind::I(t)],
+                )
                 .await?
                 .map_or(Value::Null, |r| r["uuid"].clone()),
             None => Value::Null,
         };
-        let mut role = settings["server_role"].as_str().unwrap_or("both").to_owned();
+        let mut role = settings["server_role"]
+            .as_str()
+            .unwrap_or("both")
+            .to_owned();
         if !matches!(role.as_str(), "both" | "build" | "deployment") {
-            role = if truthy(settings.get("is_build_server")) { "build".into() } else { "both".into() };
+            role = if truthy(settings.get("is_build_server")) {
+                "build".into()
+            } else {
+                "both".into()
+            };
         }
         Ok(json!({
             "uuid": server["uuid"],
@@ -795,37 +979,59 @@ impl<'a> Exporter<'a> {
     /// `ServerTransferExporter::export`.
     pub async fn export(mut self, server_id: i64) -> R<Value> {
         if server_id == 0 {
-            return Err("The Coolify host (localhost) cannot be transferred between instances.".into());
+            return Err(
+                "The Coolify host (localhost) cannot be transferred between instances.".into(),
+            );
         }
         let server = self
             .one("SELECT * FROM servers WHERE id = $1", &[Bind::I(server_id)])
             .await?
             .ok_or("Server not found.")?;
         let settings = self
-            .one("SELECT * FROM server_settings WHERE server_id = $1", &[Bind::I(server_id)])
+            .one(
+                "SELECT * FROM server_settings WHERE server_id = $1",
+                &[Bind::I(server_id)],
+            )
             .await?
             .unwrap_or(Value::Null);
-        let key_id = server["private_key_id"].as_i64().ok_or("Server has no private key to export.")?;
-        let key = self.one("SELECT team_id FROM private_keys WHERE id = $1", &[Bind::I(key_id)]).await?.ok_or("Server has no private key to export.")?;
+        let key_id = server["private_key_id"]
+            .as_i64()
+            .ok_or("Server has no private key to export.")?;
+        let key = self
+            .one(
+                "SELECT team_id FROM private_keys WHERE id = $1",
+                &[Bind::I(key_id)],
+            )
+            .await?
+            .ok_or("Server has no private key to export.")?;
         if key.get("team_id").map_or(-1, super::as_int) != self.team_id {
             return Err("The server private key does not belong to the server team. Select a private key of this team first.".into());
         }
         push_unique(&mut self.private_key_ids, key_id);
 
         let applications = self
-            .rows(&format!("SELECT x.* FROM applications x WHERE {DEST} AND x.deleted_at IS NULL"), &[Bind::I(server_id)])
+            .rows(
+                &format!("SELECT x.* FROM applications x WHERE {DEST} AND x.deleted_at IS NULL"),
+                &[Bind::I(server_id)],
+            )
             .await?;
         let mut databases: Vec<(Value, &str)> = Vec::new();
         for (table, type_name) in DATABASES {
             for row in self
-                .rows(&format!("SELECT x.* FROM {table} x WHERE {DEST} AND x.deleted_at IS NULL"), &[Bind::I(server_id)])
+                .rows(
+                    &format!("SELECT x.* FROM {table} x WHERE {DEST} AND x.deleted_at IS NULL"),
+                    &[Bind::I(server_id)],
+                )
                 .await?
             {
                 databases.push((row, type_name));
             }
         }
         let services = self
-            .rows("SELECT * FROM services WHERE server_id = $1 AND deleted_at IS NULL", &[Bind::I(server_id)])
+            .rows(
+                "SELECT * FROM services WHERE server_id = $1 AND deleted_at IS NULL",
+                &[Bind::I(server_id)],
+            )
             .await?;
 
         // `assertNoAdditionalDestinations`.
@@ -840,20 +1046,36 @@ impl<'a> Exporter<'a> {
         }
 
         // `collectProjectIds`.
-        let mut env_ids: Vec<i64> = applications.iter().chain(services.iter()).filter_map(|r| r["environment_id"].as_i64()).collect();
-        env_ids.extend(databases.iter().filter_map(|(r, _)| r["environment_id"].as_i64()));
+        let mut env_ids: Vec<i64> = applications
+            .iter()
+            .chain(services.iter())
+            .filter_map(|r| r["environment_id"].as_i64())
+            .collect();
+        env_ids.extend(
+            databases
+                .iter()
+                .filter_map(|(r, _)| r["environment_id"].as_i64()),
+        );
         env_ids.sort_unstable();
         env_ids.dedup();
         let mut project_ids = Vec::new();
         for env in &env_ids {
-            if let Some(r) = self.one("SELECT project_id FROM environments WHERE id = $1", &[Bind::I(*env)]).await?
+            if let Some(r) = self
+                .one(
+                    "SELECT project_id FROM environments WHERE id = $1",
+                    &[Bind::I(*env)],
+                )
+                .await?
                 && let Some(p) = r["project_id"].as_i64()
             {
                 push_unique(&mut project_ids, p);
             }
         }
         let mut projects = self
-            .rows("SELECT * FROM projects WHERE team_id = $1 ORDER BY name", &[Bind::I(self.team_id)])
+            .rows(
+                "SELECT * FROM projects WHERE team_id = $1 ORDER BY name",
+                &[Bind::I(self.team_id)],
+            )
             .await?;
         projects.retain(|p| project_ids.contains(&id_of(p)));
         if projects.len() != project_ids.len() {
@@ -863,8 +1085,21 @@ impl<'a> Exporter<'a> {
         // `destinationUuidMap` and `exportDestinations`.
         let mut dest = BTreeMap::new();
         let mut destinations = Vec::new();
-        for (table, morph, kind) in [("standalone_dockers", "App\\Models\\StandaloneDocker", "standalone"), ("swarm_dockers", "App\\Models\\SwarmDocker", "swarm")] {
-            for d in self.rows(&format!("SELECT * FROM {table} WHERE server_id = $1"), &[Bind::I(server_id)]).await? {
+        for (table, morph, kind) in [
+            (
+                "standalone_dockers",
+                "App\\Models\\StandaloneDocker",
+                "standalone",
+            ),
+            ("swarm_dockers", "App\\Models\\SwarmDocker", "swarm"),
+        ] {
+            for d in self
+                .rows(
+                    &format!("SELECT * FROM {table} WHERE server_id = $1"),
+                    &[Bind::I(server_id)],
+                )
+                .await?
+            {
                 dest.insert(format!("{morph}:{}", id_of(&d)), text(&d["uuid"]));
                 destinations.push(json!({"uuid": d["uuid"], "name": d["name"], "network": d["network"], "type": kind}));
             }
@@ -900,8 +1135,12 @@ impl<'a> Exporter<'a> {
         let cloud = server["cloud_provider_token_id"].as_i64();
         let cloud_tokens = match cloud {
             Some(t) => {
-                let r = self.team_record("cloud_provider_tokens", t, "cloud provider token").await?;
-                vec![json!({"uuid": r["uuid"], "provider": r["provider"], "token": self.dec(r.get("token")), "name": r["name"], "description": r["description"]})]
+                let r = self
+                    .team_record("cloud_provider_tokens", t, "cloud provider token")
+                    .await?;
+                vec![
+                    json!({"uuid": r["uuid"], "provider": r["provider"], "token": self.dec(r.get("token")), "name": r["name"], "description": r["description"]}),
+                ]
             }
             None => Vec::new(),
         };
@@ -910,7 +1149,9 @@ impl<'a> Exporter<'a> {
             push_unique(&mut self.token_ids, t);
         }
 
-        let dns = self.managed_dns(server_id, &server, &applications, &services).await?;
+        let dns = self
+            .managed_dns(server_id, &server, &applications, &services)
+            .await?;
         let server_shared = self.shared_vars("server_id", "server", server_id).await?;
 
         // `exportProject`.
@@ -919,7 +1160,10 @@ impl<'a> Exporter<'a> {
             let project_id = id_of(project);
             let mut environments = Vec::new();
             for env in self
-                .rows("SELECT * FROM environments WHERE project_id = $1 ORDER BY name", &[Bind::I(project_id)])
+                .rows(
+                    "SELECT * FROM environments WHERE project_id = $1 ORDER BY name",
+                    &[Bind::I(project_id)],
+                )
                 .await?
             {
                 let env_id = id_of(&env);
@@ -933,19 +1177,28 @@ impl<'a> Exporter<'a> {
                 for a in applications.iter().filter(|a| in_env(a)) {
                     apps.push(self.export_application(a, &dest).await?);
                     uuids.push(text(&a["uuid"]));
-                    ends.insert(format!("App\\Models\\Application:{}", id_of(a)), json!({"kind": "application", "uuid": a["uuid"]}));
+                    ends.insert(
+                        format!("App\\Models\\Application:{}", id_of(a)),
+                        json!({"kind": "application", "uuid": a["uuid"]}),
+                    );
                 }
                 let mut dbs = Vec::new();
                 for (d, t) in databases.iter().filter(|(d, _)| in_env(d)) {
                     dbs.push(self.export_database(d, t, &dest).await?);
                     uuids.push(text(&d["uuid"]));
-                    ends.insert(format!("App\\Models\\{t}:{}", id_of(d)), json!({"kind": "database", "uuid": d["uuid"]}));
+                    ends.insert(
+                        format!("App\\Models\\{t}:{}", id_of(d)),
+                        json!({"kind": "database", "uuid": d["uuid"]}),
+                    );
                 }
                 let mut svcs = Vec::new();
                 for s in services.iter().filter(|s| in_env(s)) {
                     svcs.push(self.export_service(s, &dest).await?);
                     uuids.push(text(&s["uuid"]));
-                    ends.insert(format!("App\\Models\\Service:{}", id_of(s)), json!({"kind": "service", "uuid": s["uuid"]}));
+                    ends.insert(
+                        format!("App\\Models\\Service:{}", id_of(s)),
+                        json!({"kind": "service", "uuid": s["uuid"]}),
+                    );
                 }
                 let mut positions = Map::new();
                 if let Value::Object(p) = &env["canvas_positions"] {
@@ -956,9 +1209,23 @@ impl<'a> Exporter<'a> {
                     }
                 }
                 let mut links = Vec::new();
-                for link in self.rows("SELECT * FROM resource_links WHERE environment_id = $1 ORDER BY id", &[Bind::I(env_id)]).await? {
-                    let source = ends.get(&format!("{}:{}", text(&link["source_type"]), text(&link["source_id"])));
-                    let target = ends.get(&format!("{}:{}", text(&link["target_type"]), text(&link["target_id"])));
+                for link in self
+                    .rows(
+                        "SELECT * FROM resource_links WHERE environment_id = $1 ORDER BY id",
+                        &[Bind::I(env_id)],
+                    )
+                    .await?
+                {
+                    let source = ends.get(&format!(
+                        "{}:{}",
+                        text(&link["source_type"]),
+                        text(&link["source_id"])
+                    ));
+                    let target = ends.get(&format!(
+                        "{}:{}",
+                        text(&link["target_type"]),
+                        text(&link["target_id"])
+                    ));
                     match (source, target) {
                         (Some(s), Some(t)) => links.push(json!({"uuid": link["uuid"], "label": link["label"], "source": s, "target": t})),
                         _ => self.left_out_links += 1,
@@ -996,11 +1263,23 @@ impl<'a> Exporter<'a> {
 
         // `buildWarnings`.
         let mut warnings = Vec::new();
-        for (morph, table, name) in [(GITHUB, "github_apps", "GitHub"), (GITLAB, "gitlab_apps", "GitLab"), (GITEA, "gitea_apps", "Gitea")] {
+        for (morph, table, name) in [
+            (GITHUB, "github_apps", "GitHub"),
+            (GITLAB, "gitlab_apps", "GitLab"),
+            (GITEA, "gitea_apps", "Gitea"),
+        ] {
             let mut uses = false;
-            for a in applications.iter().filter(|a| a["source_type"].as_str() == Some(morph)) {
+            for a in applications
+                .iter()
+                .filter(|a| a["source_type"].as_str() == Some(morph))
+            {
                 if let Some(id) = a["source_id"].as_i64()
-                    && let Some(r) = self.one(&format!("SELECT is_system_wide FROM {table} WHERE id = $1"), &[Bind::I(id)]).await?
+                    && let Some(r) = self
+                        .one(
+                            &format!("SELECT is_system_wide FROM {table} WHERE id = $1"),
+                            &[Bind::I(id)],
+                        )
+                        .await?
                     && truthy(r.get("is_system_wide"))
                 {
                     uses = true;
@@ -1026,7 +1305,13 @@ impl<'a> Exporter<'a> {
         // S3 storages must be in the team.
         let mut s3_out = Vec::new();
         for id in self.s3_ids.clone() {
-            let Some(s) = self.one("SELECT * FROM s3_storages WHERE team_id = $1 AND id = $2", &[Bind::I(self.team_id), Bind::I(id)]).await? else {
+            let Some(s) = self
+                .one(
+                    "SELECT * FROM s3_storages WHERE team_id = $1 AND id = $2",
+                    &[Bind::I(self.team_id), Bind::I(id)],
+                )
+                .await?
+            else {
                 return Err("An S3 storage used by a backup on this server does not belong to the server team. Select an S3 storage of this team first.".into());
             };
             s3_out.push(json!({
@@ -1043,13 +1328,19 @@ impl<'a> Exporter<'a> {
         let (github, gitlab, gitea, checklist_names) = self.export_git_apps().await?;
         let mut tokens = Vec::new();
         for id in self.token_ids.clone() {
-            let t = self.team_record("integration_tokens", id, "integration token").await?;
+            let t = self
+                .team_record("integration_tokens", id, "integration token")
+                .await?;
             tokens.push(json!({"uuid": t["uuid"], "provider": t["provider"], "name": t["name"], "token": self.dec(t.get("token")), "capabilities": t["capabilities"], "metadata": t["metadata"]}));
         }
 
-        let team_shared = self.referenced_team_vars(&server_shared, &project_payloads).await?;
+        let team_shared = self
+            .referenced_team_vars(&server_shared, &project_payloads)
+            .await?;
         let certificates = self.ssl_certificates(server_id).await?;
-        let checklist = self.checklist(&applications, &checklist_names, runner.is_some()).await?;
+        let checklist = self
+            .checklist(&applications, &checklist_names, runner.is_some())
+            .await?;
         let runner_payload = runner.as_ref().map(|c| json!({
             "uuid": c["uuid"], "github_app_uuid": c["app_uuid"], "labels": c["labels"],
             "is_enabled": truthy(c.get("is_enabled")), "is_dedicated": truthy(c.get("is_dedicated")),
@@ -1091,46 +1382,147 @@ impl<'a> Exporter<'a> {
     async fn export_git_apps(&self) -> R<(Vec<Value>, Vec<Value>, Vec<Value>, GitNames)> {
         let key_uuid = |row: Value| async move {
             match row["private_key_id"].as_i64() {
-                Some(k) => self.one("SELECT uuid FROM private_keys WHERE id = $1", &[Bind::I(k)]).await.ok().flatten().map_or(Value::Null, |r| r["uuid"].clone()),
+                Some(k) => self
+                    .one("SELECT uuid FROM private_keys WHERE id = $1", &[Bind::I(k)])
+                    .await
+                    .ok()
+                    .flatten()
+                    .map_or(Value::Null, |r| r["uuid"].clone()),
                 None => Value::Null,
             }
         };
         let mut names = GitNames::default();
         let mut github = Vec::new();
         for id in &self.github_ids {
-            let a = self.one("SELECT * FROM github_apps WHERE id = $1", &[Bind::I(*id)]).await?.ok_or("missing")?;
+            let a = self
+                .one("SELECT * FROM github_apps WHERE id = $1", &[Bind::I(*id)])
+                .await?
+                .ok_or("missing")?;
             names.github.push(text(&a["name"]));
-            let mut o = pick(&a, &["uuid", "name", "organization", "api_url", "html_url", "custom_user", "custom_port", "app_id", "installation_id", "client_id"]);
+            let mut o = pick(
+                &a,
+                &[
+                    "uuid",
+                    "name",
+                    "organization",
+                    "api_url",
+                    "html_url",
+                    "custom_user",
+                    "custom_port",
+                    "app_id",
+                    "installation_id",
+                    "client_id",
+                ],
+            );
             self.dec_fields(&a, &mut o, &["client_secret", "webhook_secret"]);
             o.insert("is_system_wide".into(), json!(false));
             o.insert("is_public".into(), json!(truthy(a.get("is_public"))));
-            o.extend(pick(&a, &["contents", "metadata", "pull_requests", "administration", "organization_self_hosted_runners", "actions", "webhook_events", "runner_group_id"]));
+            o.extend(pick(
+                &a,
+                &[
+                    "contents",
+                    "metadata",
+                    "pull_requests",
+                    "administration",
+                    "organization_self_hosted_runners",
+                    "actions",
+                    "webhook_events",
+                    "runner_group_id",
+                ],
+            ));
             o.insert("private_key_uuid".into(), key_uuid(a.clone()).await);
-            o.insert("webhook_url_hint".into(), json!("/webhooks/source/github/events"));
+            o.insert(
+                "webhook_url_hint".into(),
+                json!("/webhooks/source/github/events"),
+            );
             github.push(Value::Object(o));
         }
         let mut gitlab = Vec::new();
         for id in &self.gitlab_ids {
-            let a = self.one("SELECT * FROM gitlab_apps WHERE id = $1", &[Bind::I(*id)]).await?.ok_or("missing")?;
+            let a = self
+                .one("SELECT * FROM gitlab_apps WHERE id = $1", &[Bind::I(*id)])
+                .await?
+                .ok_or("missing")?;
             names.gitlab.push(text(&a["name"]));
-            let mut o = pick(&a, &["uuid", "name", "organization", "api_url", "html_url", "custom_port", "custom_user", "app_id", "oauth_id", "client_id", "expires_at", "redirect_uri", "group_name", "public_key", "webhook_token", "deploy_key_id"]);
-            self.dec_fields(&a, &mut o, &["app_secret", "client_secret", "access_token", "refresh_token"]);
+            let mut o = pick(
+                &a,
+                &[
+                    "uuid",
+                    "name",
+                    "organization",
+                    "api_url",
+                    "html_url",
+                    "custom_port",
+                    "custom_user",
+                    "app_id",
+                    "oauth_id",
+                    "client_id",
+                    "expires_at",
+                    "redirect_uri",
+                    "group_name",
+                    "public_key",
+                    "webhook_token",
+                    "deploy_key_id",
+                ],
+            );
+            self.dec_fields(
+                &a,
+                &mut o,
+                &[
+                    "app_secret",
+                    "client_secret",
+                    "access_token",
+                    "refresh_token",
+                ],
+            );
             o.insert("is_system_wide".into(), json!(false));
             o.insert("is_public".into(), json!(truthy(a.get("is_public"))));
             o.insert("private_key_uuid".into(), key_uuid(a.clone()).await);
-            o.insert("webhook_url_hint".into(), json!("/webhooks/source/gitlab/events"));
+            o.insert(
+                "webhook_url_hint".into(),
+                json!("/webhooks/source/gitlab/events"),
+            );
             gitlab.push(Value::Object(o));
         }
         let mut gitea = Vec::new();
         for id in &self.gitea_ids {
-            let a = self.one("SELECT * FROM gitea_apps WHERE id = $1", &[Bind::I(*id)]).await?.ok_or("missing")?;
+            let a = self
+                .one("SELECT * FROM gitea_apps WHERE id = $1", &[Bind::I(*id)])
+                .await?
+                .ok_or("missing")?;
             names.gitea.push(text(&a["name"]));
-            let mut o = pick(&a, &["uuid", "name", "organization", "api_url", "html_url", "custom_port", "custom_user", "client_id", "expires_at", "redirect_uri"]);
-            self.dec_fields(&a, &mut o, &["client_secret", "access_token", "refresh_token", "webhook_secret"]);
+            let mut o = pick(
+                &a,
+                &[
+                    "uuid",
+                    "name",
+                    "organization",
+                    "api_url",
+                    "html_url",
+                    "custom_port",
+                    "custom_user",
+                    "client_id",
+                    "expires_at",
+                    "redirect_uri",
+                ],
+            );
+            self.dec_fields(
+                &a,
+                &mut o,
+                &[
+                    "client_secret",
+                    "access_token",
+                    "refresh_token",
+                    "webhook_secret",
+                ],
+            );
             o.insert("is_system_wide".into(), json!(false));
             o.insert("is_public".into(), json!(truthy(a.get("is_public"))));
             o.insert("private_key_uuid".into(), key_uuid(a.clone()).await);
-            o.insert("webhook_url_hint".into(), json!("/webhooks/source/gitea/events"));
+            o.insert(
+                "webhook_url_hint".into(),
+                json!("/webhooks/source/gitea/events"),
+            );
             gitea.push(Value::Object(o));
         }
         Ok((github, gitlab, gitea, names))
@@ -1138,8 +1530,9 @@ impl<'a> Exporter<'a> {
 
     /// `exportReferencedTeamSharedEnvVars`.
     async fn referenced_team_vars(&self, server: &[Value], projects: &[Value]) -> R<Vec<Value>> {
-        static TEAM_REF: std::sync::LazyLock<regex::Regex> =
-            std::sync::LazyLock::new(|| regex::Regex::new(r"\{\{\s*team\.(.+?)\s*\}\}").expect("regex"));
+        static TEAM_REF: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+            regex::Regex::new(r"\{\{\s*team\.(.+?)\s*\}\}").expect("regex")
+        });
         let mut keys: Vec<String> = Vec::new();
         let mut scan = |v: &Value| {
             fn walk(v: &Value, keys: &mut Vec<String>) {
@@ -1165,7 +1558,12 @@ impl<'a> Exporter<'a> {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
-        let rows = self.rows("SELECT * FROM shared_environment_variables WHERE type = 'team' AND team_id = $1", &[Bind::I(self.team_id)]).await?;
+        let rows = self
+            .rows(
+                "SELECT * FROM shared_environment_variables WHERE type = 'team' AND team_id = $1",
+                &[Bind::I(self.team_id)],
+            )
+            .await?;
         Ok(rows
             .iter()
             .filter(|r| keys.contains(&text(&r["key"])))
@@ -1176,7 +1574,13 @@ impl<'a> Exporter<'a> {
     /// `exportSslCertificates`.
     async fn ssl_certificates(&self, server_id: i64) -> R<Vec<Value>> {
         let mut out = Vec::new();
-        for c in self.rows("SELECT * FROM ssl_certificates WHERE server_id = $1", &[Bind::I(server_id)]).await? {
+        for c in self
+            .rows(
+                "SELECT * FROM ssl_certificates WHERE server_id = $1",
+                &[Bind::I(server_id)],
+            )
+            .await?
+        {
             let (mut kind, mut uuid) = (Value::Null, Value::Null);
             if let (Some(t), Some(id)) = (c["resource_type"].as_str(), c["resource_id"].as_i64()) {
                 let (table, name) = match t {
@@ -1184,11 +1588,19 @@ impl<'a> Exporter<'a> {
                     "App\\Models\\Service" => (Some("services"), "service".to_owned()),
                     other => {
                         let base = other.rsplit('\\').next().unwrap_or(other).to_owned();
-                        (DATABASES.iter().find(|(_, n)| *n == base).map(|(t, _)| *t), base)
+                        (
+                            DATABASES.iter().find(|(_, n)| *n == base).map(|(t, _)| *t),
+                            base,
+                        )
                     }
                 };
                 if let Some(table) = table
-                    && let Some(r) = self.one(&format!("SELECT uuid FROM {table} WHERE id = $1"), &[Bind::I(id)]).await?
+                    && let Some(r) = self
+                        .one(
+                            &format!("SELECT uuid FROM {table} WHERE id = $1"),
+                            &[Bind::I(id)],
+                        )
+                        .await?
                 {
                     uuid = r["uuid"].clone();
                     kind = json!(name);
@@ -1214,17 +1626,42 @@ impl<'a> Exporter<'a> {
     }
 
     /// `postTransferChecklist`.
-    async fn checklist(&self, applications: &[Value], names: &GitNames, has_runner: bool) -> R<Vec<String>> {
+    async fn checklist(
+        &self,
+        applications: &[Value],
+        names: &GitNames,
+        has_runner: bool,
+    ) -> R<Vec<String>> {
         let mut steps = Vec::new();
         let mut manual = Vec::new();
         for a in applications {
-            if a["build_pack"].as_str() == Some("dockerimage") || super::blank(a.get("git_repository")) {
+            if a["build_pack"].as_str() == Some("dockerimage")
+                || super::blank(a.get("git_repository"))
+            {
                 continue;
             }
             let public = match (a["source_type"].as_str(), a["source_id"].as_i64()) {
-                (Some(GITHUB), Some(id)) => self.one("SELECT is_public FROM github_apps WHERE id = $1", &[Bind::I(id)]).await?,
-                (Some(GITLAB), Some(id)) => self.one("SELECT is_public FROM gitlab_apps WHERE id = $1", &[Bind::I(id)]).await?,
-                (Some(GITEA), Some(id)) => self.one("SELECT is_public FROM gitea_apps WHERE id = $1", &[Bind::I(id)]).await?,
+                (Some(GITHUB), Some(id)) => {
+                    self.one(
+                        "SELECT is_public FROM github_apps WHERE id = $1",
+                        &[Bind::I(id)],
+                    )
+                    .await?
+                }
+                (Some(GITLAB), Some(id)) => {
+                    self.one(
+                        "SELECT is_public FROM gitlab_apps WHERE id = $1",
+                        &[Bind::I(id)],
+                    )
+                    .await?
+                }
+                (Some(GITEA), Some(id)) => {
+                    self.one(
+                        "SELECT is_public FROM gitea_apps WHERE id = $1",
+                        &[Bind::I(id)],
+                    )
+                    .await?
+                }
                 _ => None,
             };
             if public.is_none_or(|p| truthy(p.get("is_public"))) {
@@ -1257,19 +1694,40 @@ impl<'a> Exporter<'a> {
 impl Exporter<'_> {
     /// `collectManagedDnsRecords`, `exportDnsZone` and `exportManagedDnsRecord`. A record that a
     /// resource staying on this instance also uses is not exported.
-    async fn managed_dns(&mut self, server_id: i64, server: &Value, applications: &[Value], services: &[Value]) -> R<(Vec<Value>, Vec<Value>)> {
+    async fn managed_dns(
+        &mut self,
+        server_id: i64,
+        server: &Value,
+        applications: &[Value],
+        services: &[Value],
+    ) -> R<(Vec<Value>, Vec<Value>)> {
         let mut keys: BTreeMap<String, Option<Value>> = BTreeMap::new();
-        keys.insert(format!("App\\Models\\Server:{server_id}"), Some(json!({"kind": "server", "uuid": server["uuid"]})));
+        keys.insert(
+            format!("App\\Models\\Server:{server_id}"),
+            Some(json!({"kind": "server", "uuid": server["uuid"]})),
+        );
         for a in applications {
-            keys.insert(format!("App\\Models\\Application:{}", id_of(a)), Some(json!({"kind": "application", "uuid": a["uuid"]})));
+            keys.insert(
+                format!("App\\Models\\Application:{}", id_of(a)),
+                Some(json!({"kind": "application", "uuid": a["uuid"]})),
+            );
             for p in self.rows("SELECT id, uuid, deleted_at FROM application_previews WHERE application_id = $1", &[Bind::I(id_of(a))]).await? {
                 let live = p["deleted_at"].is_null().then(|| json!({"kind": "preview", "uuid": p["uuid"]}));
                 keys.insert(format!("App\\Models\\ApplicationPreview:{}", id_of(&p)), live);
             }
         }
         for s in services {
-            for sa in self.rows("SELECT id, uuid FROM service_applications WHERE service_id = $1", &[Bind::I(id_of(s))]).await? {
-                keys.insert(format!("App\\Models\\ServiceApplication:{}", id_of(&sa)), Some(json!({"kind": "service_application", "uuid": sa["uuid"]})));
+            for sa in self
+                .rows(
+                    "SELECT id, uuid FROM service_applications WHERE service_id = $1",
+                    &[Bind::I(id_of(s))],
+                )
+                .await?
+            {
+                keys.insert(
+                    format!("App\\Models\\ServiceApplication:{}", id_of(&sa)),
+                    Some(json!({"kind": "service_application", "uuid": sa["uuid"]})),
+                );
             }
         }
         let records = self
@@ -1280,17 +1738,29 @@ impl Exporter<'_> {
                 &[],
             )
             .await?;
-        let instance_id: String = std::env::var("APP_ID").ok().filter(|i| !i.is_empty()).unwrap_or_else(|| "default".to_owned()).chars().take(40).collect();
+        let instance_id: String = std::env::var("APP_ID")
+            .ok()
+            .filter(|i| !i.is_empty())
+            .unwrap_or_else(|| "default".to_owned())
+            .chars()
+            .take(40)
+            .collect();
         let (mut zones, mut out, mut zone_ids) = (Vec::new(), Vec::new(), Vec::new());
         for r in records {
             let refs = self.rows("SELECT resource_type, resource_id FROM managed_dns_record_references WHERE managed_dns_record_id = $1", &[Bind::I(id_of(&r))]).await?;
-            let ref_keys: Vec<String> = refs.iter().map(|x| format!("{}:{}", text(&x["resource_type"]), text(&x["resource_id"]))).collect();
+            let ref_keys: Vec<String> = refs
+                .iter()
+                .map(|x| format!("{}:{}", text(&x["resource_type"]), text(&x["resource_id"])))
+                .collect();
             if !ref_keys.iter().any(|k| keys.contains_key(k)) {
                 continue;
             }
             let name = text(&r["name"]);
             let team = |k: &str| r.get(k).map_or(-1, super::as_int);
-            if team("team_id") != self.team_id || team("token_team") != self.team_id || team("zone_team") != self.team_id {
+            if team("team_id") != self.team_id
+                || team("token_team") != self.team_id
+                || team("zone_team") != self.team_id
+            {
                 self.warnings.push(format!("DNS record {name} is not transferred, because its DNS provider token belongs to another team. The target instance does not manage it."));
                 continue;
             }
@@ -1298,11 +1768,17 @@ impl Exporter<'_> {
                 self.warnings.push(format!("DNS record {name} stays managed by this instance, because a resource that is not transferred also uses it. The target instance does not update or delete it."));
                 continue;
             }
-            let references: Vec<Value> = ref_keys.iter().filter_map(|k| keys.get(k).cloned().flatten()).collect();
+            let references: Vec<Value> = ref_keys
+                .iter()
+                .filter_map(|k| keys.get(k).cloned().flatten())
+                .collect();
             if references.is_empty() {
                 continue;
             }
-            for t in [r["integration_token_id"].as_i64(), r["zone_token"].as_i64()].into_iter().flatten() {
+            for t in [r["integration_token_id"].as_i64(), r["zone_token"].as_i64()]
+                .into_iter()
+                .flatten()
+            {
                 push_unique(&mut self.token_ids, t);
             }
             let zone_id = r["dns_provider_zone_id"].as_i64().unwrap_or(0);
@@ -1336,4 +1812,3 @@ enum Bind<'b> {
     I(i64),
     S(&'b str),
 }
-
