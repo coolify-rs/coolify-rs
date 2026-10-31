@@ -30,7 +30,10 @@ fn db_error(e: sqlx::Error) -> String {
 }
 
 /// The row, locked: `Server::query()->lockForUpdate()->findOrFail($id)->server_metadata`.
-pub async fn locked_metadata(conn: &mut PgConnection, id: i64) -> Result<Map<String, Value>, String> {
+pub async fn locked_metadata(
+    conn: &mut PgConnection,
+    id: i64,
+) -> Result<Map<String, Value>, String> {
     let meta: Option<Value> =
         sqlx::query_scalar("SELECT server_metadata FROM servers WHERE id = $1 FOR UPDATE")
             .bind(id)
@@ -50,13 +53,15 @@ pub async fn write_metadata(
     id: i64,
     metadata: &Map<String, Value>,
 ) -> Result<(), String> {
-    sqlx::query("UPDATE servers SET server_metadata = $2::text::json, updated_at = $3 WHERE id = $1")
-        .bind(id)
-        .bind(Value::Object(metadata.clone()).to_string())
-        .bind(Utc::now().naive_utc())
-        .execute(&mut *conn)
-        .await
-        .map_err(db_error)?;
+    sqlx::query(
+        "UPDATE servers SET server_metadata = $2::text::json, updated_at = $3 WHERE id = $1",
+    )
+    .bind(id)
+    .bind(Value::Object(metadata.clone()).to_string())
+    .bind(Utc::now().naive_utc())
+    .execute(&mut *conn)
+    .await
+    .map_err(db_error)?;
     Ok(())
 }
 
@@ -65,7 +70,8 @@ fn sentinel_token(jobs: &Jobs, server_uuid: &str) -> Result<String, String> {
     let enc = jobs
         .encrypter()
         .ok_or_else(|| "APP_KEY is not configured.".to_owned())?;
-    Ok(enc.encrypt_string(&enc.encrypt_serialized(&json!({"server_uuid": server_uuid}).to_string())))
+    Ok(enc
+        .encrypt_string(&enc.encrypt_serialized(&json!({"server_uuid": server_uuid}).to_string())))
 }
 
 /// `ServerTransferClaimer::claim`.
@@ -303,12 +309,14 @@ pub async fn mark_transferred(
     t.remove("owner_marker_conflict");
 
     // `releaseGithubRunners`.
-    sqlx::query("UPDATE github_runner_configs SET is_enabled = false, updated_at = $2 WHERE server_id = $1")
-        .bind(server_id)
-        .bind(now)
-        .execute(&mut *tx)
-        .await
-        .map_err(db_error)?;
+    sqlx::query(
+        "UPDATE github_runner_configs SET is_enabled = false, updated_at = $2 WHERE server_id = $1",
+    )
+    .bind(server_id)
+    .bind(now)
+    .execute(&mut *tx)
+    .await
+    .map_err(db_error)?;
     sqlx::query(
         "UPDATE github_runner_executions SET status = 'cancelled', error_message = $2, \
          completed_at = COALESCE(completed_at, $3), updated_at = $3 \
@@ -386,7 +394,10 @@ pub async fn release_if_claimed_elsewhere(
     let metadata = srv.row.record.get("server_metadata").cloned();
     let transfer = metadata.as_ref().and_then(|m| m.get("transfer"));
     if server_id == 0
-        || transfer.and_then(|t| t.get("status")).and_then(Value::as_str) != Some("claimed")
+        || transfer
+            .and_then(|t| t.get("status"))
+            .and_then(Value::as_str)
+            != Some("claimed")
     {
         return Ok(false);
     }
@@ -421,7 +432,9 @@ pub async fn release_if_claimed_elsewhere(
         .and_then(Value::as_str)
         .filter(|u| {
             let l = u.to_ascii_lowercase();
-            (l.starts_with("http://") || l.starts_with("https://")) && u.len() > 8 && !u.contains(' ')
+            (l.starts_with("http://") || l.starts_with("https://"))
+                && u.len() > 8
+                && !u.contains(' ')
         })
         .map(|u| u.trim().trim_end_matches('/').to_owned());
     let newer = newer_than(

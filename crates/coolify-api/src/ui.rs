@@ -136,6 +136,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .merge(crate::ui_server_github_runners::routes())
         .merge(crate::ui_server_cloud::routes())
         .merge(crate::ui_server_proxy::routes())
+        .merge(crate::ui_server_transfer::routes())
         .merge(crate::ui_sources_routes::routes())
         .route_layer(from_fn_with_state(state, crate::session::ui_guard))
 }
@@ -594,6 +595,7 @@ fn server_facts(s: &coolify_db::servers::ServerRow) -> Value {
         "status_type": status_type,
         "functional": functional,
         "transferred": transferred,
+        "transfer_target_url": s.record.get("server_metadata").and_then(|m| m.pointer("/transfer/target_instance_url")),
         "is_coolify_host": s.id == 0,
         "is_localhost": ip == "host.docker.internal" || s.id == 0,
         "is_build": is_build,
@@ -981,8 +983,14 @@ async fn delete_server_form(
         ));
     }
     let from_provider = actions.iter().any(|a| a.starts_with("delete_from_"));
-    // Archiving a transferred server, deleting resources, cloud servers,
-    // queued deployments' logs and GitHub runners are not ported.
+    if transferred && !from_provider {
+        // `ServerTransferClaimer::deleteArchive`: records only.
+        crate::server_transfer::delete_archive_now(&state, server.id)
+            .await
+            .map_err(|_| ApiError::Internal)?;
+        return Ok(ok(json!({"message": "Server deleted."})).into_response());
+    }
+    // Deleting resources, cloud servers, queued deployments' logs and GitHub runners are not ported.
     if transferred
         || resources > 0
         || from_provider

@@ -82,6 +82,17 @@ pub async fn instance_url(db: &Db) -> String {
     url.trim_end_matches('/').to_owned()
 }
 
+/// `ServerTransferClaimer::deleteArchive` in its own transaction.
+pub async fn delete_archive_now(
+    state: &crate::state::AppState,
+    server_id: i64,
+) -> Result<(), TransferError> {
+    let mut tx = state.db.pool().begin().await?;
+    importer::delete_archive(&mut tx, server_id).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// `isDev()`.
 pub fn is_dev() -> bool {
     std::env::var("APP_ENV").is_ok_and(|e| e == "local")

@@ -1,6 +1,6 @@
 <script lang="ts">
   // Port of upstream livewire/server/proxy/dynamic-configurations.blade.php,
-  // new-dynamic-configuration.blade.php and dynamic-configuration-navbar.blade.php.
+  // server/proxy/new-dynamic-configuration.blade.php and server/proxy/dynamic-configuration-navbar.blade.php.
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
   import FormInput from '../components/FormInput.svelte';

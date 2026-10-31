@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Port of upstream livewire/server/docker-cleanup.blade.php and docker-cleanup-executions.blade.php.
+  // Port of upstream livewire/server/docker-cleanup.blade.php and server/docker-cleanup-executions.blade.php.
   import Reicon from '../components/Reicon.svelte';
   import Callout from '../components/Callout.svelte';
   import ConfirmModal from '../components/ConfirmModal.svelte';

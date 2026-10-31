@@ -2411,7 +2411,8 @@ pub fn router(state: AppState) -> Router {
         (
             "POST",
             "api/v1/servers/import",
-            on_post(server_transfer::import),
+            on_post(server_transfer::import)
+                .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024)),
         ),
         (
             "POST",

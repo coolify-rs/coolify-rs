@@ -43,6 +43,7 @@ pub mod ui_server_metrics;
 pub mod ui_server_ops;
 pub mod ui_server_patches;
 pub mod ui_server_proxy;
+pub mod ui_server_transfer;
 pub mod ui_server_tunnel;
 pub mod ui_services;
 pub mod ui_settings;
