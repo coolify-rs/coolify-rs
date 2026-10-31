@@ -26,6 +26,7 @@
   import ResourceOperations from '../components/shared/ResourceOperations.svelte';
   import Destination from '../components/shared/Destination.svelte';
   import FileBrowser from '../components/shared/FileBrowser.svelte';
+  import ApplicationSwarm from '../components/shared/ApplicationSwarm.svelte';
   import Unported from './Unported.svelte';
   import { appUi, dbUi, uiApi, ApiError, type ApplicationRecord, type ApplicationState, type DeploymentDetail } from '../lib/api';
   import { applicationNavContext, applicationSection } from '../lib/applicationMenu';
@@ -100,6 +101,9 @@
       gitBased: !r.dockerfile && bp !== 'dockerimage',
       dockerImage: bp === 'dockerimage',
       compose: bp === 'dockercompose',
+      swarm: appState?.is_swarm ?? false,
+      // `server-status-badge`.
+      serverBadge: r.server_status === false ? 'One or more servers are unreachable or misconfigured.' : undefined,
     });
     uiApi.project(uuid).then((d) => setProjectCrumbs(d, env));
     dbUi
@@ -193,7 +197,9 @@
             {:else if active === 'advanced'}
               <ApplicationAdvanced uuid={app} {base} onchange={() => refresh().catch(() => {})} />
             {:else if active === 'rollback'}
-              <ApplicationRollback uuid={app} />
+              <ApplicationRollback uuid={app} {base} />
+            {:else if active === 'swarm' && appState.is_swarm}
+              <ApplicationSwarm uuid={app} onchange={() => refresh().catch(() => {})} />
             {:else if active === 'metrics'}
               <Metrics kind="application" uuid={app} />
             {:else if active === 'webhooks'}

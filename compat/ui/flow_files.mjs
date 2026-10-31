@@ -98,7 +98,7 @@ try {
     await h.shot('files-editor', false);
     await h.page.evaluate(() => window.monaco?.editor.getEditors()[0]?.setValue('key: value\n'));
     await h.page.waitForTimeout(300);
-    await h.page.locator('button[type=submit]:visible', { hasText: 'Save changes' }).last().click({ timeout: 8000 });
+    await h.page.locator('button[type=submit]:visible', { hasText: 'Save changes' }).last().evaluate((b) => b.click());
     rec.toast_save = await h.toasts(1500);
     rec.saved = inContainer('cat /data/ops/a.yml');
 
@@ -106,7 +106,7 @@ try {
     await h.page.keyboard.press('Escape');
     await h.page.waitForTimeout(800);
     await h.shot('files-after-save', false);
-    await row(h, 'a.yml').locator('button[title="Edit permissions"]').click({ timeout: 8000 });
+    await row(h, 'a.yml').locator('button[title="Edit permissions"]').evaluate((b) => b.click());
     await h.page.waitForTimeout(300);
     await h.field('Octal mode').fill('640', { timeout: 8000 });
     await h.shot('files-chmod', false);
@@ -114,7 +114,7 @@ try {
     rec.toast_chmod = await h.toasts(1500);
     rec.mode = inContainer('stat -c %a /data/ops/a.yml');
     await h.page.waitForTimeout(800);
-    await row(h, 'a.yml').locator('button[title="Edit permissions"]').click({ timeout: 8000 });
+    await row(h, 'a.yml').locator('button[title="Edit permissions"]').evaluate((b) => b.click());
     await h.page.waitForTimeout(300);
     await h.field('Octal mode').fill('abc', { timeout: 8000 });
     await submit(h, 'Apply');
@@ -172,6 +172,66 @@ try {
     await h.page.waitForTimeout(1500);
     await h.shot('maint-svc');
     rec.maint_section = await h.page.locator('#maintenance-section').innerText().then((t) => t.replace(/\s+/g, ' ')).catch(() => null);
+
+    // Maintenance on the server: the same fixture, off again at the end of each side.
+    const subId = psql(`select a.id from service_applications a join services s on s.id = a.service_id where s.uuid = '${service}'`);
+    psql(`update service_applications set fqdn = 'https://maint-${stamp}.example.test/x,http://maint2-${stamp}.example.test' where id = ${subId}`);
+    const yaml = '/data/coolify/proxy/dynamic/coolify-maintenance.yaml';
+    const page = `/data/coolify/proxy/error-pages/maintenance-${service}.html`;
+    const fileState = () => ({ yaml: vm(`cat ${yaml} 2>/dev/null | grep -v '^ *$' || true`), page: vm(`cat ${page} 2>/dev/null || true`) });
+    await h.go(`${dir('service', service)}/domains`);
+    await h.page.waitForTimeout(1500);
+    await h.page.locator('#maintenance-section button.listbox-trigger').first().click({ force: true });
+    await h.page.waitForTimeout(200);
+    await h.page.locator('.listbox-option:visible', { hasText: 'On: show' }).first().click({ force: true });
+    rec.maint_on_toast = await h.toasts(5000);
+    await h.page.waitForTimeout(1500);
+    rec.maint_on = fileState();
+    rec.maint_on_row = psql(`select is_maintenance_enabled from services where uuid = '${service}'`);
+    await h.shot('maint-on');
+    await h.page.locator('#maintenance-section textarea').first().fill('<h1>custom</h1>');
+    await h.page.waitForTimeout(300);
+    await h.page.locator('button:visible', { hasText: /^\s*Save\s*$/ }).last().click({ force: true }).catch(() => {});
+    rec.maint_save_toast = await h.toasts(5000);
+    rec.maint_custom_page = vm(`cat ${page} 2>/dev/null || true`);
+    rec.maint_custom_row = psql(`select maintenance_page from services where uuid = '${service}'`);
+    await h.page.locator('button:visible', { hasText: 'Reset to default' }).first().click({ force: true });
+    rec.maint_reset_toast = await h.toasts(5000);
+    rec.maint_reset_page = vm(`cat ${page} 2>/dev/null | head -5 || true`);
+    rec.maint_reset_row = psql(`select coalesce(maintenance_page, 'NULL') from services where uuid = '${service}'`);
+    await h.page.locator('#maintenance-section button.listbox-trigger').first().click({ force: true });
+    await h.page.waitForTimeout(200);
+    await h.page.locator('.listbox-option:visible', { hasText: 'Off: serve' }).first().click({ force: true });
+    rec.maint_off_toast = await h.toasts(5000);
+    rec.maint_off = fileState();
+
+    // Danger: an application with a file storage with content, on its own fixture.
+    const victim = (await api('POST', '/applications/dockerimage', { project_uuid: P, server_uuid: SERVER, environment_name: 'production', docker_registry_image_name: 'nginx', docker_registry_image_tag: 'alpine', ports_exposes: '80', name: 'files-victim', instant_deploy: false })).uuid;
+    const victimId = psql(`select id from applications where uuid = '${victim}'`);
+    const APP = String.raw`App\Models\Application`;
+    psql(`insert into local_persistent_volumes (uuid, name, mount_path, resource_type, resource_id, created_at, updated_at) values ('dv${h.label}${stamp}', '${victim}-vol', '/vol', '${APP}', ${victimId}, now(), now())`);
+    psql(`insert into local_file_volumes (uuid, fs_path, mount_path, content, is_directory, resource_type, resource_id, created_at, updated_at) values ('df${h.label}${stamp}', '/data/coolify/applications/${victim}/conf.txt', '/etc/conf.txt', 'hello', false, '${APP}', ${victimId}, now(), now())`);
+    vm(`mkdir -p /data/coolify/applications/${victim} && echo hello > /data/coolify/applications/${victim}/conf.txt && docker volume create ${victim}-vol >/dev/null`);
+    await h.go(`${dir('application', victim)}/danger`);
+    await h.page.waitForTimeout(1500);
+    await h.shot('danger-app');
+    await h.page.locator('button:visible', { hasText: /^\s*Delete application\s*$/ }).first().click({ force: true });
+    await h.page.waitForTimeout(500);
+    for (let i = 0; i < 5; i++) {
+      const pwd = h.page.locator('input[type=password]:visible').last();
+      if (await pwd.count()) await pwd.fill(h.secret).catch(() => {});
+      const typed = h.page.locator('input[type=text]:visible:not([readonly]):not([disabled])').last();
+      if (await typed.count()) await typed.fill('files-victim').catch(() => {});
+      await h.page.locator('button:visible', { hasText: /^\s*(Continue|Confirm|Permanently Delete|Delete)\s*$/ }).last().click({ timeout: 1500, force: true }).catch(() => {});
+      await h.page.waitForTimeout(900);
+      if (!(await h.page.locator('input[type=password]:visible').count()) && i > 0) break;
+    }
+    await h.page.waitForTimeout(12000);
+    rec.danger_url = new URL(h.page.url()).pathname.replace(P, 'P').replace(E, 'E');
+    rec.danger_row = psql(`select count(*) from applications where uuid = '${victim}'`);
+    rec.danger_files = psql(`select count(*) from local_file_volumes where resource_type = '${APP}' and resource_id = ${victimId}`);
+    rec.danger_vols = psql(`select count(*) from local_persistent_volumes where resource_type = '${APP}' and resource_id = ${victimId}`);
+    rec.danger_dir = vm(`ls /data/coolify/applications/${victim} 2>&1 | wc -l; docker volume ls -q --filter name=${victim}-vol | wc -l`);
     return rec;
   });
 } finally {

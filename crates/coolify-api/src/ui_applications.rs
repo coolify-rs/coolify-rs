@@ -436,6 +436,7 @@ pub async fn state(
         "custom_labels": labels_text,
         "server_ip": server.as_ref().and_then(|s| s.record.get("ip")).cloned().unwrap_or(Value::Null),
         "server_id": server.as_ref().map(|s| s.id),
+        "is_swarm": server.as_ref().is_some_and(|s| coolify_jobs::server::ServerInfo::from_row(s).is_swarm()),
     }))
     .into_response())
 }

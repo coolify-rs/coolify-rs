@@ -2,6 +2,7 @@
   // Port of upstream livewire/project/shared/file-browser.blade.php (+ Shared\FileBrowser). The
   // heading and the sidebar come from the resource page around this section.
   import BetaBadge from '../BetaBadge.svelte';
+  import Forbidden from '../Forbidden.svelte';
   import Empty from '../Empty.svelte';
   import FormInput from '../FormInput.svelte';
   import Listbox from '../Listbox.svelte';
@@ -35,6 +36,8 @@
 
   let filesLoaded = $state(false);
   let loadFailed = $state(false);
+  // `->middleware('can.access.terminal')` of the route.
+  let forbidden = $state(false);
   let containerRunning = $state(false);
   let shellUnavailable = $state(false);
   let helperError = $state<string | null>(null);
@@ -104,6 +107,10 @@
       }
       filesLoaded = true;
     } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        forbidden = true;
+        return;
+      }
       loadFailed = true;
       failure(err);
     }
@@ -223,6 +230,9 @@
   }}
 />
 
+{#if forbidden}
+  <Forbidden />
+{:else}
 <SettingsSection title="Files" description="Browse and manage files inside the running container." flush>
   {#snippet badges()}
     <BetaBadge />
@@ -431,6 +441,7 @@
     </div>
   {/if}
 </SettingsSection>
+{/if}
 
 {#if dialog?.type === 'delete'}
   {@const entry = dialog.entry}
