@@ -1,12 +1,13 @@
 // The Coolify Cloud path of coolify-rs against compat/diff/stripe_fake.py. The reference runs
 // self-hosted, so this checks the Stripe calls and rows against upstream's PHP by hand, not by diff.
 //   python3 compat/diff/stripe_fake.py 18192 &
-//   SELF_HOSTED=false SUBSCRIPTION_PROVIDER=stripe STRIPE_API_BASE=http://127.0.0.1:18192 STRIPE_API_KEY=sk_fake \
+//   SELF_HOSTED=false SUBSCRIPTION_PROVIDER=stripe STRIPE_API_BASE=http://127.0.0.1:18192 STRIPE_API_KEY=sk_fake STRIPE_WEBHOOK_SECRET=whsec_fake \
 //     STRIPE_PRICE_ID_DYNAMIC_MONTHLY=price_m STRIPE_PRICE_ID_DYNAMIC_YEARLY=price_y scripts/dev-server.sh 18092
 //   COOLIFY_RS_BASE=http://127.0.0.1:18092 node compat/diff/subscription_fake.mjs
 // Works on a team it creates, which has no servers, and deletes that team and its subscription by id.
 // The login password is read from the fixture file and never printed.
 import { createRequire } from 'node:module';
+import { createHmac } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 
@@ -72,9 +73,9 @@ try {
   let r = await call('POST', '/ui/subscription/subscribe', { type: 'dynamic-yearly' });
   check('checkout url', r.json.url?.includes('/checkout/'), r.json);
   let log = await fake('/__log');
-  const customer = log.find((l) => l.path === '/v1/customers');
+  const customer = log.findLast((l) => l.path === '/v1/customers');
   check('customer idempotency', customer?.idempotency === `coolify-team-${team}-customer` && customer.params['metadata[team_id]'] === String(team), customer);
-  const session = log.find((l) => l.path === '/v1/checkout/sessions' && l.method === 'POST');
+  const session = log.findLast((l) => l.path === '/v1/checkout/sessions' && l.method === 'POST');
   check('checkout parameters', session?.params['line_items[0][price]'] === 'price_y' && session.params['line_items[0][adjustable_quantity][minimum]'] === '2' && session.params['subscription_data[metadata][team_id]'] === String(team) && session.params.mode === 'subscription' && session.params['client_reference_id']?.endsWith(`:${team}`), session?.params);
   const row = () => JSON.parse(sql(`SELECT row_to_json(s) FROM subscriptions s WHERE team_id = ${team}`) || 'null');
   check('customer saved', row()?.stripe_customer_id?.startsWith('cus_'), row());
@@ -151,9 +152,30 @@ try {
   const events = sql(`SELECT count(*) FROM audit_events WHERE event LIKE 'ui.subscription.%' AND team_id = ${team}`);
   check('audit events', Number(events) === 5, events);
 
-  // A member sees the permissions callout (not exercised for this team: it has one user).
-  const denied = await call('POST', '/ui/subscription/portal', undefined);
-  check('portal without a body still answers', denied.status < 500 || denied.status === 415, denied);
+  // The webhook: signature, then what StripeProcessJob changes.
+  const event = async (type, object, sign = true) => {
+    const payload = JSON.stringify({ type, data: { object } });
+    const t = Math.floor(Date.now() / 1000);
+    const hex = createHmac('sha256', sign ? 'whsec_fake' : 'other').update(`${t}.${payload}`).digest('hex');
+    const r = await fetch(`${RS}/webhooks/payments/stripe/events`, { method: 'POST', headers: { 'Stripe-Signature': `t=${t},v1=${hex}`, 'Content-Type': 'application/json' }, body: payload });
+    await new Promise((d) => setTimeout(d, 300));
+    return { status: r.status, text: await r.text() };
+  };
+  const badSig = await event('invoice.paid', {}, false);
+  check('webhook bad signature', badSig.status === 400 && badSig.text === 'Invalid signature.', badSig);
+  const user = sql("SELECT id FROM users WHERE email = 'alice@example.test'");
+  const okHook = await event('checkout.session.completed', { client_reference_id: `${user}:${team}`, subscription: 'sub_hook', customer: cid });
+  check('webhook answer', okHook.status === 200 && okHook.text === 'Webhook received. Cool cool cool cool cool.', okHook);
+  check('checkout completed', row().stripe_subscription_id === 'sub_hook' && row().stripe_invoice_paid === true, row());
+  const hookItems = { data: [{ subscription: 'sub_hook', quantity: 150, plan: { id: 'price_m' }, price: { lookup_key: 'dynamic-monthly' } }] };
+  await event('customer.subscription.updated', { customer: cid, status: 'past_due', cancel_at_period_end: true, cancellation_details: { feedback: 'too_expensive', comment: 'hi' }, items: hookItems });
+  check('updated past due', row().stripe_past_due === true && row().stripe_feedback === 'too_expensive' && row().stripe_plan_id === 'price_m' && row().stripe_cancel_at_period_end === true && sql(`SELECT custom_server_limit FROM teams WHERE id = ${team}`) === '100', row());
+  await event('customer.subscription.updated', { customer: cid, status: 'active', cancel_at_period_end: false, items: hookItems });
+  check('updated active', row().stripe_past_due === false && row().stripe_invoice_paid === true, row());
+  await event('customer.subscription.deleted', { customer: cid, id: 'sub_other' });
+  check('deleted other subscription ignored', row().stripe_subscription_id === 'sub_hook', row());
+  await event('customer.subscription.deleted', { customer: cid, id: 'sub_hook' });
+  check('deleted ends the subscription', row().stripe_subscription_id === null && row().stripe_invoice_paid === false, row());
 } finally {
   await call('POST', '/ui/session/team', { team_id: before }).catch(() => {});
   if (team) {

@@ -28,6 +28,7 @@ export interface NavContext {
   isAdmin: boolean;
   isOwner: boolean;
   isInstanceAdmin: boolean;
+  isCloud?: boolean;
 }
 
 export const navSections: [string, NavItem[]][] = [
@@ -111,6 +112,7 @@ export const navSections: [string, NavItem[]][] = [
           { label: 'API Tokens', icon: 'code', href: '/security/api-tokens', active: ['security/api-tokens'], ported: true },
         ],
       },
+      { label: 'Subscription', icon: 'subscription', href: '/subscription', active: ['subscription*'], visible: (c) => !!c.isCloud && c.isAdmin, ported: true },
       { label: 'Tags', icon: 'tags', href: '/tags', active: ['tags*', 'canvas/tags'], ported: true },
       {
         label: 'Settings',

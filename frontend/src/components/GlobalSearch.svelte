@@ -111,7 +111,7 @@
     }, 150);
     try {
       const d = await layoutUi.searchItems();
-      const ctx = { isAdmin: session.isAdmin, isOwner: session.isOwner, isInstanceAdmin: session.isInstanceAdmin };
+      const ctx = { isAdmin: session.isAdmin, isOwner: session.isOwner, isInstanceAdmin: session.isInstanceAdmin, isCloud: session.info?.features.cloud };
       allItems = [...navigationItems(ctx, session.info?.current_team?.id), ...d.resources];
       creatable = creatableItems(session.isAdmin, d.services);
     } catch {

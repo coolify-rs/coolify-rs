@@ -180,9 +180,13 @@
 
 {#if data && which === 'index'}
   <div class="application-settings-form w-full max-w-none">
-    <div class="mb-6">
-      <h1>Subscription</h1>
-      <p class="subtitle">Choose a plan for Coolify Cloud</p>
+    <div class="flex flex-col">
+      <header class="order-1 mb-4 flex min-w-0 items-start justify-between gap-4 lg:order-2 lg:mb-8">
+        <div class="min-w-0 flex-1">
+          <h1 class="min-w-0 truncate text-[24px]! leading-7! font-semibold! tracking-tight!">Subscription</h1>
+          <p class="mt-1 text-[13px] text-neutral-500 dark:text-fg-dim">Choose a plan for Coolify Cloud</p>
+        </div>
+      </header>
     </div>
     {#if data.is_admin}
       {#if loading}
@@ -255,9 +259,13 @@
   </div>
 {:else if data}
   <div class="application-settings-form w-full max-w-none">
-    <div class="mb-6">
-      <h1>Subscription</h1>
-      <p class="subtitle">Plan and billing for Coolify Cloud</p>
+    <div class="flex flex-col">
+      <header class="order-1 mb-4 flex min-w-0 items-start justify-between gap-4 lg:order-2 lg:mb-8">
+        <div class="min-w-0 flex-1">
+          <h1 class="min-w-0 truncate text-[24px]! leading-7! font-semibold! tracking-tight!">Subscription</h1>
+          <p class="mt-1 text-[13px] text-neutral-500 dark:text-fg-dim">Plan and billing for Coolify Cloud</p>
+        </div>
+      </header>
     </div>
     <div class="application-settings-workspace flex flex-col gap-6">
       {#if data.provider === 'stripe'}

@@ -1,4 +1,4 @@
-//! `routes/webhooks.php`, mounted under `/webhooks` (without Stripe), and what the handlers of
+//! `routes/webhooks.php`, mounted under `/webhooks`, and what the handlers of
 //! `Webhook\{Github,Gitlab,Gitea,Bitbucket}` share.
 
 mod bitbucket;
@@ -44,6 +44,10 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/webhooks/source/gitea/events", post(gitea::normal))
         .route("/webhooks/source/gitea/events/manual", post(gitea::manual))
+        .route(
+            "/webhooks/payments/stripe/events",
+            post(crate::ui_subscription::stripe_events),
+        )
 }
 
 /// `$request->server('REMOTE_ADDR')`.
@@ -52,7 +56,7 @@ fn client_address(peer: Option<&ConnectInfo<SocketAddr>>) -> String {
 }
 
 /// `auditLogWebhookFailure($provider, $reason, $context)`.
-fn audit_failure(provider: &str, reason: &str, detail: &str) {
+pub(crate) fn audit_failure(provider: &str, reason: &str, detail: &str) {
     tracing::warn!(target: "audit", event = %format!("webhook.{provider}.signature_failed"), reason = %reason, detail = %detail, "webhook signature failed");
 }
 

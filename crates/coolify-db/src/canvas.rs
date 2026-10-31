@@ -757,3 +757,63 @@ pub async fn search_users(db: &Db, search: &str) -> DbResult<Vec<Value>> {
         .map(|(id, name, email, active)| json!({"id": id, "name": name, "email": email, "active": active}))
         .collect())
 }
+
+/// `Subscription::where('stripe_customer_id', $customerId)->first()`.
+pub async fn subscription_by_customer(db: &Db, customer: &str) -> DbResult<Option<Record>> {
+    let text: Option<String> = sqlx::query_scalar(
+        "SELECT row_to_json(t)::text FROM subscriptions t WHERE t.stripe_customer_id = $1 ORDER BY t.id LIMIT 1",
+    )
+    .bind(customer)
+    .fetch_optional(db.pool())
+    .await?;
+    text.as_deref().map(decode).transpose()
+}
+
+/// `Subscription::updateOrCreate(['team_id' => ...], [...])` or `firstOrCreate` with `overwrite` false.
+pub async fn store_subscription(
+    db: &Db,
+    team_id: i64,
+    subscription_id: Option<&str>,
+    customer: Option<&str>,
+    paid: bool,
+    overwrite: bool,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    if team_subscription(db, team_id).await?.is_some() {
+        if overwrite {
+            sqlx::query(
+                "UPDATE subscriptions SET stripe_subscription_id = $1, stripe_customer_id = $2, stripe_invoice_paid = $3, \
+                 stripe_past_due = false, updated_at = now() AT TIME ZONE 'UTC' WHERE team_id = $4",
+            )
+            .bind(subscription_id)
+            .bind(customer)
+            .bind(paid)
+            .bind(team_id)
+            .execute(db.pool())
+            .await?;
+        }
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT INTO subscriptions (team_id, stripe_subscription_id, stripe_customer_id, stripe_invoice_paid, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')",
+    )
+    .bind(team_id)
+    .bind(subscription_id)
+    .bind(customer)
+    .bind(paid)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
+/// `$team->members->where('id', $userId)->first()->isAdmin()`.
+pub async fn is_team_admin(db: &Db, team_id: i64, user_id: i64) -> DbResult<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM team_user WHERE team_id = $1 AND user_id = $2 AND role IN ('admin', 'owner'))",
+    )
+    .bind(team_id)
+    .bind(user_id)
+    .fetch_one(db.pool())
+    .await?)
+}

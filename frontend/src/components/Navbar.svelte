@@ -13,7 +13,7 @@
   let { desktop = false }: { desktop?: boolean } = $props();
 
   const sections = $derived(
-    visibleSections({ isAdmin: session.isAdmin, isOwner: session.isOwner, isInstanceAdmin: session.isInstanceAdmin }),
+    visibleSections({ isAdmin: session.isAdmin, isOwner: session.isOwner, isInstanceAdmin: session.isInstanceAdmin, isCloud: session.info?.features.cloud }),
   );
   const leafActive = (l: NavLeaf) => pathIs(router.path, l.active);
   const itemActive = (i: NavItem) => (isParent(i) ? i.children.some(leafActive) : leafActive(i));

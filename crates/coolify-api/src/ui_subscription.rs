@@ -1396,3 +1396,479 @@ async fn admin_back(
     }
     Ok(ok(json!({})).into_response())
 }
+
+/// `Webhook\\Stripe::events`: checks the signature, answers, then runs `StripeProcessJob`.
+pub async fn stripe_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    let answer = |code: StatusCode, text: &'static str| (code, text).into_response();
+    let (Some(_), Some(secret)) = (config("STRIPE_API_KEY"), config("STRIPE_WEBHOOK_SECRET"))
+    else {
+        crate::webhooks::audit_failure("stripe", "stripe_not_configured", "");
+        return answer(StatusCode::BAD_REQUEST, "Invalid signature.");
+    };
+    let signature = headers
+        .get("stripe-signature")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    if !signature_ok(signature, &body, &secret, Utc::now().timestamp()) {
+        crate::webhooks::audit_failure("stripe", "invalid_signature", "");
+        return answer(StatusCode::BAD_REQUEST, "Invalid signature.");
+    }
+    let Ok(event) = serde_json::from_slice::<Value>(&body) else {
+        crate::webhooks::audit_failure("stripe", "invalid_payload", "");
+        return answer(StatusCode::BAD_REQUEST, "Invalid webhook.");
+    };
+    tokio::spawn(async move {
+        if let Err(e) = process_event(&state, &event).await {
+            // `send_internal_notification('StripeProcessJob error: ...')`.
+            tracing::error!(error = %e, "StripeProcessJob error");
+        }
+    });
+    answer(
+        StatusCode::OK,
+        "Webhook received. Cool cool cool cool cool.",
+    )
+}
+
+/// `Stripe\\Webhook::constructEvent`: `t=...,v1=...` over `{t}.{payload}`, within five minutes.
+fn signature_ok(header: &str, payload: &[u8], secret: &str, now: i64) -> bool {
+    use hmac::{Hmac, Mac};
+    let mut timestamp = None;
+    let mut signatures = Vec::new();
+    for part in header.split(',') {
+        match part.trim().split_once('=') {
+            Some(("t", t)) => timestamp = t.parse::<i64>().ok(),
+            Some(("v1", v)) => signatures.push(v.to_owned()),
+            _ => {}
+        }
+    }
+    let Some(timestamp) = timestamp else {
+        return false;
+    };
+    if (now - timestamp).abs() > 300 {
+        return false;
+    }
+    signatures.iter().any(|sig| {
+        let Ok(mut mac) = Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()) else {
+            return false;
+        };
+        mac.update(format!("{timestamp}.").as_bytes());
+        mac.update(payload);
+        let bytes: Vec<u8> = (0..sig.len() / 2)
+            .filter_map(|i| {
+                sig.get(i * 2..i * 2 + 2)
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+            })
+            .collect();
+        mac.verify_slice(&bytes).is_ok()
+    })
+}
+
+fn excluded(plan: Option<&str>) -> bool {
+    match (config("STRIPE_EXCLUDED_PLANS"), plan) {
+        (Some(list), Some(plan)) => list.contains(plan),
+        _ => false,
+    }
+}
+
+/// `StripeProcessJob::handle`. `send_internal_notification` is a log line here; the jobs it would
+/// dispatch (`VerifyStripeSubscriptionStatusJob`, `SubscriptionInvoiceFailedJob`,
+/// `ServerLimitCheckJob`) are not ported.
+async fn process_event(state: &AppState, event: &Value) -> Result<(), String> {
+    let db = &state.db;
+    let data = event
+        .pointer("/data/object")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let kind = event
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let get = |p: &str| data.pointer(p).and_then(Value::as_str).map(str::to_owned);
+    let failed = |e: coolify_db::DbError| e.to_string();
+    let team_of = |v: Option<&Value>| match v {
+        Some(Value::String(s)) => s.parse::<i64>().ok(),
+        Some(Value::Number(n)) => n.as_i64(),
+        _ => None,
+    };
+    let customer = get("/customer");
+    match kind {
+        "radar.early_fraud_warning.created" => {
+            let client = Stripe::new().ok_or("Stripe is not configured.")?;
+            let describe = |e: StripeError| e.message;
+            if let Some(charge) = get("/charge") {
+                client
+                    .post("/refunds", &[("charge", charge)])
+                    .await
+                    .map_err(describe)?;
+            }
+            let intent = get("/payment_intent").unwrap_or_default();
+            let intent = client
+                .get(&format!("/payment_intents/{intent}"), &[])
+                .await
+                .map_err(describe)?;
+            let customer = intent
+                .get("customer")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let Some(customer) = customer else {
+                return Err("Early fraud warning: subscription not found.".to_owned());
+            };
+            let list = client
+                .get(
+                    "/subscriptions",
+                    &[("customer", customer.clone()), ("limit", "100".to_owned())],
+                )
+                .await
+                .map_err(describe)?;
+            let mut ids: Vec<String> = list
+                .get("data")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|s| s.get("status").and_then(Value::as_str) != Some("incomplete_expired"))
+                .filter_map(|s| s.get("id").and_then(Value::as_str).map(str::to_owned))
+                .collect();
+            let row = coolify_db::canvas::subscription_by_customer(db, &customer)
+                .await
+                .map_err(failed)?;
+            if let Some(id) = row.as_ref().and_then(|r| text(r, "stripe_subscription_id"))
+                && !ids.iter().any(|i| i == id)
+            {
+                ids.push(id.to_owned());
+            }
+            if ids.is_empty() {
+                return Err("Early fraud warning: subscription not found.".to_owned());
+            }
+            for id in &ids {
+                client
+                    .call(
+                        reqwest::Method::DELETE,
+                        &format!("/subscriptions/{id}"),
+                        &[],
+                        None,
+                    )
+                    .await
+                    .map_err(describe)?;
+            }
+            if let Some(team) = row
+                .as_ref()
+                .and_then(|r| r.get("team_id"))
+                .and_then(Value::as_i64)
+            {
+                coolify_db::canvas::subscription_ended(db, team)
+                    .await
+                    .map_err(failed)?;
+            }
+        }
+        "checkout.session.completed" => {
+            let Some(reference) = get("/client_reference_id") else {
+                return Ok(());
+            };
+            let (user, team) = reference.split_once(':').unwrap_or((&reference, ""));
+            let (Ok(user), Ok(team)) = (user.parse::<i64>(), team.parse::<i64>()) else {
+                return Err(format!("Bad client reference {reference}"));
+            };
+            if !coolify_db::canvas::is_team_admin(db, team, user)
+                .await
+                .map_err(failed)?
+            {
+                return Err(format!(
+                    "User {user} is not an admin or owner of team {team}"
+                ));
+            }
+            coolify_db::canvas::store_subscription(
+                db,
+                team,
+                get("/subscription").as_deref(),
+                customer.as_deref(),
+                true,
+                true,
+            )
+            .await
+            .map_err(failed)?;
+        }
+        "invoice.paid" => {
+            if excluded(get("/lines/data/0/plan/id").as_deref()) {
+                return Ok(());
+            }
+            let Some(row) = coolify_db::canvas::subscription_by_customer(
+                db,
+                customer.as_deref().unwrap_or_default(),
+            )
+            .await
+            .map_err(failed)?
+            else {
+                return Ok(());
+            };
+            let team = row.get("team_id").and_then(Value::as_i64).unwrap_or(-1);
+            if let Some(id) = text(&row, "stripe_subscription_id") {
+                let client = Stripe::new().ok_or("Stripe is not configured.")?;
+                let current = client
+                    .get(&format!("/subscriptions/{id}"), &[])
+                    .await
+                    .map_err(|e| e.message)?;
+                match current.get("status").and_then(Value::as_str) {
+                    Some("active") => {
+                        coolify_db::canvas::update_subscription(
+                            db,
+                            team,
+                            &[
+                                ("stripe_invoice_paid", json!(true)),
+                                ("stripe_past_due", json!(false)),
+                            ],
+                        )
+                        .await
+                        .map_err(failed)?;
+                    }
+                    Some("past_due") => {
+                        coolify_db::canvas::update_subscription(
+                            db,
+                            team,
+                            &[
+                                ("stripe_invoice_paid", json!(true)),
+                                ("stripe_past_due", json!(true)),
+                            ],
+                        )
+                        .await
+                        .map_err(failed)?;
+                    }
+                    other => {
+                        tracing::warn!(status = ?other, "invoice.paid for a subscription that is not active")
+                    }
+                }
+            }
+        }
+        "invoice.payment_failed" | "payment_intent.payment_failed" => {
+            tracing::warn!(kind, customer = ?customer, "Stripe payment failed");
+        }
+        "customer.subscription.created" => {
+            let team = team_of(data.pointer("/metadata/team_id"));
+            let user = team_of(data.pointer("/metadata/user_id"));
+            let (Some(team), Some(user)) = (team, user) else {
+                return Err("No team id or user id found".to_owned());
+            };
+            if !coolify_db::canvas::is_team_admin(db, team, user)
+                .await
+                .map_err(failed)?
+            {
+                return Err(format!(
+                    "User {user} is not an admin or owner of team {team}"
+                ));
+            }
+            let id = get("/id");
+            coolify_db::canvas::store_subscription(
+                db,
+                team,
+                id.as_deref(),
+                customer.as_deref(),
+                false,
+                false,
+            )
+            .await
+            .map_err(failed)?;
+            let row = coolify_db::canvas::team_subscription(db, team)
+                .await
+                .map_err(failed)?;
+            if let Some(row) = row {
+                if text(&row, "stripe_customer_id") != customer.as_deref() {
+                    return Err(format!("Stripe customer ID mismatch for team {team}"));
+                }
+                if text(&row, "stripe_subscription_id").is_none() {
+                    coolify_db::canvas::update_subscription(
+                        db,
+                        team,
+                        &[("stripe_subscription_id", json!(id))],
+                    )
+                    .await
+                    .map_err(failed)?;
+                }
+            }
+        }
+        "customer.subscription.updated" => {
+            let plan = get("/items/data/0/plan/id").or_else(|| get("/plan/id"));
+            if excluded(plan.as_deref()) {
+                return Ok(());
+            }
+            let status = get("/status").unwrap_or_default();
+            let id = get("/items/data/0/subscription").or_else(|| get("/id"));
+            let found = coolify_db::canvas::subscription_by_customer(
+                db,
+                customer.as_deref().unwrap_or_default(),
+            )
+            .await
+            .map_err(failed)?;
+            let team = match &found {
+                Some(row) => row.get("team_id").and_then(Value::as_i64).unwrap_or(-1),
+                None => {
+                    if status == "incomplete_expired" {
+                        return Err("Subscription incomplete expired".to_owned());
+                    }
+                    let Some(team) = team_of(data.pointer("/metadata/team_id")) else {
+                        return Err("No subscription and team id found".to_owned());
+                    };
+                    coolify_db::canvas::store_subscription(
+                        db,
+                        team,
+                        id.as_deref(),
+                        customer.as_deref(),
+                        false,
+                        false,
+                    )
+                    .await
+                    .map_err(failed)?;
+                    team
+                }
+            };
+            let row = coolify_db::canvas::team_subscription(db, team)
+                .await
+                .map_err(failed)?
+                .ok_or("Subscription is gone")?;
+            if get("/items/data/0/price/lookup_key").is_some_and(|l| l.contains("dynamic")) {
+                let quantity = data
+                    .pointer("/items/data/0/quantity")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(2)
+                    .clamp(MIN_SERVER_LIMIT, MAX_SERVER_LIMIT);
+                coolify_db::canvas::set_server_limit(db, team, quantity)
+                    .await
+                    .map_err(failed)?;
+            }
+            coolify_db::canvas::update_subscription(
+                db,
+                team,
+                &[
+                    (
+                        "stripe_feedback",
+                        data.pointer("/cancellation_details/feedback")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                    ),
+                    (
+                        "stripe_comment",
+                        data.pointer("/cancellation_details/comment")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                    ),
+                    ("stripe_plan_id", json!(plan)),
+                    (
+                        "stripe_cancel_at_period_end",
+                        json!(
+                            data.get("cancel_at_period_end")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false)
+                        ),
+                    ),
+                ],
+            )
+            .await
+            .map_err(failed)?;
+            let same = text(&row, "stripe_subscription_id") == id.as_deref();
+            match status.as_str() {
+                "paused" | "incomplete_expired" if same => {
+                    coolify_db::canvas::update_subscription(
+                        db,
+                        team,
+                        &[("stripe_invoice_paid", json!(false))],
+                    )
+                    .await
+                    .map_err(failed)?;
+                }
+                "past_due" if same => {
+                    coolify_db::canvas::update_subscription(
+                        db,
+                        team,
+                        &[("stripe_past_due", json!(true))],
+                    )
+                    .await
+                    .map_err(failed)?;
+                }
+                "unpaid" => {
+                    if same {
+                        coolify_db::canvas::update_subscription(
+                            db,
+                            team,
+                            &[("stripe_invoice_paid", json!(false))],
+                        )
+                        .await
+                        .map_err(failed)?;
+                    }
+                    coolify_db::canvas::subscription_ended(db, team)
+                        .await
+                        .map_err(failed)?;
+                }
+                "active" if same => {
+                    coolify_db::canvas::update_subscription(
+                        db,
+                        team,
+                        &[
+                            ("stripe_past_due", json!(false)),
+                            ("stripe_invoice_paid", json!(true)),
+                        ],
+                    )
+                    .await
+                    .map_err(failed)?;
+                }
+                _ => {}
+            }
+        }
+        "customer.subscription.deleted" => {
+            let row = coolify_db::canvas::subscription_by_customer(
+                db,
+                customer.as_deref().unwrap_or_default(),
+            )
+            .await
+            .map_err(failed)?;
+            if let Some(row) =
+                row.filter(|r| text(r, "stripe_subscription_id") == get("/id").as_deref())
+            {
+                let team = row.get("team_id").and_then(Value::as_i64).unwrap_or(-1);
+                coolify_db::canvas::subscription_ended(db, team)
+                    .await
+                    .map_err(failed)?;
+            }
+        }
+        other => return Err(format!("Unhandled event type: {other}")),
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hmac::{Hmac, Mac};
+
+    fn sign(payload: &str, secret: &str, t: i64) -> String {
+        let mut mac = Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).expect("key");
+        mac.update(format!("{t}.{payload}").as_bytes());
+        let hex: String = mac
+            .finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        format!("t={t},v1={hex}")
+    }
+
+    #[test]
+    fn stripe_signature() {
+        let now = 1_800_000_000;
+        assert!(signature_ok(&sign("{}", "whsec", now), b"{}", "whsec", now));
+        assert!(!signature_ok(
+            &sign("{}", "other", now),
+            b"{}",
+            "whsec",
+            now
+        ));
+        assert!(!signature_ok(
+            &sign("{}", "whsec", now - 301),
+            b"{}",
+            "whsec",
+            now
+        ));
+        assert!(!signature_ok("", b"{}", "whsec", now));
+    }
+}
