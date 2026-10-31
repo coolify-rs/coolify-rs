@@ -77,7 +77,12 @@ Upstream references are relative to the upstream repository root.
 | Scheduled tasks, scheduler, Horizon queues | `app/Console/Kernel.php`, 72 jobs | |
 | Sending notifications (email, Discord, Slack, Telegram, Pushover, webhook), delivery failure tracking, transactional mail | `app/Notifications/*`, `TracksDeliveryFailures` | verified: `compat/diff/notifications_diff.py` (subject, mail HTML, request bodies), `compat/diff/notifications_e2e.py` (delivery to mailpit and a local endpoint), `crates/coolify-jobs/tests/notifications_delivery.rs`; triggers not wired are in KNOWN_LIMITATIONS |
 | Terminal and file browser | `docker/coolify-terminal`, `ContainerFilesystemService` | high-risk; security review required |
-| Cloud providers (Hetzner, DigitalOcean, Vultr, Hostinger), cloud-init | controllers + jobs | |
+| Cloud providers (Hetzner, DigitalOcean, Vultr, Hostinger), cloud-init | controllers + jobs | UI: cloud tokens and cloud-init scripts verified on both UIs (`compat/ui/flow_security.mjs`) up to the calls to the providers |
+| UI: notifications (email, Discord, Slack, Telegram, Pushover, webhook) | `Livewire/Notifications/*` | verified on both UIs (`compat/ui/flow_notifications.mjs`): toasts, rows, audit events, member and instance admin states |
+| UI: tags, deploy by tag | `Livewire/Tags/Show`, `DeployController::by_tags` | verified on both UIs (`compat/ui/flow_tags.mjs`, `compat/diff/tags_deploy_diff.py`) except a deployment started from a tag; the canvas is not ported |
+| UI: shared variables | `Livewire/SharedVariables/*`, `Project/Shared/EnvironmentVariable/{Add, Show}` for shared variables | verified on both UIs (`compat/ui/flow_shared_variables.mjs`); the canvas is not ported |
+| UI: S3 storage | `Livewire/Storage/*` | verified on both UIs against a local MinIO (`compat/ui/flow_storages.mjs`) |
+| UI: API tokens, integration tokens | `Livewire/Security/{ApiTokens, IntegrationToken*}` | verified on both UIs (`compat/ui/flow_security.mjs`, Vault against a local fake); Cloudflare tokens are refused, see KNOWN_LIMITATIONS |
 | MCP server, Sentinel metrics, traffic analytics | `routes/ai.php`, `SentinelController` | |
 | Install / upgrade scripts, self-update | `scripts/install.sh`, `upgrade.sh`, `UpdateCoolifyJob` | |
 | Billing (Stripe, cloud only) | `app/Http/Controllers/Webhook/Stripe.php` | out of scope (self-hosted focus) |

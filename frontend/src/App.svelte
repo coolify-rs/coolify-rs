@@ -29,6 +29,12 @@
   import SharedVariableScope from './pages/SharedVariableScope.svelte';
   import Storages from './pages/Storages.svelte';
   import Storage from './pages/Storage.svelte';
+  import ApiTokens from './pages/ApiTokens.svelte';
+  import CloudTokens from './pages/CloudTokens.svelte';
+  import CloudToken from './pages/CloudToken.svelte';
+  import CloudInitScripts from './pages/CloudInitScripts.svelte';
+  import CloudInitScript from './pages/CloudInitScript.svelte';
+  import IntegrationTokens from './pages/IntegrationTokens.svelte';
   import Unported from './pages/Unported.svelte';
   import { router } from './lib/router.svelte';
   import { session } from './lib/session.svelte';
@@ -144,6 +150,18 @@
       <Storages />
     {:else if router.current.name === 'storage'}
       {#key router.path}<Storage uuid={params.uuid} section={params.section ?? 'general'} />{/key}
+    {:else if router.current.name === 'api-tokens'}
+      <ApiTokens />
+    {:else if router.current.name === 'cloud-tokens'}
+      <CloudTokens />
+    {:else if router.current.name === 'cloud-token'}
+      {#key params.uuid}<CloudToken uuid={params.uuid} />{/key}
+    {:else if router.current.name === 'cloud-init-scripts'}
+      <CloudInitScripts />
+    {:else if router.current.name === 'cloud-init-script'}
+      {#key params.uuid}<CloudInitScript uuid={params.uuid} />{/key}
+    {:else if router.current.name === 'integration-tokens'}
+      <IntegrationTokens />
     {:else if router.current.name === 'servers'}
       <Servers />
     {:else if router.current.name === 'server-new' || router.current.name === 'server-new-type'}

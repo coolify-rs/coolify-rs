@@ -669,3 +669,22 @@ async fn send_test(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summarize_like_validation_exception() {
+        assert_eq!(summarize(&[]), None);
+        assert_eq!(summarize(&["a".to_owned()]).as_deref(), Some("a"));
+        assert_eq!(
+            summarize(&["a".to_owned(), "b".to_owned()]).as_deref(),
+            Some("a (and 1 more error)")
+        );
+        assert_eq!(
+            summarize(&["a".to_owned(), "b".to_owned(), "c".to_owned()]).as_deref(),
+            Some("a (and 2 more errors)")
+        );
+    }
+}

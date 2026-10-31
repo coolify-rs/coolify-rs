@@ -147,8 +147,8 @@ export async function flow(port, user, body, opts = {}) {
       ['ref', 'http://127.0.0.1:18000'],
       ['rs', `http://127.0.0.1:${port}`],
     ]) {
-      const page = await login(browser, base, user);
       opts.before?.();
+      const page = await login(browser, base, user);
       const h = helpers(page, base, label);
       try { results[label] = await body(h); } finally { opts.after?.(); }
       await page.context().close();

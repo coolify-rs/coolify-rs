@@ -243,7 +243,7 @@ fn present_script(state: &AppState, ctx: &AuthCtx, mut r: Record) -> Result<Valu
 }
 
 /// `ValidCloudInitYaml`.
-fn cloud_init_rule(v: &Value) -> Option<String> {
+pub(crate) fn cloud_init_rule(v: &Value) -> Option<String> {
     let text = v.as_str()?;
     if text.is_empty() || text == "0" {
         return None;

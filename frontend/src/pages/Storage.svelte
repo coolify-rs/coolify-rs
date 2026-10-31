@@ -310,7 +310,7 @@
           </div>
         {:else}
           <div class="application-settings-form">
-            <SettingsSection id="storage-danger-section" title="Danger zone">
+            <SettingsSection id="storage-danger-section" title="Danger zone" description="Destructive actions for this S3 storage destination cannot be undone.">
               <DangerZone title="Delete storage">
                 <p>
                   Permanently delete

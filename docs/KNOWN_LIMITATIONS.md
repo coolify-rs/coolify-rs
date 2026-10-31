@@ -8,7 +8,8 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   yet."}`; `scripts/parity.py --missing` lists them.
 - Not every upstream API operation is implemented (`scripts/parity.py`). Others answer `501 {"message":"This endpoint is not
   implemented in coolify-rs yet."}`.
-- The web UI covers the dashboard, projects, environments, private keys, team settings, members and appearance.
+- The web UI covers the dashboard, projects, environments, private keys, API, cloud and integration tokens, cloud-init scripts,
+  notifications, tags, shared variables, S3 storage, team settings, members and appearance.
   Not available yet: registration and the root setup window, password reset and forced password change, 2FA
   enrollment and recovery codes, passkeys, OAuth/SSO, team creation and invitations, instance settings, API token
   management, and every page for servers, resources, sources, storages, notifications and tags (they open a "not
@@ -111,6 +112,27 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - coolify-rs cannot bootstrap a new installation: it requires a database created by upstream Coolify at the baseline
   (`main` @ b5823c7, 473 migrations); it runs no upstream DDL. A 4.5.0 database is served read-only until upstream
   is upgraded.
+
+## Keys, notifications, tags, shared variables and S3 pages
+
+- Integration tokens for Cloudflare: `IntegrationTokenValidator` for Cloudflare and `CloudflareDnsProvider::syncZones` are not
+  ported. Creating such a token shows the provider's validation error, and "Refresh zones" shows an error. Stored Cloudflare
+  tokens can be listed, renamed and deleted.
+- Cloud token "Validate" and "Validate and add" call the real provider APIs, as upstream. They were only exercised up to the
+  form validation, since nothing may go to an external service during tests.
+- Send-test on Pushover and Telegram calls the real services, as upstream, so the comparison flows leave them out. The Telegram
+  path shares `notify_test` with `compat/diff/notifications_e2e.py`.
+- A failing SMTP send in the test email: only "connection refused" uses Symfony's message. Other transport errors (DNS, TLS,
+  authentication) show lettre's text.
+- S3 connection failures do not send `emails.s3-connection-error`, and `unusable_email_sent` is only reset, not set.
+- `Canvas` links (tags, shared variables) lead to the not-available page, as the canvas pages are not ported. Their toggles
+  are shown, and `prefersCanvasView` is not honoured.
+- Upstream glitches reproduced on purpose: the Issued tokens list hides tokens created since the page load (Alpine list), and
+  the new-tag modal shows no validation error (`wire:ignore`). Not reproduced: the variable count of the shared variables table
+  lags one request behind after an add, and rows of the S3 resources table without `wire:key` show stale data after a move.
+- Pages behind `viewAny` (cloud tokens, cloud-init scripts, integration tokens) stay empty for a member instead of upstream's
+  403 page.
+- `SharedVariables` overview: `{{scope.KEY}}` matching decrypts every resource variable of the team on each visit, as upstream.
 
 ## API divergences (implemented routes)
 
