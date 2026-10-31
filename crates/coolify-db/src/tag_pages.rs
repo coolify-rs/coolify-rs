@@ -164,3 +164,50 @@ pub async fn detach(db: &Db, tag_id: i64, morph: &str, id: i64) -> DbResult<()> 
     .await?;
     Ok(())
 }
+
+/// A resource variable with the owners its `{{scope.KEY}}` references resolve against.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ResourceVariable {
+    pub value: Option<String>,
+    pub resource_uuid: String,
+    pub environment_id: i64,
+    pub project_id: i64,
+    pub server_id: Option<i64>,
+}
+
+/// `SharedVariableCanvas::resourceVariables(resources('team', $team))`.
+pub async fn resource_variables(db: &Db, team_id: i64) -> DbResult<Vec<ResourceVariable>> {
+    let mut union: Vec<String> = vec![
+        "SELECT a.id, a.uuid, a.environment_id, 'App\\Models\\Application' AS morph, a.destination_id, a.destination_type, NULL::bigint AS service_server FROM applications a WHERE a.deleted_at IS NULL".to_owned(),
+        "SELECT s.id, s.uuid, s.environment_id, 'App\\Models\\Service' AS morph, s.destination_id, s.destination_type, s.server_id AS service_server FROM services s WHERE s.deleted_at IS NULL".to_owned(),
+    ];
+    for (table, class) in [
+        ("standalone_postgresqls", "StandalonePostgresql"),
+        ("standalone_redis", "StandaloneRedis"),
+        ("standalone_mongodbs", "StandaloneMongodb"),
+        ("standalone_mysqls", "StandaloneMysql"),
+        ("standalone_mariadbs", "StandaloneMariadb"),
+        ("standalone_keydbs", "StandaloneKeydb"),
+        ("standalone_dragonflies", "StandaloneDragonfly"),
+        ("standalone_clickhouses", "StandaloneClickhouse"),
+        ("standalone_sqlites", "StandaloneSqlite"),
+    ] {
+        union.push(format!(
+            "SELECT d.id, d.uuid, d.environment_id, 'App\\Models\\{class}' AS morph, d.destination_id, d.destination_type, NULL::bigint AS service_server FROM {table} d WHERE d.deleted_at IS NULL"
+        ));
+    }
+    let sql = format!(
+        "SELECT v.value, r.uuid AS resource_uuid, r.environment_id, e.project_id, \
+           COALESCE(r.service_server, sd.server_id, sw.server_id) AS server_id \
+         FROM ({}) r JOIN environments e ON e.id = r.environment_id JOIN projects p ON p.id = e.project_id \
+         JOIN environment_variables v ON v.resourceable_id = r.id AND v.resourceable_type = r.morph AND v.is_preview = false \
+         LEFT JOIN standalone_dockers sd ON r.destination_type = 'App\\Models\\StandaloneDocker' AND sd.id = r.destination_id \
+         LEFT JOIN swarm_dockers sw ON r.destination_type = 'App\\Models\\SwarmDocker' AND sw.id = r.destination_id \
+         WHERE p.team_id = $1 ORDER BY v.key",
+        union.join(" UNION ALL ")
+    );
+    Ok(sqlx::query_as(&sql)
+        .bind(team_id)
+        .fetch_all(db.pool())
+        .await?)
+}

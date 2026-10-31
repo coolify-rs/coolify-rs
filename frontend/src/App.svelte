@@ -24,6 +24,9 @@
   import NotificationEmail from './pages/NotificationEmail.svelte';
   import NotificationChannel from './pages/NotificationChannel.svelte';
   import Tags from './pages/Tags.svelte';
+  import SharedVariables from './pages/SharedVariables.svelte';
+  import SharedVariableOwners from './pages/SharedVariableOwners.svelte';
+  import SharedVariableScope from './pages/SharedVariableScope.svelte';
   import Unported from './pages/Unported.svelte';
   import { router } from './lib/router.svelte';
   import { session } from './lib/session.svelte';
@@ -123,6 +126,18 @@
       {#key params.channel}<NotificationChannel channel={params.channel} />{/key}
     {:else if router.current.name === 'tags'}
       {#key router.path}<Tags tagName={params.tagName} />{/key}
+    {:else if router.current.name === 'shared-overview'}
+      <SharedVariables />
+    {:else if ['shared-projects', 'shared-environments', 'shared-servers'].includes(router.current.name)}
+      {#key router.path}<SharedVariableOwners kind={router.current.name} />{/key}
+    {:else if router.current.name === 'shared-team'}
+      <SharedVariableScope kind="team" />
+    {:else if router.current.name === 'project-shared-variables'}
+      {#key router.path}<SharedVariableScope kind="project" uuid={params.uuid} />{/key}
+    {:else if router.current.name === 'environment-shared-variables'}
+      {#key router.path}<SharedVariableScope kind="environment" uuid={params.uuid} env={params['env']} />{/key}
+    {:else if router.current.name === 'shared-server'}
+      {#key router.path}<SharedVariableScope kind="server" uuid={params.uuid} />{/key}
     {:else if router.current.name === 'servers'}
       <Servers />
     {:else if router.current.name === 'server-new' || router.current.name === 'server-new-type'}
