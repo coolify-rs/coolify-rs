@@ -5,3 +5,5 @@ compat/reference/secrets
 .git
 frontend/node_modules
 frontend/dist
+compat/ui/node_modules
+compat/ui/shots

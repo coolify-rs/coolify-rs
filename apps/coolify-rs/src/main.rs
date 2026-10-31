@@ -38,6 +38,13 @@ struct Cli {
 enum Cmd {
     /// Serve the API (default).
     Serve,
+    /// What an installed server runs: prepare the database and first-run rows, then serve.
+    /// An empty database gets the baseline schema; a database with tables keeps what it has.
+    Boot,
+    /// Create the baseline schema. Refuses any database that already has a table.
+    CreateSchema,
+    /// Ask the running server whether it answers (the container's health check).
+    Healthcheck,
     /// Inspect the database and print the schema guard result as JSON.
     CheckSchema,
     /// Run one scheduled server job now and print what it returns (operators and differential tests).
@@ -255,16 +262,87 @@ fn main() -> Result<()> {
         .block_on(run())
 }
 
+/// `curl --fail http://127.0.0.1:8080/api/health` of upstream's Compose file, without curl's exit
+/// codes: non-zero unless the server answers 200 within two seconds.
+async fn healthcheck() -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listen = env("COOLIFY_RS_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".into());
+    let port = listen
+        .parse::<SocketAddr>()
+        .context("COOLIFY_RS_LISTEN must be host:port")?
+        .port();
+    let answer = tokio::time::timeout(Duration::from_secs(2), async move {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
+        stream
+            .write_all(b"GET /api/health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+            .await?;
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await?;
+        Ok::<_, std::io::Error>(response)
+    })
+    .await
+    .context("the server did not answer in time")?
+    .context("the server is not listening")?;
+    let line = String::from_utf8_lossy(&answer);
+    let line = line.lines().next().unwrap_or_default();
+    anyhow::ensure!(line.contains(" 200 "), "the server answered: {line}");
+    Ok(())
+}
+
+/// The folder the installer's key is in, inside the container.
+fn ssh_keys_dir(cfg: &Config) -> PathBuf {
+    cfg.remote.data_dir.join("ssh").join("keys")
+}
+
 async fn run() -> Result<()> {
     let cli = Cli::parse();
+    if matches!(cli.cmd, Some(Cmd::Healthcheck)) {
+        return healthcheck().await;
+    }
     let cfg = Config::from_env()?;
     init_tracing(cfg.json_logs);
+
+    if matches!(cli.cmd, Some(Cmd::CreateSchema)) {
+        coolify_db::bootstrap::create_schema(&cfg.db.url)
+            .await
+            .context("creating the schema")?;
+        println!("schema created");
+        return Ok(());
+    }
+    let boot = matches!(cli.cmd, Some(Cmd::Boot));
+    if boot {
+        let prepared = coolify_db::bootstrap::prepare(&cfg.db.url)
+            .await
+            .context("preparing the database")?;
+        tracing::info!(?prepared, "database prepared");
+        let ran =
+            coolify_db::bootstrap::apply_migrations(&cfg.db.url, coolify_db::bootstrap::MIGRATIONS)
+                .await
+                .context("applying schema changes")?;
+        if !ran.is_empty() {
+            tracing::info!(?ran, "schema changes applied");
+        }
+    }
 
     let db = Db::connect(&cfg.db)
         .await
         .context("connecting to the Coolify database")?;
     let schema = db.schema();
+    let seeded = if boot && schema.read_only_reason.is_none() {
+        let encrypter = cfg
+            .encrypter
+            .as_ref()
+            .context("APP_KEY must be set to install")?;
+        Some(
+            coolify_jobs::first_run::production_seed(&db, encrypter, &ssh_keys_dir(&cfg))
+                .await
+                .context("first-run rows")?,
+        )
+    } else {
+        None
+    };
     match cli.cmd.unwrap_or(Cmd::Serve) {
+        Cmd::Healthcheck | Cmd::CreateSchema => Ok(()),
         Cmd::ServerJob { job, server_uuid } => {
             let remote = Remote::new(cfg.remote.clone()).context("remote execution")?;
             let jobs = coolify_jobs::Jobs::new(db.clone(), remote, cfg.encrypter.clone());
@@ -286,7 +364,7 @@ async fn run() -> Result<()> {
             );
             Ok(())
         }
-        Cmd::Serve => {
+        Cmd::Serve | Cmd::Boot => {
             if let Some(reason) = &schema.read_only_reason {
                 tracing::warn!(%reason, "starting in read-only mode");
             }
@@ -345,6 +423,11 @@ async fn run() -> Result<()> {
                     remote,
                 },
             );
+            if seeded.is_some()
+                && let Err(e) = coolify_api::ui_auth::seed_root_user(&state).await
+            {
+                tracing::error!(error = ?e, "could not create the root user");
+            }
             if let Some(jobs) = &state.jobs {
                 // Container statuses of databases, every minute (upstream's ServerManagerJob).
                 jobs.spawn_status_poller();
@@ -367,6 +450,10 @@ async fn run() -> Result<()> {
                 }
             }
             let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
+            if let (Some(seeded), Some(jobs)) = (seeded, &state.jobs) {
+                coolify_jobs::first_run::spawn_after_start(jobs, seeded);
+                coolify_jobs::updates::spawn_schedule(jobs, state.version.to_string());
+            }
             axum::serve(
                 listener,
                 app(state).into_make_service_with_connect_info::<SocketAddr>(),

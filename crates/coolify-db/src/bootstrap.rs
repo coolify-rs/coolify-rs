@@ -16,7 +16,7 @@ pub const MIGRATIONS_SQL: &str =
     include_str!("../../../compat/baseline/upstream-main-b5823c7-migrations.sql");
 
 /// Held for the length of the transaction: two starting containers must not both create the schema.
-const LOCK_KEY: i64 = 0x636f_6f6c_6966_79;
+const LOCK_KEY: i64 = 0x0063_6f6f_6c69_6679;
 
 /// Why a database has to be left alone, or that something failed while looking at it.
 #[derive(Debug, thiserror::Error)]

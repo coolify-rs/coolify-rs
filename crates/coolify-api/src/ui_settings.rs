@@ -31,6 +31,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/ui/settings/advanced", get(advanced).post(advanced_action))
         .route("/ui/settings/updates", get(updates).post(updates_action))
         .route("/ui/settings/upgrade", get(upgrade_state).post(upgrade))
+        .route("/ui/settings/upgrade/status", get(upgrade_status))
         .route("/ui/settings/email", get(email).post(email_action))
         .route("/ui/settings/backup", get(backup).post(backup_action))
         .route("/ui/settings/backup/executions", get(backup_executions))
@@ -1300,15 +1301,33 @@ async fn upgrade_state(State(state): State<AppState>) -> ApiResult {
     Ok(ok(refresh_upgrade_state(&state).await?).into_response())
 }
 
-/// `Upgrade::upgrade`. `UpdateCoolify` replaces the container with upstream's image, which is not
-/// what a coolify-rs instance runs, so the action stops here with what a user can do.
+/// `Upgrade::upgrade`: `UpdateCoolify::run(manual_update: true)`.
 async fn upgrade(State(state): State<AppState>, Extension(ctx): Extension<AuthCtx>) -> ApiResult {
     if !admin(&state, &ctx).await? {
         return Ok(toast_error(StatusCode::FORBIDDEN, "Forbidden"));
     }
-    Ok(server_error(
-        "Upgrading from the UI is not available in coolify-rs: install the new release of coolify-rs instead.",
-    ))
+    let Some(jobs) = &state.jobs else {
+        return Ok(server_error("Remote execution is not configured."));
+    };
+    match coolify_jobs::updates::update_coolify(jobs, &state.version, true).await {
+        Ok(_) => Ok(ok(json!({})).into_response()),
+        Err(message) => Ok(server_error(&message)),
+    }
+}
+
+/// `Upgrade::getUpgradeStatus`: only root team members can view it.
+async fn upgrade_status(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+) -> ApiResult {
+    let Some(jobs) = state.jobs.as_ref().filter(|_| ctx.team_id == 0) else {
+        return Ok(ok(json!({"status": "none"})).into_response());
+    };
+    let latest = latest_version(&state);
+    Ok(
+        ok(coolify_jobs::updates::upgrade_status(jobs, &state.version, &latest).await)
+            .into_response(),
+    )
 }
 
 async fn updates(State(state): State<AppState>, Extension(ctx): Extension<AuthCtx>) -> ApiResult {

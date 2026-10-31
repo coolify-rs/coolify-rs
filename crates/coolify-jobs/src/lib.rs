@@ -10,6 +10,7 @@ pub mod cloud;
 pub mod compose_parser;
 pub mod databases;
 pub mod file_browser;
+pub mod first_run;
 pub mod git_http;
 pub mod gitea;
 pub mod github;
@@ -22,6 +23,7 @@ pub mod server_ops;
 pub mod server_transfer;
 pub mod services;
 pub mod storages;
+pub mod updates;
 mod validate;
 
 use std::collections::{HashMap, HashSet};
