@@ -358,6 +358,72 @@ pub async fn api(
     Ok((status, response.json().await.unwrap_or(Value::Null)))
 }
 
+/// A `github_apps` row by id.
+pub async fn source_by_id(db: &Db, id: i64) -> coolify_db::DbResult<Option<Record>> {
+    let row: Option<String> =
+        sqlx::query_scalar("SELECT row_to_json(g)::text FROM github_apps g WHERE id = $1")
+            .bind(id)
+            .fetch_optional(db.pool())
+            .await?;
+    Ok(row.and_then(|t| coolify_db::records::parse_row(&t).ok()))
+}
+
+/// `Previews::load_prs`: `githubApi($source, "/repos/{$repository}/pulls")`, sorted by number,
+/// with the `X-RateLimit-Remaining` header. `Err` holds the message `githubApi()` throws.
+pub async fn pull_requests(
+    db: &Db,
+    enc: Option<&Encrypter>,
+    source: &Record,
+    repository: &str,
+) -> Result<(Option<String>, Vec<Value>), String> {
+    let api = field(source, "api_url").unwrap_or_default().to_owned();
+    let http = git_http::client(Some(db), &api, Duration::from_secs(30)).await?;
+    let url = format!("{api}/repos/{repository}/pulls");
+    let is_public = source
+        .get("is_public")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let request = if is_public {
+        http.get(&url).header("Accept", "application/vnd.github.v3+json")
+    } else {
+        let token = installation_token(db, enc, Some(source)).await?;
+        authed(http.get(&url), &token)
+    };
+    let response = request.send().await.map_err(|e| e.to_string())?;
+    let header = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    };
+    let remaining = header("X-RateLimit-Remaining");
+    let reset = header("X-RateLimit-Reset");
+    let success = response.status().is_success();
+    let body: Value = response.json().await.unwrap_or(Value::Null);
+    if !success {
+        let reset_time = reset
+            .and_then(|r| r.parse::<i64>().ok())
+            .and_then(|r| chrono::DateTime::from_timestamp(r, 0))
+            .unwrap_or_default()
+            .format("%Y-%m-%d %H:%M:%S");
+        let message = body
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("no error message found");
+        return Err(format!(
+            "GitHub API call failed:<br>Error: {message}<br>Rate Limit Status:<br>- Remaining Calls: {}<br>- Reset Time: {reset_time} UTC",
+            remaining.as_deref().unwrap_or("0")
+        ));
+    }
+    let mut rows = match body {
+        Value::Array(rows) => rows,
+        _ => Vec::new(),
+    };
+    rows.sort_by_key(|r| r.get("number").and_then(Value::as_i64).unwrap_or_default());
+    Ok((remaining, rows))
+}
+
 /// `getGithubCommitRangeFiles()`: `None` when the list is unknown.
 pub async fn commit_range_files(
     db: &Db,

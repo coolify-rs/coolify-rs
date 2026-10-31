@@ -625,6 +625,56 @@ impl Jobs {
         Ok(json!({"current": current, "images": images}))
     }
 
+    /// `Previews::stop`: `docker stack rm` on Swarm, otherwise `stopContainers()`.
+    pub async fn stop_preview_deployment(
+        &self,
+        a: &ApplicationRow,
+        pull_request_id: i64,
+    ) -> Result<(), String> {
+        let server_id = a.server_id().ok_or("Server not found.")?;
+        let row = servers::find_by_id(&self.0.db, server_id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("Server not found.")?;
+        let server = ServerInfo::from_row(&row);
+        let t = server.target(self).await?;
+        if server.is_swarm() {
+            let stack = format!("docker stack rm {}", quote(&format!("{}-{pull_request_id}", a.uuid)));
+            self.remote()
+                .run(&t, &[&stack], RunOptions::op("preview.stop"))
+                .await
+                .map_err(|e| e.message)?;
+            return Ok(());
+        }
+        let containers = self
+            .containers_for_pull_request(&t, &server, &a.uuid, Some(pull_request_id))
+            .await?;
+        let grace = a
+            .setting_int("stop_grace_period")
+            .filter(|g| (1..=3600).contains(g))
+            .unwrap_or(30);
+        for c in containers {
+            let Some(name) = c.get("Names").and_then(Value::as_str) else {
+                continue;
+            };
+            let stop = crate::databases::docker_stop_command(
+                u32::try_from(grace).unwrap_or(30),
+                &quote(name),
+                server.docker_version(),
+            );
+            // `throwError: false`.
+            let _ = self
+                .remote()
+                .run_quiet(
+                    &t,
+                    &[&stop, &format!("docker rm -f {}", quote(name))],
+                    RunOptions::op("preview.stop"),
+                )
+                .await;
+        }
+        Ok(())
+    }
+
     /// `CleanupPreviewDeployment::run($application, $pullRequestId, $preview)`, after the preview
     /// was soft deleted; then `DeleteResourceJob::dispatch($preview)`. A server that is not
     /// functional stops it right there: the row stays soft deleted, as upstream.

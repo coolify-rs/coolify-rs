@@ -13,6 +13,9 @@ pub mod files;
 pub mod logs;
 pub mod maintenance;
 pub mod operations;
+pub mod previews;
+pub mod resource_details;
+pub mod scheduled_tasks;
 pub mod secret_manager;
 pub mod storages;
 
@@ -43,6 +46,9 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .merge(config::routes())
         .merge(secret_manager::routes())
         .merge(storages::routes())
+        .merge(previews::routes())
+        .merge(resource_details::routes())
+        .merge(scheduled_tasks::routes())
         .route_layer(from_fn_with_state(state, crate::session::ui_guard))
 }
 

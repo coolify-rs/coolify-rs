@@ -243,6 +243,7 @@ export interface ServerFacts {
   is_localhost: boolean;
   is_build: boolean;
   is_swarm: boolean;
+  has_additional_servers?: boolean;
   is_swarm_worker: boolean;
   proxy_set: boolean;
   proxy_status: string | null;
@@ -459,6 +460,7 @@ export interface ApplicationState {
   server_ip: string | null;
   server_id: number | null;
   is_swarm?: boolean;
+  has_additional_servers?: boolean;
   /** `Server::buildServers($teamId)->exists()`. */
   /** `is_public_repository()`. */
   source_is_public?: boolean;

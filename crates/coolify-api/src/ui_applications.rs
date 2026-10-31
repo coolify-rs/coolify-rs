@@ -434,6 +434,8 @@ pub async fn state(
         "running_deployment_url": running_url,
         "configuration_changed": changed,
         "server_timezone": timezone,
+        // `$application->additional_servers()->exists()`.
+        "has_additional_servers": !coolify_db::application_ops::additional_networks(&state.db, fresh.id).await?.is_empty(),
         "custom_labels": labels_text,
         "server_ip": server.as_ref().and_then(|s| s.record.get("ip")).cloned().unwrap_or(Value::Null),
         "server_id": server.as_ref().map(|s| s.id),

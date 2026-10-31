@@ -76,7 +76,7 @@ fn field_error(message: String) -> Response {
         .into_response()
 }
 
-fn split(value: Option<&str>) -> Vec<String> {
+pub(super) fn split(value: Option<&str>) -> Vec<String> {
     value
         .unwrap_or_default()
         .split(',')
@@ -134,13 +134,13 @@ fn php_get<'a>(value: &'a PhpValue, key: &str) -> Option<&'a PhpValue> {
     }
 }
 
-fn parsed_compose(a: &ApplicationRow) -> Option<PhpValue> {
+pub(super) fn parsed_compose(a: &ApplicationRow) -> Option<PhpValue> {
     coolify_jobs::compose_parser::validate::parse_docker_compose_yaml(a.str("docker_compose_raw")?)
         .ok()
 }
 
 /// `composeServices`: the services that are not databases.
-fn compose_services(a: &ApplicationRow) -> Vec<String> {
+pub(super) fn compose_services(a: &ApplicationRow) -> Vec<String> {
     let Some(parsed) = parsed_compose(a) else {
         return Vec::new();
     };
@@ -194,7 +194,7 @@ fn exposed_ports(a: &ApplicationRow) -> Vec<i64> {
 }
 
 /// `inheritedDomainInternalPort($service)`.
-fn inherited_port(a: &ApplicationRow, service: Option<&str>) -> Option<i64> {
+pub(super) fn inherited_port(a: &ApplicationRow, service: Option<&str>) -> Option<i64> {
     if let Some(p) = compose_service_ports(a, service).first() {
         return Some(*p);
     }
@@ -208,7 +208,7 @@ fn inherited_port(a: &ApplicationRow, service: Option<&str>) -> Option<i64> {
 }
 
 /// `availableInternalPorts($service)`.
-fn available_ports(a: &ApplicationRow, service: Option<&str>) -> Vec<i64> {
+pub(super) fn available_ports(a: &ApplicationRow, service: Option<&str>) -> Vec<i64> {
     if is_compose(a) {
         return compose_service_ports(a, service);
     }
@@ -230,7 +230,7 @@ fn available_ports(a: &ApplicationRow, service: Option<&str>) -> Vec<i64> {
 }
 
 /// `DomainUrlParts::compose`.
-fn compose(scheme: &str, host: &str, port: &str, path: &str) -> String {
+pub(super) fn compose(scheme: &str, host: &str, port: &str, path: &str) -> String {
     let scheme = if scheme.trim().eq_ignore_ascii_case("http") {
         "http"
     } else {
@@ -251,7 +251,7 @@ fn compose(scheme: &str, host: &str, port: &str, path: &str) -> String {
 }
 
 /// `DomainUrlParts::split`.
-fn parts_json(url: &str) -> Value {
+pub(super) fn parts_json(url: &str) -> Value {
     let Some(p) = domains::UrlParts::parse(url).filter(|p| !p.host.is_empty()) else {
         return json!({"scheme": "https", "host": "", "port": "", "path": ""});
     };
@@ -916,7 +916,7 @@ async fn remove(
 }
 
 /// `generateUrl(server: $server, random: $random)`.
-async fn generated_url(
+pub(super) async fn generated_url(
     state: &AppState,
     a: &ApplicationRow,
     random: &str,
