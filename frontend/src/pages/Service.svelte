@@ -2,8 +2,13 @@
   // Port of upstream livewire/project/service/configuration.blade.php (+
   // Project\Service\Configuration). `Index::mount` redirects `/{stack_service_uuid}`
   // to this page: a compose resource is edited in the modal of its card.
-  // `Project/Shared/*` sections are placeholders until the shared components are connected.
+  // `Project/Shared/*` sections not ported yet stay placeholders.
   import Empty from '../components/Empty.svelte';
+  import EnvironmentVariables from '../components/shared/EnvironmentVariables.svelte';
+  import RuntimeLogs from '../components/shared/RuntimeLogs.svelte';
+  import SecretManagerLinks from '../components/shared/SecretManagerLinks.svelte';
+  import Tags from '../components/shared/Tags.svelte';
+  import Webhooks from '../components/shared/Webhooks.svelte';
   import ServiceDomains from '../components/ServiceDomains.svelte';
   import Reicon from '../components/Reicon.svelte';
   import ServiceHeading from '../components/ServiceHeading.svelte';
@@ -173,19 +178,20 @@
               {/each}
             </div>
           {:else if section === 'environment-variables'}
-            <ServiceSharedPlaceholder section="Project/Shared/EnvironmentVariable/All" />
+            <EnvironmentVariables kind="service" uuid={service} onconfigurationchanged={refreshQuiet} />
+            <SecretManagerLinks kind="service" uuid={service} />
           {:else if section === 'scheduled-tasks'}
             <ServiceSharedPlaceholder section="Project/Shared/ScheduledTask/All" />
           {:else if section === 'webhooks'}
-            <ServiceSharedPlaceholder section="Project/Shared/Webhooks" />
+            <Webhooks kind="service" uuid={service} />
           {:else if section === 'resource-operations'}
             <ServiceSharedPlaceholder section="Project/Shared/ResourceOperations" />
           {:else if section === 'tags'}
-            <ServiceSharedPlaceholder section="Project/Shared/Tags" />
+            <Tags kind="service" uuid={service} />
           {:else if section === 'danger'}
             <ServiceSharedPlaceholder section="Project/Shared/Danger" />
           {:else if section === 'logs'}
-            <ServiceSharedPlaceholder section="Project/Shared/Logs" />
+            <div class="runtime-logs-column min-w-0"><RuntimeLogs kind="service" uuid={service} /></div>
           {:else if section === 'terminal'}
             <ServiceSharedPlaceholder section="Project/Shared/ExecuteContainerCommand" />
           {:else if section === 'files'}

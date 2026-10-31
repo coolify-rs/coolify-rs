@@ -12,6 +12,17 @@
   import DatabaseDanger from '../components/DatabaseDanger.svelte';
   import DeploymentHistory from '../components/DeploymentHistory.svelte';
   import DeploymentLogs from '../components/DeploymentLogs.svelte';
+  import EnvironmentVariables from '../components/shared/EnvironmentVariables.svelte';
+  import SecretManagerLinks from '../components/shared/SecretManagerLinks.svelte';
+  import Storages from '../components/shared/Storages.svelte';
+  import HealthChecks from '../components/shared/HealthChecks.svelte';
+  import ResourceLimits from '../components/shared/ResourceLimits.svelte';
+  import RuntimeLogs from '../components/shared/RuntimeLogs.svelte';
+  import ApplicationAdvanced from '../components/shared/ApplicationAdvanced.svelte';
+  import ApplicationRollback from '../components/shared/ApplicationRollback.svelte';
+  import Metrics from '../components/shared/Metrics.svelte';
+  import Tags from '../components/shared/Tags.svelte';
+  import Webhooks from '../components/shared/Webhooks.svelte';
   import Unported from './Unported.svelte';
   import { appUi, dbUi, uiApi, ApiError, type ApplicationRecord, type ApplicationState, type DeploymentDetail } from '../lib/api';
   import { applicationNavContext, applicationSection } from '../lib/applicationMenu';
@@ -169,6 +180,27 @@
               {/if}
             {:else if active === 'source' && !record.dockerfile && record.build_pack !== 'dockerimage'}
               <ApplicationSource uuid={app} onsaved={() => refresh().catch(() => {})} />
+            {:else if active === 'environment-variables'}
+              <EnvironmentVariables kind="application" uuid={app} onconfigurationchanged={() => refresh().catch(() => {})} />
+              <SecretManagerLinks kind="application" uuid={app} />
+            {:else if active === 'persistent-storage'}
+              <Storages kind="application" uuid={app} onchange={() => refresh().catch(() => {})} />
+            {:else if active === 'logs'}
+              <div class="runtime-logs-column min-w-0"><RuntimeLogs kind="application" uuid={app} /></div>
+            {:else if active === 'advanced'}
+              <ApplicationAdvanced uuid={app} {base} onchange={() => refresh().catch(() => {})} />
+            {:else if active === 'rollback'}
+              <ApplicationRollback uuid={app} />
+            {:else if active === 'metrics'}
+              <Metrics kind="application" uuid={app} />
+            {:else if active === 'webhooks'}
+              <Webhooks kind="application" uuid={app} />
+            {:else if active === 'healthcheck' && record.build_pack !== 'dockercompose'}
+              <HealthChecks kind="application" uuid={app} onchange={() => refresh().catch(() => {})} />
+            {:else if active === 'resource-limits'}
+              <ResourceLimits kind="application" uuid={app} />
+            {:else if active === 'tags'}
+              <Tags kind="application" uuid={app} />
             {:else if active === 'deployment'}
               <DeploymentHistory uuid={app} {base} {serverName} {timezone} />
             {:else if active === 'danger'}

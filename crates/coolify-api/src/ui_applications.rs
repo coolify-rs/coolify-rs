@@ -1180,7 +1180,11 @@ pub async fn update(
 }
 
 /// `resetDefaultLabels($manualReset)`: regenerates Coolify-managed labels (always on a manual reset).
-async fn regenerate_labels(state: &AppState, id: i64, manual: bool) -> Result<(), ApiError> {
+pub(crate) async fn regenerate_labels(
+    state: &AppState,
+    id: i64,
+    manual: bool,
+) -> Result<(), ApiError> {
     let a = apps::find_by_id(&state.db, id).await?.ok_or(NOT_FOUND)?;
     if !manual && !a.setting_bool("is_container_label_readonly_enabled") {
         return Ok(());

@@ -4,7 +4,7 @@
   import { untrack } from 'svelte';
   import Empty from './Empty.svelte';
   import ServiceFileStorage from './ServiceFileStorage.svelte';
-  import ServiceSharedPlaceholder from './ServiceSharedPlaceholder.svelte';
+  import Storages from './shared/Storages.svelte';
   import SettingsSection from './SettingsSection.svelte';
   import { headline, type ServiceStoragePart } from '../lib/servicesApi';
 
@@ -56,7 +56,7 @@
       <Empty size="sm" title="No storage found" description="No volumes, files, or directories are defined for this service." iconName="storages" />
     {:else if activeTab === 'volumes'}
       {#if hasVolumes}
-        <ServiceSharedPlaceholder section="Project/Shared/Storages/All" />
+        <Storages kind="service-{part.kind}" uuid={part.uuid} onchange={onchanged} volumesOnly />
       {:else}
         <Empty size="sm" title="No volumes configured" description="This service has no volume mounts." iconName="storages" />
       {/if}
