@@ -18,7 +18,7 @@ export function showToasts<T extends ActionResult>(r: T): T & { ok: boolean } {
     else if (t.type === 'error') {
       good = false;
       notify.failure(t.message);
-    } else notify.info(t.message);
+    } else notify.info('Info', t.message);
   }
   return { ...r, ok: good };
 }

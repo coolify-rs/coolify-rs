@@ -273,7 +273,9 @@ async fn check_s3(
         Ok(t) => t,
         Err(e) => return Ok(toast("error", &e)),
     };
-    if let Err(e) = target.list_root().await {
+    // `$s3Storage->testConnection()`.
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    if let Err(e) = jobs.check_s3_connection(&row).await {
         return Ok(toast("error", &e));
     }
     match target.object_size(clean).await {

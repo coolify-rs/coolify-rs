@@ -27,7 +27,7 @@ export const CONFIGURATION_SECTIONS = [
 export function databaseNavContext(
   base: string,
   active: string,
-  opts: { canUpdate: boolean; canAccessTerminal: boolean; backups: boolean; initScripts: boolean },
+  opts: { canUpdate: boolean; canAccessTerminal: boolean; backups: boolean; initScripts: boolean; sqlite?: boolean },
 ): NavContext {
   const item = (label: string, section: string, icon: string, extra: Partial<Entry> = {}): Entry => ({
     label,
@@ -41,7 +41,7 @@ export function databaseNavContext(
     'General': item('General', 'general', 'settings', {
       children: [
         { id: 'database-details-section', label: 'Database details' },
-        { id: 'access-section', label: 'Access' },
+        ...(opts.sqlite ? [] : [{ id: 'access-section', label: 'Access' }]),
         { id: 'container-section', label: 'Container' },
         ...(opts.initScripts ? [{ id: 'initialization-scripts-section', label: 'Initialization scripts' }] : []),
       ],

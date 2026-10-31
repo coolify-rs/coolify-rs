@@ -59,8 +59,9 @@
       saved = { ...form };
       await onsaved();
     } catch (e) {
-      error = e instanceof ApiError ? e : new ApiError(0, String(e));
-      if (!Object.keys(error.errors).length) notify.failure(error.message);
+      // `catch (Exception) { handleError }`: the message shows as a toast.
+      const failure = e instanceof ApiError ? e : new ApiError(0, String(e));
+      notify.failure(Object.values(failure.errors)[0]?.[0] ?? failure.message);
     } finally {
       saving = false;
     }

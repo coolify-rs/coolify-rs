@@ -232,8 +232,8 @@
       description: orNull(form.description),
       image: form.image,
       ports_mappings: orNull(form.portsMappings),
-      public_port: form.publicPort.trim() === '' ? null : Number(form.publicPort),
-      public_port_timeout: form.publicPortTimeout.trim() === '' ? null : Number(form.publicPortTimeout),
+      public_port: str(form.publicPort).trim() === '' ? null : Number(form.publicPort),
+      public_port_timeout: str(form.publicPortTimeout).trim() === '' ? null : Number(form.publicPortTimeout),
       custom_docker_run_options: orNull(form.customDockerRunOptions),
       is_log_drain_enabled: !!record.is_log_drain_enabled,
     };
@@ -755,7 +755,11 @@
                     helper={sslModes.helper}
                     disabled={!enableSsl || !exited || !canUpdate}
                     bind:value={sslMode}
-                    onchange={saveSsl}
+                    onchange={async () => {
+                      // `onChange="instantSaveSSL"` and `updatedSslMode` both save.
+                      await saveSsl();
+                      await saveSsl();
+                    }}
                     options={sslModes.options}
                   />
                 {/if}
@@ -776,8 +780,8 @@
               { value: false, label: 'Private' },
               {
                 value: true,
-                label: form.publicPort === '' ? 'Public through TCP proxy (set public port first)' : 'Public through TCP proxy',
-                disabled: form.publicPort === '',
+                label: str(saved.publicPort) === '' ? 'Public through TCP proxy (set public port first)' : 'Public through TCP proxy',
+                disabled: str(saved.publicPort) === '',
               },
             ]}
           />

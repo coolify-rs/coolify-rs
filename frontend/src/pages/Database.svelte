@@ -83,6 +83,7 @@
       // `isBackupSolutionAvailable()`: not for Redis, KeyDB and Dragonfly.
       backups: !['redis', 'keydb', 'dragonfly'].includes(dbState.kind ?? ''),
       initScripts: (dbState.kind ?? 'postgresql') === 'postgresql',
+      sqlite: dbState.kind === 'sqlite',
     });
     page.navContext = menu;
     if (backup) {

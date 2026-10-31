@@ -452,9 +452,6 @@
 {#if confirm === 'file'}
   <ConfirmModal
     title="Restore Database from File?"
-    actions={['Copy backup file to database container', 'Execute restore command']}
-    warningMessage="Existing objects can cause the import to fail unless replacement is enabled."
-    confirmWithText={false}
     confirmWithPassword
     onconfirm={(password) => run(password, 'file')}
     onclose={() => (confirm = null)}
@@ -462,9 +459,6 @@
 {:else if confirm === 's3'}
   <ConfirmModal
     title="Restore Database from S3?"
-    actions={['Download backup from S3 storage', 'Copy file into database container', 'Execute restore command']}
-    warningMessage="Existing objects can cause the import to fail unless replacement is enabled."
-    confirmWithText={false}
     confirmWithPassword
     onconfirm={(password) => run(password, 's3')}
     onclose={() => (confirm = null)}

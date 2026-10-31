@@ -293,8 +293,8 @@
   <ConfirmModal
     title="Confirm Backup Schedule Deletion?"
     checkboxes={[
-      { id: 'delete_associated_backups_locally', label: 'All backups will be permanently deleted (associated with this backup job) from local storage.' },
-      { id: 'delete_associated_backups_s3', label: 'All backups will be permanently deleted (associated with this backup job) from the selected S3 Storage.' },
+      { id: 'delete_associated_backups_locally', label: 'All backups will be permanently deleted from local storage.' },
+      { id: 'delete_associated_backups_s3', label: 'All backups will be permanently deleted (associated with this backup job) from every S3 storage of this schedule.' },
     ]}
     actions={['The selected backup schedule will be deleted.', 'Scheduled backups for this database will stop if this is its only schedule.']}
     confirmationText={record.name ?? ''}

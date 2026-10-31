@@ -411,12 +411,8 @@ async fn action(
                 "info",
             )
             .await;
-            let mut res = toasts(&[(
-                "success",
-                "Backup queued. It will be available in a few minutes.",
-            )]);
-            res["redirect_executions"] = json!(true);
-            Ok(ok(res).into_response())
+            // Upstream's `success` event is lost in the full redirect to the executions page.
+            Ok(ok(json!({"redirect_executions": true})).into_response())
         }
         _ => Err(ApiError::Message(StatusCode::NOT_FOUND, "Not found.")),
     }
