@@ -6,6 +6,7 @@
 
 pub mod audit;
 pub mod auth;
+pub mod dns;
 pub mod fallback;
 pub mod git_urls;
 pub mod input;
@@ -26,6 +27,7 @@ pub mod ui_databases;
 pub mod ui_notifications;
 pub mod ui_profile;
 pub mod ui_security;
+pub mod ui_settings;
 pub mod ui_shared_variables;
 pub mod ui_storages;
 pub mod ui_tags;

@@ -8,6 +8,7 @@
   import TeamSwitcher from './TeamSwitcher.svelte';
   import UserMenu from './UserMenu.svelte';
   import ServerTopbar from './ServerTopbar.svelte';
+  import UpgradeBadge from './UpgradeBadge.svelte';
   import { page } from '../lib/page.svelte';
   import { layout } from '../lib/layout.svelte';
   import { link, router } from '../lib/router.svelte';
@@ -61,6 +62,9 @@
           >
         {/if}
       </div>
+      {#if session.isInstanceAdmin && !collapsed}
+        <div class="ml-auto shrink-0"><UpgradeBadge /></div>
+      {/if}
     </div>
     <div class="flex h-full items-center gap-0.5 min-w-0 flex-1 border-b border-black/[0.06] pl-3 pr-4 dark:border-white/[0.04]">
       <div class="relative flex min-w-0 flex-1 items-center">
@@ -151,6 +155,7 @@
     </div>
     <div class="flex shrink-0 items-center gap-1">
       <div id="configuration-warning-hud-slot-mobile" class="relative shrink-0"></div>
+      {#if session.isInstanceAdmin}<UpgradeBadge />{/if}
       <UserMenu />
       <button
         type="button"

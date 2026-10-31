@@ -53,6 +53,11 @@
   import CloudInitScripts from './pages/CloudInitScripts.svelte';
   import CloudInitScript from './pages/CloudInitScript.svelte';
   import IntegrationTokens from './pages/IntegrationTokens.svelte';
+  import SettingsGeneral from './pages/SettingsGeneral.svelte';
+  import SettingsAdvanced from './pages/SettingsAdvanced.svelte';
+  import SettingsUpdates from './pages/SettingsUpdates.svelte';
+  import SettingsEmail from './pages/SettingsEmail.svelte';
+  import SettingsBackup from './pages/SettingsBackup.svelte';
   import Unported from './pages/Unported.svelte';
   import { router } from './lib/router.svelte';
   import { session } from './lib/session.svelte';
@@ -266,6 +271,16 @@
       {#key params.uuid}<CloudInitScript uuid={params.uuid} />{/key}
     {:else if router.current.name === 'integration-tokens'}
       <IntegrationTokens />
+    {:else if router.current.name === 'settings-general'}
+      <SettingsGeneral />
+    {:else if router.current.name === 'settings-advanced'}
+      <SettingsAdvanced />
+    {:else if router.current.name === 'settings-updates'}
+      <SettingsUpdates />
+    {:else if router.current.name === 'settings-email'}
+      <SettingsEmail />
+    {:else if router.current.name === 'settings-backup'}
+      <SettingsBackup />
     {:else if router.current.name === 'settings-oauth'}
       {#key router.path}<SettingsOauth provider={params.provider} />{/key}
     {:else if router.current.name === 'onboarding'}

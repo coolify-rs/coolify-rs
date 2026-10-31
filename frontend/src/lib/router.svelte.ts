@@ -20,6 +20,11 @@ const routes: { name: string; pattern: string }[] = [
   // Answered by the server (`OauthController::callback`); this only keeps the route on the list.
   { name: 'oauth-denied', pattern: '/auth/:provider/callback' },
   { name: 'onboarding', pattern: '/onboarding' },
+  { name: 'settings-general', pattern: '/settings' },
+  { name: 'settings-advanced', pattern: '/settings/advanced' },
+  { name: 'settings-updates', pattern: '/settings/updates' },
+  { name: 'settings-email', pattern: '/settings/email' },
+  { name: 'settings-backup', pattern: '/settings/backup' },
   { name: 'settings-oauth', pattern: '/settings/oauth' },
   { name: 'settings-oauth', pattern: '/settings/oauth/:provider' },
   { name: 'dashboard', pattern: '/' },
