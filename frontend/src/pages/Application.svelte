@@ -14,6 +14,7 @@
   import DeploymentLogs from '../components/DeploymentLogs.svelte';
   import EnvironmentVariables from '../components/shared/EnvironmentVariables.svelte';
   import SecretManagerLinks from '../components/shared/SecretManagerLinks.svelte';
+  import Storages from '../components/shared/Storages.svelte';
   import Unported from './Unported.svelte';
   import { appUi, dbUi, uiApi, ApiError, type ApplicationRecord, type ApplicationState, type DeploymentDetail } from '../lib/api';
   import { applicationNavContext, applicationSection } from '../lib/applicationMenu';
@@ -174,6 +175,8 @@
             {:else if active === 'environment-variables'}
               <EnvironmentVariables kind="application" uuid={app} onconfigurationchanged={() => refresh().catch(() => {})} />
               <SecretManagerLinks kind="application" uuid={app} />
+            {:else if active === 'persistent-storage'}
+              <Storages kind="application" uuid={app} onchange={() => refresh().catch(() => {})} />
             {:else if active === 'deployment'}
               <DeploymentHistory uuid={app} {base} {serverName} {timezone} />
             {:else if active === 'danger'}

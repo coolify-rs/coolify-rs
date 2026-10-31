@@ -118,27 +118,36 @@ impl Jobs {
         d: &DatabaseRow,
         server: &ServerInfo,
     ) -> Result<(), String> {
+        self.save_file_storage_in(row, &workdir(d), server).await
+    }
+
+    /// `LocalFileVolume::saveStorageOnServer` for a resource directory.
+    pub async fn save_file_storage_in(
+        &self,
+        row: &Record,
+        dir: &str,
+        server: &ServerInfo,
+    ) -> Result<(), String> {
         if parts::bool_of(row, "is_host_file") {
             return Ok(());
         }
-        let dir = workdir(d);
         let fs_path = parts::str_of(row, "fs_path").unwrap_or_default();
         let is_directory = parts::bool_of(row, "is_directory");
-        let host = resolve_host_path(&dir, &resolved_fs_path(fs_path, &dir), "storage path")?;
-        let normalized = normalize_unix_path(&dir)?;
+        let host = resolve_host_path(dir, &resolved_fs_path(fs_path, dir), "storage path")?;
+        let normalized = normalize_unix_path(dir)?;
         if inside(&host, &normalized) {
             self.assert_remote_path_confined(&normalized, &host, server)
                 .await?;
         } else if !is_directory {
             self.assert_remote_path_not_symlink(&host, server).await?;
         }
-        let outside = is_outside_resource_directory(fs_path, &dir);
+        let outside = is_outside_resource_directory(fs_path, dir);
         validate_shell_safe_path(&host, "storage path")?;
         let escaped = quote(&host);
         let mut commands: Vec<String> = Vec::new();
         if is_directory {
             commands.push(format!("mkdir -p {escaped} > /dev/null 2>&1 || true"));
-            commands.push(format!("mkdir -p {} > /dev/null 2>&1 || true", quote(&dir)));
+            commands.push(format!("mkdir -p {} > /dev/null 2>&1 || true", quote(dir)));
         }
         if let Some((parent, _)) = host.rsplit_once('/')
             && !parent.is_empty()
@@ -217,17 +226,26 @@ impl Jobs {
 
     /// `LocalFileVolume::deleteStorageOnServer`: paths outside the resource directory are kept.
     pub async fn delete_file_storage(&self, row: &Record, d: &DatabaseRow) -> Result<(), String> {
+        let server = self.server_for(d).await?;
+        self.delete_file_storage_in(row, &workdir(d), &server).await
+    }
+
+    /// `LocalFileVolume::deleteStorageOnServer` for a resource directory.
+    pub async fn delete_file_storage_in(
+        &self,
+        row: &Record,
+        dir: &str,
+        server: &ServerInfo,
+    ) -> Result<(), String> {
         if parts::bool_of(row, "is_host_file") {
             return Ok(());
         }
-        let server = self.server_for(d).await?;
-        let dir = workdir(d);
         let fs_path = parts::str_of(row, "fs_path").unwrap_or_default();
-        if is_outside_resource_directory(fs_path, &dir) {
+        if is_outside_resource_directory(fs_path, dir) {
             return Ok(());
         }
-        let resolved = normalize_unix_path(&resolved_fs_path(fs_path, &dir))?;
-        self.assert_remote_path_confined(&dir, &resolved, &server)
+        let resolved = normalize_unix_path(&resolved_fs_path(fs_path, dir))?;
+        self.assert_remote_path_confined(dir, &resolved, server)
             .await?;
         validate_shell_safe_path(&resolved, "storage path")?;
         let escaped = quote(&resolved);
@@ -250,6 +268,80 @@ impl Jobs {
                 .await
                 .map_err(|e| e.message)?;
         }
+        Ok(())
+    }
+
+    /// `LocalFileVolume::loadStorageOnServer`: what the content of a file on the server is, as
+    /// the model stores it, or `None` when no file is there.
+    pub async fn load_file_storage_in(
+        &self,
+        row: &Record,
+        dir: &str,
+        server: &ServerInfo,
+    ) -> Result<Option<String>, String> {
+        const MAX_CONTENT_SIZE: i64 = 5 * 1024 * 1024;
+        const TOO_LARGE: &str = "[file too large to display]";
+        const BINARY: &str = "[binary file]";
+        let fs_path = parts::str_of(row, "fs_path").unwrap_or_default();
+        let host = resolve_host_path(dir, &resolved_fs_path(fs_path, dir), "storage path")?;
+        let normalized = normalize_unix_path(dir)?;
+        if inside(&host, &normalized) {
+            self.assert_remote_path_confined(&normalized, &host, server)
+                .await?;
+        }
+        validate_shell_safe_path(&host, "storage path")?;
+        let escaped = quote(&host);
+        let t = server.target(self).await?;
+        if self.remote_test(&t, "-f", &escaped).await? != "OK" {
+            return Ok(None);
+        }
+        let size = self
+            .remote()
+            .run(
+                &t,
+                &[format!("stat -c%s {escaped} 2>/dev/null").as_str()],
+                RunOptions::op("storage.size"),
+            )
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if size.trim().parse::<i64>().unwrap_or(0) > MAX_CONTENT_SIZE {
+            return Ok(Some(TOO_LARGE.to_owned()));
+        }
+        let limit = MAX_CONTENT_SIZE + 1;
+        let content = self
+            .remote()
+            .run(
+                &t,
+                &[format!("head -c {limit} {escaped}").as_str()],
+                RunOptions::op("storage.read"),
+            )
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if content.len() as i64 > MAX_CONTENT_SIZE {
+            return Ok(Some(TOO_LARGE.to_owned()));
+        }
+        let binary = content
+            .bytes()
+            .any(|b| b <= 0x08 || b == 0x0B || b == 0x0C || (0x0E..=0x1F).contains(&b));
+        Ok(Some(if binary { BINARY.to_owned() } else { content }))
+    }
+
+    /// `instant_remote_process(['docker volume rm -f ' ...])`.
+    pub async fn remove_docker_volume(
+        &self,
+        name: &str,
+        server: &ServerInfo,
+    ) -> Result<(), String> {
+        let t = server.target(self).await?;
+        let command = format!("docker volume rm -f {}", quote(name));
+        self.remote()
+            .run(&t, &[command.as_str()], RunOptions::op("storage.volume_rm"))
+            .await
+            .map_err(|e| e.message)?;
         Ok(())
     }
 

@@ -11,6 +11,7 @@
     children,
     footer,
     isLarge = false,
+    narrow = false,
     focusFirstField = true,
   }: {
     title: string;
@@ -19,6 +20,8 @@
     children: Snippet;
     footer?: Snippet;
     isLarge?: boolean;
+    /** The mount dialogs of the storage page. */
+    narrow?: boolean;
     /** Upstream does not focus a field in modals opened through `wireOpen`. */
     focusFirstField?: boolean;
   } = $props();
@@ -44,7 +47,7 @@
       aria-label={title}
       class="application-settings-form application-settings-section relative flex max-h-[calc(100dvh-2rem)] w-full flex-col overflow-hidden {isLarge
         ? 'lg:w-[95vw]! lg:max-w-7xl!'
-        : 'lg:w-auto lg:min-w-2xl lg:max-w-4xl'}"
+        : narrow ? 'lg:w-[36rem]!' : 'lg:w-auto lg:min-w-2xl lg:max-w-4xl'}"
       style="box-shadow: 0 0 0 1px var(--coollabs-hairline), var(--shadow-modal)"
     >
       <header class="shrink-0 flex-wrap! sm:flex-nowrap!">

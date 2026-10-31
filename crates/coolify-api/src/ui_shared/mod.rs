@@ -5,6 +5,7 @@
 
 pub mod envs;
 pub mod secret_manager;
+pub mod storages;
 
 use axum::Router;
 use axum::http::StatusCode;
@@ -23,6 +24,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
     Router::new()
         .merge(envs::routes())
         .merge(secret_manager::routes())
+        .merge(storages::routes())
         .route_layer(from_fn_with_state(state, crate::session::ui_guard))
 }
 
@@ -57,6 +59,9 @@ pub struct Res {
     pub raw: Record,
     /// `application_settings` of an application.
     pub settings: Option<Record>,
+    /// The service of a `service_applications` or `service_databases` row.
+    pub service_uuid: Option<String>,
+    pub service_compose: Option<String>,
 }
 
 impl Res {
@@ -85,6 +90,24 @@ impl Res {
     pub fn compose_raw(&self) -> Option<&str> {
         self.str("docker_compose_raw")
             .or_else(|| self.str("docker_compose"))
+    }
+    /// `$resource->workdir()`: the resource directory on the server.
+    pub fn workdir(&self) -> String {
+        match self.class {
+            Class::Application => format!("/data/coolify/applications/{}", self.uuid),
+            Class::Database => format!("/data/coolify/databases/{}", self.uuid),
+            Class::Service => format!("/data/coolify/services/{}", self.uuid),
+            Class::ServiceApplication | Class::ServiceDatabase => format!(
+                "/data/coolify/services/{}",
+                self.service_uuid.as_deref().unwrap_or_default()
+            ),
+        }
+    }
+    /// `$resource->git_based()`.
+    pub fn git_based(&self) -> bool {
+        self.is_application()
+            && !self.str("dockerfile").is_some_and(|v| !v.is_empty())
+            && self.str("build_pack") != Some("dockerimage")
     }
     /// `$resource->type() === 'service' || $resource?->build_pack === 'dockercompose'`.
     pub fn is_compose(&self) -> bool {
@@ -131,6 +154,8 @@ pub async fn find(
                 server_id: a.server_id(),
                 raw: a.raw.clone(),
                 settings: Some(a.settings.clone()),
+                service_uuid: None,
+                service_compose: None,
             })
         }
         "service" => {
@@ -153,6 +178,8 @@ pub async fn find(
                 server_id: s.server_id(),
                 raw: s.raw.clone(),
                 settings: None,
+                service_uuid: None,
+                service_compose: None,
             })
         }
         "database" => {
@@ -180,6 +207,8 @@ pub async fn find(
                 server_id: d.server_id(),
                 raw: d.raw.clone(),
                 settings: None,
+                service_uuid: None,
+                service_compose: None,
             })
         }
         "service-application" | "service-database" => {
@@ -218,6 +247,8 @@ pub async fn find(
                 server_id: s.server_id(),
                 raw: sub.raw.clone(),
                 settings: None,
+                service_uuid: Some(s.uuid.clone()),
+                service_compose: s.str("docker_compose_raw").map(str::to_owned),
             })
         }
         _ => Err(NOT_FOUND),
