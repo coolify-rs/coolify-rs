@@ -23,6 +23,12 @@
   import Metrics from '../components/shared/Metrics.svelte';
   import Tags from '../components/shared/Tags.svelte';
   import Webhooks from '../components/shared/Webhooks.svelte';
+  import ResourceOperations from '../components/shared/ResourceOperations.svelte';
+  import Destination from '../components/shared/Destination.svelte';
+  import FileBrowser from '../components/shared/FileBrowser.svelte';
+  import ApplicationSwarm from '../components/shared/ApplicationSwarm.svelte';
+  import ApplicationDomains from '../components/shared/ApplicationDomains.svelte';
+  import Maintenance from '../components/shared/Maintenance.svelte';
   import Unported from './Unported.svelte';
   import { appUi, dbUi, uiApi, ApiError, type ApplicationRecord, type ApplicationState, type DeploymentDetail } from '../lib/api';
   import { applicationNavContext, applicationSection } from '../lib/applicationMenu';
@@ -97,6 +103,9 @@
       gitBased: !r.dockerfile && bp !== 'dockerimage',
       dockerImage: bp === 'dockerimage',
       compose: bp === 'dockercompose',
+      swarm: appState?.is_swarm ?? false,
+      // `server-status-badge`.
+      serverBadge: r.server_status === false ? 'One or more servers are unreachable or misconfigured.' : undefined,
     });
     uiApi.project(uuid).then((d) => setProjectCrumbs(d, env));
     dbUi
@@ -180,6 +189,9 @@
               {/if}
             {:else if active === 'source' && !record.dockerfile && record.build_pack !== 'dockerimage'}
               <ApplicationSource uuid={app} onsaved={() => refresh().catch(() => {})} />
+            {:else if active === 'domains'}
+              <ApplicationDomains uuid={app} {base} onchange={() => refresh().catch(() => {})} />
+              <div class="mt-4"><Maintenance kind="application" uuid={app} /></div>
             {:else if active === 'environment-variables'}
               <EnvironmentVariables kind="application" uuid={app} onconfigurationchanged={() => refresh().catch(() => {})} />
               <SecretManagerLinks kind="application" uuid={app} />
@@ -190,7 +202,9 @@
             {:else if active === 'advanced'}
               <ApplicationAdvanced uuid={app} {base} onchange={() => refresh().catch(() => {})} />
             {:else if active === 'rollback'}
-              <ApplicationRollback uuid={app} />
+              <ApplicationRollback uuid={app} {base} />
+            {:else if active === 'swarm' && appState.is_swarm}
+              <ApplicationSwarm uuid={app} onchange={() => refresh().catch(() => {})} />
             {:else if active === 'metrics'}
               <Metrics kind="application" uuid={app} />
             {:else if active === 'webhooks'}
@@ -199,6 +213,12 @@
               <HealthChecks kind="application" uuid={app} onchange={() => refresh().catch(() => {})} />
             {:else if active === 'resource-limits'}
               <ResourceLimits kind="application" uuid={app} />
+            {:else if active === 'resource-operations'}
+              <ResourceOperations kind="application" uuid={app} />
+            {:else if active === 'files'}
+              <FileBrowser kind="application" uuid={app} />
+            {:else if active === 'servers'}
+              <Destination kind="application" uuid={app} {base} onchange={() => refresh().catch(() => {})} />
             {:else if active === 'tags'}
               <Tags kind="application" uuid={app} />
             {:else if active === 'deployment'}

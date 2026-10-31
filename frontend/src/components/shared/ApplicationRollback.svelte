@@ -1,7 +1,5 @@
 <script lang="ts">
-  // Port of upstream livewire/project/application/rollback.blade.php. Listing images on the server
-  // and the retention setting; starting a rollback belongs to the deployment pipeline and is not
-  // ported, so the action is disabled.
+  // Port of upstream livewire/project/application/rollback.blade.php.
   import Callout from '../Callout.svelte';
   import Empty from '../Empty.svelte';
   import FormInput from '../FormInput.svelte';
@@ -12,9 +10,10 @@
   import { ApiError, request } from '../../lib/api';
   import { resPath } from '../../lib/sharedApi';
   import { diffForHumans } from '../../lib/format';
+  import { router } from '../../lib/router.svelte';
   import { notify } from '../../lib/toast.svelte';
 
-  let { uuid }: { uuid: string } = $props();
+  let { uuid, base = '' }: { uuid: string; base?: string } = $props();
 
   let data = $state<any>(null);
   let keep = $state('2');
@@ -31,6 +30,17 @@
   $effect(() => {
     load();
   });
+
+  // `rollbackImage($commit)`.
+  async function rollback(commit: string) {
+    try {
+      const r = await request<{ deployment_uuid?: string; title?: string; message?: string }>('POST', `${path}/start`, { commit });
+      if (r.deployment_uuid) router.go(`${base}/deployment/${r.deployment_uuid}`);
+      else notify.error(r.title ?? 'Error', r.message);
+    } catch (err) {
+      notify.failure(err instanceof ApiError ? err.message : String(err));
+    }
+  }
 
   async function submit() {
     saving = true;
@@ -86,7 +96,13 @@
               <p class="mt-1 text-xs text-neutral-500 dark:text-fg-dim">Built {diffForHumans(String(image.created_at).replace(' ', 'T').replace(/ ([+-]\d{2})(\d{2}).*$/, '$1:$2'))} <span class="mx-1 text-neutral-300 dark:text-fg-faint">·</span> {image.created_at}</p>
             </div>
             {#if data.can_update}
-              <button type="button" class="button" disabled title={image.is_current ? 'This image is currently running.' : 'Only commit and pull-request image tags support rollback.'}>Rollback</button>
+              {#if image.is_current}
+                <button type="button" class="button" disabled title="This image is currently running.">Rollback</button>
+              {:else if !rollbackable}
+                <button type="button" class="button" disabled title="Only commit and pull-request image tags support rollback.">Rollback</button>
+              {:else}
+                <button type="button" class="button" onclick={() => rollback(image.tag)}>Roll back to this image</button>
+              {/if}
             {/if}
           </div>
         {:else}

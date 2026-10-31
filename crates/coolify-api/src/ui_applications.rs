@@ -299,7 +299,7 @@ pub async fn create_docker_image(
     Ok(created(json!({"uuid": uuid})).into_response())
 }
 
-fn random_str(n: usize) -> String {
+pub(crate) fn random_str(n: usize) -> String {
     use rand::Rng as _;
     const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let mut rng = rand::thread_rng();
@@ -436,6 +436,7 @@ pub async fn state(
         "custom_labels": labels_text,
         "server_ip": server.as_ref().and_then(|s| s.record.get("ip")).cloned().unwrap_or(Value::Null),
         "server_id": server.as_ref().map(|s| s.id),
+        "is_swarm": a.str("destination_type") == Some(r"App\Models\SwarmDocker") || server.as_ref().is_some_and(|s| coolify_jobs::server::ServerInfo::from_row(s).is_swarm()),
     }))
     .into_response())
 }
@@ -1312,7 +1313,7 @@ pub async fn delete(
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
-    if a.destination.is_none() || !apps::unported_parts(&state.db, a.id).await?.is_empty() {
+    if a.destination.is_none() {
         return Err(ApiError::NotPorted);
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;

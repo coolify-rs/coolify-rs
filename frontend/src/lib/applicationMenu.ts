@@ -19,7 +19,7 @@ export function applicationSection(section: string | undefined): string {
 export function applicationNavContext(
   base: string,
   active: string,
-  opts: { canAccessTerminal: boolean; gitBased: boolean; dockerImage: boolean; compose: boolean },
+  opts: { canAccessTerminal: boolean; gitBased: boolean; dockerImage: boolean; compose: boolean; swarm?: boolean; serverBadge?: string },
 ): NavContext {
   const item = (label: string, section: string, icon: string, extra: Partial<Entry> = {}): Entry => ({
     label,
@@ -47,6 +47,7 @@ export function applicationNavContext(
         { id: 'advanced-proxy-section', label: 'Proxy' },
       ],
     }),
+    'Swarm': item('Swarm', 'swarm', 'destinations', { visible: !!opts.swarm }),
     'Healthcheck': item('Healthcheck', 'healthcheck', 'feedback', {
       children: [
         { id: 'healthcheck-configuration-section', label: 'Configuration' },
@@ -55,12 +56,12 @@ export function applicationNavContext(
     }),
     'Runtime Logs': item('Runtime Logs', 'logs', 'unordered-list'),
     'Deployment Logs': item('Deployment Logs', 'deployment', 'time-back'),
-    'Terminal': item('Terminal', 'terminal', 'browser-terminal', { visible: opts.canAccessTerminal }),
-    'Files': item('Files', 'files', 'folder', { visible: opts.canAccessTerminal, beta: true }),
+    'Terminal': item('Terminal', 'terminal', 'browser-terminal', { visible: opts.canAccessTerminal && !opts.swarm }),
+    'Files': item('Files', 'files', 'folder', { visible: opts.canAccessTerminal && !opts.swarm, beta: true }),
     'Metrics': item('Metrics', 'metrics', 'graph'),
     'Analytics': item('Analytics', 'analytics', 'analytics'),
     'Git Source': item('Git Source', 'source', 'sources', { visible: opts.gitBased }),
-    'Servers': item('Servers', 'servers', 'servers'),
+    'Servers': item('Servers', 'servers', 'servers', { errorBadge: opts.serverBadge }),
     'Preview Deployments': item('Preview Deployments', 'preview-deployments', 'eye', {
       visible: opts.gitBased || opts.dockerImage,
       children: [
@@ -89,7 +90,7 @@ export function applicationNavContext(
     'Danger Zone': item('Danger Zone', 'danger', 'danger'),
   };
   const menuGroups = [
-    ['General', 'Domains', 'Environment Variables', 'Persistent Storage', 'Advanced', 'Healthcheck'],
+    ['General', 'Domains', 'Environment Variables', 'Persistent Storage', 'Advanced', 'Swarm', 'Healthcheck'],
     ['Runtime Logs', 'Deployment Logs', 'Terminal', 'Files', 'Metrics', 'Analytics'],
     ['Git Source', 'Servers', 'Preview Deployments'],
     ['Scheduled Tasks', 'Webhooks', 'Backups'],

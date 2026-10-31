@@ -131,3 +131,14 @@ Upstream references are relative to the upstream repository root.
 `ServerTransferMigrator` with `MigrateServerToInstanceJob`, `TransferFinishChecklist` with `CheckTransferFinishStepsJob`, and the
 pages `Server/Transfer` and `Server/TransferFinish`. Differential: `compat/diff/transfer_diff.py`.
 
+## Resource operations and shared sections
+
+| Section | Upstream | Status |
+|---|---|---|
+| Clone and move a resource, clone an environment | `Project\Shared\ResourceOperations`, `Project\CloneMe` | application, database and service: rows compared with the reference after clones and moves through both UIs (`compat/ui/flow_operations.mjs`) |
+| Servers section | `Project\Shared\Destination` | primary, additional, add, promote, remove compared (`compat/ui/flow_destination.mjs`); deploy to one additional server not ported |
+| Maintenance mode | `Project\Shared\Maintenance`, `Server::setupMaintenancePages` | Traefik files on the VM compared (`compat/ui/flow_files.mjs`) |
+| Files | `Project\Shared\FileBrowser`, `ContainerFilesystemService` | create, edit, chmod, rename, upload, download and delete compared inside a running database container |
+| Danger on service pages, application delete with file storages | `Project\Shared\Danger`, `DeleteResourceJob` | rows, directory and volume compared after deletes through both UIs |
+| Application domains | `Project\Application\Domains` | rows and labels compared (`compat/ui/flow_domains.mjs`); DNS checks not ported |
+| Swarm settings, rollback start, Refresh GPUs, server status badge | `Application\Swarm`, `Rollback`, `Advanced`, `ServerStatusBadge` | compared, except the badge's warning states |

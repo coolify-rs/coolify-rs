@@ -13,6 +13,7 @@
   import UnsavedBar from '../UnsavedBar.svelte';
   import { ApiError, request } from '../../lib/api';
   import { resPath, type ResourceKind } from '../../lib/sharedApi';
+  import { diffForHumans } from '../../lib/format';
   import { notify } from '../../lib/toast.svelte';
 
   let { kind = 'application', uuid, base, onchange }: { kind?: ResourceKind; uuid: string; base: string; onchange?: () => void } = $props();
@@ -95,6 +96,17 @@
     }
     save('resolver', { certificateResolverMode: resolverMode, certificateResolverName: resolverName });
   }
+
+  // `refreshGpus()`.
+  async function refreshGpus() {
+    try {
+      const r = await request<{ message: string }>('POST', `${resPath(kind, uuid)}/gpus/refresh`, {});
+      notify.success(r.message);
+      await load();
+    } catch (err) {
+      notify.failure(err instanceof ApiError ? err.message : String(err));
+    }
+  }
 </script>
 
 {#if d}
@@ -162,7 +174,7 @@
         {#if d.build_pack !== 'dockercompose'}
           <SettingsSubsection id="advanced-gpu-section" title="GPU" helper="Give this application access to the host's GPUs. More info <a href='https://docs.docker.com/compose/gpu-support/' class='underline dark:text-white' target='_blank'>here</a>.">
             {#snippet actions()}
-              <button type="button" class="button" disabled title="Refreshing GPUs is not available in coolify-rs yet.">
+              <button type="button" class="button" disabled={!canUpdate || !d.gpu_servers.some((g: any) => g.is_functional)} title={d.gpu_servers.some((g: any) => g.is_functional) ? undefined : 'Validate the server connection first.'} onclick={refreshGpus}>
                 <Reicon name="refresh" class="size-3.5" />
                 Refresh GPUs
               </button>
@@ -170,8 +182,35 @@
             <Callout type="info" title="Detected GPUs" class="mb-5">
               {#each d.gpu_servers as server, i (server.uuid)}
                 <div class={i > 0 ? 'mt-2' : ''}>
-                  <p class="font-medium text-neutral-700 dark:text-fg"><a use:link href="/server/{server.uuid}" class="underline">{server.name}</a></p>
-                  <div class="text-[12px] leading-5 text-neutral-600 dark:text-fg-dim"><p>Not checked yet. Refresh to find GPUs.</p></div>
+                  <p class="font-medium text-neutral-700 dark:text-fg">
+                    <a use:link href="/server/{server.uuid}" class="underline">{server.name}</a>
+                    {#if server.collected_at}
+                      <span class="font-normal text-neutral-500 dark:text-fg-dim">· checked {diffForHumans(server.collected_at)}</span>
+                    {/if}
+                  </p>
+                  <div class="text-[12px] leading-5 text-neutral-600 dark:text-fg-dim">
+                    {#if !server.gpus}
+                      <p>Not checked yet. Refresh to find GPUs.</p>
+                    {:else if server.gpus.length === 0}
+                      <p>No NVIDIA GPU found (<span class="font-mono">nvidia-smi</span> is not installed or shows no GPU).</p>
+                    {:else}
+                      <ul>
+                        {#each server.gpus as gpu (gpu.uuid)}
+                          <li>
+                            <span class="font-mono font-medium text-neutral-950 dark:text-fg">{gpu.index}</span>
+                            · {gpu.name} · {Math.round((gpu.memory_mb / 1024) * 10) / 10} GB ·
+                            <span class="font-mono">{gpu.uuid}</span>
+                          </li>
+                        {/each}
+                      </ul>
+                      {#if !server.nvidia_container_toolkit}
+                        <p class="mt-1 text-warning-900 dark:text-warning">
+                          NVIDIA Container Toolkit not found. Containers cannot use these GPUs until you
+                          <a href="https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html" class="underline" target="_blank">install it</a> and restart Docker.
+                        </p>
+                      {/if}
+                    {/if}
+                  </div>
                 </div>
               {/each}
             </Callout>

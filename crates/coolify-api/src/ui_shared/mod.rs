@@ -4,9 +4,15 @@
 //! `service-application` and `service-database`.
 
 pub mod advanced;
+pub mod application_extras;
 pub mod config;
+pub mod destination;
+pub mod domains;
 pub mod envs;
+pub mod files;
 pub mod logs;
+pub mod maintenance;
+pub mod operations;
 pub mod secret_manager;
 pub mod storages;
 
@@ -27,7 +33,13 @@ pub fn routes(state: AppState) -> Router<AppState> {
     Router::new()
         .merge(envs::routes())
         .merge(advanced::routes())
+        .merge(application_extras::routes())
         .merge(logs::routes())
+        .merge(destination::routes())
+        .merge(domains::routes())
+        .merge(files::routes())
+        .merge(maintenance::routes())
+        .merge(operations::routes())
         .merge(config::routes())
         .merge(secret_manager::routes())
         .merge(storages::routes())

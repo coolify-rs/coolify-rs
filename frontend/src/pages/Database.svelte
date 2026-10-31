@@ -23,6 +23,9 @@
   import Storages from '../components/shared/Storages.svelte';
   import Tags from '../components/shared/Tags.svelte';
   import Webhooks from '../components/shared/Webhooks.svelte';
+  import ResourceOperations from '../components/shared/ResourceOperations.svelte';
+  import Destination from '../components/shared/Destination.svelte';
+  import FileBrowser from '../components/shared/FileBrowser.svelte';
   import Unported from './Unported.svelte';
   import { dbUi, uiApi, ApiError, type DatabaseRecord, type DatabaseState } from '../lib/api';
   import { backupNavContext, databaseNavContext, databaseSection, teleport } from '../lib/databaseMenu';
@@ -127,10 +130,7 @@
   });
   // Sections that only render `Project/Shared/*` (ported by the shared branch).
   const sharedSections: Record<string, string> = {
-    servers: 'Project/Shared/Destination',
-    'resource-operations': 'Project/Shared/ResourceOperations',
     terminal: 'Project/Shared/ExecuteContainerCommand',
-    files: 'Project/Shared/FileBrowser',
   };
 
   const running = $derived((record?.status ?? '').startsWith('running'));
@@ -217,6 +217,12 @@
             <ResourceLimits kind="database" uuid={db} />
           {:else if active === 'metrics'}
             <Metrics kind="database" uuid={db} />
+          {:else if active === 'files'}
+            <FileBrowser kind="database" uuid={db} />
+          {:else if active === 'servers'}
+            <Destination kind="database" uuid={db} />
+          {:else if active === 'resource-operations'}
+            <ResourceOperations kind="database" uuid={db} />
           {:else if active === 'tags'}
             <Tags kind="database" uuid={db} />
           {:else if active === 'logs'}

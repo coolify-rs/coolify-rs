@@ -27,6 +27,8 @@ export interface NavContextItem {
   /** Shown greyed out, not a link ("Validate the server connection first."). */
   disabled?: boolean;
   beta?: boolean;
+  /** `project.application.server-status-badge`: the title of the warning icon. */
+  errorBadge?: string;
   /** Sections of the active page the entry lists below itself (`.nav-children`), by element id. */
   children?: { id: string; label: string }[];
   /** Sub pages the active entry lists below itself (the `children` of components/server/sidebar.blade.php). */

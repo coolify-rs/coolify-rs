@@ -9,7 +9,8 @@
     language = '',
     readonly = false,
     rows = 0,
-  }: { value?: string; language?: string; readonly?: boolean; rows?: number } = $props();
+    placeholder = 'Start typing here',
+  }: { value?: string; language?: string; readonly?: boolean; rows?: number; placeholder?: string } = $props();
 
   const monacoVersion = '0.52.2';
   let element: HTMLDivElement | undefined = $state();
@@ -85,7 +86,7 @@
         lineNumbersMinChars: 3,
         automaticLayout: true,
         language,
-        placeholder: 'Start typing here',
+        placeholder,
         domReadOnly: readonly,
         contextmenu: !readonly,
         renderLineHighlight: 'none',

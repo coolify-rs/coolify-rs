@@ -34,6 +34,7 @@ pub mod profile;
 pub mod projects;
 pub mod records;
 pub mod resource_envs;
+pub mod resource_ops;
 pub mod schema;
 pub mod server_ops;
 pub mod servers;

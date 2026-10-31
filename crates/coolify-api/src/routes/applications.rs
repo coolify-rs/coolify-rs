@@ -1962,7 +1962,7 @@ pub async fn stop(
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
-    if a.destination.is_none() || !apps::unported_parts(&state.db, a.id).await?.is_empty() {
+    if a.destination.is_none() {
         return Err(ApiError::NotPorted);
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
@@ -1986,7 +1986,7 @@ pub async fn delete(
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
-    if a.destination.is_none() || !apps::unported_parts(&state.db, a.id).await?.is_empty() {
+    if a.destination.is_none() {
         return Err(ApiError::NotPorted);
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;

@@ -542,6 +542,12 @@ impl Remote {
         t: &Target,
         remote_path: &str,
     ) -> Result<RemoteRead, RemoteError> {
+        self.open_command(t, &format!("cat {}", crate::shell::quote(remote_path)))
+            .await
+    }
+
+    /// Runs one command and streams its standard output.
+    pub async fn open_command(&self, t: &Target, command: &str) -> Result<RemoteRead, RemoteError> {
         let known_hosts = self.check_target(t)?;
         let key = self.write_key(&t.key)?;
         let mut child = self
@@ -551,7 +557,7 @@ impl Remote {
         let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
             return Err(RemoteError::new("Failed to start ssh: missing pipes", None));
         };
-        let mut lines = vec![format!("cat {}", crate::shell::quote(remote_path))];
+        let mut lines = vec![command.to_owned()];
         if t.is_non_root() {
             lines = parse_commands_by_line_for_sudo(&lines, &t.user);
         }

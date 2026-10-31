@@ -458,6 +458,7 @@ export interface ApplicationState {
   custom_labels: string | null;
   server_ip: string | null;
   server_id: number | null;
+  is_swarm?: boolean;
   /** `Server::buildServers($teamId)->exists()`. */
   /** `is_public_repository()`. */
   source_is_public?: boolean;

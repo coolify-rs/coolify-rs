@@ -2,6 +2,7 @@
 
 use chrono::Utc;
 use coolify_db::applications::{self as apps, ApplicationRow};
+use coolify_db::resource_ops as ops;
 use coolify_db::servers::{self, ColumnValue};
 use coolify_remote::RunOptions;
 use coolify_remote::shell::quote;
@@ -12,7 +13,7 @@ use crate::server::ServerInfo;
 
 impl Jobs {
     /// The application's containers on its server (`getCurrentApplicationContainerStatus`).
-    async fn application_containers(
+    pub async fn application_containers(
         &self,
         target: &coolify_remote::Target,
         uuid: &str,
@@ -63,7 +64,8 @@ impl Jobs {
     }
 
     /// `StopApplication::handle($application, $previewDeployments, ..., $resetRestartCount, $removeContainers)`:
-    /// the error message when something failed (nothing is written then).
+    /// the error message when something failed (nothing is written then). Runs on the main server and
+    /// on every additional server.
     pub async fn stop_application(
         &self,
         a: &ApplicationRow,
@@ -73,50 +75,49 @@ impl Jobs {
     ) -> Option<String> {
         let db = &self.0.db;
         let server_id = a.server_id()?;
-        let row = servers::find_by_id(db, server_id).await.ok().flatten()?;
-        let server = ServerInfo::from_row(&row);
-        let name = row
-            .record
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
+        let mut server_ids = vec![server_id];
+        server_ids.extend(
+            ops::additional_server_ids(db, a.id)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|id| *id != server_id),
+        );
+        let mut container_present = !remove;
         let mut errors: Vec<String> = Vec::new();
-        if !server.is_functional() {
-            errors.push(format!("Server {name} is not functional."));
-        } else {
+        for id in server_ids {
+            let Some(row) = servers::find_by_id(db, id).await.ok().flatten() else {
+                continue;
+            };
+            let server = ServerInfo::from_row(&row);
+            if !server.is_functional() {
+                let name = row
+                    .record
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                errors.push(format!("Server {name} is not functional."));
+                continue;
+            }
             match server.target(self).await {
                 Err(e) => errors.push(e),
-                Ok(t) => match self.application_containers(&t, &a.uuid, previews).await {
-                    Err(e) => errors.push(e),
-                    Ok(containers) => {
-                        let grace = a
-                            .setting_int("stop_grace_period")
-                            .filter(|g| (1..=3600).contains(g))
-                            .unwrap_or(30);
-                        for c in containers {
-                            let Some(n) = c.get("Names").and_then(Value::as_str) else {
-                                continue;
-                            };
-                            let mut cmds = vec![crate::databases::docker_stop_command(
-                                u32::try_from(grace).unwrap_or(30),
-                                &quote(n),
-                                server.docker_version(),
-                            )];
-                            if remove {
-                                cmds.push(format!("docker rm -f {}", quote(n)));
-                            }
-                            let refs: Vec<&str> = cmds.iter().map(String::as_str).collect();
-                            if let Err(e) = self
-                                .remote()
-                                .run(&t, &refs, RunOptions::op("application.stop"))
-                                .await
-                            {
-                                errors.push(e.message);
-                            }
-                        }
+                Ok(t) if server.is_swarm() => {
+                    container_present = false;
+                    let stack = format!("docker stack rm {}", quote(&a.uuid));
+                    if let Err(e) = self
+                        .remote()
+                        .run(&t, &[&stack], RunOptions::op("application.stop"))
+                        .await
+                    {
+                        errors.push(e.message);
                     }
-                },
+                }
+                Ok(t) => {
+                    errors.extend(
+                        self.stop_containers_on(a, &server, &t, previews, remove)
+                            .await,
+                    );
+                }
             }
         }
         if !errors.is_empty() {
@@ -126,7 +127,7 @@ impl Jobs {
         }
         let mut values = vec![
             ("status", ColumnValue::Text(Some("exited:unhealthy".into()))),
-            ("container_present", ColumnValue::Bool(!remove)),
+            ("container_present", ColumnValue::Bool(container_present)),
         ];
         if reset_restart_count {
             values.extend([
@@ -138,6 +139,64 @@ impl Jobs {
         }
         let _ = apps::update_if_changed(db, a.id, &values, Utc::now().naive_utc()).await;
         None
+    }
+
+    /// `StopApplicationOneServer::run`: the error message when something failed.
+    pub async fn stop_application_on(&self, a: &ApplicationRow, server_id: i64) -> Option<String> {
+        let db = &self.0.db;
+        let row = servers::find_by_id(db, server_id).await.ok().flatten()?;
+        let server = ServerInfo::from_row(&row);
+        if !server.is_functional() {
+            return Some("Server is not functional".to_owned());
+        }
+        let t = match server.target(self).await {
+            Ok(t) => t,
+            Err(e) => return Some(e),
+        };
+        let errors = self.stop_containers_on(a, &server, &t, false, true).await;
+        (!errors.is_empty()).then(|| errors.join(" "))
+    }
+
+    /// The loop over `getCurrentApplicationContainerStatus()` of `StopApplication`.
+    async fn stop_containers_on(
+        &self,
+        a: &ApplicationRow,
+        server: &ServerInfo,
+        t: &coolify_remote::Target,
+        previews: bool,
+        remove: bool,
+    ) -> Vec<String> {
+        let containers = match self.application_containers(t, &a.uuid, previews).await {
+            Ok(c) => c,
+            Err(e) => return vec![e],
+        };
+        let grace = a
+            .setting_int("stop_grace_period")
+            .filter(|g| (1..=3600).contains(g))
+            .unwrap_or(30);
+        let mut errors = Vec::new();
+        for c in containers {
+            let Some(n) = c.get("Names").and_then(Value::as_str) else {
+                continue;
+            };
+            let mut cmds = vec![crate::databases::docker_stop_command(
+                u32::try_from(grace).unwrap_or(30),
+                &quote(n),
+                server.docker_version(),
+            )];
+            if remove {
+                cmds.push(format!("docker rm -f {}", quote(n)));
+            }
+            let refs: Vec<&str> = cmds.iter().map(String::as_str).collect();
+            if let Err(e) = self
+                .remote()
+                .run(t, &refs, RunOptions::op("application.stop"))
+                .await
+            {
+                errors.push(e.message);
+            }
+        }
+        errors
     }
 
     /// `StopApplication::dispatch(...)` from the API and the UI.
@@ -169,13 +228,9 @@ impl Jobs {
                     cmds.push(format!("rm -rf /data/coolify/applications/{}", a.uuid));
                 }
                 if delete_volumes {
-                    for (name, _, host) in apps::persistent_volumes(&db, a.id)
-                        .await
-                        .unwrap_or_default()
-                    {
-                        if host.as_deref().is_none_or(str::is_empty) {
-                            cmds.push(format!("docker volume rm -f {}", quote(&name)));
-                        }
+                    // `deleteVolumes()`: skips volumes shared with a SQLite database.
+                    for name in ops::own_volume_names(&db, a.id).await.unwrap_or_default() {
+                        cmds.push(format!("docker volume rm -f {}", quote(&name)));
                     }
                 }
                 if delete_networks {
@@ -193,8 +248,42 @@ impl Jobs {
                         .await;
                 }
             }
+            // `deleteScheduledVolumeBackups()`: failures are logged, the local rows still go.
+            let server = match a.server_id() {
+                Some(id) => servers::find_by_id(&db, id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|r| ServerInfo::from_row(&r)),
+                None => None,
+            };
+            for backup in ops::volume_backup_schedules(&db, a.id)
+                .await
+                .unwrap_or_default()
+            {
+                if let Err(e) = jobs.delete_volume_schedule(&backup, server.as_ref()).await {
+                    tracing::warn!(application = %a.uuid, error = %e, "Remote backup cleanup failed while deleting resource");
+                }
+            }
+            // `$resource->maintenanceServers()` before the rows go.
+            let maintenance_servers = if a.bool("is_maintenance_enabled") {
+                let mut ids: Vec<i64> = a.server_id().into_iter().collect();
+                ids.extend(
+                    ops::additional_server_ids(&db, a.id)
+                        .await
+                        .unwrap_or_default(),
+                );
+                ids
+            } else {
+                Vec::new()
+            };
             if let Err(e) = apps::force_delete(&db, a.id, Utc::now().naive_utc()).await {
                 tracing::warn!(application = %a.uuid, error = %e, "application rows could not be deleted");
+            }
+            if let Err(e) =
+                crate::server_ops::proxy::sync_maintenance_pages(&jobs, &maintenance_servers).await
+            {
+                tracing::warn!(application = %a.uuid, error = %e, "Maintenance page cleanup failed while deleting resource.");
             }
         });
     }

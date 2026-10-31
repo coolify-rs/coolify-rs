@@ -14,6 +14,10 @@
   import ServiceHeading from '../components/ServiceHeading.svelte';
   import ServiceResourceCard from '../components/ServiceResourceCard.svelte';
   import ServiceSharedPlaceholder from '../components/ServiceSharedPlaceholder.svelte';
+  import ResourceOperations from '../components/shared/ResourceOperations.svelte';
+  import Maintenance from '../components/shared/Maintenance.svelte';
+  import FileBrowser from '../components/shared/FileBrowser.svelte';
+  import DatabaseDanger from '../components/DatabaseDanger.svelte';
   import ServiceStackForm from '../components/ServiceStackForm.svelte';
   import ServiceStorage from '../components/ServiceStorage.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
@@ -165,7 +169,7 @@
             </div>
           {:else if section === 'domains'}
             <ServiceDomains serviceUuid={service} />
-            <div class="mt-6"><ServiceSharedPlaceholder section="Project/Shared/Maintenance" /></div>
+            <div class="mt-4"><Maintenance kind="service" uuid={service} /></div>
           {:else if section === 'storages'}
             <div class="space-y-6">
               <div
@@ -185,17 +189,17 @@
           {:else if section === 'webhooks'}
             <Webhooks kind="service" uuid={service} />
           {:else if section === 'resource-operations'}
-            <ServiceSharedPlaceholder section="Project/Shared/ResourceOperations" />
+            <ResourceOperations kind="service" uuid={service} />
           {:else if section === 'tags'}
             <Tags kind="service" uuid={service} />
           {:else if section === 'danger'}
-            <ServiceSharedPlaceholder section="Project/Shared/Danger" />
+            <DatabaseDanger kind="service" record={{ uuid: service, name: data.service.name }} canDelete={data.can_update} back="/project/{uuid}/environment/{env}" />
           {:else if section === 'logs'}
             <div class="runtime-logs-column min-w-0"><RuntimeLogs kind="service" uuid={service} /></div>
           {:else if section === 'terminal'}
             <ServiceSharedPlaceholder section="Project/Shared/ExecuteContainerCommand" />
           {:else if section === 'files'}
-            <ServiceSharedPlaceholder section="Project/Shared/FileBrowser" />
+            <FileBrowser kind="service" uuid={service} />
           {:else}
             <Unported />
           {/if}

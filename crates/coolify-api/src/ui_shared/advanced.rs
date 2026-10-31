@@ -150,13 +150,43 @@ async fn show(
         "server_certificate_resolver": server_setting("traefik_certificate_resolver").and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_else(|| "letsencrypt".to_owned()),
         "certificate_resolver_mode": if resolver.is_empty() { "server" } else if resolver == "none" { "none" } else { "custom" },
         "certificate_resolver_name": (!resolver.is_empty() && resolver != "none").then_some(resolver),
-        "gpu_servers": server.as_ref().map(|s| vec![json!({
-            "uuid": s.uuid,
-            "name": s.record.get("name"),
-            "reachable": s.settings.as_ref().and_then(|x| x.get("is_reachable")).cloned(),
-        })]).unwrap_or_default(),
+        "gpu_servers": gpu_servers(&state, &res, server.as_ref()).await?,
     }))
     .into_response())
+}
+
+/// `gpuServers`: `$application->maintenanceServers()` with what `x-server.gpu-list` shows.
+async fn gpu_servers(
+    state: &AppState,
+    res: &Res,
+    primary: Option<&servers::ServerRow>,
+) -> Result<Vec<Value>, ApiError> {
+    let mut rows: Vec<servers::ServerRow> = primary.cloned().into_iter().collect();
+    for id in coolify_db::resource_ops::additional_server_ids(&state.db, res.id).await? {
+        if !rows.iter().any(|r| r.id == id)
+            && let Some(row) = servers::find_by_id(&state.db, id).await?
+        {
+            rows.push(row);
+        }
+    }
+    Ok(rows
+        .iter()
+        .map(|s| {
+            let metadata = s.record.get("server_metadata").and_then(|m| match m {
+                Value::String(t) => serde_json::from_str::<Value>(t).ok(),
+                other => Some(other.clone()),
+            });
+            let field = |k: &str| metadata.as_ref().and_then(|m| m.get(k)).cloned();
+            json!({
+                "uuid": s.uuid,
+                "name": s.record.get("name"),
+                "is_functional": coolify_jobs::server::ServerInfo::from_row(s).is_functional(),
+                "collected_at": field("collected_at"),
+                "gpus": field("gpus"),
+                "nvidia_container_toolkit": field("nvidia_container_toolkit"),
+            })
+        })
+        .collect())
 }
 
 /// `Advanced::instantSave`.
