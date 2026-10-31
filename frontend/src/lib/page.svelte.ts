@@ -14,6 +14,8 @@ export interface Switcher {
   title: string;
   label: string;
   items: SwitcherItem[];
+  /** The status chip after the button (`x-slot:meta`). */
+  meta?: { label: string; dot: string };
 }
 
 /** An entry of a resource menu (e.g. upstream components/server/sidebar.blade.php). */

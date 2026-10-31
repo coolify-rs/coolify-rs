@@ -305,10 +305,6 @@ pub async fn resources(
     Extension(ctx): Extension<AuthCtx>,
 ) -> ApiResult {
     // `authorize('viewAny', Project::class)` allows every team member.
-    if coolify_db::server_ops::team_has_services(&state.db, ctx.team_id).await? {
-        // Presenting a service needs the Service model (ported with services).
-        return Err(ApiError::NotPorted);
-    }
     let mut items: Vec<Value> = Vec::new();
     let apps = coolify_db::applications::list_for_team(&state.db, ctx.team_id).await?;
     for a in &apps {
@@ -332,6 +328,9 @@ pub async fn resources(
             )
             .await?,
         );
+    }
+    for service in coolify_db::services::list_for_team(&state.db, ctx.team_id).await? {
+        items.push(crate::routes::services::model_array(&state, &ctx, &service).await?);
     }
     for d in coolify_db::databases::list_for_team(&state.db, ctx.team_id).await? {
         let v = crate::routes::databases::present(&state, &ctx, &d, false, Some(json!([]))).await?;
@@ -433,18 +432,12 @@ pub async fn resources_by_server(
     Path(uuid): Path<String>,
 ) -> ApiResult {
     let s = find_server(&state, &ctx, &uuid).await?;
-    if !coolify_db::server_ops::services_on_server(&state.db, s.id)
-        .await?
-        .is_empty()
-    {
-        return Err(ApiError::NotPorted);
-    }
     // `serializeApiResponse` does not reorder this list either.
     let items = defined_resources(&state, s.id).await?;
     Ok(ok(Value::Array(items)).into_response())
 }
 
-/// `$server->definedResources()` as the controller maps them (services are not ported).
+/// `$server->definedResources()` as the controller maps them.
 pub(crate) async fn defined_resources(
     state: &AppState,
     server_id: i64,
@@ -483,6 +476,19 @@ pub(crate) async fn defined_resources(
                 d.str("status").unwrap_or_default()
             )),
         );
+        items.push(Value::Object(m));
+    }
+    for service in coolify_db::services::list_for_server(&state.db, server_id).await? {
+        let status = crate::routes::services::status_of(state, &service).await?;
+        let r = coolify_db::services::SERVICE.present(service.raw.clone());
+        let mut m = Map::new();
+        m.insert("id".into(), time(&r, "id"));
+        m.insert("uuid".into(), time(&r, "uuid"));
+        m.insert("name".into(), time(&r, "name"));
+        m.insert("type".into(), json!("service"));
+        m.insert("created_at".into(), time(&r, "created_at"));
+        m.insert("updated_at".into(), time(&r, "updated_at"));
+        m.insert("status".into(), status.map_or(Value::Null, Value::String));
         items.push(Value::Object(m));
     }
     Ok(items)
@@ -571,12 +577,29 @@ pub async fn domains_by_server(
             push(t, &domains);
         }
     }
-    // Service applications are read with the services port.
-    if !coolify_db::server_ops::services_on_server(&state.db, s.id)
+    for service in coolify_db::services::list_for_team(&state.db, ctx.team_id).await? {
+        if service.server_id() != Some(s.id) {
+            continue;
+        }
+        for sub in coolify_db::services::subs(
+            &state.db,
+            coolify_db::services::SubKind::Application,
+            service.id,
+        )
         .await?
-        .is_empty()
-    {
-        return Err(ApiError::NotPorted);
+        {
+            let domains: Vec<Value> = sub
+                .str("fqdn")
+                .unwrap_or_default()
+                .split(',')
+                .map(domain_host_without_port)
+                .filter(|d| !d.is_empty())
+                .map(|d| json!(d))
+                .collect();
+            for t in &targets {
+                push(t, &domains);
+            }
+        }
     }
     let out: Vec<Value> = grouped
         .into_iter()

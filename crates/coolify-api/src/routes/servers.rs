@@ -217,16 +217,6 @@ pub async fn show(
         .await?
         .ok_or(NOT_FOUND)?;
     // `view`: member of the server's team (the query is already team-scoped).
-    if resources {
-        // Listing resources needs the application/database/service models (not ported yet).
-        // Presenting resources needs the service model when the server has services.
-        if !coolify_db::server_ops::services_on_server(&state.db, s.id)
-            .await?
-            .is_empty()
-        {
-            return Err(ApiError::NotPorted);
-        }
-    }
     let mut r = s.record.clone();
     if resources {
         r.insert(

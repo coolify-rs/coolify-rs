@@ -434,8 +434,7 @@ fn resource_link(
     Some(format!("{root}/project/{p}/environment/{e}/{kind}/{uuid}"))
 }
 
-/// `usersOf`: registries of the images on this server. Services and the applications
-/// a build server builds for its team are read with those ports.
+/// `usersOf`: registries of the images on this server.
 async fn registry_users(
     state: &AppState,
     s: &ServerRow,
@@ -474,6 +473,109 @@ async fn registry_users(
                     &d.environment,
                     "database",
                     d.str("uuid").unwrap_or_default(),
+                ),
+            ));
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    for service in coolify_db::services::list_for_server(&state.db, s.id).await? {
+        let link = service_link(&root, &service);
+        let name = service.str("name").unwrap_or_default().to_string();
+        let mut subs = coolify_db::services::subs(
+            &state.db,
+            coolify_db::services::SubKind::Application,
+            service.id,
+        )
+        .await?;
+        subs.extend(
+            coolify_db::services::subs(
+                &state.db,
+                coolify_db::services::SubKind::Database,
+                service.id,
+            )
+            .await?,
+        );
+        for sub in subs {
+            if let Some(image) = sub.str("image").filter(|i| !i.trim().is_empty()) {
+                let registry = registries::registry_from_image(image);
+                if seen.insert(format!("{registry}|{link:?}|{name}")) {
+                    users.push((registry, "Service", name.clone(), link.clone()));
+                }
+            }
+        }
+    }
+    if crate::routes::servers::effective_role_is_build(&s.settings.clone().unwrap_or_default()) {
+        users.extend(build_users(state, s, &root).await?);
+    }
+    Ok(users)
+}
+
+/// `$service->link()`.
+fn service_link(root: &str, service: &coolify_db::services::ServiceRow) -> Option<String> {
+    let p = service.project.get("uuid").and_then(Value::as_str)?;
+    let e = service.environment.get("uuid").and_then(Value::as_str)?;
+    Some(format!(
+        "{root}/project/{p}/environment/{e}/service/{}",
+        service.uuid
+    ))
+}
+
+/// `applicationsBuiltOnBuildServers`: applications of the team a deployment builds on a build
+/// server and pushes to a registry.
+async fn build_users(
+    state: &AppState,
+    s: &ServerRow,
+    root: &str,
+) -> Result<Vec<registries::RegistryUser>, ApiError> {
+    let mut apps = coolify_db::applications::list_for_team(
+        &state.db,
+        s.record
+            .get("team_id")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+    )
+    .await?;
+    apps.sort_by(|a, b| a.str("name").cmp(&b.str("name")));
+    let mut users = Vec::new();
+    for a in apps {
+        let Some(image) = a
+            .str("docker_registry_image_name")
+            .filter(|i| !i.is_empty())
+        else {
+            continue;
+        };
+        let Some(deployment_server) = a.server_id() else {
+            continue;
+        };
+        if deployment_server == s.id {
+            continue;
+        }
+        let Some(target) = coolify_db::servers::find_by_id(&state.db, deployment_server).await?
+        else {
+            continue;
+        };
+        // `canBuildApplications`: every role except deployments only.
+        let settings = target.settings.clone().unwrap_or_default();
+        let deployment_only =
+            settings.get("server_role").and_then(Value::as_str) == Some("deployment");
+        let build_pack = a.str("build_pack").unwrap_or_default();
+        let must_build_elsewhere =
+            deployment_only && !matches!(build_pack, "dockerimage" | "dockercompose");
+        let enabled = a
+            .settings
+            .get("is_build_server_enabled")
+            .is_some_and(crate::serialize::php_truthy);
+        if must_build_elsewhere || enabled {
+            users.push((
+                registries::registry_from_image(image),
+                "Build",
+                a.str("name").unwrap_or_default().to_string(),
+                resource_link(
+                    root,
+                    &a.project,
+                    &a.environment,
+                    "application",
+                    a.str("uuid").unwrap_or_default(),
                 ),
             ));
         }

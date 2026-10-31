@@ -32,6 +32,7 @@ pub mod services;
 pub mod teams;
 #[cfg(feature = "testing")]
 pub mod testing;
+pub mod ui_servers;
 pub mod users;
 
 use std::time::Duration;

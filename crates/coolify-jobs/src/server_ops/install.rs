@@ -37,7 +37,7 @@ async fn set_logs(srv: &Srv, message: &str) -> Result<(), String> {
 }
 
 /// `validateConnection()`: one attempt.
-async fn validate_connection(srv: &Srv) -> Result<(bool, String), String> {
+pub async fn validate_connection(srv: &Srv) -> Result<(bool, String), String> {
     if srv.info.skipped() {
         return Ok((false, "Server skipped.".to_string()));
     }

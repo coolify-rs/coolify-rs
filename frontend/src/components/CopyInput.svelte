@@ -2,12 +2,14 @@
   // Port of upstream components/forms/copy-input.blade.php.
   import Reicon from './Reicon.svelte';
 
-  let { label, text }: { label: string; text: string } = $props();
+  let { label, text }: { label?: string; text: string } = $props();
 </script>
 
 <div class="w-full">
   <!-- svelte-ignore a11y_label_has_associated_control -->
-  <label class="flex gap-1 items-center mb-1 text-sm font-medium text-black dark:text-white">{label}</label>
+  {#if label}
+    <label class="flex gap-1 items-center mb-1 text-sm font-medium text-black dark:text-white">{label}</label>
+  {/if}
   <div class="relative">
     <input
       type="text"

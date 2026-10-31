@@ -107,6 +107,70 @@ async fn service_status(state: &AppState, s: &ServiceRow) -> Result<Option<Strin
     Ok(job_status::container_status_of(&subs))
 }
 
+/// `$service->status`, for lists of other controllers.
+pub(crate) async fn status_of(
+    state: &AppState,
+    s: &ServiceRow,
+) -> Result<Option<String>, ApiError> {
+    service_status(state, s).await
+}
+
+/// `$resource->toArray()` of `ResourcesController::resources` with `status` and `type`: the
+/// columns in table order, the relation key, the appended attributes and the relations they load.
+pub(crate) async fn model_array(
+    state: &AppState,
+    ctx: &AuthCtx,
+    s: &ServiceRow,
+) -> Result<Value, ApiError> {
+    let server = server_of(state, s).await?;
+    let mut r = SERVICE.present(s.raw.clone());
+    if !ctx.can_read_sensitive {
+        r.shift_remove("docker_compose");
+        r.shift_remove("docker_compose_raw");
+    }
+    r.insert(
+        "laravel_through_key".into(),
+        s.project.get("id").cloned().unwrap_or(Value::Null),
+    );
+    r.insert(
+        "server_status".into(),
+        Value::Bool(server.as_ref().is_some_and(server_functional)),
+    );
+    r.insert(
+        "status".into(),
+        service_status(state, s)
+            .await?
+            .map_or(Value::Null, Value::String),
+    );
+    if let Some(server) = &server {
+        r.insert(
+            "server".into(),
+            nested_server_with(state, server, false, ctx.can_read_sensitive)?,
+        );
+    }
+    let apps = svc::subs(&state.db, SubKind::Application, s.id).await?;
+    let databases = svc::subs(&state.db, SubKind::Database, s.id).await?;
+    r.insert(
+        "applications".into(),
+        Value::Array(
+            apps.iter()
+                .map(|a| Value::Object(application_array(a)))
+                .collect(),
+        ),
+    );
+    r.insert(
+        "databases".into(),
+        Value::Array(
+            databases
+                .iter()
+                .map(|d| Value::Object(SERVICE_DATABASE.present(d.raw.clone())))
+                .collect(),
+        ),
+    );
+    r.insert("type".into(), json!("service"));
+    Ok(Value::Object(r))
+}
+
 /// `ServiceApplication::toArray()`.
 fn application_array(sub: &SubRow) -> Record {
     let mut r = SERVICE_APPLICATION.present(sub.raw.clone());
