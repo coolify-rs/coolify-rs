@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use coolify_db::Db;
+pub use reqwest::Method;
 use reqwest::{Client, RequestBuilder, Response};
 use serde_json::Value;
 

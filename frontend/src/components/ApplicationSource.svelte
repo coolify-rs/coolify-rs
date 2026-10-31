@@ -1,7 +1,7 @@
 <script lang="ts">
   // Port of upstream livewire/project/application/source.blade.php (+
   // Project\Application\Source): repository, branch and commit, the deploy key
-  // and the Git provider App. Switching to a GitLab or Gitea App is not ported.
+  // and the Git provider App.
   import ConfirmModal from './ConfirmModal.svelte';
   import Empty from './Empty.svelte';
   import FormInput from './FormInput.svelte';
@@ -78,8 +78,7 @@
       const r = await appUi.changeSource(uuid, { source_id: card.id, source_type: card.type });
       notify.success(r.message);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 501) notify.info('Not available in coolify-rs yet', 'Switching to this Git source is not supported by coolify-rs yet.');
-      else notify.failure(e instanceof ApiError ? e.message : String(e));
+      notify.failure(e instanceof ApiError ? e.message : String(e));
     }
     changing = null;
     await load();

@@ -19,7 +19,10 @@ pub mod state;
 pub mod ui;
 pub mod ui_applications;
 pub mod ui_databases;
+pub mod ui_sources;
+pub mod ui_sources_routes;
 pub mod validation;
+pub mod webhooks;
 
 pub use routes::router;
 pub use state::AppState;

@@ -958,7 +958,7 @@ const GENERAL_MESSAGES: Messages = &[
 ];
 
 /// Laravel's summary of a validation failure (`handleError` shows it as an error toast).
-fn summary(errors: &Map<String, Value>) -> String {
+pub(crate) fn summary(errors: &Map<String, Value>) -> String {
     let all: Vec<String> = errors
         .values()
         .flat_map(|v| v.as_array().cloned().unwrap_or_default())

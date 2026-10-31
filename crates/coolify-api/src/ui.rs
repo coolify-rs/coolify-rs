@@ -126,6 +126,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
             axum::routing::delete(remove_member),
         )
         .route("/ui/team/members/{id}/role", post(set_member_role))
+        .merge(crate::ui_sources_routes::routes())
         .route_layer(from_fn_with_state(state, crate::session::ui_guard))
 }
 

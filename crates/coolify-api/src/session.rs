@@ -262,6 +262,62 @@ async fn live_session(state: &AppState, headers: &HeaderMap) -> Result<Live, Api
     })
 }
 
+/// The signed-in user of a browser callback (`Route::middleware(['web', 'auth'])`).
+pub struct WebUser {
+    session_id: String,
+    pub user_id: i64,
+    pub team_id: TeamId,
+    memberships: Vec<Membership>,
+}
+
+impl WebUser {
+    pub fn member_of(&self, team: TeamId) -> bool {
+        self.memberships.iter().any(|m| m.team_id == team)
+    }
+
+    /// `refreshSession($team)`.
+    pub fn switch_team(&self, state: &AppState, team: TeamId) {
+        if team != self.team_id {
+            state.sessions.set_team(&self.session_id, team);
+        }
+    }
+
+    /// The request context the UI handlers read.
+    pub fn ctx(&self) -> AuthCtx {
+        let role = self
+            .memberships
+            .iter()
+            .find(|m| m.team_id == self.team_id)
+            .map_or(Role::Member, |m| m.role);
+        AuthCtx {
+            token_id: 0,
+            user_id: self.user_id,
+            team_id: self.team_id,
+            team_id_raw: self.team_id.to_string(),
+            role,
+            can_read_sensitive: role.is_admin(),
+            abilities: abilities_for(role),
+        }
+    }
+}
+
+/// `auth` for a browser request: signed-out visitors go to the login page.
+pub async fn web_user(state: &AppState, headers: &HeaderMap) -> Result<WebUser, Response> {
+    match live_session(state, headers).await {
+        Ok(live) => Ok(WebUser {
+            session_id: live.id,
+            user_id: live.user.id,
+            team_id: live.team_id,
+            memberships: live.memberships,
+        }),
+        Err(_) => Err((
+            StatusCode::FOUND,
+            [(axum::http::header::LOCATION, "/login")],
+        )
+            .into_response()),
+    }
+}
+
 const TEAM_2FA_REQUIRED: &str = "Two-factor authentication is required by this team.";
 
 /// Guard for `/ui/api/v1/...`: session → CSRF → membership → team 2FA policy.
