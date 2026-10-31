@@ -61,6 +61,7 @@ Report only what you verified. Say plainly what failed, what you skipped and wha
 - Delete everything you create on the reference, the database and the VM. Never touch data you did not create.
 - Comments cite what they port (`/// \`serviceParser()\``). Match the surrounding code; reuse existing helpers.
 - Never commit secrets. Fixtures use a test `app.key`.
+- Frontend API clients for a new area go in a new `frontend/src/lib/<area>Api.ts`, not `api.ts`.
 - Keep edits to shared files small (`routes/mod.rs`, `ui.rs`, `router.svelte.ts`, `App.svelte`, `api.ts`, docs); other
   branches change them too. Put new code in new modules.
 - Upstream features that need something unavailable here (Stripe, a cloud provider account, a GitHub App): port what
