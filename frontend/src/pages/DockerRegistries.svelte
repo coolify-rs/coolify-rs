@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Forbidden from '../components/Forbidden.svelte';
+  import { session } from '../lib/session.svelte';
   // Port of upstream livewire/server/docker-registries.blade.php.
   import Empty from '../components/Empty.svelte';
   import Modal from '../components/Modal.svelte';
@@ -41,4 +43,8 @@
   <Modal title="Log in on multiple servers" subtitle="Runs docker login on each server that you choose." onclose={() => (logging = false)}>
     <RegistryLogin picker servers={data.servers.filter((s) => s.functional)} ondone={() => ((logging = false), generation++)} />
   </Modal>
+{/if}
+
+{#if !session.isAdmin}
+  <Forbidden />
 {/if}

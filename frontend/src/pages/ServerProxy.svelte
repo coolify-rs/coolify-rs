@@ -80,7 +80,8 @@
 
   const routing = () => ({
     generate_exact_labels: exactLabels,
-    redirect_url: form.redirectUrl || null,
+    // A field never touched stays null in Livewire; a cleared one is an empty string.
+    redirect_url: form.redirectUrl !== '' ? form.redirectUrl : data?.redirect_url == null ? null : '',
     certificate_resolver: form.certificateResolver || null,
     custom_error_page: form.customErrorPage || null,
   });

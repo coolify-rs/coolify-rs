@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Forbidden from '../components/Forbidden.svelte';
   // Port of upstream livewire/server/create.blade.php with
   // livewire/server/new/by-ip.blade.php; the provider forms are their own pages.
   import Reicon from '../components/Reicon.svelte';
@@ -303,4 +304,8 @@
       </div>
     {/if}
   </div>
+{/if}
+
+{#if !session.isAdmin}
+  <Forbidden />
 {/if}

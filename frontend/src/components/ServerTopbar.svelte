@@ -5,6 +5,7 @@
   import Reicon from './Reicon.svelte';
   import { link, router } from '../lib/router.svelte';
   import { post, failure } from '../lib/serverApi';
+  import { session } from '../lib/session.svelte';
   import ServerProxyActions from './ServerProxyActions.svelte';
   import type { ServerTopbar } from '../lib/page.svelte';
 
@@ -26,7 +27,7 @@
   const proxyNeedsAttention = $derived(server.proxySet && (server.proxyStatus !== 'running' || proxyUpdateAvailable));
   const proxyStatusLabel = $derived(proxyConfigurationPending ? 'Restart required' : traefikUpdateAvailable ? 'Update available' : headline(server.proxyStatus));
   // `$showSentinelStatus` in upstream livewire/server/navbar.blade.php.
-  const showSentinelStatus = $derived(server.sentinelEnabled);
+  const showSentinelStatus = $derived(server.functional && server.sentinelEnabled && session.isAdmin);
   const sentinelNeedsAttention = $derived(showSentinelStatus && server.sentinelStatus === 'out_of_sync');
   const sentinelStatusLabel = $derived(server.sentinelStatus === 'waiting' ? 'Waiting for first report' : server.sentinelStatus === 'in_sync' ? 'In sync' : 'Out of sync');
   const summary = $derived<[string, 'success' | 'warning' | 'error']>(

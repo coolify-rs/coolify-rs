@@ -126,7 +126,8 @@
         server_timezone: form.serverTimezone,
         wildcard_domain: form.wildcardDomain === '' ? null : form.wildcardDomain,
       });
-      notify.ok('Server settings updated.');
+      if (form.wildcardDomain === '' && saved?.wildcardDomain) await post(`/server-page/${encodeURIComponent(uuid)}/clear-wildcard`);
+      notify.success('Server settings updated.');
       saved = { ...form };
       await load();
     } catch (e) {
@@ -141,7 +142,7 @@
     try {
       await api.patch(`/servers/${encodeURIComponent(uuid)}`, { server_role: next });
       role = committedRole = next;
-      notify.ok('Server settings updated.');
+      notify.success('Server settings updated.');
     } catch (e) {
       role = committedRole;
       notify.error(e instanceof ApiError ? (Object.values(e.errors).flat()[0] ?? e.message) : String(e));

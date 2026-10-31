@@ -489,13 +489,10 @@ async fn submit(
             proxy_config::SaveError::Other(m) => m,
         });
     }
+    // `$this->server->proxy->redirect_url = $this->redirectUrl`: a cleared field stays an empty string.
     srv.proxy_set(
         "redirect_url",
-        input
-            .get("redirect_url")
-            .filter(|v| php_truthy(v))
-            .cloned()
-            .unwrap_or(Value::Null),
+        input.get("redirect_url").cloned().unwrap_or(Value::Null),
     );
     if let Err(e) = srv.save_proxy().await {
         return toast_error(e);

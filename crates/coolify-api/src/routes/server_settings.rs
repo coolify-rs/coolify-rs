@@ -600,7 +600,7 @@ const DRAIN_FIELDS: &[&str] = &[
     "logdrain_cloudwatch_stream_prefix",
 ];
 
-fn drain_transform(state: &AppState, ctx: &AuthCtx, s: &ServerRow) -> Value {
+pub(crate) fn drain_transform(state: &AppState, ctx: &AuthCtx, s: &ServerRow) -> Value {
     let r = raw_settings(s);
     let mut m = Map::new();
     m.insert(

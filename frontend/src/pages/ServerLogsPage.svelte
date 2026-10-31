@@ -1,5 +1,8 @@
 <script lang="ts">
+  import Forbidden from '../components/Forbidden.svelte';
+  import { session } from '../lib/session.svelte';
   // Port of upstream livewire/server/proxy/logs.blade.php and sentinel/logs.blade.php.
+  import Callout from '../components/Callout.svelte';
   import Empty from '../components/Empty.svelte';
   import LogViewer, { type LogRequest } from '../components/LogViewer.svelte';
   import ServerFrame from '../components/ServerFrame.svelte';
@@ -49,10 +52,18 @@
             {/if}
           {/snippet}
           <div class="settings-log-panel">
+            {#if !session.isAdmin}
+              <Callout type="info" title="Hidden (only admins can view)">Container logs can contain secrets.</Callout>
+            {:else}
             <LogViewer {fetchLogs} containerName={container} displayName={kind === 'proxy' ? 'Coolify Proxy' : 'Sentinel'} collapsible={false} />
+            {/if}
           </div>
         </SettingsSection>
       {/if}
     </div>
   {/snippet}
 </ServerFrame>
+
+{#if kind === 'sentinel' && !session.isAdmin}
+  <Forbidden />
+{/if}

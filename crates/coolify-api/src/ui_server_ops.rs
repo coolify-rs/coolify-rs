@@ -37,6 +37,7 @@ pub fn routes() -> Router<AppState> {
     let p = |s: &str| format!("{SERVER_PAGE}/{s}");
     Router::new()
         .route(&p("sentinel"), get(sentinel_show).post(sentinel_submit))
+        .route(&p("log-drains"), get(log_drains))
         .route(&p("sentinel/restart"), post(sentinel_restart))
         .route(&p("sentinel/regenerate"), post(sentinel_regenerate))
         .route(&p("sentinel/restore"), post(sentinel_restore))
@@ -83,6 +84,31 @@ fn is_sentinel_enabled(s: &ServerRow) -> bool {
 }
 
 /// `Sentinel::syncData` and `refreshSentinelStatus`.
+/// `LogDrains::mount` for the page. The fields of a secret stay empty for who cannot edit them,
+/// where upstream's Livewire snapshot carries them to every team member.
+async fn log_drains(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    let mut c = ctx.clone();
+    c.can_read_sensitive = ctx.is_team_admin();
+    let s = find_server(&state, &c, &uuid).await?;
+    let mut drains = crate::routes::server_settings::drain_transform(&state, &c, &s);
+    // The form binds every field.
+    for k in [
+        "logdrain_newrelic_license_key",
+        "logdrain_axiom_api_key",
+        "logdrain_custom_config",
+        "logdrain_custom_config_parser",
+    ] {
+        if drains.get(k).is_none() {
+            drains[k] = json!("");
+        }
+    }
+    Ok(ok(drains).into_response())
+}
+
 async fn sentinel_show(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,

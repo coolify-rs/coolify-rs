@@ -995,6 +995,32 @@ async function runAll() {
     await sleep(5000);
   }, { ignore: ['ca'] });
 
+  // Settings forms: the rows through both UIs, which the state comparison of `step` diffs in full.
+  const saveForm = async (side, path, fields) => {
+    const page = await open(side, path);
+    await sleep(1500);
+    let last;
+    for (const [id, value] of fields) {
+      last = field(page, id);
+      await last.fill(value);
+    }
+    await last.press('Enter');
+    await sleep(2500);
+  };
+  await step('settings: advanced', (side) => saveForm(side, '/server/{U}/advanced', [['concurrentBuilds', '3'], ['dynamicTimeout', '4000'], ['deploymentQueueLimit', '30'], ['serverDiskUsageNotificationThreshold', '85']]));
+  await step('settings: docker cleanup', (side) => saveForm(side, '/server/{U}/docker-cleanup', [['dockerCleanupFrequency', '*/10 * * * *']]));
+  await step('settings: docker cleanup invalid', (side) => saveForm(side, '/server/{U}/docker-cleanup', [['dockerCleanupFrequency', 'nope']]));
+  await step('settings: proxy routing', (side) => saveForm(side, '/server/{U}/proxy', [['redirectUrl', 'https://1.1.1.1/x']]), { settle: 4000 });
+  await step('settings: proxy routing clear', (side) => saveForm(side, '/server/{U}/proxy', [['redirectUrl', '']]), { settle: 4000 });
+  await step('settings: general', (side) => saveForm(side, '/server/{U}', [['description', 'diff description'], ['wildcardDomain', 'https://x.example.test']]));
+  await step('settings: general clear', (side) => saveForm(side, '/server/{U}', [['description', ''], ['wildcardDomain', '']]));
+  await step('settings: fetch details', async (side) => {
+    const page = await open(side, '/server/{U}');
+    await clickTop(page, /^\s*(Refresh details|Fetch server details)\s*$/i);
+    await sleep(4000);
+  });
+  await step('settings: restore cleanup', (side) => saveForm(side, '/server/{U}/docker-cleanup', [['dockerCleanupFrequency', '0 0 * * *']]));
+
   // TLS certificates: a fixture store with two certificates.
   const acme = JSON.stringify({ letsencrypt: { Account: { Email: 'a@example.test', Registration: {}, PrivateKey: 'x', KeyType: '4096' }, Certificates: [
     { domain: { main: 'one.example.test', sans: ['www.one.example.test'] }, certificate: '', key: 'k', Store: 'default' },

@@ -44,11 +44,10 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   (`CloudflareTunnelService`) and the integration token form answer with an error toast or link to the unported token page; manual mode and the
   tunnel token path are ported. GitHub Runners: the page, settings, Sysbox install and cancel are ported; a GitHub App that is ready for runners
   answers with an error toast, because `GithubRunnerApi`, provisioning, reconciling and the `workflow_job` webhook are not ported. Security
-  Patches: the `ServerPatchCheck` notifications are not sent. Within the ported pages: deleting TLS
-  certificates and acme.json backups, the
-  "Proxy Startup Logs" dialog, the Docker cleanup "may be stalled" warning, and the toolbar of the shared log viewer (search,
-  filter, copy, download) are missing. Saving a CA certificate checks it against P-521 keys only and does not run
-  `RegenerateSslCertJob`. Traffic analytics: the charts of the server page and of `/analytics` are ported (Traefik verified, the Caddy proxy not run);
+  Patches: the `ServerPatchCheck` notifications are not sent. Saving a CA certificate does not run `RegenerateSslCertJob`. Log drains: the secret fields stay empty for a
+  member, where upstream's Livewire snapshot carries them. Proxy status toasts come from real-time events upstream
+  (`ProxyStatusChangedUI`); the UI here polls, and neither side shows them when the real-time service is down.
+  Traffic analytics: the charts of the server page and of `/analytics` are ported (Traefik verified, the Caddy proxy not run);
   the dashboard widget (`Dashboard\TrafficAnalytics`) and the application and service analytics pages (`ResourceTrafficAnalytics`), where the "Top applications" rows link, are not. After a filter change, rows of a list with equal values can
   stand in another order than on the reference, which keeps the previous DOM order for ties; a fresh load has the same order.
 - Validation jobs run inside the coolify-rs process: a restart drops a running validation (upstream's queue keeps it).

@@ -44,6 +44,7 @@ pub fn routes() -> Router<AppState> {
         .route("/ui/deployments-indicator", get(deployments_indicator))
         .route(&p("details"), get(details).post(refresh_details))
         .route(&p("check-localhost"), post(check_localhost))
+        .route(&p("clear-wildcard"), post(clear_wildcard))
         .route(&p("private-key"), get(keys))
         .route(&p("private-key/use"), post(use_key))
         .route(&p("private-key/generate"), post(generate_key))
@@ -491,6 +492,30 @@ async fn refresh_details(
             "Could not collect server details. Check the application logs for the remote command error.",
         ),
     }
+}
+
+/// `$this->server->settings->wildcard_domain = $this->wildcardDomain`: a cleared Livewire field is an empty string,
+/// where the API this form saves through stores null.
+async fn clear_wildcard(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    let s = find_server(&state, &ctx, &uuid).await?;
+    if !ctx.is_team_admin() {
+        return toast_error("This action is unauthorized.");
+    }
+    coolify_db::servers::update_settings(
+        &state.db,
+        s.id,
+        &[(
+            "wildcard_domain",
+            coolify_db::servers::ColumnValue::Text(Some(String::new())),
+        )],
+        state.now(),
+    )
+    .await?;
+    Ok(ok(json!({})).into_response())
 }
 
 /// `Server\Show::checkLocalhostConnection`.

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Forbidden from '../components/Forbidden.svelte';
   // Port of upstream livewire/server/sentinel/show.blade.php and livewire/server/sentinel.blade.php.
   import Reicon from '../components/Reicon.svelte';
   import Callout from '../components/Callout.svelte';
@@ -181,4 +182,8 @@
     onconfirm={() => call('restore', 'Default Sentinel configuration restored. Restarting Sentinel.')}
     onclose={() => (restoring = false)}
   />
+{/if}
+
+{#if !session.isAdmin}
+  <Forbidden />
 {/if}
