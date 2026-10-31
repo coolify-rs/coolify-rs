@@ -110,6 +110,7 @@ CASES = {
     "preview-nixpacks": dict(build_pack="nixpacks", base_directory="/javascript/runtimes/nodejs", ports_exposes="3000"),
     # Compose previews: suffixed services, volumes and networks, the file docker-compose-pr-N.yaml.
     "preview-compose": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests", docker_compose_location="/docker-compose-local-volumes.yaml"),
+    # The postgres container has no password here, so it restarts on both sides.
     "preview-compose-db": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests", docker_compose_location="/docker-compose-pr-db.yaml"),
     "preview-compose-build": dict(build_pack="dockercompose", base_directory="/internal/compose", docker_compose_location="/docker-compose.yaml"),
     # A Docker Image preview: deploy 2 is POST /deploy?pr=N&docker_tag=..., which creates the row.
@@ -464,7 +465,12 @@ def main():
                 record(f"[{case}] the build saw the secret", any("hunter2-secret" in l for l in seen[0]), seen[0])
             if case in PREVIEW_CASES:
                 seen = []
-                time.sleep(10)  # GetContainersStatus, dispatched by the end of the deployment
+                # GetContainersStatus runs at the end of a deployment and then on the reference's schedule.
+                for _ in range(45):
+                    time.sleep(2)
+                    states = sql("SELECT string_agg(status, ' ') FROM application_previews WHERE application_id IN (SELECT id FROM applications WHERE uuid IN ('{}', '{}'))".format(ur, us))
+                    if len(states.split()) == 2 and "starting" not in states and len(set(states.split())) == 1:
+                        break
                 for u in (ur, us):
                     row = sql(f"SELECT row_to_json(p)::text FROM application_previews p WHERE application_id = (SELECT id FROM applications WHERE uuid = '{u}') AND pull_request_id = {preview_pr}")
                     row = json.loads(row or "{}")
@@ -473,15 +479,15 @@ def main():
                     labels = vm(f"docker inspect --format '{{{{json .Config.Labels}}}}' {u}-pr-{preview_pr}")
                     fqdn = row.get("fqdn") or ""
                     host = fqdn.split("://", 1)[-1].split("/")[0]
-                    labels = re.sub(r'"(com\.docker\.compose\.[^"]*)":"[^"]*"', r'"\1":""', labels)
+                    labels = re.sub(r'"(com\.docker\.compose\.[^"]*|coolify\.deploymentId)":"[^"]*"', r'"\1":""', labels)
                     code = vm(f"curl -s -o /dev/null -w '%{{http_code}}' -H 'Host: {host}' http://127.0.0.1/")
                     pairs = [(u, "U"), (commit or "", "SHA"), (f"{case}-ref", "NAME"), (f"{case}-rs", "NAME"), (host, "HOST")]
                     network = vm(f"docker network ls --filter name=^{u}-{preview_pr}$ --format '{{{{.Name}}}}'").strip()
                     pr_file = vm(f"cat /data/coolify/applications/{u}/docker-compose-pr-{preview_pr}.yaml")
-                    seen.append(dict(prod=norm(prod, pairs), pr=norm(pr, pairs), labels=norm(labels, pairs), code=code, network=norm(network, pairs), file=norm(pr_file, pairs).replace(host, "HOST"),
+                    seen.append(dict(prod="\n".join(sorted(norm(prod, pairs).split("\n"))), pr=norm(pr, pairs), labels=norm(labels, pairs), code=code, network=norm(network, pairs), file=norm(pr_file, pairs).replace(host, "HOST"),
                                      row={k: norm(str(row.get(k)), pairs) for k in ("pull_request_id", "docker_compose_domains", "pull_request_html_url", "domain_port_overrides", "docker_registry_image_tag", "status")}))
                     seen[-1]["restarts"] = (row.get("restart_count") or 0) > 0
-                record(f"[{case}] the preview runs beside production alike", seen[0] == seen[1] and "running" in seen[0]["prod"] and "running" in seen[0]["pr"] and seen[0]["file"] != "", "\n".join(difflib.unified_diff(json.dumps(seen[0], indent=0).splitlines(), json.dumps(seen[1], indent=0).splitlines(), lineterm="")))
+                record(f"[{case}] the preview runs beside production alike", seen[0] == seen[1] and (case == "preview-compose-db" or ("running" in seen[0]["prod"] and "running" in seen[0]["pr"])) and seen[0]["file"] != "", "\n".join(difflib.unified_diff(json.dumps(seen[0], indent=0).splitlines(), json.dumps(seen[1], indent=0).splitlines(), lineterm="")))
             ip_pairs = [(ip, "IP") for ip in ips.values()]
             if case == "rollback":
                 images = [vm(f"docker ps --filter label=coolify.applicationUuid={u} --format '{{{{.Image}}}}'").strip() for u in (ur, us)]
