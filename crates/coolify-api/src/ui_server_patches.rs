@@ -88,7 +88,9 @@ async fn show(
 ) -> ApiResult {
     let s = find_server(&state, &ctx, &uuid).await?;
     authorize_update(&ctx)?;
+    let (text, _) = crate::ui::confirmation_steps(&state, ctx.user_id).await?;
     Ok(ok(json!({
+        "confirm_with_text": text,
         "name": s.record.get("name").cloned().unwrap_or(Value::Null),
         "patch_check_frequency": setting(&s, "patch_check_frequency").as_str().unwrap_or_default(),
         "auto_security_updates": php_truthy(&setting(&s, "is_auto_security_updates_enabled")),

@@ -25,6 +25,7 @@
   import ServerSwarm from './ServerSwarm.svelte';
   import ServerTerminalAccess from './ServerTerminalAccess.svelte';
   import ServerPatches from './ServerPatches.svelte';
+  import ServerCloudflareTunnel from './ServerCloudflareTunnel.svelte';
   import { serverSection } from '../lib/serverMenu';
 
   let { uuid, section, sub }: { uuid: string; section: string; sub?: string } = $props();
@@ -51,6 +52,7 @@
     swarm: ServerSwarm,
     'security/terminal-access': ServerTerminalAccess,
     'security/patches': ServerPatches,
+    'cloudflare-tunnel': ServerCloudflareTunnel,
   };
   const Page = $derived(pages[sub ? `${section}/${sub}` : section] ?? pages[section]);
 </script>

@@ -31,6 +31,7 @@
     error: string | null;
     checked_at: string | null;
     checking: boolean;
+    confirm_with_text: boolean;
   };
 
   // CheckUpdates::RISK_LABELS, HELD_REASON_LABELS, FULL_UPGRADE_ONLY
@@ -360,6 +361,7 @@
           confirmationText={data.name}
           confirmationLabel="Enter the server name to confirm"
           shortConfirmationLabel="Server name"
+          confirmWithText={data.confirm_with_text}
           step2ButtonText="Reboot server"
           onconfirm={reboot}
           onclose={() => (modal = null)}
@@ -401,6 +403,7 @@
           confirmationText="Update All Packages"
           confirmationLabel="Confirm by entering the text below"
           shortConfirmationLabel="Confirmation"
+          confirmWithText={data.confirm_with_text}
           step2ButtonText="Update All Packages"
           onconfirm={() => start(`${url}/update-all`)}
           onclose={() => (modal = null)}

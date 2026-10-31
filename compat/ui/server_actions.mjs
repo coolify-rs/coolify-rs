@@ -399,6 +399,7 @@ async function runNewSections() {
   if (want('patches')) await runPatches();
   if (want('patches-reboot')) await runPatchesReboot();
   if (want('patches-all')) await runPatchesAll();
+  if (want('tunnel')) await runTunnel();
 }
 async function compareActivityLog(name) {
   const logs = {};
@@ -485,6 +486,86 @@ async function runPatchesReboot() {
     await confirm(page, 'Reboot server', { typed: server[side].names.SERVER });
     await sleep(3000);
   }, { settle: 1000, ignore: ['ps', 'nets', 'files', 'ca', 'settings.', 'server.', 'proxy', 'destinations', 'ssl', 'cleanup', 'images'] });
+}
+async function runTunnel() {
+  const P = '/server/{U}/cloudflare-tunnel';
+  const pass = async (page) => {
+    await sleep(300);
+    const pw = page.locator('input[type=password]:visible').last();
+    if (await pw.isVisible().catch(() => false)) {
+      await pw.fill(password);
+      await sleep(200);
+      await clickTop(page, 'Confirm');
+    }
+  };
+  const shoot = async (name) => {
+    for (const side of ['ref', 'rs']) await pages[side].screenshot({ path: `${out}tunnel_${name}-${side}.png` });
+  };
+  // No token, then a token of this team without and with the capability. Only the name and the capability are read.
+  const team = sql(`select team_id from servers where id=${server.ref.id}`);
+  await step('tunnel: no token', (side) => open(side, P));
+  await shoot('no_token');
+  const insert = (caps) => sql(`insert into integration_tokens (uuid, team_id, name, provider, token, capabilities, created_at, updated_at) values ('diff-tunnel-token', ${team}, 'diff tunnel token', 'cloudflare', 'unused', '${caps}', now(), now()) on conflict (uuid) do update set capabilities=excluded.capabilities`);
+  try {
+    insert('["dns"]');
+    await step('tunnel: token without the capability', (side) => open(side, P));
+    await shoot('no_capability');
+    insert('["dns","tunnel"]');
+    await step('tunnel: empty api form', async (side) => {
+      const page = await open(side, P);
+      await page.locator('[id="api_ssh_domain"], [wire\\:model="api_ssh_domain"]').first().evaluate((n) => n.closest('form').noValidate = true);
+      await clickTop(page, 'Set up tunnel');
+      await sleep(1500);
+    });
+    await shoot('api_empty');
+    await step('tunnel: invalid hostname', async (side) => {
+      const page = await pages[side];
+      await listbox(page, 'cloudflare_integration_token_id', 'diff tunnel token');
+      await field(page, 'api_ssh_domain').fill('bad_host name');
+      await clickTop(page, 'Set up tunnel');
+      await sleep(1500);
+    });
+    await shoot('api_invalid');
+    await step('tunnel: existing tunnel form', async (side) => {
+      const page = await open(side, P);
+      await clickTop(page, 'Use an existing tunnel with its tunnel token');
+      await sleep(400);
+    });
+    await shoot('collapsible');
+  } finally {
+    sql(`delete from integration_tokens where uuid='diff-tunnel-token'`);
+  }
+  await step('tunnel: manual configuration', async (side) => {
+    const page = await open(side, P);
+    await clickTop(page, 'I configured the tunnel manually');
+    await sleep(300);
+    await page.locator('input[x-model="userConfirmationText"]:visible, input#userConfirmationText:visible').last().fill('I manually configured Cloudflare Tunnel');
+    await sleep(200);
+    await clickTop(page, /^\s*(Continue|Confirm)\s*$/);
+    await pass(page);
+    await sleep(2000);
+  });
+  await shoot('enabled');
+  await step('tunnel: update without a configuration', async (side) => {
+    const page = await open(side, P);
+    await clickTop(page, 'Update Cloudflare Tunnel');
+    await sleep(3000);
+  });
+  await step('tunnel: disable', async (side) => {
+    const page = await open(side, P);
+    await clickTop(page, 'Disable Cloudflare Tunnel');
+    await sleep(300);
+    await page.locator('input[x-model="userConfirmationText"]:visible, input#userConfirmationText:visible').last().fill('DISABLE CLOUDFLARE TUNNEL');
+    await sleep(200);
+    await clickTop(page, /^\s*(Continue|Confirm)\s*$/);
+    await pass(page);
+    await sleep(4000);
+  });
+  await shoot('disabled');
+  for (const side of ['ref', 'rs']) sql(`update server_settings set is_usable=false where server_id=${server[side].id}`);
+  await step('tunnel: not validated', (side) => open(side, P), { ignore: ['settings.is_usable', 'settings.is_reachable'] });
+  await shoot('not_validated');
+  for (const side of ['ref', 'rs']) sql(`update server_settings set is_usable=true where server_id=${server[side].id}`);
 }
 async function runPatchesAll() {
   const P = '/server/{U}/security/patches';

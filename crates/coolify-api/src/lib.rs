@@ -26,6 +26,7 @@ pub mod ui_server_metrics;
 pub mod ui_server_ops;
 pub mod ui_server_patches;
 pub mod ui_server_proxy;
+pub mod ui_server_tunnel;
 pub mod validation;
 
 pub use routes::router;

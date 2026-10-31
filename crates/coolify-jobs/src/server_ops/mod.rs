@@ -15,6 +15,7 @@ pub mod registries;
 pub mod scheduler;
 pub mod sentinel;
 pub mod traffic;
+pub mod tunnel;
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};

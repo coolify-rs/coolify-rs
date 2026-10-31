@@ -46,6 +46,8 @@ export const notify = {
   info: (message: string, description?: string) => toasts.push('info', message, description),
   /** Livewire `$this->dispatch('success', $message)`: titled "Success" (layouts/base.blade.php). */
   success: (message: string) => toasts.push('success', 'Success', message),
+  /** Livewire `$this->dispatch('warning', $message)`: titled "Warning" (layouts/base.blade.php). */
+  warning: (message: string) => toasts.push('warning', 'Warning', message),
   /** Livewire `$this->dispatch('error', $message)` (`handleError()`): titled "Error". */
   failure: (message: string) => toasts.push('danger', 'Error', message),
 };

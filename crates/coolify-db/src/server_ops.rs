@@ -84,6 +84,26 @@ pub async fn insert_server_activity(
     .await?)
 }
 
+/// The Cloudflare `IntegrationToken`s of a team by name: `(id, name, can manage tunnels)`.
+pub async fn cloudflare_tokens(db: &Db, team_id: i64) -> DbResult<Vec<(i64, String, bool)>> {
+    let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, name, capabilities::text FROM integration_tokens \
+         WHERE team_id = $1 AND provider = 'cloudflare' ORDER BY name",
+    )
+    .bind(team_id)
+    .fetch_all(db.pool())
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, capabilities)| {
+            let list: Vec<String> = capabilities
+                .and_then(|c| serde_json::from_str(&c).ok())
+                .unwrap_or_default();
+            (id, name, list.iter().any(|c| c == "tunnel"))
+        })
+        .collect())
+}
+
 /// `$server->save()` for `sentinel_updated_at`.
 pub async fn save_sentinel_updated_at(
     db: &Db,

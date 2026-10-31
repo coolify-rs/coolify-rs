@@ -993,7 +993,7 @@ pub async fn tunnel_show(
     Ok(ok(Value::Object(tunnel_transform(&s))).into_response())
 }
 
-async fn restore_previous_ip(state: &AppState, s: &ServerRow) -> Result<bool, ApiError> {
+pub(crate) async fn restore_previous_ip(state: &AppState, s: &ServerRow) -> Result<bool, ApiError> {
     let previous = s
         .record
         .get("ip_previous")
