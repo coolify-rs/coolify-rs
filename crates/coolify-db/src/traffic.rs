@@ -44,6 +44,79 @@ fn server_of_destination(alias: &str) -> String {
     )
 }
 
+/// What `Fleet\Metrics::containerMeta` reads of a resource.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ContainerResource {
+    pub uuid: String,
+    pub name: Option<String>,
+    pub image: Option<String>,
+    pub team_id: Option<i64>,
+    pub is_application: bool,
+    pub project_uuid: Option<String>,
+    pub environment_uuid: Option<String>,
+}
+
+/// `queryResourcesByUuid`: the first model that has the uuid, in upstream's order. The team of the
+/// row is returned and checked by the caller (`getResourceByUuid`).
+pub async fn container_resources(db: &Db, uuids: &[String]) -> DbResult<Vec<ContainerResource>> {
+    if uuids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let standalone = |rank: usize, table: &str| {
+        format!(
+            "SELECT {rank} AS rank, t.uuid, t.name, t.image::text AS image, p.team_id::bigint AS team_id, false AS is_application, \
+             p.uuid AS project_uuid, e.uuid AS environment_uuid \
+             FROM {table} t LEFT JOIN environments e ON e.id = t.environment_id LEFT JOIN projects p ON p.id = e.project_id \
+             WHERE t.uuid = ANY($1) AND t.deleted_at IS NULL"
+        )
+    };
+    let mut parts = vec![
+        "SELECT 0 AS rank, t.uuid, t.name, t.docker_registry_image_name::text AS image, p.team_id::bigint AS team_id, true AS is_application, \
+         p.uuid AS project_uuid, e.uuid AS environment_uuid \
+         FROM applications t LEFT JOIN environments e ON e.id = t.environment_id LEFT JOIN projects p ON p.id = e.project_id \
+         WHERE t.uuid = ANY($1) AND t.deleted_at IS NULL"
+            .to_string(),
+        "SELECT 1 AS rank, t.uuid, t.name, NULL::text AS image, p.team_id::bigint AS team_id, false AS is_application, \
+         p.uuid AS project_uuid, e.uuid AS environment_uuid \
+         FROM services t LEFT JOIN environments e ON e.id = t.environment_id LEFT JOIN projects p ON p.id = e.project_id \
+         WHERE t.uuid = ANY($1) AND t.deleted_at IS NULL"
+            .to_string(),
+    ];
+    // `DATABASE_TYPES` as `queryResourcesByUuid` walks them.
+    for (index, table) in [
+        "standalone_postgresqls",
+        "standalone_redis",
+        "standalone_mongodbs",
+        "standalone_mysqls",
+        "standalone_mariadbs",
+        "standalone_keydbs",
+        "standalone_dragonflies",
+        "standalone_clickhouses",
+    ]
+    .iter()
+    .enumerate()
+    {
+        parts.push(standalone(index + 2, table));
+    }
+    parts.push(
+        "SELECT 10 AS rank, t.uuid, t.name, t.image::text AS image, p.team_id::bigint AS team_id, false AS is_application, \
+         p.uuid AS project_uuid, e.uuid AS environment_uuid \
+         FROM service_databases t LEFT JOIN services s ON s.id = t.service_id \
+         LEFT JOIN environments e ON e.id = s.environment_id LEFT JOIN projects p ON p.id = e.project_id \
+         WHERE t.uuid = ANY($1) AND t.deleted_at IS NULL"
+            .to_string(),
+    );
+    let query = format!(
+        "SELECT DISTINCT ON (uuid) uuid, name, image, team_id, is_application, project_uuid, environment_uuid \
+         FROM ({}) r ORDER BY uuid, rank",
+        parts.join(" UNION ALL ")
+    );
+    Ok(sqlx::query_as(&query)
+        .bind(uuids)
+        .fetch_all(db.pool())
+        .await?)
+}
+
 /// `Application::ownedByCurrentTeam()` then `Service::ownedByCurrentTeam()`, each ordered by name,
 /// with the relations `TrafficResource` reads.
 pub async fn team_resources(db: &Db, team_id: TeamId) -> DbResult<Vec<TrafficResourceRow>> {

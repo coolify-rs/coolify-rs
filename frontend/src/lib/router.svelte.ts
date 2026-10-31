@@ -29,6 +29,7 @@ const routes: { name: string; pattern: string }[] = [
   { name: 'settings-oauth', pattern: '/settings/oauth/:provider' },
   { name: 'dashboard', pattern: '/' },
   { name: 'analytics', pattern: '/analytics' },
+  { name: 'metrics', pattern: '/metrics' },
   { name: 'projects', pattern: '/projects' },
   { name: 'project', pattern: '/project/:uuid' },
   { name: 'project-edit', pattern: '/project/:uuid/edit' },

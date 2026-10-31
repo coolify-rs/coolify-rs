@@ -3,6 +3,7 @@
   import Toasts from './components/Toasts.svelte';
   import Login from './pages/Login.svelte';
   import Analytics from './pages/Analytics.svelte';
+  import FleetMetrics from './pages/FleetMetrics.svelte';
   import Register from './pages/Register.svelte';
   import ForgotPassword from './pages/ForgotPassword.svelte';
   import ResetPassword from './pages/ResetPassword.svelte';
@@ -144,6 +145,7 @@
     'settings-oauth': 'Authentication',
     dashboard: 'Dashboard',
     analytics: 'Analytics',
+    metrics: 'Metrics',
     projects: 'Projects',
     keys: 'Keys & Tokens',
     team: 'Teams',
@@ -215,6 +217,8 @@
       <Dashboard />
     {:else if router.current.name === 'analytics'}
       <Analytics />
+    {:else if router.current.name === 'metrics'}
+      <FleetMetrics />
     {:else if router.current.name === 'projects'}
       <Projects />
     {:else if router.current.name === 'project'}

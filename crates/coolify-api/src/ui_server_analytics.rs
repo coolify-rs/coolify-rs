@@ -7,6 +7,7 @@ mod client;
 mod countries;
 mod helpers;
 mod resource;
+mod widgets;
 
 use aggregator::{Aggregator, BreakdownRow, top_by_requests};
 use axum::Extension;
@@ -53,6 +54,11 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/ui/analytics", get(global))
         .route(&format!("{SERVER_PAGE}/analytics/data"), get(scoped))
+        .route("/ui/dashboard/traffic", get(widgets::dashboard))
+        .route(
+            "/ui/resources/{kind}/{uuid}/analytics",
+            get(widgets::resource),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -387,6 +393,28 @@ async fn load_data(
     if !aggregate.has_overview() {
         return;
     }
+    shape_common(&aggregate, out);
+    out.insert(
+        "topApps".into(),
+        json!(top_by_requests(
+            app_rows.into_iter().map(|(_, r)| r).collect(),
+            |r| r.requests,
+            50
+        )),
+    );
+    out.insert(
+        "topHosts".into(),
+        json!(top_by_requests(
+            host_totals.into_iter().map(|(_, r)| r).collect(),
+            |r| r.requests,
+            50
+        )),
+    );
+}
+
+/// The properties both analytics components fill from their aggregator, with the derivations of
+/// `BuildsTrafficChartPayload` the views use.
+fn shape_common(aggregate: &Aggregator, out: &mut Map<String, Value>) {
     let summed = aggregate.overview();
     let breakdowns = aggregate.breakdowns();
     let rows_of = |dimension: &str| -> &[BreakdownRow] {
@@ -421,22 +449,6 @@ async fn load_data(
     out.insert(
         "uniquesApproximate".into(),
         json!(summed.uniques_approximate),
-    );
-    out.insert(
-        "topApps".into(),
-        json!(top_by_requests(
-            app_rows.into_iter().map(|(_, r)| r).collect(),
-            |r| r.requests,
-            50
-        )),
-    );
-    out.insert(
-        "topHosts".into(),
-        json!(top_by_requests(
-            host_totals.into_iter().map(|(_, r)| r).collect(),
-            |r| r.requests,
-            50
-        )),
     );
     out.insert("topPaths".into(), json!(aggregate.top_paths()));
     out.insert("breakdowns".into(), Value::Object(breakdowns_out));

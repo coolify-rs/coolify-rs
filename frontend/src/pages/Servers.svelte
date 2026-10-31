@@ -4,14 +4,20 @@
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
   import ViewToggle from '../components/ViewToggle.svelte';
+  import ServerMetricsChart from '../components/dashboard/ServerMetricsChart.svelte';
   import { serversUi, type ServersPageData } from '../lib/api';
+  import { serverMetricsPoll } from '../lib/metricsApi.svelte';
   import { link } from '../lib/router.svelte';
   import { listView } from '../lib/listview.svelte';
 
   let data = $state<ServersPageData | null>(null);
   let search = $state('');
   const view = listView('servers', 'table');
-  serversUi.list().then((d) => (data = d));
+  const metrics = serverMetricsPoll();
+  serversUi.list().then((d) => {
+    data = d;
+    metrics.start(d.servers.filter((s) => s.is_metrics_enabled).map((s) => s.uuid));
+  });
 
   const filtered = $derived.by(() => {
     const q = search.trim().toLowerCase();
@@ -77,6 +83,9 @@
                 use:link
                 class="group relative flex min-h-28 flex-col rounded-xl border border-neutral-200 bg-white p-3 shadow-sm transition-all hover:-translate-y-px hover:border-neutral-300 hover:no-underline hover:shadow-md dark:border-white/[0.08] dark:bg-white/[0.05] dark:hover:border-white/[0.14]"
               >
+                {#if s.is_metrics_enabled}
+                  <ServerMetricsChart uuid={s.uuid} data={metrics.charts[s.uuid]} />
+                {/if}
                 <div class="relative z-10 flex items-start gap-3">
                   <div class={glyph}><Reicon name="servers" class="size-4" /></div>
                   <div class="min-w-0 flex-1 self-center">

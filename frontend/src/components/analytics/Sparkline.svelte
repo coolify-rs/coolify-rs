@@ -7,10 +7,11 @@
     id,
     values,
     categories,
-    colorVar,
+    colorVar = '--chart-status-3xx',
+    color = '',
     label,
     format = 'number',
-  }: { id: string; values: number[]; categories: number[]; colorVar: string; label: string; format?: 'number' | 'bytes' | 'ms' } = $props();
+  }: { id: string; values: (number | null)[]; categories: number[]; colorVar?: string; color?: string; label: string; format?: 'number' | 'bytes' | 'ms' | 'percent' } = $props();
 
   let el: HTMLDivElement;
   let chart: ApexChart | null = null;
@@ -34,11 +35,11 @@
     if (tip) tip.hidden = true;
   };
   const cssVar = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  const accent = () => cssVar(colorVar) || '#3b82f6';
+  const accent = () => color || cssVar(colorVar) || '#3b82f6';
   const muted = () => cssVar('--chart-geo-empty') || 'rgba(128,128,128,0.45)';
-  const isFlat = (a: number[]) => !Array.isArray(a) || a.length === 0 || a.every((v) => !Number(v));
-  const points = (data: number[], cats: number[]) => data.map((value, index) => (cats[index] === undefined ? value : { x: cats[index], y: value }));
-  function opts(data: number[], cats: number[]) {
+  const isFlat = (a: (number | null)[]) => !Array.isArray(a) || a.length === 0 || a.every((v) => !Number(v));
+  const points = (data: (number | null)[], cats: number[]) => data.map((value, index) => (cats[index] === undefined ? value : { x: cats[index], y: value }));
+  function opts(data: (number | null)[], cats: number[]) {
     const flat = isFlat(data);
     const len = Array.isArray(data) && data.length ? data.length : 12;
     const shown = flat ? Array(len).fill(0) : data;
@@ -64,6 +65,7 @@
       return `${Number(amount.toFixed(unit === 0 ? 0 : 2))} ${units[unit]}`;
     }
     if (format === 'ms') return `${Number(value).toLocaleString()} ms`;
+    if (format === 'percent') return `${Number(Number(value).toFixed(1)).toLocaleString()}%`;
     return Number(value).toLocaleString();
   }
 

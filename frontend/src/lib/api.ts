@@ -170,6 +170,8 @@ export interface DashboardData {
     description: string | null;
     status: string;
     status_type: 'success' | 'warning' | 'error';
+    is_metrics_enabled: boolean;
+    is_traffic_analytics_enabled: boolean;
   }[];
   private_keys: number;
   can_create: boolean;
@@ -229,6 +231,7 @@ export const teamUi = {
 
 /** One server as `GET /ui/servers` describes it (facts the server pages need). */
 export interface ServerFacts {
+  is_metrics_enabled?: boolean;
   proxy_type?: string | null;
   outdated_warning?: [boolean, boolean];
   uuid: string;

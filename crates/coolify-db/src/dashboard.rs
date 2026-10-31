@@ -34,6 +34,8 @@ pub struct DashServer {
     pub is_usable: bool,
     pub proxy_type: Option<String>,
     pub proxy_status: Option<String>,
+    pub is_metrics_enabled: bool,
+    pub is_traffic_analytics_enabled: bool,
 }
 
 /// `Project::ownedByCurrentTeam()->with('environments')->withCount([...])`.
@@ -94,7 +96,9 @@ pub async fn servers(db: &Db, team_id: TeamId) -> DbResult<Vec<DashServer>> {
                 COALESCE(ss.force_disabled, false) AS force_disabled, \
                 COALESCE(ss.is_reachable, false) AS is_reachable, \
                 COALESCE(ss.is_usable, false) AS is_usable, \
-                s.proxy->>'type' AS proxy_type, s.proxy->>'status' AS proxy_status \
+                s.proxy->>'type' AS proxy_type, s.proxy->>'status' AS proxy_status, \
+                COALESCE(ss.is_metrics_enabled, false) AS is_metrics_enabled, \
+                COALESCE(ss.is_traffic_analytics_enabled, false) AS is_traffic_analytics_enabled \
          FROM servers s LEFT JOIN server_settings ss ON ss.server_id = s.id \
          WHERE s.team_id = $1 AND s.deleted_at IS NULL ORDER BY s.name",
     )

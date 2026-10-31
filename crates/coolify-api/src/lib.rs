@@ -29,6 +29,7 @@ pub mod ui_database_backups;
 pub mod ui_database_general;
 pub mod ui_database_import;
 pub mod ui_databases;
+pub mod ui_fleet_metrics;
 pub mod ui_help;
 pub mod ui_layout;
 pub mod ui_notifications;

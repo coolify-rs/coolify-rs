@@ -455,7 +455,7 @@ impl Aggregator {
     }
 
     /// `addSeries`.
-    fn add_series(&mut self, buckets: Vec<SeriesBucket>) {
+    pub fn add_series(&mut self, buckets: Vec<SeriesBucket>) {
         for data in buckets {
             let row = self.series.entry(data.bucket).or_insert(SeriesOut {
                 bucket: data.bucket,

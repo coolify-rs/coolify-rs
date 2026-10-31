@@ -9,6 +9,7 @@
     class: klass = '',
     title,
     text = false,
+    dir,
   }: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     table: TrafficTable<any>;
@@ -17,9 +18,10 @@
     class?: string;
     title?: string;
     text?: boolean;
+    dir?: 'asc' | 'desc';
   } = $props();
 
-  const firstDir = $derived(text ? 'asc' : 'desc');
+  const firstDir = $derived(dir ?? (text ? 'asc' : 'desc'));
   // `hidden` and `inline-flex` on one element conflict, so add the display only when the caller sets none.
   const display = $derived(klass.includes('hidden') ? '' : 'inline-flex');
   const state = $derived(table.sorted(column));

@@ -75,7 +75,7 @@
       series: [{ name, data: [] }],
       colors: [color],
       stroke: { curve: 'smooth', width: 2 },
-      fill: { type: 'gradient', gradient: { opacityFrom: 0.28, opacityTo: 0.02 } },
+      fill: { type: 'gradient', gradient: { opacityFrom: 0.28, opacityTo: 0.02, stops: [0, 90, 100] } },
       dataLabels: { enabled: false },
       grid: { borderColor: 'rgba(128, 128, 128, 0.14)', strokeDashArray: 4 },
       legend: { show: false },
