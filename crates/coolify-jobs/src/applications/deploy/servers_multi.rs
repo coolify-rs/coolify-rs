@@ -12,7 +12,7 @@ use coolify_remote::shell::quote;
 use rand::seq::SliceRandom as _;
 use serde_json::Value;
 
-use super::{Cmd, Fail, Run, Step, in_docker, now};
+use super::{Cmd, Fail, Run, Step, in_docker};
 use crate::applications::queue::{QueueOptions, Queued};
 use crate::server::ServerInfo;
 
@@ -137,13 +137,7 @@ impl Run {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
-        let _ = apps::update_deployment(
-            &db,
-            self.queue_id,
-            &[("build_server_id", servers::ColumnValue::Int(id))],
-            now(),
-        )
-        .await;
+        // `$queue->build_server_id` stays in memory: upstream's row keeps it empty.
         self.info(&format!("Found a suitable build server ({build_name})."))
             .await;
         self.build_server = Some((server, build_name, target));

@@ -86,7 +86,9 @@ def wait(u, count, timeout=500):
     """All of the first `count` deployments ended, the helper of each stopped."""
     for _ in range(timeout // 2):
         q = rows(u)
-        if len(q) >= count and all(x["status"] in END and x["finished_at"] and "Gracefully shutting down build container" in (x["logs"] or "") for x in q[:count]):
+        # A deployment refused before it starts has no finished_at and no helper.
+        if len(q) >= count and all(x["status"] == "failed" and "Before deploying to multiple servers" in (x["logs"] or "")
+                                   or x["status"] in END and x["finished_at"] and "Gracefully shutting down build container" in (x["logs"] or "") for x in q[:count]):
             return q
         time.sleep(2)
     return rows(u)
@@ -141,7 +143,7 @@ def compare_row(label, qr, qs, pairs_r, pairs_s):
     first = next(((x, y) for x, y in zip(vr, vs) if x != y), None)
     record(f"{label}: visible log", vr == vs, f"{len(vr)} vs {len(vs)}, first {first}")
     first = next(((x, y) for x, y in zip(cr, cs) if x != y), None)
-    record(f"{label}: commands", cr == cs, f"{len(cr)} vs {len(cs)}, first {first}")
+    record(f"{label}: commands", cr == cs, f"{len(cr)} vs {len(cs)}, first {first}, tail {cr[-2:]} {cs[-2:]}")
 
 
 class Env:
@@ -162,10 +164,13 @@ class Env:
         vm(self.vm2, f"docker inspect {FORWARD} >/dev/null 2>&1 || docker run -d --name {FORWARD} --restart=no --network host alpine/socat tcp-listen:5000,fork,reuseaddr,bind=127.0.0.1 tcp-connect:{ip}:5000")
         vm(self.vm2, "docker pull nginx:alpine >/dev/null 2>&1")
         key = sql(f"SELECT uuid FROM private_keys WHERE id={KEY_ID}")
-        c, s = call("ref", "POST", "/servers", {"name": "multi-diff-vm2", "ip": f"{self.vm2}.orb.local", "port": 22, "user": "root",
-                                                "private_key_uuid": key, "instant_validate": False, "proxy_type": "none"})
-        record("second server created", c == 201, s)
-        self.server2 = s["uuid"]
+        # A run stopped halfway can leave the server of this machine; nothing else uses that address.
+        self.server2 = sql(f"SELECT uuid FROM servers WHERE ip='{self.vm2}.orb.local' AND team_id=4 AND deleted_at IS NULL")
+        if not self.server2:
+            c, s = call("ref", "POST", "/servers", {"name": "multi-diff-vm2", "ip": f"{self.vm2}.orb.local", "port": 22, "user": "root",
+                                                    "private_key_uuid": key, "instant_validate": False, "proxy_type": "none"})
+            record("second server created", c == 201, s)
+            self.server2 = s["uuid"]
         self.server2_id = int(sql(f"SELECT id FROM servers WHERE uuid='{self.server2}'"))
         call("ref", "GET", f"/servers/{self.server2}/validate")
         for _ in range(60):
@@ -210,12 +215,13 @@ class Env:
             time.sleep(3)
         for u in self.apps:
             for machine in (VM1, self.vm2):
-                vm(machine, f"docker stack rm {u} >/dev/null 2>&1; docker ps -aq --filter label=coolify.applicationId --filter name={u} | xargs -r docker rm -f; docker network rm {u} >/dev/null 2>&1; rm -rf /data/coolify/applications/{u}")
+                vm(machine, f"docker stack rm {u} >/dev/null 2>&1; docker ps -aq --filter name={u} | xargs -r docker rm -f; docker network rm {u} >/dev/null 2>&1; rm -rf /data/coolify/applications/{u}")
         if self.project:
             for _ in range(10):
                 if call("ref", "DELETE", f"/projects/{self.project}")[0] in (200, 404):
                     break
                 time.sleep(3)
+        sql(f"UPDATE server_settings SET is_swarm_manager=false WHERE server_id={self.server2_id}") if self.server2_id else None
         if self.server2 and not self.a.keep_server:
             sql(f"UPDATE server_settings SET is_build_server=false, server_role=NULL, is_swarm_manager=false WHERE server_id={self.server2_id}")
             if self.swarm_dest:
@@ -264,7 +270,7 @@ def case_missing(e):
 
 
 def containers(machine, u):
-    return vm(machine, f"docker ps --format '{{{{.Names}}}}' --filter label=coolify.applicationId --filter name={u}").split()
+    return vm(machine, f"docker ps --format '{{{{.Names}}}}' --filter name={u}").split()
 
 
 def case_multi(e, rs):
@@ -326,7 +332,6 @@ def case_build(e, with_config):
         want = "finished" if with_config else "failed"
         record(f"[{case}] both {want}", qr and qs and qr[0]["status"] == qs[0]["status"] == want, (qr and qr[0]["status"], qs and qs[0]["status"]))
         compare_row(f"[{case}]", qr[0], qs[0], pairs(u, "ref", case), pairs(u, "rs", case))
-        record(f"[{case}] build server recorded", all(int(q[0]["build_server_id"] or 0) == e.server2_id for q in (qr, qs)), [q[0]["build_server_id"] for q in (qr, qs)])
         if with_config:
             for side in ("ref", "rs"):
                 record(f"[{case}] {side}: runs on the main server", bool(containers(VM1, u[side])) and not containers(e.vm2, u[side]))
@@ -337,10 +342,19 @@ def case_build(e, with_config):
 
 def case_swarm(e):
     vm(e.vm2, "docker swarm init >/dev/null 2>&1; docker network inspect coolify-overlay >/dev/null 2>&1 || docker network create --driver overlay --attachable coolify-overlay")
-    e.swarm_dest = f"msd{os.getpid()}swarm"
-    sql(f"INSERT INTO swarm_dockers (name, uuid, network, server_id, created_at, updated_at) VALUES ('multi-diff-swarm', '{e.swarm_dest}', 'coolify-overlay', {e.server2_id}, now(), now())")
+    e.swarm_dest = sql(f"SELECT uuid FROM swarm_dockers WHERE server_id={e.server2_id}")
+    if not e.swarm_dest:
+        e.swarm_dest = f"msd{os.getpid()}swarm"
+        sql(f"INSERT INTO swarm_dockers (name, uuid, network, server_id, created_at, updated_at) VALUES ('multi-diff-swarm', '{e.swarm_dest}', 'coolify-overlay', {e.server2_id}, now(), now())")
     sql(f"UPDATE server_settings SET is_swarm_manager=true WHERE server_id={e.server2_id}")
     sql(f"DELETE FROM standalone_dockers WHERE id={e.dest2} AND NOT EXISTS (SELECT 1 FROM additional_destinations WHERE standalone_docker_id={e.dest2})")
+    # A generated container name makes the service name too long for Swarm on both sides.
+    u = e.create_pair("swarm-long", server=e.server2, destination_uuid=e.swarm_dest)
+    qr, qs = deploy_pair(u)
+    record("[swarm-long] both failed", qr and qs and qr[0]["status"] == qs[0]["status"] == "failed", (qr and qr[0]["status"], qs and qs[0]["status"]))
+    compare_row("[swarm-long]", qr[0], qs[0], pairs(u, "ref", "swarm-long"), pairs(u, "rs", "swarm-long"))
+    for side in ("ref", "rs"):
+        record(f"[swarm-long] {side} says why", "name must be 63 characters or fewer" in (qr if side == "ref" else qs)[0]["logs"])
     u = e.create_pair("swarm", server=e.server2, destination_uuid=e.swarm_dest)
     for side in ("ref", "rs"):
         c, r = call(side, "GET", f"/applications/{u[side]}")
@@ -350,8 +364,10 @@ def case_swarm(e):
     strip = ("updated_at",)
     record("[swarm] show alike", c1 == c2 and {k: v for k, v in a.items() if k not in strip} == {k: v for k, v in b.items() if k not in strip},
            {k: (a.get(k), b.get(k)) for k in a if a.get(k) != b.get(k)})
+    for side in ("ref", "rs"):
+        sql(f"UPDATE application_settings SET is_consistent_container_name_enabled=true, is_swarm_only_worker_nodes=false WHERE application_id=(SELECT id FROM applications WHERE uuid='{u[side]}')")
     qr, qs = deploy_pair(u)
-    record("[swarm] both finished", qr and qs and qr[0]["status"] == qs[0]["status"] == "finished", (qr and qr[0]["status"], qs and qs[0]["status"], (qs and (qs[0]["logs"] or ""))[-500:]))
+    record("[swarm] both finished", qr and qs and qr[0]["status"] == qs[0]["status"] == "finished", [[e["output"][:900] for e in json.loads(q[0]["logs"] or "[]") if e["type"] == "stderr"][-4:] for q in (qr, qs) if q])
     compare_row("[swarm]", qr[0], qs[0], pairs(u, "ref", "swarm"), pairs(u, "rs", "swarm"))
     cr = vm(e.vm2, f"cat /data/coolify/applications/{u['ref']}/docker-compose.yaml")
     cs = vm(e.vm2, f"cat /data/coolify/applications/{u['rs']}/docker-compose.yaml")
@@ -363,7 +379,14 @@ def case_swarm(e):
                 break
             time.sleep(3)
             s = vm(e.vm2, f"docker stack services {u[side]} --format '{{{{.Name}}}} {{{{.Replicas}}}}'")
-        record(f"[swarm] {side} service runs", "1/1" in s, s)
+        record(f"[swarm] {side} service runs", "1/1" in s, s + vm(e.vm2, f"docker service ps {u[side]}_{u[side]} --no-trunc --format '{{{{.CurrentState}}}} {{{{.Error}}}}' | head -3"))
+    # GetContainersStatus reads the replicas of the service.
+    rs = Rs()
+    rs.post(f"/ui/resources/application/{u['rs']}/destination/stop", {"server_id": e.server2_id})
+    status = sql(f"SELECT status FROM applications WHERE uuid='{u['rs']}'")
+    record("[swarm] rs status from the service replicas", status == "running:healthy", status)
+    c, r = call("rs", "GET", f"/applications/{u['rs']}")
+    record("[swarm] rs server_status", r.get("server_status") is True and r.get("status") == "running:healthy", (r.get("server_status"), r.get("status")))
     for side in ("ref", "rs"):
         c, r = call(side, "POST", f"/applications/{u[side]}/stop")
         record(f"[swarm] {side} stop accepted", c == 200, r)
@@ -373,6 +396,8 @@ def case_swarm(e):
         time.sleep(3)
     for side in ("ref", "rs"):
         record(f"[swarm] {side} stack removed", not vm(e.vm2, f"docker stack services {u[side]} -q").strip())
+
+
 
 
 def main():
