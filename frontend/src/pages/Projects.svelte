@@ -139,7 +139,7 @@
             {/snippet}
           </Dropdown>
 
-          <ViewToggle bind:mode={() => view.mode, (m) => ((view.mode = m), (page = 1))} />
+          <ViewToggle canvasUrl="/projects/canvas" bind:mode={() => view.mode, (m) => ((view.mode = m), (page = 1))} />
         </div>
       </div>
 

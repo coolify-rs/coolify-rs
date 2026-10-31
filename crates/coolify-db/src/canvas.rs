@@ -177,21 +177,21 @@ pub async fn destination_servers(db: &Db) -> DbResult<HashMap<(String, i64), i64
     Ok(list.into_iter().map(|(t, i, s)| ((t, i), s)).collect())
 }
 
-/// `$application->additional_servers` per application.
+/// `$application->additional_servers` per application: server id and pivot status.
 pub async fn additional_servers(
     db: &Db,
     application_ids: &[i64],
-) -> DbResult<HashMap<i64, Vec<i64>>> {
-    let list: Vec<(i64, i64)> = sqlx::query_as(
-        "SELECT a.application_id, s.id FROM servers s INNER JOIN additional_destinations a ON s.id = a.server_id \
+) -> DbResult<HashMap<i64, Vec<(i64, Option<String>)>>> {
+    let list: Vec<(i64, i64, Option<String>)> = sqlx::query_as(
+        "SELECT a.application_id, s.id, a.status FROM servers s INNER JOIN additional_destinations a ON s.id = a.server_id \
          WHERE a.application_id = ANY($1) AND s.deleted_at IS NULL",
     )
     .bind(application_ids)
     .fetch_all(db.pool())
     .await?;
-    let mut out: HashMap<i64, Vec<i64>> = HashMap::new();
-    for (application, server) in list {
-        out.entry(application).or_default().push(server);
+    let mut out: HashMap<i64, Vec<(i64, Option<String>)>> = HashMap::new();
+    for (application, server, status) in list {
+        out.entry(application).or_default().push((server, status));
     }
     Ok(out)
 }

@@ -2,7 +2,7 @@
   // Port of upstream livewire/project/resource/index.blade.php. coolify-rs
   // lists the environment's databases it can show (`dbUi.resources`); the
   // other resources (applications, services, unported database kinds) are
-  // counted in a note instead of listed. Upstream's canvas view is left out.
+  // counted in a note instead of listed.
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
   import Dropdown from '../components/Dropdown.svelte';
@@ -300,8 +300,9 @@
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2 sm:shrink-0">
+          {#if isEmpty}<ViewToggle single canvasUrl="/project/{uuid}/environment/{env}/canvas" />{/if}
           <a
-            href="/project/{uuid}/environment/{env}/shared-variables"
+            href="/shared-variables/environments/project/{uuid}/environment/{env}"
             use:link
             class="button whitespace-nowrap"
             title="Shared variables for this environment"
@@ -458,7 +459,7 @@
               {/snippet}
             </Dropdown>
 
-            <ViewToggle bind:mode={() => view.mode, (m) => ((view.mode = m), (page = 1))} />
+            <ViewToggle canvasUrl="/project/{uuid}/environment/{env}/canvas" bind:mode={() => view.mode, (m) => ((view.mode = m), (page = 1))} />
           </div>
         </div>
 

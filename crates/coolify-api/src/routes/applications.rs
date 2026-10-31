@@ -61,7 +61,7 @@ const ENCRYPTED: &[&str] = &[
 ];
 
 /// The `status` getter of a single-server application.
-fn status_getter(v: Option<&str>) -> String {
+pub(crate) fn status_getter(v: Option<&str>) -> String {
     coolify_jobs::applications::status::normalize_status(v.unwrap_or_default())
 }
 

@@ -5,6 +5,9 @@ export function listView(key: string, fallback = 'table') {
   const storageKey = `listView:${key}`;
   let initial = fallback;
   try {
+    // `?view=` (the canvas page's link back) wins and is remembered, as in `listView()` upstream.
+    const asked = new URLSearchParams(window.location.search).get('view');
+    if (asked === 'table' || asked === 'grid') localStorage.setItem(storageKey, asked);
     initial = localStorage.getItem(storageKey) ?? fallback;
   } catch {
     // Storage unavailable: use the default view.

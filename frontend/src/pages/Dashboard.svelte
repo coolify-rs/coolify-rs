@@ -78,7 +78,7 @@
               {/if}
             {/snippet}
             {#snippet actions()}
-              {#if projects.length}<ViewToggle bind:mode={projectsView.mode} />{/if}
+              <ViewToggle single={!projects.length} canvasUrl="/dashboard/canvas" bind:mode={projectsView.mode} />
             {/snippet}
           </SectionHeading>
 

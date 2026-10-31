@@ -1,9 +1,10 @@
 <script lang="ts">
-  // Port of upstream components/canvas-view-toggle.blade.php (table / grid
-  // switch; coolify-rs has no canvas view).
+  // Port of upstream components/canvas-view-toggle.blade.php (table / grid switch and the canvas
+  // link). `single`: pages with one list view show only the canvas link.
   import Reicon from './Reicon.svelte';
+  import { link } from '../lib/router.svelte';
 
-  let { mode = $bindable('table'), canvasUrl }: { mode?: string; canvasUrl?: string } = $props();
+  let { mode = $bindable('table'), canvasUrl, single = false }: { mode?: string; canvasUrl?: string; single?: boolean } = $props();
 
   const views: [string, string, string][] = [
     ['table', 'Table view', 'unordered-list'],
@@ -14,6 +15,7 @@
 </script>
 
 <div class="view-toggle">
+  {#if !single}
   <span class="flex w-7.5 shrink-0">
     {#each views as [m, label, icon] (m)}
       {#if mode !== m}
@@ -23,8 +25,9 @@
       {/if}
     {/each}
   </span>
+  {/if}
   {#if canvasUrl}
-    <a href={canvasUrl} class={item} title="Canvas view (beta): see everything and how it connects">
+    <a href={canvasUrl} use:link class={item} title="Canvas view (beta): see everything and how it connects">
       <Reicon name="deploy-canvas" class="size-3.5" />
       Canvas
       <span class="ml-0.5 inline-flex items-center rounded-full bg-coollabs px-1.5 py-px text-[10px] leading-4 font-semibold text-white"> Try it </span>

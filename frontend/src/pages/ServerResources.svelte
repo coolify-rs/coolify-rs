@@ -1,6 +1,7 @@
 <script lang="ts">
-  // Port of upstream livewire/server/resources.blade.php (the canvas view is not ported).
+  // Port of upstream livewire/server/resources.blade.php.
   import Reicon from '../components/Reicon.svelte';
+  import ViewToggle from '../components/ViewToggle.svelte';
   import Empty from '../components/Empty.svelte';
   import Pager from '../components/Pager.svelte';
   import ResourceLogo from '../components/ResourceLogo.svelte';
@@ -122,6 +123,7 @@
             <Reicon name="refresh" class="size-3.5" />
             Refresh
           </button>
+          <ViewToggle single canvasUrl="/server/{uuid}/canvas" />
         {/snippet}
 
         <div class="border-b border-neutral-200 p-3 dark:border-white/[0.08]">

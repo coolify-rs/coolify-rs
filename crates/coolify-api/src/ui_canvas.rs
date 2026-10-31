@@ -44,7 +44,7 @@ const BRIDGED: &[(&str, &str)] = &[
     ("GET", "projects/{uuid}/environments"),
     ("POST", "projects/{uuid}/environments"),
     ("GET", "servers"),
-    ("GET", "servers/{uuid}/destinations"),
+    ("GET", "servers/{server_uuid}/destinations"),
     ("GET", "github-apps"),
     ("GET", "github-apps/{github_app_id}/repositories"),
     (
@@ -321,9 +321,7 @@ fn check_positions(errors: &mut Map<String, Value>, items: &[(String, &Value)]) 
     }
     for axis in ["x", "y"] {
         for (key, item) in items {
-            if is_list(item) {
-                check_coordinate(errors, &format!("positions.{key}.{axis}"), item.get(axis));
-            }
+            check_coordinate(errors, &format!("positions.{key}.{axis}"), item.get(axis));
         }
     }
 }
@@ -1087,4 +1085,22 @@ async fn deploy_shell(Extension(ctx): Extension<AuthCtx>) -> ApiResult {
         "service_logos": logos,
     }))
     .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_bridged_route_exists_in_the_api() {
+        for (method, uri) in BRIDGED {
+            let full = format!("api/v1/{uri}");
+            assert!(
+                crate::routes::ROUTES
+                    .iter()
+                    .any(|r| r.method == *method && r.uri == full),
+                "{method} {full}"
+            );
+        }
+    }
 }

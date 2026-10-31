@@ -91,7 +91,7 @@ export function dashboardContext(path: string): string | null {
   const p = path.replace(/\/+$/, '') || '/';
   const rules: [RegExp, string][] = [
     [/^\/$/, 'Dashboard'],
-    [/^\/projects$/, 'Projects'],
+    [/^\/projects(\/canvas)?$/, 'Projects'],
     [/^\/terminal/, 'Terminal'],
     [/^\/servers?(\/|$)/, 'Servers'],
     [/^\/sources?(\/|$)/, 'Sources'],
@@ -103,6 +103,7 @@ export function dashboardContext(path: string): string | null {
     [/^\/notifications/, 'Notifications'],
     [/^\/security/, 'Keys & Tokens'],
     [/^\/tags/, 'Tags'],
+    [/^\/canvas\/tags$/, 'Tags'],
     [/^\/settings/, 'Settings'],
     [/^\/profile/, 'Profile'],
     [/^\/admin/, 'Admin'],

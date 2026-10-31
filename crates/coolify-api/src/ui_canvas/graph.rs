@@ -11,6 +11,7 @@ use coolify_jobs::services::templates;
 use serde_json::{Map, Value, json};
 
 use crate::response::ApiError;
+use crate::routes::applications::status_getter;
 use crate::state::AppState;
 
 pub const EMPTY_ZONE: &str = "empty";
@@ -52,7 +53,7 @@ pub struct Loaded {
     pub projects: HashMap<i64, Record>,
     pub servers: HashMap<i64, Record>,
     destinations: HashMap<(String, i64), i64>,
-    additional: HashMap<i64, Vec<i64>>,
+    additional: HashMap<i64, Vec<(i64, Option<String>)>>,
     service_applications: HashMap<i64, Vec<Record>>,
     service_databases: HashMap<i64, Vec<Record>>,
 }
@@ -117,7 +118,7 @@ pub async fn load(state: &AppState, environments: &[Record]) -> Result<Loaded, A
         .map(Resource::id)
         .collect();
     let additional = db::additional_servers(&state.db, &app_ids).await?;
-    let mut server_ids: Vec<i64> = additional.values().flatten().copied().collect();
+    let mut server_ids: Vec<i64> = additional.values().flatten().map(|(id, _)| *id).collect();
     for r in &resources {
         let key = (
             text(&r.row, "destination_type").to_owned(),
@@ -434,6 +435,30 @@ fn build_pack_name(pack: &str) -> String {
     }
 }
 
+/// `Application::status()`: with additional servers, the status over all of them.
+fn application_status(value: Option<&str>, additional: &[(i64, Option<String>)]) -> String {
+    if additional.is_empty() {
+        return status_getter(value);
+    }
+    let value = value.unwrap_or_default();
+    let main_status = value.split(':').next().unwrap_or_default();
+    let main_health = value.split_once(':').map_or(value, |(_, h)| h);
+    let (mut status, mut health) = (main_status, main_health);
+    for (_, pivot) in additional {
+        let pivot = pivot.as_deref().unwrap_or_default();
+        let server_status = pivot.split(':').next().unwrap_or_default();
+        if main_status != server_status {
+            status = "degraded";
+        }
+        if let Some((_, server_health)) = pivot.split_once(':')
+            && main_health != server_health
+        {
+            health = "unhealthy";
+        }
+    }
+    format!("{status}:{health}")
+}
+
 pub struct Graph {
     pub zones: Vec<Value>,
     pub nodes: Vec<Map<String, Value>>,
@@ -493,11 +518,11 @@ pub async fn graph(
         };
         let mut shown: Vec<&Record> = server.into_iter().collect();
         let mut node = if r.morph == APPLICATION_MORPH {
-            let extra: Vec<&Record> = l
-                .additional
-                .get(&r.id())
-                .map(|ids| ids.iter().filter_map(|i| l.servers.get(i)).collect())
-                .unwrap_or_default();
+            let pivots = l.additional.get(&r.id()).map_or(&[][..], Vec::as_slice);
+            let extra: Vec<&Record> = pivots
+                .iter()
+                .filter_map(|(i, _)| l.servers.get(i))
+                .collect();
             let mut extra_zones: Vec<&str> = Vec::new();
             for s in &extra {
                 let uuid = text(s, "uuid");
@@ -523,7 +548,7 @@ pub async fn graph(
                 "id": r.uuid(),
                 "type": "application",
                 "name": r.name(),
-                "status": r.str("status").unwrap_or_default(),
+                "status": application_status(r.str("status"), pivots),
                 "zone": zone,
                 "extra_zones": extra_zones,
                 "urls": split_urls(r.str("fqdn")),
@@ -579,7 +604,7 @@ pub async fn graph(
                 "id": r.uuid(),
                 "type": "database",
                 "name": r.name(),
-                "status": r.str("status").unwrap_or_default(),
+                "status": status_getter(r.str("status")),
                 "zone": zone,
                 "extra_zones": [],
                 "urls": [],
@@ -1093,7 +1118,7 @@ pub async fn dashboard_payload(
         .collect();
     if let Some(m) = payload.as_object_mut() {
         m.insert("title".into(), json!("Dashboard"));
-        m.insert("title_link".into(), json!(format!("{base}/")));
+        m.insert("title_link".into(), json!(base));
         if let Some(Value::Array(nodes)) = m.get_mut("nodes") {
             for n in nodes.iter_mut() {
                 let hit = n.get("type").and_then(Value::as_str) == Some("application");
