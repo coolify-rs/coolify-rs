@@ -51,6 +51,40 @@ pub async fn preview(
     row.as_deref().map(decode).transpose()
 }
 
+/// The commit of the latest other deployment of a pull request that has one.
+pub async fn latest_pull_request_commit(
+    db: &Db,
+    application_id: i64,
+    pull_request_id: i64,
+    except_queue_id: i64,
+) -> DbResult<Option<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT commit FROM application_deployment_queues \
+         WHERE application_id = $1::text AND pull_request_id = $2 AND id <> $3 AND commit NOT IN ('HEAD', '') \
+         ORDER BY id DESC LIMIT 1",
+    )
+    .bind(application_id)
+    .bind(pull_request_id as i32)
+    .bind(except_queue_id)
+    .fetch_optional(db.pool())
+    .await?)
+}
+
+/// `$preview->resetRestartLimit()`.
+pub async fn reset_preview_restart_limit(db: &Db, id: i64, now: NaiveDateTime) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query(
+        "UPDATE application_previews SET restart_count = 0, restart_limit_reached = false, \
+         last_restart_at = NULL, last_restart_type = NULL, updated_at = $2 WHERE id = $1 \
+         AND (restart_count <> 0 OR restart_limit_reached OR last_restart_at IS NOT NULL OR last_restart_type IS NOT NULL)",
+    )
+    .bind(id)
+    .bind(now)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
 /// The soft deleted row too (`DeleteResourceJob` holds the model it was given).
 pub async fn preview_by_id(db: &Db, id: i64) -> DbResult<Option<Record>> {
     let row: Option<String> =

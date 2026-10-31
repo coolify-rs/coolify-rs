@@ -8,6 +8,7 @@ mod build;
 mod commands;
 mod compose_pack;
 mod git;
+mod preview;
 mod secrets;
 
 use std::collections::HashMap;
@@ -165,6 +166,12 @@ struct BuildState {
     buildx: bool,
     /// `$this->pull_request_id`.
     pull_request_id: i64,
+    /// `$this->git_type`.
+    git_type: Option<String>,
+    /// `$this->dockerImagePreviewTag`.
+    preview_tag: Option<String>,
+    /// `$this->preview`.
+    preview: Option<coolify_db::records::Record>,
     /// `$this->dockerSecretsSupported`.
     secrets_supported: bool,
     /// `$this->build_secrets`.
@@ -319,7 +326,7 @@ impl Run {
     async fn init_redaction(&mut self) {
         let (known, locked) = self
             .jobs
-            .log_redaction_secrets(&self.app, self.server.id, false)
+            .log_redaction_secrets(&self.app, self.server.id, self.b.is_preview())
             .await;
         self.known.extend(known);
         self.locked.extend(locked);
@@ -610,9 +617,18 @@ impl Run {
             }
             seen.push(id);
             let labels = v.get("Labels").and_then(Value::as_str).unwrap_or_default();
-            if !labels.contains("coolify.pullRequestId=")
-                || labels.contains("coolify.pullRequestId=0")
-            {
+            let base = !labels.contains("coolify.pullRequestId=")
+                || labels.contains("coolify.pullRequestId=0,")
+                || labels.ends_with("coolify.pullRequestId=0");
+            let keep = if self.b.is_preview() {
+                !base
+                    && labels
+                        .split(',')
+                        .any(|l| l == format!("coolify.pullRequestId={}", self.b.pull_request_id))
+            } else {
+                base
+            };
+            if keep {
                 containers.push(v);
             }
         }
@@ -655,7 +671,8 @@ impl Jobs {
             return;
         };
         let server_id = q.int("server_id").unwrap_or_default();
-        if q.int("pull_request_id").unwrap_or(0) != 0 {
+        let pull_request_id = q.int("pull_request_id").unwrap_or(0);
+        if pull_request_id != 0 && app.str("build_pack") == Some("dockercompose") {
             self.refuse_preview_deployment(&q, app.id, server_id).await;
             return;
         }
@@ -703,13 +720,20 @@ impl Jobs {
             disable_build_cache,
             dockerfile_location: "/Dockerfile".into(),
             compose_location: "/docker-compose.yaml".into(),
+            pull_request_id,
+            git_type: q.str("git_type").map(str::to_owned),
+            preview_tag: q.str("docker_registry_image_tag").map(str::to_owned),
             ..Default::default()
         };
         let mut run = Run {
             jobs: self.clone(),
             queue_id,
             dep: q.uuid.clone(),
-            container: compose::container_name(&app, created),
+            container: if pull_request_id == 0 {
+                compose::container_name(&app, created)
+            } else {
+                compose::preview_container_name(&app, pull_request_id)
+            },
             commit: q.str("commit").unwrap_or("HEAD").to_owned(),
             workdir: format!("/artifacts/{}{base}", q.uuid),
             cfg: format!("/data/coolify/applications/{}", app.uuid),
@@ -727,6 +751,13 @@ impl Jobs {
             hint_added: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         run.init_redaction().await;
+        if pull_request_id != 0
+            && let Err(e) = run.load_preview().await
+        {
+            run.failed(&e).await;
+            run.finally().await;
+            return;
+        }
 
         // handle()
         if q.status == "cancelled-by-user" {
@@ -788,8 +819,8 @@ fn hostname() -> Option<String> {
 }
 
 impl Jobs {
-    /// The job does not build previews yet, and running the row as if it were production would
-    /// replace the production containers: the row fails with a line that says so.
+    /// The preview branch of the Compose parser is not ported, and running the row as if it were
+    /// production would replace the production containers: the row fails with a line that says so.
     async fn refuse_preview_deployment(
         &self,
         q: &apps::Deployment,
@@ -798,7 +829,7 @@ impl Jobs {
     ) {
         let entry = apps::LogEntry {
             command: None,
-            output: "Preview deployments are not ported to coolify-rs yet. Nothing was deployed."
+            output: "Preview deployments of Docker Compose applications are not ported to coolify-rs yet. Nothing was deployed."
                 .into(),
             kind: "stderr",
             timestamp: chrono::Utc::now()
@@ -1093,7 +1124,10 @@ impl Run {
             .unwrap_or_default()
             .to_owned();
         // resolveDockerImageTag(): a rollback runs the tag in `commit`.
-        let tag = if self.b.rollback && !self.commit.trim().is_empty() {
+        let preview_tag = self.b.preview_tag.clone().filter(|t| !t.is_empty());
+        let tag = if let Some(tag) = preview_tag.filter(|_| self.b.is_preview()) {
+            tag
+        } else if self.b.rollback && !self.commit.trim().is_empty() {
             self.commit.clone()
         } else {
             self.app
@@ -1172,8 +1206,11 @@ impl Run {
         let net = quote(self.app.network());
         let dep = &self.dep;
         // seccompProfileMountFlags(): docker compose runs in this helper and reads the profiles.
-        let seccomp =
-            docker_run::seccomp_profile_mount_flags(self.app.str("custom_docker_run_options"));
+        let seccomp = if self.b.is_preview() {
+            String::new()
+        } else {
+            docker_run::seccomp_profile_mount_flags(self.app.str("custom_docker_run_options"))
+        };
         let run_command = if config == "OK" {
             format!(
                 "docker run -d --network {net} --name {dep} {env_flags} --rm -v {home}/.docker/config.json:/root/.docker/config.json:ro {buildx} -v /var/run/docker.sock:/var/run/docker.sock {seccomp} {helper}"
@@ -1209,9 +1246,36 @@ impl Run {
             .encrypter
             .as_ref()
             .ok_or_else(|| Fail::new("No application encryption key has been specified."))?;
-        let input = LabelInput::new(&self.app, server)
+        let mut input = LabelInput::new(&self.app, server)
             .with_basic_auth(&self.app, server, enc)
             .map_err(Fail::new)?;
+        if self.b.is_preview() {
+            let overrides = self
+                .b
+                .preview
+                .as_ref()
+                .and_then(|p| p.get("domain_port_overrides"))
+                .and_then(|v| match v {
+                    Value::String(s) => serde_json::from_str::<Value>(s).ok(),
+                    other => Some(other.clone()),
+                })
+                .and_then(|v| v.as_object().cloned())
+                .map(|o| {
+                    o.iter()
+                        .filter_map(|(k, v)| {
+                            v.as_i64()
+                                .or_else(|| v.as_str()?.parse().ok())
+                                .map(|p| (k.clone(), p))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            input = input.for_preview(
+                self.b.pull_request_id,
+                self.deployed_fqdn().as_deref(),
+                overrides,
+            );
+        }
         Ok(labels::application(&input))
     }
 
@@ -1255,8 +1319,12 @@ impl Run {
             None if self.app.setting_bool("is_container_label_readonly_enabled") => {
                 self.generated_labels(&server_row)?
             }
+            None if self.b.is_preview() => Vec::new(),
             None => return Err(Fail::new("Undefined variable $labels")),
         };
+        if self.b.is_preview() {
+            labels = self.generated_labels(&server_row)?;
+        }
         // traefikHostRulesWithoutIpv6Brackets
         labels = labels
             .into_iter()
@@ -1286,6 +1354,7 @@ impl Run {
                 .and_then(Value::as_str)
                 .unwrap_or_default(),
             &version,
+            self.b.pull_request_id,
         ));
         // Custom HEALTHCHECK of the repository's Dockerfile.
         if self.app.str("build_pack") == Some("dockerfile")
@@ -1293,9 +1362,28 @@ impl Run {
         {
             self.read_dockerfile_healthcheck().await?;
         }
-        let volumes = apps::persistent_volumes(&db, self.app.id)
+        let mut volumes = apps::persistent_volumes(&db, self.app.id)
             .await
             .map_err(|e| Fail::new(e.to_string()))?;
+        if self.b.is_preview() {
+            // generate_local_persistent_volumes(): the preview suffix on the name or the host path.
+            let suffixes = apps::preview_suffix_volumes(&db, self.app.id)
+                .await
+                .map_err(|e| Fail::new(e.to_string()))?;
+            let pr = self.b.pull_request_id;
+            for (name, _, host) in &mut volumes {
+                let enabled = suffixes
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .is_none_or(|(_, on)| *on);
+                if enabled {
+                    *name = crate::compose_parser::volumes::add_preview_deployment_suffix(name, pr);
+                    if let Some(h) = host.as_mut().filter(|h| !h.is_empty()) {
+                        *h = crate::compose_parser::volumes::add_preview_deployment_suffix(h, pr);
+                    }
+                }
+            }
+        }
         // `$persistent_file_volumes`: every file storage is mounted.
         let file_volumes: Vec<String> = apps::file_volume_rows(&db, self.app.id)
             .await
@@ -1367,9 +1455,14 @@ impl Run {
             project_id: self.app.project.get("id").and_then(Value::as_i64),
             environment_id: self.app.environment.get("id").and_then(Value::as_i64),
         };
-        let variables: Vec<Var> = env::load_for(&self.jobs.0.db, enc, &owner, Some(self.server.id))
-            .await
-            .map_err(Fail::new)?;
+        let mut variables: Vec<Var> =
+            env::load_for(&self.jobs.0.db, enc, &owner, Some(self.server.id))
+                .await
+                .map_err(Fail::new)?;
+        if self.b.is_preview() {
+            variables = self.deployed_variables().await?;
+        }
+        let deployed_fqdn = self.deployed_fqdn();
         let project = self
             .app
             .project
@@ -1394,6 +1487,7 @@ impl Run {
                 project_name: project.as_deref(),
                 environment_name: environment.as_deref(),
                 server_ip: Some(&ip),
+                preview: self.b.is_preview().then_some(deployed_fqdn.as_deref()),
             },
         );
         if let Some(w) = warning {
@@ -1455,7 +1549,8 @@ impl Run {
             let consistent = self
                 .app
                 .setting_bool("is_consistent_container_name_enabled");
-            if mapped || consistent || options.contains("--ip") {
+            let preview = self.b.is_preview();
+            if mapped || consistent || preview || options.contains("--ip") {
                 self.info(SEPARATOR).await;
                 if mapped {
                     self.info("Application has ports mapped to the host system, rolling update is not supported.").await;
@@ -1470,6 +1565,14 @@ impl Run {
                         .is_some_and(|n| !n.is_empty())
                 {
                     self.info("Custom internal name is set, rolling update is not supported.")
+                        .await;
+                }
+                if preview {
+                    self.app.settings.insert(
+                        "is_consistent_container_name_enabled".into(),
+                        Value::Bool(true),
+                    );
+                    self.info("Pull request deployment, rolling update is not supported.")
                         .await;
                 }
                 if options.contains("--ip") {
@@ -1875,21 +1978,35 @@ impl Run {
     async fn handle_successful_deployment(&mut self) {
         let db = self.jobs.0.db.clone();
         let n = now();
-        let _ = apps::update_if_changed(
-            &db,
-            self.app.id,
-            &[
-                ("restart_count", ColumnValue::Int(0)),
-                ("last_restart_at", ColumnValue::Text(None)),
-                ("last_restart_type", ColumnValue::Text(None)),
-                ("restart_limit_reached", ColumnValue::Bool(false)),
-            ],
-            n,
-        )
-        .await;
+        if self.b.is_preview() {
+            if let Some(id) = self
+                .b
+                .preview
+                .as_ref()
+                .and_then(|p| p.get("id"))
+                .and_then(Value::as_i64)
+            {
+                let _ = coolify_db::application_ops::reset_preview_restart_limit(&db, id, n).await;
+            }
+        } else {
+            let _ = apps::update_if_changed(
+                &db,
+                self.app.id,
+                &[
+                    ("restart_count", ColumnValue::Int(0)),
+                    ("last_restart_at", ColumnValue::Text(None)),
+                    ("last_restart_type", ColumnValue::Text(None)),
+                    ("restart_limit_reached", ColumnValue::Bool(false)),
+                ],
+                n,
+            )
+            .await;
+        }
         // markDeploymentConfigurationApplied($this->application_deployment_queue)
         if let Some(enc) = self.jobs.0.encrypter.as_ref()
-            && let Err(e) = snapshot::mark_applied(&db, enc, self.app.id, self.queue_id, 0).await
+            && let Err(e) =
+                snapshot::mark_applied(&db, enc, self.app.id, self.queue_id, self.b.pull_request_id)
+                    .await
         {
             tracing::warn!(
                 "Failed to mark configuration as applied for deployment {}: {e}",
@@ -1934,6 +2051,7 @@ impl Run {
             .await;
         if self.app.str("build_pack") != Some("dockercompose")
             && code != 69420
+            && !self.b.is_preview()
             && !self
                 .app
                 .setting_bool("is_consistent_container_name_enabled")
@@ -1987,10 +2105,20 @@ impl Run {
                 finished.format("%Y-%m-%d %H:%M:%S")
             );
             let c = self.cfg.clone();
+            let file = if self.b.is_preview() {
+                let file = crate::compose_parser::volumes::add_preview_deployment_suffix(
+                    "docker-compose",
+                    self.b.pull_request_id,
+                );
+                self.b.compose_location = format!("/{file}.yaml");
+                format!("{file}.yaml")
+            } else {
+                "docker-compose.yaml".to_owned()
+            };
             self.exec(vec![
                 Cmd::new(format!("mkdir -p {c}")),
-                Cmd::new(format!("rm -f {c}/docker-compose.yaml {c}/README.md")).hidden(),
-                Cmd::new(format!("tee {c}/docker-compose.yaml > /dev/null")).input(yaml),
+                Cmd::new(format!("rm -f {c}/{file} {c}/README.md")).hidden(),
+                Cmd::new(format!("tee {c}/{file} > /dev/null")).input(yaml),
                 Cmd::new(format!("echo '{readme}' | tee {c}/README.md > /dev/null")),
             ])
             .await?;

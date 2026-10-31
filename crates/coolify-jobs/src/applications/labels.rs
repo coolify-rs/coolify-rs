@@ -29,6 +29,8 @@ pub struct LabelInput {
     pub traffic_analytics: bool,
     /// The `is_http_basic_auth_*` arguments, when enabled with a username and a password.
     pub basic_auth: Option<BasicAuth>,
+    /// The preview branch of `generateLabelsApplication`: no retries and no redirect direction.
+    pub preview: bool,
 }
 
 /// HTTP basic auth of the label generators. Each generator hashes the password once.
@@ -223,7 +225,31 @@ impl LabelInput {
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             basic_auth: None,
+            preview: false,
         }
+    }
+
+    /// The preview branch of `generateLabelsApplication($application, $preview)`: the preview's
+    /// domains, every one of them noindex.
+    #[must_use]
+    pub fn for_preview(
+        mut self,
+        pull_request_id: i64,
+        fqdn: Option<&str>,
+        port_overrides: BTreeMap<String, i64>,
+    ) -> Self {
+        self.uuid = format!("{}-pr-{pull_request_id}", self.uuid);
+        self.fqdn = fqdn.map(str::to_owned);
+        self.noindex_domains = fqdn
+            .unwrap_or_default()
+            .split(',')
+            .filter(|d| !d.is_empty())
+            .map(str::to_owned)
+            .collect();
+        self.port_overrides = port_overrides;
+        self.redirect = "both".to_owned();
+        self.preview = true;
+        self
     }
 
     /// `generateLabelsApplication`'s basic auth arguments. A password that cannot be decrypted
@@ -329,10 +355,13 @@ pub fn traefik(input: &LabelInput, domains: &[String], escape_redirect: bool) ->
         "false"
     };
     // is_retry_enabled
-    labels.push(format!(
-        "traefik.http.middlewares.retry-{u}.retry.attempts=5"
-    ));
-    let from_labels = [format!("retry-{u}")];
+    let mut from_labels: Vec<String> = Vec::new();
+    if !input.preview {
+        labels.push(format!(
+            "traefik.http.middlewares.retry-{u}.retry.attempts=5"
+        ));
+        from_labels.push(format!("retry-{u}"));
+    }
     for (i, domain) in domains.iter().enumerate() {
         let Some(url) = UrlParts::parse(domain) else {
             continue;
@@ -535,9 +564,11 @@ pub fn caddy(input: &LabelInput, domains: &[String]) -> Vec<String> {
                 "caddy_{i}.{handle}.{i}_reverse_proxy={{{{upstreams}}}}"
             )),
         }
-        labels.push(format!(
-            "caddy_{i}.{handle}.{i}_reverse_proxy.lb_try_duration=5s"
-        ));
+        if !input.preview {
+            labels.push(format!(
+                "caddy_{i}.{handle}.{i}_reverse_proxy.lb_try_duration=5s"
+            ));
+        }
         labels.push(format!("caddy_{i}.{handle}={path}*"));
         if input.gzip {
             labels.push(format!("caddy_{i}.encode=zstd gzip"));
@@ -595,7 +626,7 @@ pub fn application(input: &LabelInput) -> Vec<String> {
     };
     let domains: Vec<String> = fqdn.split(',').map(str::to_owned).collect();
     match input.exact_labels.as_deref() {
-        Some("TRAEFIK") => traefik(input, &domains, true),
+        Some("TRAEFIK") => traefik(input, &domains, !input.preview),
         Some("CADDY") => caddy(input, &domains),
         Some(_) => Vec::new(),
         None => {
@@ -613,6 +644,7 @@ pub fn default_labels(
     name: &str,
     environment: &str,
     version: &str,
+    pull_request_id: i64,
 ) -> Vec<String> {
     vec![
         "coolify.managed=true".into(),
@@ -624,7 +656,7 @@ pub fn default_labels(
         format!("coolify.projectName={}", slug(project)),
         format!("coolify.serviceName={}", slug(name)),
         format!("coolify.environmentName={}", slug(environment)),
-        "coolify.pullRequestId=0".into(),
+        format!("coolify.pullRequestId={pull_request_id}"),
     ]
 }
 
@@ -649,6 +681,7 @@ mod tests {
             exact_labels: None,
             traffic_analytics: false,
             basic_auth: None,
+            preview: false,
         }
     }
 

@@ -13,6 +13,18 @@ use crate::databases::env::Var;
 /// The env file name in the working directory and the configuration directory.
 pub const ENV_FILE: &str = concat!(".", "env");
 
+/// `generateApplicationContainerName($application, $pull_request_id)` for a preview.
+pub fn preview_container_name(a: &ApplicationRow, pull_request_id: i64) -> String {
+    let name = if a.setting_bool("is_consistent_container_name_enabled") {
+        a.setting_str("custom_internal_name")
+            .filter(|n| !n.is_empty())
+            .unwrap_or(&a.uuid)
+    } else {
+        &a.uuid
+    };
+    format!("{name}-pr-{pull_request_id}")
+}
+
 /// `generateApplicationContainerName($application, 0)`.
 pub fn container_name(a: &ApplicationRow, now: chrono::NaiveDateTime) -> String {
     if a.setting_bool("is_consistent_container_name_enabled") {
@@ -111,6 +123,9 @@ pub struct EnvContext<'a> {
     pub project_name: Option<&'a str>,
     pub environment_name: Option<&'a str>,
     pub server_ip: Option<&'a str>,
+    /// A preview deployment: `$this->preview->fqdn`, and `variables` holds the deployed preview
+    /// variables.
+    pub preview: Option<Option<&'a str>>,
 }
 
 /// What a Docker Compose deployment adds to the runtime env file.
@@ -149,7 +164,10 @@ pub fn runtime_env(
     variables: &[Var],
     ctx: &EnvContext<'_>,
 ) -> (Vec<String>, Option<String>) {
-    let production: Vec<&Var> = variables.iter().filter(|v| !v.is_preview).collect();
+    let production: Vec<&Var> = variables
+        .iter()
+        .filter(|v| ctx.preview.is_some() || !v.is_preview)
+        .collect();
     let defined = |key: &str| production.iter().any(|v| v.key == key);
     let mut coolify: Vec<(&str, Option<String>)> = Vec::new();
     if !defined("SOURCE_COMMIT") {
@@ -159,7 +177,7 @@ pub fn runtime_env(
         .str("compose_parsing_version")
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(1);
-    let fqdn = a.str("fqdn");
+    let fqdn = ctx.preview.unwrap_or(a.str("fqdn"));
     if !defined("COOLIFY_FQDN") {
         let key = if parsing >= 3 {
             "COOLIFY_URL"
@@ -257,6 +275,7 @@ pub fn runtime_env(
     let ports = main_ports(a);
     let mut warning = None;
     if ctx.compose.is_none()
+        && ctx.preview.is_none()
         && a.setting_bool("is_container_label_readonly_enabled")
         && let Some(port) = production
             .iter()

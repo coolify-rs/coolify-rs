@@ -2323,7 +2323,7 @@ pub async fn deploy(
     if docker_tag.is_some() && tag.is_some() {
         return bad("You can only use tag or docker_tag, not both.");
     }
-    if tag.is_some() || pr != 0 {
+    if tag.is_some() {
         return Err(ApiError::NotPorted);
     }
     let Some(uuids) = uuid else {
@@ -2347,10 +2347,36 @@ pub async fn deploy(
             }
             continue;
         };
+        // by_uuids(): the preview, created for a Docker Image application with a tag.
+        let mut preview_tag = docker_tag.clone();
+        let mut git_type = None;
+        if pr != 0 {
+            let Some(preview) =
+                super::application_previews::deploy_preview(&state, &a, pr, docker_tag.as_deref())
+                    .await?
+            else {
+                items.push(json!({"message": format!("Pull request {pr} not found for this resource."), "resource_uuid": u}));
+                continue;
+            };
+            if a.str("build_pack") == Some("dockerimage") {
+                preview_tag = preview
+                    .get("docker_registry_image_tag")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
+            git_type = preview
+                .get("git_type")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
         if !ctx.is_team_admin() {
             items.push(
                 json!({"message": "Unauthorized to deploy this application.", "resource_uuid": u}),
             );
+            continue;
+        }
+        if preview_tag.is_some() && a.str("build_pack") != Some("dockerimage") {
+            items.push(json!({"message": "docker_tag can only be used with Docker Image applications.", "resource_uuid": u}));
             continue;
         }
         deployable(&state, &a).await?;
@@ -2362,6 +2388,9 @@ pub async fn deploy(
                 QueueOptions {
                     force_rebuild: force,
                     is_api: true,
+                    pull_request_id: pr,
+                    git_type,
+                    docker_registry_image_tag: preview_tag,
                     ..Default::default()
                 },
             )

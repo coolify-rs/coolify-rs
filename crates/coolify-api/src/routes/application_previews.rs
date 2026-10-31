@@ -148,6 +148,58 @@ pub async fn show(
     Ok(ok(format_preview(&preview)).into_response())
 }
 
+/// `$resource->previews()->where('pull_request_id', $pr)->first()`, or
+/// `upsertDockerImagePreview($application, $pr, $dockerTag)` for a Docker Image application.
+pub(crate) async fn deploy_preview(
+    state: &AppState,
+    a: &ApplicationRow,
+    pull_request_id: i64,
+    docker_tag: Option<&str>,
+) -> Result<Option<Record>, ApiError> {
+    use coolify_db::application_ops as store;
+    let existing = store::preview(&state.db, a.id, pull_request_id).await?;
+    if a.str("build_pack") != Some("dockerimage") {
+        return Ok(existing);
+    }
+    let Some(preview) = existing else {
+        let Some(tag) = docker_tag else {
+            return Ok(None);
+        };
+        let preview = store::create_preview(
+            &state.db,
+            &store::NewPreview {
+                application_id: a.id,
+                pull_request_id,
+                pull_request_html_url: String::new(),
+                git_type: None,
+                docker_compose_domains: None,
+                docker_registry_image_tag: Some(tag.to_owned()),
+            },
+            state.now(),
+        )
+        .await?;
+        store_preview_domains(state, a, &preview).await?;
+        return Ok(store::preview(&state.db, a.id, pull_request_id).await?);
+    };
+    let current = preview
+        .get("docker_registry_image_tag")
+        .and_then(Value::as_str);
+    if let Some(tag) = docker_tag.filter(|t| current != Some(*t)) {
+        store::update_preview(
+            &state.db,
+            id_of(&preview),
+            &[(
+                "docker_registry_image_tag",
+                coolify_db::servers::ColumnValue::Text(Some(tag.to_owned())),
+            )],
+            state.now(),
+        )
+        .await?;
+        return Ok(store::preview(&state.db, a.id, pull_request_id).await?);
+    }
+    Ok(Some(preview))
+}
+
 /// `generate_preview_fqdn_compose()` or `generate_preview_fqdn()` for a preview of `a`, saved.
 pub(crate) async fn store_preview_domains(
     state: &AppState,

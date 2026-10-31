@@ -188,7 +188,9 @@ pub async fn unported_parts(db: &Db, id: i64) -> DbResult<Vec<&'static str>> {
             "additional servers",
         ),
         (
-            "SELECT EXISTS (SELECT 1 FROM application_previews WHERE application_id = $1 AND deleted_at IS NULL)",
+            // The job builds the previews of every other build pack.
+            "SELECT EXISTS (SELECT 1 FROM application_previews p JOIN applications a ON a.id = p.application_id \
+             WHERE p.application_id = $1 AND p.deleted_at IS NULL AND a.build_pack = 'dockercompose')",
             "previews",
         ),
     ] {
@@ -445,6 +447,17 @@ pub async fn persistent_volumes(
 ) -> DbResult<Vec<(String, String, Option<String>)>> {
     Ok(sqlx::query_as(
         "SELECT name, mount_path, host_path FROM local_persistent_volumes WHERE resource_type = $1 AND resource_id = $2",
+    )
+    .bind(MORPH)
+    .bind(id)
+    .fetch_all(db.pool())
+    .await?)
+}
+
+/// `is_preview_suffix_enabled` of the persistent volumes, keyed by name.
+pub async fn preview_suffix_volumes(db: &Db, id: i64) -> DbResult<Vec<(String, bool)>> {
+    Ok(sqlx::query_as(
+        "SELECT name, COALESCE(is_preview_suffix_enabled, true) FROM local_persistent_volumes WHERE resource_type = $1 AND resource_id = $2",
     )
     .bind(MORPH)
     .bind(id)

@@ -103,6 +103,13 @@ CASES = {
                               docker_compose_custom_build_command="docker compose nosuchcommand"),
     "custom-start-fail": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests", docker_compose_location="/docker-compose-simple.yaml",
                               docker_compose_custom_start_command="docker compose nosuchcommand"),
+    # Previews through POST /deploy?pr=N (PREVIEWS: the pull request of the repository), after a production deployment.
+    "preview-dockerfile": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
+    "preview-static": dict(build_pack="static", base_directory="/static", ports_exposes="80"),
+    "preview-secrets": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
+    "preview-nixpacks": dict(build_pack="nixpacks", base_directory="/javascript/runtimes/nodejs", ports_exposes="3000"),
+    # A Docker Image preview: deploy 2 is POST /deploy?pr=N&docker_tag=..., which creates the row.
+    "preview-image": dict(docker_registry_image_name="nginx", docker_registry_image_tag="alpine", ports_exposes="80"),
     # Stored past the API's validation: the job refuses it.
     "custom-unsafe": dict(build_pack="dockercompose", base_directory="/internal/compose-parser-tests", docker_compose_location="/docker-compose-simple.yaml"),
 }
@@ -120,6 +127,8 @@ def norm(text, pairs):
     text = re.sub(r"RAILPACK_BUILT_AT=\d+", "RAILPACK_BUILT_AT=T", text)
     # The Compose build fingerprint hashes per-application inputs.
     text = re.sub(r"coolify\.build-fingerprint=[0-9a-f]{64}", "coolify.build-fingerprint=FP", text)
+    # A preview image before the commit is known carries the deployment uuid.
+    text = re.sub(r"pr-(\d+)-[a-z0-9]{24}", r"pr-\1-DEP", text)
     text = re.sub(r"COOLIFY_BUILD_SECRETS_HASH(=|: )[0-9a-f]{64}", r"COOLIFY_BUILD_SECRETS_HASH\1H", text)
     return text
 
@@ -150,7 +159,7 @@ OWN_CREATE = ("compose-files", "inline", "inline-instant", "preserve-compose")
 # Queued by the create request, so the first deployment needs no call.
 INSTANT = ("inline-instant",)
 # How many deployments a case runs, when it is not two.
-DEPLOYS = {"rollback": 3}
+DEPLOYS = {"rollback": 3, "preview-dockerfile": 3}
 # Each side deletes the application through its own API, and the result is compared.
 OWN_DELETE = ("file-storage", "compose-files", "preserve", "preserve-compose")
 # SQL on the created row before the first deployment; {u} is its uuid.
@@ -162,11 +171,17 @@ PREPARE_SQL = {"basic-auth-generated": "UPDATE applications SET custom_labels = 
                "custom-secrets": BUILD_SECRETS, "preserve": PRESERVE, "preserve-compose": PRESERVE, "custom-preserve": PRESERVE,
                "custom-raw": SETTING.replace("{col}", "is_raw_compose_deployment_enabled"),
                "raw": SETTING.replace("{col}", "is_raw_compose_deployment_enabled"),
+               "preview-secrets": BUILD_SECRETS,
                "custom-unsafe": "UPDATE applications SET docker_compose_custom_start_command = 'echo $(id)' WHERE uuid = '{u}'"}
 # POST /applications/{uuid}/envs through the reference, for both rows.
 SECRET_ENV = [{"key": "DIFF_SECRET", "value": "hunter2-secret", "is_buildtime": True, "is_runtime": True},
               {"key": "DIFF_MULTI", "value": "line one\nline two", "is_multiline": True, "is_buildtime": True, "is_runtime": False}]
-ENVS = {"secrets": SECRET_ENV, "secrets-inline": SECRET_ENV, "secrets-nixpacks": SECRET_ENV[:1], "secrets-compose": SECRET_ENV[:1]}
+ENVS = {"preview-dockerfile": SECRET_ENV, "preview-secrets": SECRET_ENV, "secrets": SECRET_ENV, "secrets-inline": SECRET_ENV, "secrets-nixpacks": SECRET_ENV[:1], "secrets-compose": SECRET_ENV[:1]}
+# Pull request deployed by deploy 2 of these cases, with the commit it deploys at the head of the repository.
+PREVIEW_PR = 74
+# The tree of that pull request is older: the application's base directory for the preview.
+PREVIEW_BASE = {"preview-dockerfile": "/dockerfile", "preview-secrets": "/dockerfile", "preview-static": "/static", "preview-nixpacks": "/nodejs"}
+PREVIEW_CASES = ("preview-dockerfile", "preview-static", "preview-secrets", "preview-nixpacks", "preview-image")
 # Cases that also compare the hidden log: build.sh and the steps BuildKit prints, which show the rewritten Dockerfile.
 HIDDEN_CASES = {"secrets", "secrets-inline", "secrets-nixpacks", "secrets-compose", "custom-commands", "custom-flags", "custom-secrets"}
 # A file in the running image: what the build saw.
@@ -249,7 +264,11 @@ def main():
                 ips = {"ref": f"{prefix}.201", "rs": f"{prefix}.202"}
             for side in ("ref", "rs"):
                 spec = {k: v.replace("{seccomp}", seccomp).replace("{ip}", ips.get(side, "")).replace("{name}", f"{case}-{side}") if isinstance(v, str) else v for k, v in template.items()}
-                if "dockerfile" in spec:
+                if "docker_registry_image_name" in spec:
+                    body = dict(server_uuid=a.server, project_uuid=project, environment_name="production", name=f"{case}-{side}",
+                                **{"instant_deploy": False, **spec})
+                    c, r = call(side, "POST", "/api/v1/applications/dockerimage", body, tok="acme_owner_root")
+                elif "dockerfile" in spec:
                     body = dict(server_uuid=a.server, project_uuid=project, environment_name="production", name=f"{case}-{side}",
                                 **{"instant_deploy": False, **spec})
                     c, r = call(side, "POST", "/api/v1/applications/dockerfile", body, tok="acme_owner_root")
@@ -308,9 +327,18 @@ def main():
                 for side, u in (("ref", ur), ("rs", us)):
                     if n == 1 and case in INSTANT:
                         continue
+                    if n == 2 and case in PREVIEW_BASE:
+                        sql(f"UPDATE applications SET base_directory = '{PREVIEW_BASE[case]}' WHERE uuid = '{u}'")
                     if case == "rollback" and n > 1:
                         target = first_commit if n == 2 else ROLLBACK_COMMIT
                         c, r = call(side, "POST", f"/api/v1/applications/{u}/rollback", {"commit": target}, tok="acme_owner_root")
+                    elif case == "preview-image" and n == 2:
+                        c, r = call(side, "POST", f"/api/v1/deploy?uuid={u}&pr={PREVIEW_PR}&docker_tag=1.27-alpine", {}, tok="acme_owner_root")
+                    elif case in PREVIEW_CASES and n == 2:
+                        c, r = call(side, "POST", f"/api/v1/applications/{u}/previews", {"pull_request_id": PREVIEW_PR, "pull_request_html_url": f"{REPO}/pull/{PREVIEW_PR}", "git_type": "github", "instant_deploy": True}, tok="acme_owner_root")
+                        c = 200 if c == 201 else c
+                    elif case in PREVIEW_CASES and n == 3:
+                        c, r = call(side, "POST", f"/api/v1/deploy?uuid={u}&pr={PREVIEW_PR}", {}, tok="acme_owner_root")
                     else:
                         c, r = deploy(side, u)
                     if c != 200:
@@ -409,6 +437,24 @@ def main():
                     seen.append(sorted(norm(l, [(u, "U"), (f"{case}-ref", "NAME"), (f"{case}-rs", "NAME")]) for l in text.splitlines() if not l.startswith(("HOSTNAME=", "SOURCE_COMMIT="))))
                 record(f"[{case}] the build saw the same variables", seen[0] == seen[1] and seen[0] != [], "\n".join(difflib.unified_diff(seen[0], seen[1], lineterm="")))
                 record(f"[{case}] the build saw the secret", any("hunter2-secret" in l for l in seen[0]), seen[0])
+            if case in PREVIEW_CASES:
+                seen = []
+                time.sleep(10)  # GetContainersStatus, dispatched by the end of the deployment
+                for u in (ur, us):
+                    row = sql(f"SELECT row_to_json(p)::text FROM application_previews p WHERE application_id = (SELECT id FROM applications WHERE uuid = '{u}') AND pull_request_id = {PREVIEW_PR}")
+                    row = json.loads(row or "{}")
+                    prod = vm(f"docker ps -a --filter label=coolify.applicationUuid={u} --filter label=coolify.pullRequestId=0 --format '{{{{.State}}}} {{{{.Image}}}}'").strip()
+                    pr = vm(f"docker ps -a --filter label=coolify.applicationUuid={u} --filter label=coolify.pullRequestId={PREVIEW_PR} --format '{{{{.Names}}}} {{{{.State}}}} {{{{.Image}}}}'").strip()
+                    labels = vm(f"docker inspect --format '{{{{json .Config.Labels}}}}' {u}-pr-{PREVIEW_PR}")
+                    fqdn = row.get("fqdn") or ""
+                    host = fqdn.split("://", 1)[-1].split("/")[0]
+                    labels = re.sub(r'"(com\.docker\.compose\.[^"]*)":"[^"]*"', r'"\1":""', labels)
+                    code = vm(f"curl -s -o /dev/null -w '%{{http_code}}' -H 'Host: {host}' http://127.0.0.1/")
+                    pairs = [(u, "U"), (commit or "", "SHA"), (f"{case}-ref", "NAME"), (f"{case}-rs", "NAME"), (host, "HOST")]
+                    pr_file = vm(f"cat /data/coolify/applications/{u}/docker-compose-pr-{PREVIEW_PR}.yaml")
+                    seen.append(dict(prod=norm(prod, pairs), pr=norm(pr, pairs), labels=norm(labels, pairs), code=code, file=norm(pr_file, pairs).replace(host, "HOST"),
+                                     row={k: norm(str(row.get(k)), pairs) for k in ("pull_request_id", "docker_compose_domains", "pull_request_html_url", "domain_port_overrides", "docker_registry_image_tag", "status", "restart_count")}))
+                record(f"[{case}] the preview runs beside production alike", seen[0] == seen[1] and "running" in seen[0]["prod"] and "running" in seen[0]["pr"], "\n".join(difflib.unified_diff(json.dumps(seen[0], indent=0).splitlines(), json.dumps(seen[1], indent=0).splitlines(), lineterm="")))
             ip_pairs = [(ip, "IP") for ip in ips.values()]
             if case == "rollback":
                 images = [vm(f"docker ps --filter label=coolify.applicationUuid={u} --format '{{{{.Image}}}}'").strip() for u in (ur, us)]

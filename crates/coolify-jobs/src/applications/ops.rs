@@ -72,6 +72,14 @@ fn normalized(
     (fqdn, json)
 }
 
+/// `DomainPortOverrides::normalize($fqdn, $overrides)` for a saved preview.
+pub fn normalized_domains(
+    fqdn: Option<&str>,
+    overrides: &BTreeMap<String, i64>,
+) -> (Option<String>, Option<String>) {
+    normalized(fqdn, overrides)
+}
+
 /// `generate_preview_fqdn()`: `None` when the application has no domain (nothing is saved then).
 pub fn preview_fqdn(
     application_fqdn: Option<&str>,

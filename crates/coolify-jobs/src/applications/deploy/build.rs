@@ -196,7 +196,7 @@ impl Run {
         self.app.str("build_pack").unwrap_or_default().to_owned()
     }
 
-    fn branch_name(&self) -> String {
+    pub(super) fn branch_name(&self) -> String {
         self.app.str("git_branch").unwrap_or_default().to_owned()
     }
 
@@ -208,6 +208,8 @@ impl Run {
         let bp = self.build_pack();
         if bp == "dockerimage" {
             self.deploy_docker_image().await?;
+        } else if self.b.is_preview() {
+            self.deploy_pull_request().await?;
         } else if self.app.str("dockerfile").is_some_and(|d| !d.is_empty()) {
             self.deploy_simple_dockerfile().await?;
         } else {
@@ -396,10 +398,10 @@ impl Run {
     async fn railpack_build_variables(&mut self) -> Result<Vec<(String, String)>, Fail> {
         let generic = self.buildtime_variables(false).await?;
         let railpack: Vec<Var> = self
-            .variables()
+            .deployed_variables()
             .await?
             .into_iter()
-            .filter(|v| !v.is_preview && v.key.starts_with("RAILPACK_") && valid_env_key(&v.key))
+            .filter(|v| v.key.starts_with("RAILPACK_") && valid_env_key(&v.key))
             .collect();
         let mut map = Ordered::default();
         for v in generic.iter().chain(railpack.iter()) {
@@ -526,7 +528,7 @@ impl Run {
     }
 
     /// `build_railpack_image()`.
-    async fn build_railpack_image(&mut self) -> Step {
+    pub(super) async fn build_railpack_image(&mut self) -> Step {
         if !self.b.buildx {
             return Err(Fail::new(
                 "Railpack deployments require the Docker buildx CLI plugin on the build server. Install or enable docker buildx and retry the deployment.",
@@ -763,20 +765,24 @@ impl Run {
     /// minus invalid keys, ordered by key or id when `sorted`, else in table order.
     async fn buildtime_variables(&mut self, sorted: bool) -> Result<Vec<Var>, Fail> {
         let vars: Vec<Var> = self
-            .variables()
+            .deployed_variables()
             .await?
             .into_iter()
-            .filter(|v| {
-                !v.is_preview
-                    && v.is_buildtime
-                    && !buildpack_control(&v.key)
-                    && valid_env_key(&v.key)
-            })
+            .filter(|v| v.is_buildtime && !buildpack_control(&v.key) && valid_env_key(&v.key))
             .collect();
         if !sorted {
             return Ok(vars);
         }
         let by_key = self.app.setting_bool("is_env_sorting_enabled");
+        if self.b.is_preview() {
+            let mut vars = vars;
+            if by_key {
+                vars.sort_by(|a, b| a.key.cmp(&b.key));
+            } else {
+                vars.sort_by_key(|v| v.id);
+            }
+            return Ok(vars);
+        }
         let order =
             git_sources::variable_ids_ordered(&self.jobs.0.db, apps::MORPH, self.app.id, by_key)
                 .await
@@ -791,10 +797,10 @@ impl Run {
         Ok(vars)
     }
 
-    /// `generate_coolify_env_variables($forBuildTime)` (pull request 0).
+    /// `generate_coolify_env_variables($forBuildTime)`.
     async fn coolify_env(&mut self, for_build: bool) -> Result<Ordered, Fail> {
-        let vars = self.variables().await?;
-        let defined = |k: &str| vars.iter().any(|v| !v.is_preview && v.key == k);
+        let vars = self.deployed_variables().await?;
+        let defined = |k: &str| vars.iter().any(|v| v.key == k);
         let mut out = Ordered::default();
         if (!for_build || self.app.setting_bool("include_source_commit_in_build"))
             && !defined("SOURCE_COMMIT")
@@ -802,7 +808,7 @@ impl Run {
             out.put("SOURCE_COMMIT", Some(self.commit.clone()));
         }
         let parsing = self.parsing_version();
-        let fqdn = self.app.str("fqdn").map(str::to_owned);
+        let fqdn = self.deployed_fqdn();
         if !defined("COOLIFY_FQDN") {
             out.put(
                 if parsing >= 3 {
@@ -922,6 +928,8 @@ impl Run {
             commit: &self.commit,
             private_key: key.as_deref(),
             github_token: self.b.github_token.as_deref(),
+            pull_request_id: self.b.pull_request_id,
+            git_type: self.b.git_type.as_deref(),
         })
         .map_err(Fail::new)?;
         self.b.branch = import.branch.clone();
@@ -973,8 +981,18 @@ impl Run {
                     .insert("repository_project_id".into(), Value::from(id));
             }
         }
+        self.resolve_bitbucket_pull_request_commit().await?;
         self.git_import().await?;
-        let reference = format!("refs/heads/{}", self.b.branch);
+        let pull_request_id = self.b.pull_request_id;
+        let reference = if pull_request_id == 0 {
+            format!("refs/heads/{}", self.b.branch)
+        } else {
+            match self.b.git_type.as_deref() {
+                Some("github" | "gitea") => format!("refs/pull/{pull_request_id}/head"),
+                Some("gitlab") => format!("refs/merge-requests/{pull_request_id}/head"),
+                _ => format!("pull/{pull_request_id}/head"),
+            }
+        };
         // `data_get($this->application, 'private_key.private_key')`
         let key = self.private_key().await?;
         let commands = match key {
@@ -1099,7 +1117,8 @@ impl Run {
                 git::shell_value(&self.commit)
             ));
         }
-        if let Some(fqdn) = self.app.str("fqdn") {
+        let deployed_fqdn = self.deployed_fqdn();
+        if let Some(fqdn) = deployed_fqdn.as_deref() {
             let domains: Vec<String> = valid_domains(fqdn);
             if !domains.is_empty() {
                 let url = domains
@@ -1144,6 +1163,13 @@ impl Run {
             self.commit
         ))
         .await;
+        if self.b.is_preview() {
+            self.info(&format!(
+                "Checking out tag pull/{}/head.",
+                self.b.pull_request_id
+            ))
+            .await;
+        }
         let max_attempts = 3;
         let mut attempt = 1;
         loop {
@@ -1218,6 +1244,25 @@ impl Run {
     /// `generate_image_names()` for a git application.
     pub(super) fn generate_image_names(&mut self) {
         let tag: String = self.commit.chars().take(128).collect();
+        let is_inline = self.app.str("dockerfile").is_some_and(|d| !d.is_empty());
+        if self.b.is_preview() && !is_inline {
+            let (pr, name) = (
+                self.b.pull_request_id,
+                self.app
+                    .str("docker_registry_image_name")
+                    .filter(|n| !n.is_empty())
+                    .map_or_else(|| self.app.uuid.clone(), str::to_owned),
+            );
+            self.b.build_image = format!(
+                "{name}:{}",
+                super::preview::preview_image_tag(pr, &self.commit, &self.dep, true)
+            );
+            self.b.production_image = format!(
+                "{name}:{}",
+                super::preview::preview_image_tag(pr, &self.commit, &self.dep, false)
+            );
+            return;
+        }
         let name = self
             .app
             .str("docker_registry_image_name")
@@ -1458,7 +1503,7 @@ impl Run {
     }
 
     /// `save_buildtime_environment_variables()`.
-    async fn save_buildtime_environment_variables(&mut self) -> Step {
+    pub(super) async fn save_buildtime_environment_variables(&mut self) -> Step {
         self.save_buildtime_environment_variables_with(None).await
     }
 
@@ -1659,11 +1704,12 @@ impl Run {
 
     /// `analyzeBuildTimeVariables($variables)`.
     async fn analyze_build_time_variables(&mut self, variables: &[(String, String)]) -> Step {
+        let preview = self.b.is_preview();
         let user: Vec<String> = self
             .variables()
             .await?
             .into_iter()
-            .filter(|v| !v.is_preview && v.is_buildtime)
+            .filter(|v| v.is_preview == preview && v.is_buildtime)
             .map(|v| v.key)
             .collect();
         let warnings: Vec<(&str, &str, &str, &str, &str)> = variables
@@ -1711,7 +1757,7 @@ impl Run {
     }
 
     /// `add_build_env_variables_to_dockerfile()`.
-    async fn add_build_env_variables_to_dockerfile(&mut self) -> Step {
+    pub(super) async fn add_build_env_variables_to_dockerfile(&mut self) -> Step {
         if self.b.secrets_supported {
             // The variables are passed with the --secret flag.
             return Ok(());
@@ -1868,7 +1914,7 @@ impl Run {
     }
 
     /// `build_static_image()`.
-    async fn build_static_image(&mut self) -> Step {
+    pub(super) async fn build_static_image(&mut self) -> Step {
         self.info(SEPARATOR).await;
         self.info("Static deployment. Copying static assets to the image.")
             .await;
@@ -1916,7 +1962,7 @@ impl Run {
     }
 
     /// `build_image()`.
-    async fn build_image(&mut self) -> Step {
+    pub(super) async fn build_image(&mut self) -> Step {
         if !self.b.secrets_supported {
             for (key, _) in self.coolify_env(true).await?.0 {
                 self.validated_buildtime_key(&key, "the Coolify build environment")
@@ -2088,7 +2134,7 @@ impl Run {
     }
 
     /// `push_to_docker_registry()`.
-    async fn push_to_docker_registry(&mut self) -> Step {
+    pub(super) async fn push_to_docker_registry(&mut self) -> Step {
         let Some(name) = self
             .app
             .str("docker_registry_image_name")
@@ -2121,7 +2167,7 @@ impl Run {
             if let Some(tag) = self
                 .app
                 .str("docker_registry_image_tag")
-                .filter(|t| !t.trim().is_empty())
+                .filter(|t| !t.trim().is_empty() && !self.b.is_preview())
                 .map(str::to_owned)
             {
                 self.info(&format!("Tagging and pushing image with {tag} tag."))
@@ -2160,7 +2206,7 @@ impl Run {
     }
 
     /// `generate_nixpacks_confs()`.
-    async fn generate_nixpacks_confs(&mut self) -> Step {
+    pub(super) async fn generate_nixpacks_confs(&mut self) -> Step {
         let command = self.nixpacks_build_cmd().await?;
         self.info(&format!(
             "Generating nixpacks configuration with: {command}"
@@ -2318,8 +2364,8 @@ impl Run {
     /// `nixpacks_build_cmd()` with `generate_nixpacks_env_variables()`.
     async fn nixpacks_build_cmd(&mut self) -> Result<String, Fail> {
         let mut args: Vec<String> = Vec::new();
-        for v in self.variables().await? {
-            if v.is_preview || !v.key.starts_with("NIXPACKS_") {
+        for v in self.deployed_variables().await? {
+            if !v.key.starts_with("NIXPACKS_") {
                 continue;
             }
             let literal = v.is_literal || v.is_multiline;
