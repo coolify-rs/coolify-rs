@@ -8,6 +8,7 @@
   import Listbox from './Listbox.svelte';
   import Modal from './Modal.svelte';
   import Reicon from './Reicon.svelte';
+  import ServiceDomainConflict from './ServiceDomainConflict.svelte';
   import StatusBadge from './StatusBadge.svelte';
   import { ApiError } from '../lib/api';
   import { headline, servicesApi, type ServiceResourceDetails } from '../lib/servicesApi';
@@ -55,7 +56,7 @@
 
   let saving = $state(false);
   let error = $state<ApiError | null>(null);
-  let conflicts = $state<{ domain: string; resource_name: string; resource_type: string; message: string }[] | null>(null);
+  let conflicts = $state<{ domain: string; resource_name: string; resource_type: string; resource_link?: string | null }[] | null>(null);
   let requiredPort = $state<number | null>(null);
   let forceDomains = false;
   let forcePort = false;
@@ -335,38 +336,21 @@
 </form>
 
 {#if conflicts}
-  <!-- components/domain-conflict-modal.blade.php -->
-  <Modal title="Domain Already In Use" onclose={() => (conflicts = null)}>
-    <div class="flex flex-col gap-4">
-      <Callout type="danger" title="Warning: Domain Conflict">
-        <ul class="mt-2 ml-4 list-disc">
-          {#each conflicts as c (c.domain + c.resource_name)}
-            <li>{c.message}</li>
-          {/each}
-        </ul>
-      </Callout>
-      <Callout type="warning" title="What will happen if you continue?">
-        <ul class="mt-2 ml-4 list-disc">
-          <li>Only one service will be accessible at this domain</li>
-          <li>The routing behavior will be unpredictable</li>
-          <li>You may experience service disruptions</li>
-          <li>SSL certificates might not work correctly</li>
-        </ul>
-      </Callout>
-      <div class="flex flex-wrap justify-end gap-2">
-        <button type="button" class="button" onclick={() => (conflicts = null)}>Cancel</button>
-        <button
-          type="button"
-          class="button button-error"
-          onclick={() => {
-            conflicts = null;
-            forceDomains = true;
-            submit();
-          }}>I understand, proceed anyway</button
-        >
-      </div>
-    </div>
-  </Modal>
+  <ServiceDomainConflict
+    {conflicts}
+    consequences={[
+      'Only one service will be accessible at this domain',
+      'The routing behavior will be unpredictable',
+      'You may experience service disruptions',
+      'SSL certificates might not work correctly',
+    ]}
+    onproceed={() => {
+      conflicts = null;
+      forceDomains = true;
+      submit();
+    }}
+    onclose={() => (conflicts = null)}
+  />
 {/if}
 
 {#if requiredPort !== null}

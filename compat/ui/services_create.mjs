@@ -35,8 +35,11 @@ const rs = await session(`http://127.0.0.1:${rsPort}`);
 await rs.goto(`http://127.0.0.1:${rsPort}/project/${project}/environment/${env}/new`);
 await rs.waitForSelector('article[aria-label^="Deploy "]', { timeout: 30000 });
 await rs.fill('input[type=search]', template.replace(/-/g, ' ').split(' ')[0]);
-const card = rs.locator(`article[aria-label^="Deploy "]`, { hasText: new RegExp(template.split('-').join('.*'), 'i') }).first();
-await card.click();
+const headline = template
+  .split('-')
+  .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+  .join(' ');
+await rs.locator(`article[aria-label="Deploy ${headline}"]`).first().click();
 for (let i = 0; i < 40 && !/\/service\//.test(rs.url()); i++) {
   const server = rs.getByText(serverName, { exact: true });
   if (await server.count()) await server.first().click().catch(() => {});

@@ -5,7 +5,6 @@
   import Callout from './Callout.svelte';
   import Checkbox from './Checkbox.svelte';
   import FormInput from './FormInput.svelte';
-  import FormTextarea from './FormTextarea.svelte';
   import Helper from './Helper.svelte';
   import Listbox from './Listbox.svelte';
   import Modal from './Modal.svelte';
@@ -202,11 +201,11 @@
       >
         {#if preview}
           <div class="font-mono">
-            <FormTextarea id="dockerCompose" monospace readonly rows={20} value={data.service.docker_compose ?? ''} />
+            <textarea id="dockerCompose" class="input min-h-[24rem] font-mono" style="height: var(--editor-height)" readonly value={data.service.docker_compose ?? ''}></textarea>
           </div>
         {:else if plainEditor}
           <div class="font-mono">
-            <FormTextarea id="dockerComposeRaw" monospace rows={20} bind:value={raw} />
+            <textarea id="dockerComposeRaw" class="input min-h-[24rem] font-mono" style="height: var(--editor-height)" bind:value={raw}></textarea>
           </div>
         {:else}
           <div class="font-mono"><MonacoEditor bind:value={raw} language="yaml" /></div>

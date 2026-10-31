@@ -4,6 +4,7 @@
   // to this page: a compose resource is edited in the modal of its card.
   // `Project/Shared/*` sections are placeholders until the shared components are connected.
   import Empty from '../components/Empty.svelte';
+  import ServiceDomains from '../components/ServiceDomains.svelte';
   import Reicon from '../components/Reicon.svelte';
   import ServiceHeading from '../components/ServiceHeading.svelte';
   import ServiceResourceCard from '../components/ServiceResourceCard.svelte';
@@ -157,6 +158,9 @@
                 </div>
               </SettingsSection>
             </div>
+          {:else if section === 'domains'}
+            <ServiceDomains serviceUuid={service} />
+            <div class="mt-6"><ServiceSharedPlaceholder section="Project/Shared/Maintenance" /></div>
           {:else if section === 'storages'}
             <div class="space-y-6">
               <div

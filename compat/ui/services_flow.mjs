@@ -103,6 +103,104 @@ const stepsImpl = {
     await p.getByRole('button', { name: /^Directories \(/ }).first().click();
     await p.waitForTimeout(1500);
   },
+  domains: async (p, base) => {
+    await p.goto(base + '/domains');
+    await p.waitForTimeout(2500);
+  },
+  domainedit: async (p) => {
+    await p.locator('[aria-label^="Settings for "]:visible').first().click();
+    await p.waitForTimeout(1000);
+  },
+  domainadd: async (p) => {
+    await p.getByRole('button', { name: 'Add domain' }).locator('visible=true').first().click();
+    await p.waitForTimeout(700);
+    await p.locator('#newDomainParts-host').fill('app.flow-test.example.test');
+    await p.waitForTimeout(300);
+    await p.keyboard.press('Enter');
+    await p.waitForTimeout(3000);
+  },
+  domainportforce: async (p) => {
+    await p.getByRole('button', { name: 'Use this port anyway' }).click();
+    await p.waitForTimeout(3000);
+  },
+  proceed: async (p) => {
+    const b = p.getByRole('button', { name: 'Proceed anyway' });
+    if (await b.count()) await b.first().click();
+    await p.waitForTimeout(3000);
+  },
+  port: async (p) => {
+    const b = p.getByRole('button', { name: 'Use this port anyway' });
+    if (await b.count()) await b.first().click();
+    await p.waitForTimeout(3000);
+  },
+  domaineditsave: async (p) => {
+    await p.locator('[aria-label^="Settings for "]:visible').last().click();
+    await p.waitForTimeout(800);
+    await p.locator('#editingDomainParts-host').fill('app2.flow-test.example.test');
+    await p.locator('#editingDomainParts-port').fill('8123');
+    await p.waitForTimeout(300);
+    await visible(p, 'Save').click();
+    await p.waitForTimeout(3000);
+  },
+  domainremove: async (p) => {
+    await p.locator('[aria-label="Remove domain"]:visible').last().click();
+    await p.waitForTimeout(600);
+    await visible(p, 'Continue').click();
+    await p.waitForTimeout(400);
+    await visible(p, 'Remove domain').click();
+    await p.waitForTimeout(3000);
+  },
+  partedit: async (p) => {
+    await p.locator('[aria-label="Resource settings"]:visible').first().click();
+    await p.waitForTimeout(2500);
+    await p.locator('input#humanName, input[wire\\:model="humanName"]').locator('visible=true').first().fill('Part human name');
+    await p.locator('input#description, input[wire\\:model="description"]').locator('visible=true').last().fill('Part description');
+    await p.locator('input#maxRestartCount, input[wire\\:model="maxRestartCount"]').locator('visible=true').first().fill('7');
+    await visible(p, 'Save changes').click();
+    await p.waitForTimeout(3000);
+  },
+  partconvert: async (p) => {
+    await p.locator('[aria-label="Resource settings"]:visible').first().click();
+    await p.waitForTimeout(2500);
+    await visible(p, 'Convert to Database').click();
+    await p.waitForTimeout(800);
+    await p.locator('input:visible').last().fill('Filebrowser');
+    await visible(p, 'Continue').click();
+    await p.waitForTimeout(500);
+    await p.locator('input[type=password]:visible').last().fill(secret);
+    await visible(p, 'Confirm').dispatchEvent('click');
+    await p.waitForTimeout(4000);
+  },
+  dbdelete: async (p) => {
+    await p.locator('[aria-label="Resource settings"]:visible').last().click();
+    await p.waitForTimeout(2500);
+    await visible(p, 'Delete').click();
+    await p.waitForTimeout(800);
+    await p.locator('input:visible').last().fill('Redis');
+    await visible(p, 'Continue').click();
+    await p.waitForTimeout(500);
+    await p.locator('input[type=password]:visible').last().fill(secret);
+    await visible(p, 'Confirm').dispatchEvent('click');
+    await p.waitForTimeout(4000);
+  },
+  composeedit: async (p) => {
+    await p.getByRole('button', { name: 'Edit Compose file' }).first().click();
+    await p.waitForTimeout(3000);
+    await p.getByText('Use plain-text editor', { exact: false }).locator('visible=true').first().click();
+    await p.waitForTimeout(500);
+    const area = p.locator('textarea:visible').first();
+    const value = await area.inputValue();
+    await area.fill(value.replace('services:', 'services:\n  extra:\n    image: nginx:alpine'));
+    await p.waitForTimeout(500);
+    await visible(p, 'Save changes').dispatchEvent('click');
+    await p.waitForTimeout(9000);
+  },
+  partsave: async (p) => {
+    await p.locator('[aria-label="Resource settings"]:visible').first().click();
+    await p.waitForTimeout(2500);
+    await visible(p, 'Save changes').dispatchEvent('click');
+    await p.waitForTimeout(4000);
+  },
   home: async (p, base) => {
     await p.goto(base);
     await p.waitForTimeout(2500);
@@ -126,16 +224,17 @@ for (const [, page, base] of sides) {
 let n = 0;
 for (const step of steps) {
   n++;
-  await Promise.all(
-    sides.map(async ([label, page, base]) => {
-      try {
-        await stepsImpl[step](page, base);
-      } catch (e) {
-        console.log(step, label, 'failed:', String(e).split('\n')[0].slice(0, 200));
-      }
-      await page.screenshot({ path: `${out}svcflow-${step}-${label}.png` });
-    }),
-  );
+  const run = async ([label, page, base]) => {
+    try {
+      await stepsImpl[step](page, base);
+    } catch (e) {
+      console.log(step, label, 'failed:', String(e).split('\n')[0].slice(0, 200));
+    }
+    await page.screenshot({ path: `${out}svcflow-${step}-${label}.png` });
+  };
+  // Long waits run side by side; domain steps one side at a time, since they see each other's rows.
+  if (step === 'deploy' || step === 'stop') await Promise.all(sides.map(run));
+  else for (const side of sides) await run(side);
   console.log('done', step);
 }
 await browser.close();

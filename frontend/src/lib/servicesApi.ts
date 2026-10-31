@@ -138,6 +138,49 @@ export interface ServiceListItem {
   tags: { id: number | string; name: string }[];
 }
 
+export interface DomainParts {
+  scheme: string;
+  host: string;
+  port: string;
+  path: string;
+}
+
+export interface ServiceDomainApp {
+  id: number;
+  uuid: string;
+  name: string;
+  image: string | null;
+  required_port: number | null;
+  redirect: string;
+  force_https: boolean;
+  permanent_redirect: boolean;
+}
+
+export interface ServiceDomainRow {
+  service_application_id: number;
+  url: string;
+  public_url: string;
+  internal_port: number | null;
+  has_port_override: boolean;
+  dns_status: string;
+  dns_message: string;
+  is_noindexed: boolean;
+  editing_parts: DomainParts;
+}
+
+export interface ServiceDomains {
+  apps: ServiceDomainApp[];
+  rows: ServiceDomainRow[];
+  can_update: boolean;
+}
+
+interface DomainAnswer {
+  message?: string;
+  warnings?: string[];
+  domain_conflicts?: { domain: string; resource_name: string; resource_link?: string | null; resource_type: string }[];
+  port_warning?: number;
+}
+
 const base = (uuid: string) => `/ui/services/${encodeURIComponent(uuid)}`;
 const part = (uuid: string, resource: string) => `${base(uuid)}/resources/${encodeURIComponent(resource)}`;
 
@@ -161,7 +204,7 @@ export const servicesApi = {
     request<{
       message?: string;
       warning?: string | null;
-      domain_conflicts?: { domain: string; resource_name: string; resource_type: string; message: string }[];
+      domain_conflicts?: { domain: string; resource_name: string; resource_type: string; resource_link?: string | null; message: string }[];
       port_warning?: number;
     }>('PATCH', part(uuid, resource), body),
   deleteResource: (uuid: string, resource: string, password: string) =>
@@ -173,6 +216,13 @@ export const servicesApi = {
     request<{ message: string }>('POST', `${part(uuid, resource)}/settings`, body),
   publicAccess: (uuid: string, resource: string, body: Record<string, unknown>) =>
     request<{ message: string }>('POST', `${part(uuid, resource)}/public`, body),
+  domains: (uuid: string) => request<ServiceDomains>('GET', `${base(uuid)}/domains`),
+  addDomain: (uuid: string, body: Record<string, unknown>) => request<DomainAnswer>('POST', `${base(uuid)}/domains`, body),
+  updateDomain: (uuid: string, body: Record<string, unknown>) => request<DomainAnswer>('PATCH', `${base(uuid)}/domains`, body),
+  removeDomain: (uuid: string, body: Record<string, unknown>) => request<DomainAnswer>('DELETE', `${base(uuid)}/domains`, body),
+  domainSettings: (uuid: string, body: Record<string, unknown>) =>
+    request<{ message: string }>('POST', `${base(uuid)}/domains/settings`, body),
+  generateDomain: (uuid: string) => request<{ parts: DomainParts }>('POST', `${base(uuid)}/domains/generate`, {}),
   storages: (uuid: string) => request<{ parts: ServiceStoragePart[] }>('GET', `${base(uuid)}/storages`),
   saveFile: (uuid: string, id: number, content: string | null) =>
     request<{ message: string }>('PATCH', `${base(uuid)}/file-storages/${id}`, { content }),

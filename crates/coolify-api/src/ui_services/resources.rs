@@ -176,7 +176,7 @@ fn errors_one(key: &str, message: String) -> ApiError {
 }
 
 /// `ServiceApplication::portRequiresConfirmation`.
-fn port_requires_confirmation(
+pub(super) fn port_requires_confirmation(
     sub: &SubRow,
     fqdn: &str,
     required: i64,
@@ -285,9 +285,7 @@ async fn submit_application(
     let force_domains = flag(body, "force_domains", false);
     if !force_domains && let Some(n) = &normalized {
         let list: Vec<String> = n.split(',').map(str::to_owned).collect();
-        let conflicts =
-            crate::routes::services::domain_conflicts(state, ctx.team_id, &list, &part.uuid)
-                .await?;
+        let conflicts = super::domain_conflicts(state, s, &list).await?;
         if !conflicts.is_empty() {
             return Ok(ok(json!({"domain_conflicts": conflicts})).into_response());
         }
@@ -356,7 +354,7 @@ async fn submit_application(
     let multiple = normalized.as_deref().is_some_and(|f| f.contains(','));
     Ok(ok(json!({
         "message": "Service saved.",
-        "warning": multiple.then_some("Some services do not support multiple domains, which can lead to problems and is NOT RECOMMENDED."),
+        "warning": multiple.then_some("Some services do not support multiple domains, which can lead to problems and is NOT RECOMMENDED.<br><br>Only use multiple domains if you know what you are doing."),
     }))
     .into_response())
 }

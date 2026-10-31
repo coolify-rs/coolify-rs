@@ -2,6 +2,7 @@
 //! `StackForm`, `EditCompose`, `Heading`, `ResourceCard`, the one-click part of
 //! `Project\Resource\Create` and of `Project\New\Select`.
 
+pub mod domains;
 pub mod extra_fields;
 pub mod resources;
 pub mod storage;
@@ -73,6 +74,21 @@ pub fn routes(state: AppState) -> Router<AppState> {
             post(resources::public_access),
         )
         .route("/ui/services/{uuid}/storages", get(storage::index))
+        .route(
+            "/ui/services/{uuid}/domains",
+            get(domains::index)
+                .post(domains::add)
+                .patch(domains::update)
+                .delete(domains::remove),
+        )
+        .route(
+            "/ui/services/{uuid}/domains/settings",
+            post(domains::settings),
+        )
+        .route(
+            "/ui/services/{uuid}/domains/generate",
+            post(domains::generate),
+        )
         .route(
             "/ui/services/{uuid}/file-storages/{id}",
             axum::routing::patch(storage::file_save).delete(storage::file_delete),
@@ -193,6 +209,29 @@ pub(crate) fn resource_logo(s: &ServiceRow) -> Value {
             json!({"src": src, "fallback": cdn})
         }
     }
+}
+
+/// `checkDomainUsage(resource: $app)`: other resources that use one of the domains. The other
+/// compose applications of the same service are not listed.
+pub(crate) async fn domain_conflicts(
+    state: &AppState,
+    s: &ServiceRow,
+    domains: &[String],
+) -> Result<Vec<Value>, ApiError> {
+    let own = format!("/service/{}", s.uuid);
+    let mut out = Vec::new();
+    for d in domains {
+        for conflict in crate::ui_settings::domain_usage(state, d).await? {
+            let mine = conflict
+                .get("resource_link")
+                .and_then(Value::as_str)
+                .is_some_and(|l| l.ends_with(&own));
+            if !mine {
+                out.push(conflict);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// `base_url(withPort: false)`.
@@ -464,8 +503,14 @@ const STACK_MESSAGES: Messages = &[
         "The name may only contain letters (including Unicode), numbers, spaces, and these characters: - _ . / @ & ( ) # , : +",
     ),
     ("name.min", "The name must be at least :min characters."),
-    ("name.max", "The name may not be greater than :max characters."),
-    ("description.string", "The Description field must be a string."),
+    (
+        "name.max",
+        "The name may not be greater than :max characters.",
+    ),
+    (
+        "description.string",
+        "The Description field must be a string.",
+    ),
     (
         "description.regex",
         "The description may only contain letters (including Unicode), numbers, spaces, and common punctuation: - _ . , ! ? ( ) ' \" + = * / @ &",
@@ -492,7 +537,6 @@ pub(crate) fn validation_toast(result: ApiResult) -> ApiResult {
         other => other,
     }
 }
-
 
 /// The rules of a template field (`'required|email'` ...), with `validationAttributes` as the name.
 fn field_error(field: &StackField, value: Option<&str>) -> Option<String> {
@@ -605,8 +649,12 @@ pub async fn submit(
     let s = find_service(&state, &ctx, &uuid).await?;
     require_admin(&ctx)?;
     let mut body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    // `wire:model` holds null for an untouched empty field.
-    if body.get("description").and_then(Value::as_str) == Some("") {
+    // The form sends an empty description; it passes the rules as empty and is stored as sent.
+    let description = body
+        .get("description")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if description.as_deref() == Some("") {
         body["description"] = Value::Null;
     }
     let input = Input(body.as_object().cloned().unwrap_or_default());
@@ -660,7 +708,6 @@ pub async fn submit(
         return Ok(toast(e));
     }
     let name = input.str("name").map(|n| strip_tags(Some(n)));
-    let description = input.str("description").map(str::to_owned);
     let before: Vec<(&'static str, ColumnValue)> = vec![
         ("name", ColumnValue::Text(Some(s.name().to_owned()))),
         (
