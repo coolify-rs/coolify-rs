@@ -308,7 +308,7 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 | `PATCH /services/{uuid}/databases/{database_uuid}` that changes `is_public` | `501` | `StartDatabaseProxy` / `StopDatabaseProxy` are not ported |
 | `POST /services/{uuid}/migrate` in a dev instance | `404`, as upstream outside dev | `MigrateResourceToDestination` only runs in dev upstream |
 | `get_service_templates(force: true)` | the shipped file, or `COOLIFY_RS_TEMPLATES_DIR`, which `PullTemplatesFromCDN` replaces | forcing a refresh from a page is not ported |
-| `CleanupDocker` after a stop, maintenance pages, managed DNS cleanup on a changed domain, `parseDockerComposeFile` for parsing versions below 3 | not run | their subsystems are not ported |
+| `CleanupDocker` after a stop, maintenance pages, `parseDockerComposeFile` for parsing versions below 3 | not run | their subsystems are not ported |
 | Order of `environment_variables`, `applications`, `databases` | ordered by id | upstream has no `ORDER BY`: Postgres returns heap order, which changes after updates |
 
 ## Secret managers, Cloudflare, DNS and GitHub runners
