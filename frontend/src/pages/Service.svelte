@@ -7,6 +7,7 @@
   import EnvironmentVariables from '../components/shared/EnvironmentVariables.svelte';
   import RuntimeLogs from '../components/shared/RuntimeLogs.svelte';
   import SecretManagerLinks from '../components/shared/SecretManagerLinks.svelte';
+  import ResourceAnalytics from '../components/shared/ResourceAnalytics.svelte';
   import Tags from '../components/shared/Tags.svelte';
   import Webhooks from '../components/shared/Webhooks.svelte';
   import ServiceDomains from '../components/ServiceDomains.svelte';
@@ -249,6 +250,8 @@
             <ExecuteContainerCommand kind="service" uuid={service} />
           {:else if section === 'files'}
             <FileBrowser kind="service" uuid={service} />
+          {:else if section === 'analytics'}
+            <ResourceAnalytics kind="service" uuid={service} />
           {:else}
             <Unported />
           {/if}

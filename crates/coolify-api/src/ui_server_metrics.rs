@@ -12,12 +12,14 @@ use coolify_jobs::server_ops::{Srv, sentinel};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap};
 
+use crate::audit::Meta;
 use crate::auth::AuthCtx;
 use crate::input::Input;
 use crate::response::{ApiError, ApiResult, ok};
 use crate::routes::server_settings::{Setting, find_server, save_settings};
 use crate::serialize::php_truthy;
 use crate::state::AppState;
+use crate::ui_fleet_metrics::round_to;
 use crate::ui_server_destinations::toast_error;
 use crate::ui_server_general::SERVER_PAGE;
 use crate::validation::{Field, Rule, validate};
@@ -30,6 +32,11 @@ pub fn routes() -> Router<AppState> {
         .route(&p("metrics"), get(show).post(save))
         .route(&p("metrics/toggle"), post(toggle))
         .route(&p("metrics/data"), get(data))
+        .route(
+            "/ui/resources/{kind}/{uuid}/metrics/data",
+            get(resource_data),
+        )
+        .route("/ui/dashboard/server-metrics/{uuid}", get(dashboard_chart))
 }
 
 fn setting(s: &ServerRow, k: &str) -> Value {
@@ -70,6 +77,7 @@ async fn save(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
     Path(uuid): Path<String>,
+    meta: Meta,
     Json(body): Json<Map<String, Value>>,
 ) -> ApiResult {
     let s = find_server(&state, &ctx, &uuid).await?;
@@ -102,6 +110,14 @@ async fn save(
             .and_then(|v| v.as_i64().or_else(|| v.as_str()?.parse().ok()))
             .unwrap_or_default()
     };
+    let changed: Vec<&str> = [
+        "sentinel_metrics_refresh_rate_seconds",
+        "sentinel_metrics_history_days",
+        "sentinel_push_interval_seconds",
+    ]
+    .into_iter()
+    .filter(|k| setting(&s, k).as_i64() != Some(number(k)))
+    .collect();
     let changes = vec![
         (
             "sentinel_metrics_refresh_rate_seconds",
@@ -117,7 +133,35 @@ async fn save(
         ),
     ];
     save_settings(&state, &s, &changes).await?;
+    audit_sentinel_update(&state, &ctx, &meta, &s, &changed).await;
     Ok(ok(json!({"message": "Metrics settings updated. Restarting Sentinel."})).into_response())
+}
+
+/// `Server\Charts::auditSentinelUpdate`: metrics settings use the same event as the Sentinel page and API.
+pub(crate) async fn audit_sentinel_update(
+    state: &AppState,
+    ctx: &AuthCtx,
+    meta: &Meta,
+    s: &ServerRow,
+    changed: &[&str],
+) {
+    if changed.is_empty() {
+        return;
+    }
+    crate::audit::log(
+        state,
+        ctx,
+        meta,
+        "ui.server.sentinel.updated",
+        json!({
+            "team_id": s.team_id,
+            "server_uuid": s.uuid,
+            "server_name": s.record.get("name"),
+            "changed_fields": changed,
+        }),
+        "info",
+    )
+    .await;
 }
 
 /// `Server\Charts::toggleMetrics`.
@@ -125,6 +169,7 @@ async fn toggle(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
     Path(uuid): Path<String>,
+    meta: Meta,
 ) -> ApiResult {
     let s = find_server(&state, &ctx, &uuid).await?;
     if !ctx.is_team_admin() {
@@ -143,6 +188,7 @@ async fn toggle(
     {
         return toast_error(e);
     }
+    audit_sentinel_update(&state, &ctx, &meta, &s, &["is_metrics_enabled"]).await;
     if enable {
         if let Err(e) = sentinel::start_sentinel(jobs, s.id, true, None).await {
             return toast_error(e);
@@ -153,19 +199,34 @@ async fn toggle(
     Ok(ok(json!({"message": "Metrics disabled. Restarting Sentinel."})).into_response())
 }
 
-const TYPES: [&str; 5] = ["cpu", "memory", "disk", "load", "network"];
+pub(crate) const TYPES: [&str; 5] = ["cpu", "memory", "disk", "load", "network"];
+
+/// `HasMetrics::getMetricsEndpoint`: `container` is the uuid of a resource.
+fn endpoint(container: Option<&str>, kind: &str, from: &str) -> String {
+    let base = "http://localhost:8888/api";
+    match container {
+        None => format!("{base}/{kind}/history?from={from}"),
+        Some(uuid) => format!("{base}/container/{uuid}/{kind}/history?from={from}"),
+    }
+}
 
 /// `HasMetrics::prefetchMetrics`: `None` when the round trip failed.
-pub(crate) async fn prefetch(srv: &Srv, mins: i64) -> Option<HashMap<&'static str, String>> {
+pub(crate) async fn prefetch(
+    srv: &Srv,
+    types: &[&'static str],
+    container: Option<&str>,
+    mins: i64,
+) -> Option<HashMap<&'static str, String>> {
     let from = (chrono::Utc::now() - chrono::Duration::minutes(mins))
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
     let token = sentinel::ensure_valid_token(srv).await.ok()?;
-    let script = TYPES
+    let script = types
         .iter()
         .map(|t| {
             format!(
-                "curl -s -H @- \"http://localhost:8888/api/{t}/history?from={from}\" <<'COOLIFY_SENTINEL_AUTH'\nAuthorization: Bearer {token}\nCOOLIFY_SENTINEL_AUTH"
+                "curl -s -H @- \"{}\" <<'COOLIFY_SENTINEL_AUTH'\nAuthorization: Bearer {token}\nCOOLIFY_SENTINEL_AUTH",
+                endpoint(container, t, &from)
             )
         })
         .collect::<Vec<_>>()
@@ -179,16 +240,44 @@ pub(crate) async fn prefetch(srv: &Srv, mins: i64) -> Option<HashMap<&'static st
         )
         .await?;
     let parts: Vec<&str> = output.split('\u{1e}').collect();
-    if parts.len() != TYPES.len() {
+    if parts.len() != types.len() {
         return None;
     }
     Some(
-        TYPES
+        types
             .iter()
             .zip(parts)
             .map(|(t, r)| (*t, r.trim().to_string()))
             .collect(),
     )
+}
+
+/// `HasMetrics::fetchMetricRows`: the prefetched answer, or one fetch of its own when the prefetch
+/// failed (a large range can exceed what one round trip carries).
+async fn fetch_rows(
+    srv: &Srv,
+    answers: &Option<HashMap<&'static str, String>>,
+    kind: &str,
+    container: Option<&str>,
+    mins: i64,
+) -> Result<Vec<Value>, String> {
+    if let Some(answers) = answers {
+        return rows(answers.get(kind));
+    }
+    let from = (chrono::Utc::now() - chrono::Duration::minutes(mins))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let token = sentinel::ensure_valid_token(srv).await?;
+    let url = endpoint(container, kind, &from);
+    let response = srv
+        .run_quiet(
+            &[format!(
+                "docker exec coolify-sentinel sh -c 'curl -H \"Authorization: Bearer {token}\" {url}'"
+            )],
+            "server.metrics",
+        )
+        .await;
+    rows(response.as_ref())
 }
 
 /// `HasMetrics::fetchMetricRows`: an error in the answer is an error, an empty answer has no rows.
@@ -305,36 +394,35 @@ async fn data(
         .unwrap_or(5);
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let srv = Srv::from_row(jobs, s);
-    let answers = prefetch(&srv, mins).await.unwrap_or_default();
-    let series = |f: &str, rows_: &[Value]| {
-        json!(
-            map_rows(rows_, f, mins)
-                .iter()
-                .map(|(a, b)| json!([a, b]))
-                .collect::<Vec<_>>()
-        )
-    };
-    let cpu = match rows(answers.get("cpu")) {
+    let answers = prefetch(&srv, &TYPES, None, mins).await;
+    let series = |f: &str, rows_: &[Value]| series_json(&map_rows(rows_, f, mins));
+    let cpu = match fetch_rows(&srv, &answers, "cpu", None, mins).await {
         Ok(r) => series("percent", &r),
         Err(e) => return toast_error(e),
     };
-    let memory = match rows(answers.get("memory")) {
+    let memory = match fetch_rows(&srv, &answers, "memory", None, mins).await {
         Ok(r) => series("usedPercent", &r),
         Err(e) => return toast_error(e),
     };
     // Disk, network and load arrived in a later Sentinel: an older one answers 404 and still shows CPU and memory.
-    let disk = rows(answers.get("disk")).ok().map(|r| {
-        let root: Vec<Value> = if r.iter().any(|row| row.get("mount").is_some()) {
-            r.into_iter()
-                .filter(|row| row.get("mount").and_then(Value::as_str) == Some("/"))
-                .collect()
-        } else {
-            r
-        };
-        series("usedPercent", &root)
-    });
-    let load = rows(answers.get("load")).ok().map(|r| series("load1", &r));
-    let network = rows(answers.get("network")).ok();
+    let disk = fetch_rows(&srv, &answers, "disk", None, mins)
+        .await
+        .ok()
+        .map(|r| {
+            let root: Vec<Value> = if r.iter().any(|row| row.get("mount").is_some()) {
+                r.into_iter()
+                    .filter(|row| row.get("mount").and_then(Value::as_str) == Some("/"))
+                    .collect()
+            } else {
+                r
+            };
+            series("usedPercent", &root)
+        });
+    let load = fetch_rows(&srv, &answers, "load", None, mins)
+        .await
+        .ok()
+        .map(|r| series("load1", &r));
+    let network = fetch_rows(&srv, &answers, "network", None, mins).await.ok();
     let (rx, tx) = network.map_or((json!([]), json!([])), |r| {
         (series("rxBytesPerSec", &r), series("txBytesPerSec", &r))
     });
@@ -349,9 +437,109 @@ async fn data(
     .into_response())
 }
 
+fn series_json(points: &[(i64, f64)]) -> Value {
+    json!(
+        points
+            .iter()
+            .map(|(a, b)| json!([a, b]))
+            .collect::<Vec<_>>()
+    )
+}
+
+/// `convertContainerMemoryBytesToMegabytes`.
+fn bytes_to_megabytes(points: &[(i64, f64)]) -> Vec<(i64, f64)> {
+    points
+        .iter()
+        .map(|(time, value)| (*time, round_to(value / 1024.0 / 1024.0, 2)))
+        .collect()
+}
+
+/// `Project\Shared\Metrics::loadData`: an application or database container.
+async fn resource_data(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path((kind, uuid)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+) -> ApiResult {
+    let res = crate::ui_shared::find(&state, &ctx, &kind, &uuid).await?;
+    let server = match res.server_id {
+        Some(id) => coolify_db::servers::find_by_id(&state.db, id).await?,
+        None => None,
+    };
+    let Some(server) = server.filter(metrics_enabled) else {
+        return Ok(ok(json!({"cpu": null, "memory": null})).into_response());
+    };
+    let mins: i64 = query
+        .get("interval")
+        .and_then(|i| i.parse().ok())
+        .unwrap_or(5);
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    let srv = Srv::from_row(jobs, server);
+    let answers = prefetch(&srv, &["cpu", "memory"], Some(&res.uuid), mins).await;
+    let cpu = match fetch_rows(&srv, &answers, "cpu", Some(&res.uuid), mins).await {
+        Ok(r) => map_rows(&r, "percent", mins),
+        Err(e) => return toast_error(e),
+    };
+    let memory = match fetch_rows(&srv, &answers, "memory", Some(&res.uuid), mins).await {
+        Ok(r) => bytes_to_megabytes(&map_rows(&r, "used", mins)),
+        Err(e) => return toast_error(e),
+    };
+    Ok(ok(json!({"cpu": series_json(&cpu), "memory": series_json(&memory)})).into_response())
+}
+
+/// `Dashboard\ServerMetricsChart::loadData`: `null` when nothing is dispatched.
+async fn dashboard_chart(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    let s = find_server(&state, &ctx, &uuid).await?;
+    if !ServerInfo::from_row(&s).is_functional() {
+        return Ok(ok(Value::Null).into_response());
+    }
+    if !metrics_enabled(&s) {
+        return Ok(ok(json!({"cpu": null, "memory": null})).into_response());
+    }
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    let srv = Srv::from_row(jobs, s);
+    let answers = prefetch(&srv, &["cpu", "memory"], None, 10).await;
+    match (
+        fetch_rows(&srv, &answers, "cpu", None, 10).await,
+        fetch_rows(&srv, &answers, "memory", None, 10).await,
+    ) {
+        (Ok(cpu), Ok(memory)) => Ok(ok(json!({
+            "cpu": series_json(&map_rows(&cpu, "percent", 10)),
+            "memory": series_json(&map_rows(&memory, "usedPercent", 10)),
+        }))
+        .into_response()),
+        // `report($e)`: the chart keeps what it shows.
+        _ => Ok(ok(Value::Null).into_response()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn container_memory_is_in_megabytes() {
+        assert_eq!(
+            bytes_to_megabytes(&[(1, 10_485_760.0), (2, 1_572_864.0)]),
+            vec![(1, 10.0), (2, 1.5)]
+        );
+    }
+
+    #[test]
+    fn endpoints_of_servers_and_containers() {
+        assert_eq!(
+            endpoint(None, "cpu", "T"),
+            "http://localhost:8888/api/cpu/history?from=T"
+        );
+        assert_eq!(
+            endpoint(Some("abc"), "memory", "T"),
+            "http://localhost:8888/api/container/abc/memory/history?from=T"
+        );
+    }
 
     #[test]
     fn lttb_keeps_ends_and_length() {

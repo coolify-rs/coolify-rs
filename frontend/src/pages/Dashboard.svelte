@@ -1,9 +1,10 @@
 <script lang="ts">
-  // Port of upstream livewire/dashboard.blade.php (projects and servers;
-  // coolify-rs has no deployments or traffic analytics to show beside them).
+  // Port of upstream livewire/dashboard.blade.php.
   import Reicon from '../components/Reicon.svelte';
   import SectionHeading from '../components/SectionHeading.svelte';
   import ActiveDeployments from '../components/ActiveDeployments.svelte';
+  import ServerMetricsChart from '../components/dashboard/ServerMetricsChart.svelte';
+  import TrafficAnalytics from '../components/dashboard/TrafficAnalytics.svelte';
   import ViewToggle from '../components/ViewToggle.svelte';
   import Empty from '../components/Empty.svelte';
   import NewProjectModal from '../components/NewProjectModal.svelte';
@@ -11,6 +12,7 @@
   import { link } from '../lib/router.svelte';
   import { listView } from '../lib/listview.svelte';
   import { sortNatural } from '../lib/natsort';
+  import { serverMetricsPoll, type Point } from '../lib/metricsApi.svelte';
 
   const limit = 8;
   let data = $state<DashboardData | null>(null);
@@ -18,7 +20,12 @@
   const projectsView = listView('dashboard_projects');
   const serversView = listView('dashboard_servers');
 
-  uiApi.dashboard().then((d) => (data = d));
+  const metrics = serverMetricsPoll();
+
+  uiApi.dashboard().then((d) => {
+    data = d;
+    metrics.start(sortNatural(d.servers, (s) => s.name).slice(0, limit).filter((s) => s.is_metrics_enabled).map((s) => s.uuid));
+  });
 
   const projects = $derived(data ? sortNatural(data.projects, (p) => p.name).slice(0, limit) : []);
   const servers = $derived(data ? sortNatural(data.servers, (s) => s.name).slice(0, limit) : []);
@@ -39,7 +46,15 @@
     'group relative flex min-h-28 min-w-0 flex-col rounded-xl border border-neutral-200 bg-white p-3 shadow-sm transition-all hover:-translate-y-px hover:border-neutral-300 hover:shadow-md dark:border-white/[0.08] dark:bg-white/[0.05] dark:hover:border-white/[0.14]';
   const glyph = 'resource-glyph flex size-8 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500';
   const projectCols = 'grid-cols-[minmax(0,1fr)_7rem_4rem] gap-4 @2xl:min-w-[560px] @2xl:grid-cols-[minmax(0,1.2fr)_7rem_minmax(0,1.5fr)_4rem]';
-  const serverCols = 'grid-cols-[minmax(0,1fr)_9.5rem] @2xl:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_9.5rem]';
+  // A Usage column (latest CPU and memory) only when a listed server collects metrics.
+  const showServerUsage = $derived(servers.some((s) => s.is_metrics_enabled));
+  const hasTrafficAnalytics = $derived(!!data?.servers.some((s) => s.is_traffic_analytics_enabled));
+  const serverCols = $derived(
+    showServerUsage
+      ? 'grid-cols-[minmax(0,1fr)_9.5rem] @xl:grid-cols-[minmax(0,1fr)_9rem_9.5rem] @2xl:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_9rem_9.5rem]'
+      : 'grid-cols-[minmax(0,1fr)_9.5rem] @2xl:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_9.5rem]',
+  );
+  const latest = (points: Point[] | null | undefined) => (points?.length ? points[points.length - 1][1] : null);
 </script>
 
 {#snippet projectActions(p: DashboardData['projects'][number])}
@@ -66,6 +81,10 @@
     <div class="grid min-w-0 gap-8 xl:items-start xl:has-[.dashboard-activity_section]:grid-cols-[minmax(0,1fr)_22rem] 2xl:has-[.dashboard-activity_section]:grid-cols-[minmax(0,1fr)_26rem]">
       <div class="dashboard-activity hidden min-w-0 has-[section]:flex flex-col gap-8 xl:order-last">
         <ActiveDeployments />
+
+        {#if hasTrafficAnalytics}
+          <TrafficAnalytics />
+        {/if}
       </div>
       <div class="flex min-w-0 flex-col gap-8">
         <section class="@container mb-0! min-w-0">
@@ -194,6 +213,9 @@
               <div class="grid min-w-0 grid-cols-1 gap-3 @lg:grid-cols-2 @4xl:grid-cols-4">
                 {#each servers as s (s.uuid)}
                   <a href="/server/{s.uuid}" use:link aria-label="Open {s.name}" class={card}>
+                    {#if s.is_metrics_enabled}
+                      <ServerMetricsChart uuid={s.uuid} data={metrics.charts[s.uuid]} />
+                    {/if}
                     <div class="relative z-10 flex min-w-0 items-start gap-3">
                       <div class={glyph}><Reicon name="servers" class="size-4" /></div>
                       <div class="min-w-0 flex-1 self-center">
@@ -222,6 +244,9 @@
                 <div class="grid {serverCols} gap-4 @2xl:min-w-[480px] {tableHead}">
                   <div>Server</div>
                   <div class="hidden @2xl:block">Description</div>
+                  {#if showServerUsage}
+                    <div class="hidden @xl:block">Usage</div>
+                  {/if}
                   <div>Status</div>
                 </div>
                 {#each servers as s (s.uuid)}
@@ -231,6 +256,25 @@
                       <p class="truncate text-[13px] font-semibold text-black dark:text-fg">{s.name}</p>
                     </div>
                     <p class="hidden truncate text-neutral-500 @2xl:block dark:text-fg-dim">{s.description || '-'}</p>
+                    {#if showServerUsage}
+                      <div class="hidden @xl:block">
+                        {#if s.is_metrics_enabled}
+                          <div class="flex flex-col gap-1 text-[11px] text-neutral-500 tabular-nums dark:text-fg-dim">
+                            {#each [['CPU', 'bg-[rgb(30,144,255)]', latest(metrics.charts[s.uuid]?.cpu)], ['Mem', 'bg-[rgb(168,85,247)]', latest(metrics.charts[s.uuid]?.memory)]] as [metricLabel, metricColor, value] (metricLabel)}
+                              <div class="flex items-center gap-2">
+                                <span class="w-7 shrink-0">{metricLabel}</span>
+                                <span class="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-neutral-200 dark:bg-white/[0.08]">
+                                  <span class="block h-full rounded-full {metricColor} transition-[width] duration-500" style="width: {Math.min(100, Number(value ?? 0))}%"></span>
+                                </span>
+                                <span class="w-8 shrink-0 text-right">{value === null ? '-' : `${Math.round(Number(value))}%`}</span>
+                              </div>
+                            {/each}
+                          </div>
+                        {:else}
+                          <span class="text-neutral-500 dark:text-fg-dim">-</span>
+                        {/if}
+                      </div>
+                    {/if}
                     <div class="flex items-center gap-2 text-[11px] font-medium text-neutral-600 dark:text-fg-dim">
                       <span
                         class="size-2 shrink-0 rounded-full {s.status_type === 'success'

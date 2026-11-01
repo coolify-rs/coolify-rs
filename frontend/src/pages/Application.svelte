@@ -23,6 +23,7 @@
   import ApplicationAdvanced from '../components/shared/ApplicationAdvanced.svelte';
   import ApplicationRollback from '../components/shared/ApplicationRollback.svelte';
   import Metrics from '../components/shared/Metrics.svelte';
+  import ResourceAnalytics from '../components/shared/ResourceAnalytics.svelte';
   import Tags from '../components/shared/Tags.svelte';
   import Webhooks from '../components/shared/Webhooks.svelte';
   import ResourceOperations from '../components/shared/ResourceOperations.svelte';
@@ -257,6 +258,8 @@
               <ApplicationPreviews uuid={app} {base} onchange={() => refresh().catch(() => {})} />
             {:else if active === 'scheduled-tasks'}
               <ScheduledTasks kind="application" uuid={app} />
+            {:else if active === 'analytics'}
+              <ResourceAnalytics kind="application" uuid={app} />
             {:else if active === 'webhooks'}
               <Webhooks kind="application" uuid={app} />
             {:else if active === 'healthcheck' && record.build_pack !== 'dockercompose'}

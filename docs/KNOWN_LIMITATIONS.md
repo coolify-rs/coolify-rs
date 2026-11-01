@@ -37,8 +37,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   says "not available"): nothing. Log drains: the secret fields stay empty for a
   member, where upstream's Livewire snapshot carries them. Proxy status toasts come from real-time events upstream
   (`ProxyStatusChangedUI`); the UI here polls, and neither side shows them when the real-time service is down.
-  Traffic analytics: the charts of the server page and of `/analytics` are ported (Traefik verified, the Caddy proxy not run);
-  the dashboard widget (`Dashboard\TrafficAnalytics`) and the application and service analytics pages (`ResourceTrafficAnalytics`), where the "Top applications" rows link, are not. After a filter change, rows of a list with equal values can
+  Traffic analytics: the charts of the server page, of `/analytics`, the dashboard widget and the application and service analytics pages are ported (Traefik verified, the Caddy proxy not run). The dashboard widget stays empty in Chrome on both sides: upstream's lazy placeholder has no box, so it never enters the viewport; its data is compared directly. After a filter change, rows of a list with equal values can
   stand in another order than on the reference, which keeps the previous DOM order for ties; a fresh load has the same order.
 - Validation jobs run inside the coolify-rs process: a restart drops a running validation (upstream's queue keeps it).
 - Databases (all 9 engines; API, proxy, SSL, backups, imports and the `Project/Database/*` pages): sections that only
@@ -298,7 +297,6 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 
 | Upstream | coolify-rs | Why |
 | --- | --- | --- |
-| Page `Project/Service/Analytics` | the page says it is not available | later task |
 | `Project/Shared/*` sections on service pages (variables, tags, danger, logs, volumes and others) | placeholder named after the section | connected when the shared components merge |
 | `addSuggestedDomain` on the Domains page | not ported | suggestions are not offered |
 | Configuration warning on service pages, with the diff of changes | the warning without the diff | no configuration diff yet |

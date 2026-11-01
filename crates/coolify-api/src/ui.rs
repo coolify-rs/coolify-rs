@@ -146,6 +146,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .merge(crate::ui_server_general::routes())
         .merge(crate::ui_server_ops::routes())
         .merge(crate::ui_server_metrics::routes())
+        .merge(crate::ui_fleet_metrics::routes())
         .merge(crate::ui_server_analytics::routes())
         .merge(crate::ui_server_patches::routes())
         .merge(crate::ui_server_tunnel::routes())
@@ -238,6 +239,8 @@ async fn dashboard_data(
                 "description": s.description,
                 "status": status,
                 "status_type": status_type,
+                "is_metrics_enabled": s.is_metrics_enabled,
+                "is_traffic_analytics_enabled": s.is_traffic_analytics_enabled,
             })
         })
         .collect();
@@ -627,6 +630,7 @@ fn server_facts(s: &coolify_db::servers::ServerRow) -> Value {
         "traefik_outdated": coolify_jobs::server_ops::checks::has_current_traefik_outdated_info(s),
         "sentinel_status": coolify_jobs::server_ops::checks::sentinel_status(s),
         "sentinel_enabled": sentinel_enabled,
+        "is_metrics_enabled": flag("is_metrics_enabled"),
         "proxy_status": proxy_status,
         "cloud": cloud,
     })

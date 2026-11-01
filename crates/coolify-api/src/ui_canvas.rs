@@ -1004,7 +1004,9 @@ async fn server_usage(
     let id = server.id;
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let srv = Srv::from_row(jobs, server);
-    let answers = metrics::prefetch(&srv, 1).await.unwrap_or_default();
+    let answers = metrics::prefetch(&srv, &metrics::TYPES, None, 1)
+        .await
+        .unwrap_or_default();
     let latest = |kind: &str, field: &str, root_only: bool| -> Value {
         let Ok(rows) = metrics::rows(answers.get(kind)) else {
             return Value::Null;
