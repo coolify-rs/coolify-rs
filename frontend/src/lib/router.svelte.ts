@@ -57,6 +57,7 @@ const routes: { name: string; pattern: string }[] = [
   { name: 'service-database-backups', pattern: '/project/:uuid/environment/:env/service/:service/:stack/backups/:backup' },
   { name: 'service-database-backups', pattern: '/project/:uuid/environment/:env/service/:service/:stack/backups/:backup/:backupSection' },
   { name: 'service-database-import', pattern: '/project/:uuid/environment/:env/service/:service/:stack/import' },
+  { name: 'service-index-advanced', pattern: '/project/:uuid/environment/:env/service/:service/:stack/advanced' },
   { name: 'realtime', pattern: '/realtime' },
   { name: 'admin', pattern: '/admin' },
   { name: 'subscription', pattern: '/subscription' },

@@ -1,17 +1,23 @@
 <script lang="ts">
   // Port of upstream livewire/boarding/index.blade.php (App\Livewire\Boarding\Index) with
   // components/boarding-progress.blade.php and components/boarding-step.blade.php. The Hetzner, Vultr,
-  // DigitalOcean and Hostinger cards go to /servers/new: their modals are not ported.
+  // DigitalOcean and Hostinger cards open `Server\New\By*` in a modal. Without `selectedTokenUuid` those stop at
+  // step 1, whose Continue goes to `server.create.token`, so upstream's `from_onboarding` branch never runs.
   import type { Snippet } from 'svelte';
   import CheckpointItem from '../components/CheckpointItem.svelte';
   import FormInput from '../components/FormInput.svelte';
   import FormTextarea from '../components/FormTextarea.svelte';
   import HelpForm from '../components/HelpForm.svelte';
   import Listbox from '../components/Listbox.svelte';
+  import Modal from '../components/Modal.svelte';
   import ProcessDialog from '../components/ProcessDialog.svelte';
   import Reicon from '../components/Reicon.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
   import ValidateServer from '../components/ValidateServer.svelte';
+  import ServerNewDigitalOcean from './ServerNewDigitalOcean.svelte';
+  import ServerNewHetzner from './ServerNewHetzner.svelte';
+  import ServerNewHostinger from './ServerNewHostinger.svelte';
+  import ServerNewVultr from './ServerNewVultr.svelte';
   import { ApiError, request, serversUi, type ValidationProgress } from '../lib/api';
   import { router } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
@@ -203,6 +209,8 @@
   const pillGroup = 'inline-flex flex-wrap items-center justify-center gap-0.5 rounded-lg border border-neutral-200 bg-neutral-50 p-0.5 dark:border-white/[0.08] dark:bg-white/[0.05]';
   const card =
     'group relative cursor-pointer min-h-36 rounded-[10px] border border-neutral-200 bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-px hover:border-neutral-300 hover:shadow-md dark:border-white/[0.08] dark:bg-white/[0.05] dark:hover:border-white/[0.14]';
+  let provision = $state<'hetzner' | 'vultr' | 'digital-ocean' | 'hostinger' | null>(null);
+  const providerTitle = { hetzner: 'Hetzner', vultr: 'Vultr', 'digital-ocean': 'DigitalOcean', hostinger: 'Hostinger' };
   const providerCard =
     'group relative cursor-pointer flex h-full min-h-36 flex-col rounded-[10px] border border-neutral-200 bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-px hover:border-neutral-300 hover:shadow-md dark:border-white/[0.08] dark:bg-white/[0.05] dark:hover:border-white/[0.14]';
   const keyCard =
@@ -351,11 +359,12 @@
                   </button>
                 </div>
               </section>
+              {#if session.isAdmin}
               <section>
                 <h3 class="text-base font-semibold">Provision a server</h3>
                 <p class="mb-3 text-sm text-neutral-500 dark:text-neutral-400">Create a server with a cloud provider.</p>
                 <div class="grid w-full grid-cols-1 gap-4 lg:grid-cols-2">
-                  <a href="/servers/new" class={providerCard}>
+                  <div class={providerCard} role="button" tabindex="0" onclick={() => (provision = 'hetzner')} onkeydown={(e) => e.key === 'Enter' && (provision = 'hetzner')}>
                     <div class="flex h-full flex-col gap-4 text-left">
                       <img src="/svgs/hetzner.svg" alt="Hetzner" class="size-10 shrink-0" />
                       <div class="min-h-0 flex-1">
@@ -363,8 +372,8 @@
                         <p class="text-sm dark:text-neutral-400">Deploy servers directly from your Hetzner Cloud account.</p>
                       </div>
                     </div>
-                  </a>
-                  <a href="/servers/new" class={providerCard}>
+                  </div>
+                  <div class={providerCard} role="button" tabindex="0" onclick={() => (provision = 'vultr')} onkeydown={(e) => e.key === 'Enter' && (provision = 'vultr')}>
                     <div class="flex h-full flex-col gap-4 text-left">
                       <img src="https://www.vultr.com/media/logo_ondark.svg" alt="Vultr" class="h-10 w-28 shrink-0 object-contain object-left" />
                       <div class="min-h-0 flex-1">
@@ -372,8 +381,8 @@
                         <p class="text-sm dark:text-neutral-400">Deploy servers directly from your Vultr account.</p>
                       </div>
                     </div>
-                  </a>
-                  <a href="/servers/new" class={providerCard}>
+                  </div>
+                  <div class={providerCard} role="button" tabindex="0" onclick={() => (provision = 'digital-ocean')} onkeydown={(e) => e.key === 'Enter' && (provision = 'digital-ocean')}>
                     <div class="flex h-full flex-col gap-4 text-left">
                       <svg class="size-10 shrink-0" fill="#0080FF" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                         <title>DigitalOcean</title>
@@ -386,8 +395,8 @@
                         <p class="text-sm dark:text-neutral-400">Deploy servers directly from your DigitalOcean account.</p>
                       </div>
                     </div>
-                  </a>
-                  <a href="/servers/new" class="{providerCard} dark:bg-white/[0.025]">
+                  </div>
+                  <div class="{providerCard} dark:bg-white/[0.025]" role="button" tabindex="0" onclick={() => (provision = 'hostinger')} onkeydown={(e) => e.key === 'Enter' && (provision = 'hostinger')}>
                     <div class="flex h-full flex-col gap-4 text-left">
                       <svg class="size-10 shrink-0 text-[#673de6]" viewBox="0 0 26 30" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Hostinger">
                         <title>Hostinger</title>
@@ -403,9 +412,10 @@
                         <p class="text-sm dark:text-neutral-400">Deploy servers directly from your Hostinger account.</p>
                       </div>
                     </div>
-                  </a>
+                  </div>
                 </div>
               </section>
+              {/if}
             </div>
             {#if !serverReachable}
               <div class="mt-6 p-4 border border-error rounded-lg text-gray-800 dark:text-gray-200">
@@ -689,4 +699,18 @@
 
 {#if helpOpen}
   <HelpForm title="Need Help?" onclose={() => (helpOpen = false)} />
+{/if}
+
+{#if provision}
+  <Modal title="Connect a {providerTitle[provision]} Server" onclose={() => (provision = null)}>
+    {#if provision === 'hetzner'}
+      <ServerNewHetzner />
+    {:else if provision === 'vultr'}
+      <ServerNewVultr />
+    {:else if provision === 'digital-ocean'}
+      <ServerNewDigitalOcean />
+    {:else}
+      <ServerNewHostinger />
+    {/if}
+  </Modal>
 {/if}

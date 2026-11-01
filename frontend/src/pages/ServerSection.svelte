@@ -2,8 +2,6 @@
   // The pages under /server/{uuid}/{section}: the ported page, or the "not
   // available" one inside the server frame (the sidebar keeps the server menu).
   import type { Component } from 'svelte';
-  import ServerFrame from '../components/ServerFrame.svelte';
-  import Unported from './Unported.svelte';
   import ServerAdvanced from './ServerAdvanced.svelte';
   import ServerRegistries from './ServerRegistries.svelte';
   import ServerAnalytics from './ServerAnalytics.svelte';
@@ -29,7 +27,7 @@
   import ServerPatches from './ServerPatches.svelte';
   import ServerCloudflareTunnel from './ServerCloudflareTunnel.svelte';
   import ServerGithubRunners from './ServerGithubRunners.svelte';
-  import { serverSection } from '../lib/serverMenu';
+  import { router } from '../lib/router.svelte';
 
   let { uuid, section, sub }: { uuid: string; section: string; sub?: string } = $props();
 
@@ -60,15 +58,13 @@
     'cloudflare-tunnel': ServerCloudflareTunnel,
     'github-runners': ServerGithubRunners,
   };
-  const Page = $derived(pages[sub ? `${section}/${sub}` : section] ?? pages[section]);
+  const Page = $derived(pages[sub ? `${section}/${sub}` : section]);
+  // A path routes/web.php does not have, also `/security` (`redirect(route('dashboard'))`), goes home.
+  $effect(() => {
+    if (!Page) router.go('/', true);
+  });
 </script>
 
 {#if Page}
   <Page {uuid} {sub} />
-{:else}
-  <ServerFrame {uuid} active={serverSection(section)} title={section}>
-    {#snippet children()}
-      <Unported />
-    {/snippet}
-  </ServerFrame>
 {/if}

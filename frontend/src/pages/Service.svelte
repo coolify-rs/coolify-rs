@@ -16,7 +16,6 @@
   import ServiceResourceCard from '../components/ServiceResourceCard.svelte';
   import ServiceBackups from '../components/ServiceBackups.svelte';
   import ServiceImportBackup from '../components/ServiceImportBackup.svelte';
-  import ServiceSharedPlaceholder from '../components/ServiceSharedPlaceholder.svelte';
   import ExecuteContainerCommand from '../components/shared/ExecuteContainerCommand.svelte';
   import ScheduledTasks from '../components/shared/ScheduledTasks.svelte';
   import ResourceOperations from '../components/shared/ResourceOperations.svelte';
@@ -27,7 +26,6 @@
   import ServiceStorage from '../components/ServiceStorage.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
   import ViewToggle from '../components/ViewToggle.svelte';
-  import Unported from './Unported.svelte';
   import { ApiError, uiApi, dbUi } from '../lib/api';
   import { headline, servicesApi, type ServicePage, type ServiceStoragePart } from '../lib/servicesApi';
   import { SERVICE_SECTIONS, serviceNavContext } from '../lib/serviceMenu';
@@ -49,7 +47,15 @@
   }: { uuid: string; env: string; service: string; section: string; route?: string; stack?: string | null; backup?: string | null; taskUuid?: string | null } = $props();
 
   const base = $derived(`/project/${uuid}/environment/${env}/service/${service}`);
-  const isSection = $derived(section === 'general' || SERVICE_SECTIONS.includes(section) || route === 'service-task');
+  // `Service\Index::mount` sends `/{stack_service_uuid}` and `/{stack_service_uuid}/advanced` to the
+  // configuration page, so any other literal in that position lands there too.
+  const isSection = $derived(
+    route === 'service-index-advanced'
+      ? false
+      : route === 'service-section'
+        ? SERVICE_SECTIONS.includes(section)
+        : true,
+  );
 
   /**
    * `VolumeBackup/Show`, `DatabaseBackups` and the `{stack}/import` route never render: they check the
@@ -111,7 +117,7 @@
 
   async function load() {
     if (!isSection) {
-      router.go(base);
+      router.go(base, true);
       return;
     }
     if (await redirected()) return;
@@ -252,8 +258,6 @@
             <FileBrowser kind="service" uuid={service} />
           {:else if section === 'analytics'}
             <ResourceAnalytics kind="service" uuid={service} />
-          {:else}
-            <Unported />
           {/if}
         </div>
       </div>

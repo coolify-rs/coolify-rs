@@ -8,7 +8,8 @@
 An API operation counts when `routes/mod.rs` has a RouteSpec for it. A web route, with its
 `Route::prefix` groups applied, counts when the frontend router has its path or the backend serves it. A Livewire component counts when some Svelte or Rust file names its
 view or class in a "port of" comment, so this is a coverage guide, not a behaviour proof; the
-differential scripts in compat/diff and the screenshots are the proof.
+differential scripts in compat/diff and the screenshots are the proof. `INLINE`, `DEV_ONLY_*` and
+`API_CATCH_ALL` hold what was opened by hand and is not a gap.
 """
 import collections
 import glob
@@ -35,7 +36,7 @@ def api():
     out = []
     for r in rows:
         for m in r["methods"]:
-            if m == "HEAD":
+            if m == "HEAD" or "/" + r["uri"] in API_CATCH_ALL:
                 continue
             out.append((m, "/" + r["uri"], (m, r["uri"]) in ported))
     return out
@@ -120,8 +121,38 @@ def web():
     out = []
     for r in web_routes():
         norm = "/" + re.sub(r"\{[^}]+\}", "{}", r).strip("/")
+        if norm in DEV_ONLY_PAGES:
+            continue
         out.append((norm, norm in served or covered([s for s in norm.split("/") if s])))
     return out
+
+
+# Components ported inside another file under no name of their own. Each entry names the file and text
+# that hold the port, and only counts while that text is still there.
+INLINE = {
+    "Concerns/BuildsMetricsChartPayload": ("crates/coolify-api/src/ui_fleet_metrics.rs", "fn build_chart_payload"),
+    "Concerns/BuildsTrafficChartPayload": ("crates/coolify-api/src/ui_server_analytics.rs", "`BuildsTrafficChartPayload`"),
+    "Project/Application/Preview/Form": ("crates/coolify-api/src/ui_shared/previews.rs", "`Preview\\Form::submit`"),
+    "Project/Application/ServerStatusBadge": ("frontend/src/pages/Application.svelte", "Application is in degraded state across multiple servers."),
+    "Project/Application/Status": ("frontend/src/components/ApplicationHeading.svelte", "DatabaseStatusSummary {status} {healthcheckUrl}"),
+    "Project/New/GiteaPrivateRepository": ("crates/coolify-api/src/ui_applications/private_git.rs", "GiteaPrivateRepository"),
+    "Project/New/GitlabPrivateRepository": ("crates/coolify-api/src/ui_applications/private_git.rs", "GitlabPrivateRepository"),
+    "Project/Service/Analytics": ("frontend/src/pages/Service.svelte", '<ResourceAnalytics kind="service"'),
+    "Project/Shared/ScheduledTask/Add": ("frontend/src/components/shared/ScheduledTasks.svelte", "async function submitAdd"),
+}
+
+# Only registered under `app()->environment(['local', 'testing'])`: a production upstream has neither.
+DEV_ONLY_PAGES = {"/__livewire-request-failure"}
+DEV_ONLY_LIVEWIRE = {"Dev/LivewireRequestFailurePreview"}
+# `Route::any('/{any}')` in routes/api.php: not an operation, the answer for every unknown path.
+API_CATCH_ALL = {"/api/{any}"}
+
+
+def inline(rel):
+    if rel not in INLINE:
+        return False
+    path, marker = INLINE[rel]
+    return marker in read(f"{ROOT}/{path}")
 
 
 def livewire():
@@ -137,7 +168,9 @@ def livewire():
         parts = rel.split("/")
         kebab = "/".join(re.sub(r"(?<!^)(?=[A-Z])", "-", p).lower() for p in parts)
         names = {kebab + ".blade.php", rel.replace("/", "\\").lower(), rel.lower()}
-        out.append((rel, any(n in text for n in names)))
+        if rel in DEV_ONLY_LIVEWIRE:
+            continue
+        out.append((rel, inline(rel) or any(n in text for n in names)))
     return out
 
 

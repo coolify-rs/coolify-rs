@@ -6,7 +6,6 @@
   import FormInput from '../components/FormInput.svelte';
   import Listbox from '../components/Listbox.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
-  import Unported from './Unported.svelte';
   import ServerNewDigitalOcean from './ServerNewDigitalOcean.svelte';
   import ServerNewHetzner from './ServerNewHetzner.svelte';
   import ServerNewHostinger from './ServerNewHostinger.svelte';
@@ -17,6 +16,12 @@
   import { notify } from '../lib/toast.svelte';
 
   let { type, token }: { type?: string; token?: string } = $props();
+
+  // `whereIn('type', ...)` on `server.create.type` and `server.create.token`: anything else is `Route::any('/{any}')`.
+  const unknownType = $derived((type && !['manual', 'hetzner', 'vultr', 'digital-ocean', 'hostinger'].includes(type)) || (type === 'manual' && token));
+  $effect(() => {
+    if (unknownType) router.go('/', true);
+  });
 
   let keys = $state<{ id: number; name: string }[]>([]);
   let privateKeyId = $state<string>('');
@@ -89,9 +94,7 @@
 
 <svelte:window onclick={(e) => keyMenu && keyMenuRoot && !keyMenuRoot.contains(e.target as Node) && (keyMenu = false)} />
 
-{#if (type && !['manual', 'hetzner', 'vultr', 'digital-ocean', 'hostinger'].includes(type)) || (type === 'manual' && token)}
-  <Unported />
-{:else}
+{#if !unknownType}
   <div class="w-full">
     <div class="mb-5 flex min-h-9 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <h1 class="min-w-0 text-[24px]! leading-7! font-semibold! tracking-tight!">New server</h1>

@@ -35,9 +35,8 @@
   import ScheduledTasks from '../components/shared/ScheduledTasks.svelte';
   import ApplicationDomains from '../components/shared/ApplicationDomains.svelte';
   import Maintenance from '../components/shared/Maintenance.svelte';
-  import Unported from './Unported.svelte';
   import { appUi, dbUi, uiApi, ApiError, type ApplicationRecord, type ApplicationState, type DeploymentDetail } from '../lib/api';
-  import { applicationBackupNavContext, applicationNavContext, applicationSection } from '../lib/applicationMenu';
+  import { applicationBackupNavContext, applicationNavContext, applicationSection, APPLICATION_SECTIONS } from '../lib/applicationMenu';
   import { setProjectCrumbs } from '../lib/crumbs';
   import { strnatcmp } from '../lib/natsort';
   import { page } from '../lib/page.svelte';
@@ -64,6 +63,12 @@
   let switching = $state(false);
 
   const active = $derived(dep ? 'deployment' : applicationSection(section));
+  $effect(() => {
+    // `Application\Configuration::mount`.
+    if (active === 'healthcheck' && record?.build_pack === 'dockercompose') router.go(`/project/${uuid}/environment/${env}/application/${app}`, true);
+    const r = router.current;
+    if (r?.name === 'application-section' && !APPLICATION_SECTIONS.includes(r.params.section)) router.go('/', true);
+  });
   const currentBackupSection = $derived<'general' | 'executions' | 'danger'>(backupSection === 'executions' || backupSection === 'danger' ? backupSection : 'general');
   const base = $derived(`/project/${uuid}/environment/${env}/application/${app}`);
   const canUpdate = $derived(appState?.can_update ?? false);
@@ -254,7 +259,7 @@
               <ApplicationSwarm uuid={app} onchange={() => refresh().catch(() => {})} />
             {:else if active === 'metrics'}
               <Metrics kind="application" uuid={app} />
-            {:else if active === 'preview-deployments' && (record.build_pack === 'dockerimage' || !record.dockerfile)}
+            {:else if active === 'preview-deployments'}
               <ApplicationPreviews uuid={app} {base} onchange={() => refresh().catch(() => {})} />
             {:else if active === 'scheduled-tasks'}
               <ScheduledTasks kind="application" uuid={app} />
@@ -280,8 +285,6 @@
               <DeploymentHistory uuid={app} {base} {serverName} {timezone} />
             {:else if active === 'danger'}
               <DatabaseDanger kind="application" {record} canDelete={canUpdate} back="/project/{uuid}/environment/{env}" />
-            {:else}
-              <Unported />
             {/if}
           </div>
         </div>

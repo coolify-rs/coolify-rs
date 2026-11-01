@@ -8,6 +8,33 @@ interface Entry extends NavContextItem {
 }
 
 /** The URL section of an application page (`/application/{uuid}/{section}`); deployments share one entry. */
+/** The sections `routes/web.php` has under `/application/{uuid}`; any other path is `Route::any('/{any}')`. */
+export const APPLICATION_SECTIONS = [
+  'domains',
+  'swarm',
+  'advanced',
+  'environment-variables',
+  'persistent-storage',
+  'backups',
+  'source',
+  'servers',
+  'scheduled-tasks',
+  'webhooks',
+  'preview-deployments',
+  'healthcheck',
+  'rollback',
+  'resource-limits',
+  'resource-operations',
+  'metrics',
+  'analytics',
+  'tags',
+  'danger',
+  'deployment',
+  'logs',
+  'terminal',
+  'files',
+];
+
 export function applicationSection(section: string | undefined): string {
   if (!section || section === 'general') return 'general';
   if (section.startsWith('deployment')) return 'deployment';
