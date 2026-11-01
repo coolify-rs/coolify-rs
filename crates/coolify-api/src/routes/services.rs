@@ -215,15 +215,36 @@ pub(crate) fn url_attribute(sub: &SubRow) -> Value {
 }
 
 /// `removeSensitiveData($service)`.
+/// A service as a relation of `environment_details`.
+pub(crate) async fn present_for_environment(
+    state: &AppState,
+    ctx: &AuthCtx,
+    s: &ServiceRow,
+) -> Result<Value, ApiError> {
+    present_service_as(state, ctx, s, false, true).await
+}
+
 async fn present_service(
     state: &AppState,
     ctx: &AuthCtx,
     s: &ServiceRow,
     with_environment: bool,
 ) -> Result<Value, ApiError> {
+    present_service_as(state, ctx, s, with_environment, false).await
+}
+
+async fn present_service_as(
+    state: &AppState,
+    ctx: &AuthCtx,
+    s: &ServiceRow,
+    with_environment: bool,
+    model: bool,
+) -> Result<Value, ApiError> {
     let server = server_of(state, s).await?;
     let mut r = SERVICE.present(s.raw.clone());
-    r.shift_remove("id");
+    if !model {
+        r.shift_remove("id");
+    }
     if !ctx.can_read_sensitive {
         r.shift_remove("docker_compose");
         r.shift_remove("docker_compose_raw");
@@ -271,6 +292,9 @@ async fn present_service(
         let mut env = s.environment.clone();
         env.insert("project".into(), Value::Object(project));
         r.insert("environment".into(), Value::Object(env));
+    }
+    if model {
+        return Ok(Value::Object(r));
     }
     if ctx.can_read_sensitive
         && let Some(mut dest) = svc::destination_record(&state.db, s).await?
@@ -1924,10 +1948,6 @@ pub async fn clone_service(
     if !hosts {
         return Err(not_found);
     }
-    if clone_volumes {
-        // VolumeCloneJob is not ported.
-        return Err(ApiError::NotPorted);
-    }
     let new_uuid = coolify_domain::new_public_id();
     let name = match input.str("name").filter(|n| !n.is_empty()) {
         Some(n) => strip_tags(Some(n)),
@@ -1943,10 +1963,49 @@ pub async fn clone_service(
         .parse_service(new_id)
         .await
         .map_err(parse_error)?;
+    let mut pending = Vec::new();
     for kind in [SubKind::Application, SubKind::Database] {
+        let sources = svc::subs(&state.db, kind, s.id).await?;
         for sub in svc::subs(&state.db, kind, new_id).await? {
             svc::sub_set_status(&state.db, kind, sub.id, "exited", state.now()).await?;
+            let Some(source) = sources.iter().find(|x| x.name == sub.name) else {
+                continue;
+            };
+            if !clone_volumes {
+                continue;
+            }
+            // `$targetVolumesByMount`: the volumes pair up by mount path.
+            let targets = svc::persistent_storages(&state.db, kind, sub.id).await?;
+            for volume in svc::persistent_storages(&state.db, kind, source.id).await? {
+                let mount = volume.get("mount_path").and_then(Value::as_str);
+                let target = targets
+                    .iter()
+                    .find(|t| t.get("mount_path").and_then(Value::as_str) == mount);
+                if let (Some(name), Some(target)) =
+                    (volume.get("name").and_then(Value::as_str), target)
+                {
+                    pending.push((
+                        name.to_owned(),
+                        target.get("id").and_then(Value::as_i64).unwrap_or_default(),
+                        target
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ));
+                }
+            }
         }
+    }
+    if !pending.is_empty()
+        && let Some(source_server) = server_of(&state, &s).await?
+    {
+        jobs_of(&state)?.spawn_service_volume_clones(
+            s.clone(),
+            source_server.id,
+            server_id,
+            pending,
+        );
     }
     tracing::info!(target: "audit", event = "api.service.cloned", team_id = ctx.team_id, source_uuid = %s.uuid, service_uuid = %new_uuid, "service cloned");
     Ok(created(json!({"uuid": new_uuid, "message": "Service cloned."})).into_response())
@@ -3246,8 +3305,7 @@ pub async fn database(
     Ok(ok(present_database(&d)).into_response())
 }
 
-/// `PATCH /services/{uuid}/databases/{database_uuid}`. Starting or stopping the database proxy is
-/// not ported: such a change answers 501.
+/// `PATCH /services/{uuid}/databases/{database_uuid}`.
 pub async fn update_database(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -3350,9 +3408,6 @@ pub async fn update_database(
             ));
         }
     }
-    if is_public != current_public {
-        return Err(ApiError::NotPorted);
-    }
     let now = state.now();
     let mut values: Vec<(&'static str, ColumnValue)> = Vec::new();
     for k in ["human_name", "description", "image"] {
@@ -3360,7 +3415,7 @@ pub async fn update_database(
             values.push((k, ColumnValue::Text(input.str(k).map(str::to_owned))));
         }
     }
-    for k in ["exclude_from_status", "is_log_drain_enabled"] {
+    for k in ["exclude_from_status", "is_log_drain_enabled", "is_public"] {
         if input.has(k) {
             values.push((k, ColumnValue::Bool(filter_bool(input.get(k)))));
         }
@@ -3384,6 +3439,23 @@ pub async fn update_database(
     let fresh = svc::sub_by_uuid(&state.db, SubKind::Database, s.id, &d.uuid)
         .await?
         .ok_or(ApiError::Internal)?;
+    // `StartDatabaseProxy::dispatch` and `StopDatabaseProxy::dispatch`.
+    if is_public != current_public {
+        let jobs = jobs_of(&state)?.clone();
+        let (service, database) = (s.clone(), fresh.clone());
+        tokio::spawn(async move {
+            let result = if is_public {
+                let kind = crate::ui_services::database_type(&database);
+                jobs.start_service_database_proxy(&service, &database, &kind)
+                    .await
+            } else {
+                jobs.stop_service_database_proxy(&service, &database).await
+            };
+            if let Err(e) = result {
+                tracing::warn!(error = %e, "service database proxy");
+            }
+        });
+    }
     tracing::info!(target: "audit", event = "api.service_database.updated", team_id = ctx.team_id, service_uuid = %s.uuid, service_database_uuid = %d.uuid, "service database updated");
     Ok(ok(present_database(&fresh)).into_response())
 }

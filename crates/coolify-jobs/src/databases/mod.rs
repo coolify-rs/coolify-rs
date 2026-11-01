@@ -169,6 +169,41 @@ impl Jobs {
         Ok(ServerInfo::from_row(&row))
     }
 
+    /// `FlushDatabase::handle`.
+    pub async fn flush_database(&self, d: &DatabaseRow) -> Result<(), String> {
+        let mut cli = if d.kind == coolify_db::databases::Kind::Keydb {
+            "keydb-cli".to_owned()
+        } else {
+            "redis-cli".to_owned()
+        };
+        if d.kind == coolify_db::databases::Kind::Dragonfly && d.bool("enable_ssl") {
+            cli.push_str(" --tls --cacert /etc/dragonfly/certs/coolify-ca.crt --cert /etc/dragonfly/certs/server.crt --key /etc/dragonfly/certs/server.key");
+        }
+        let server = self.server_for(d).await?;
+        let target = server.target(self).await?;
+        let command = format!(
+            "docker exec {} sh -c 'REDISCLI_AUTH=\"$REDIS_PASSWORD\" {cli} FLUSHALL ASYNC'",
+            d.uuid
+        );
+        let output = self
+            .remote()
+            .run(
+                &target,
+                &[&command],
+                coolify_remote::RunOptions::op("database.flush"),
+            )
+            .await
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+        if output == "OK" {
+            Ok(())
+        } else if output.is_empty() {
+            Err("Failed to flush the database.".to_owned())
+        } else {
+            Err(output)
+        }
+    }
+
     /// `StartDatabase::prerequisiteError`: the CA of a database with SSL.
     pub async fn start_prerequisite_error(&self, d: &DatabaseRow) -> Option<String> {
         if !d.bool("enable_ssl") {
@@ -442,32 +477,13 @@ impl Jobs {
             let Ok(server) = jobs.server_for(&d).await else {
                 return;
             };
-            // `cloneRemoteVolume` (through the Coolify host) is not ported.
-            if server.id != target_server_id {
-                tracing::warn!(database = %d.uuid, "volume data is not cloned to another server");
-                return;
-            }
             jobs.stop_database(&d, &server, true).await;
-            if let Ok(t) = server.target(&jobs).await {
-                for (source, target) in clones {
-                    // `VolumeCloneJob::cloneLocalVolume` (a plain `local` target volume).
-                    let create = format!("docker volume create {}", quote(&target));
-                    let copy = format!(
-                        "docker run --rm -v {}:/source -v {}:/target alpine sh -c 'cp -a /source/. /target/'",
-                        quote(&source),
-                        quote(&target)
-                    );
-                    if let Err(e) = jobs
-                        .remote()
-                        .run(
-                            &t,
-                            &[create.as_str(), copy.as_str()],
-                            RunOptions::op("database.clone").timeout(Duration::from_secs(3600)),
-                        )
-                        .await
-                    {
-                        tracing::warn!(database = %d.uuid, error = %e.message, "volume clone failed");
-                    }
+            for (source, target) in clones {
+                if let Err(e) = jobs
+                    .clone_volume_data(server.id, target_server_id, &source, None, &target)
+                    .await
+                {
+                    tracing::warn!(database = %d.uuid, error = %e, "volume clone failed");
                 }
             }
             jobs.start_database(&d, None).await;

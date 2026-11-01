@@ -158,3 +158,12 @@ pages `Server/Transfer` and `Server/TransferFinish`. Differential: `compat/diff/
 | Danger on service pages, application delete with file storages | `Project\Shared\Danger`, `DeleteResourceJob` | rows, directory and volume compared after deletes through both UIs |
 | Application domains | `Project\Application\Domains` | rows and labels compared (`compat/ui/flow_domains.mjs`); DNS checks not ported |
 | Swarm settings, rollback start, Refresh GPUs, server status badge | `Application\Swarm`, `Rollback`, `Advanced`, `ServerStatusBadge` | compared, except the badge's warning states |
+
+## Deploy stream
+
+- `GET /projects/{uuid}/{environment}` with its resources.
+- Deploy job: additional servers (`parent_deployment_uuid`, `only_this_server`, combined notification), build servers,
+  registry pushes, Swarm stacks for applications. Status: `ComplexStatusCheck` and Swarm service replicas.
+- `/deploy` with services and databases, the public port of a service database, Flush all data, clones with volumes for
+  services and across servers (`VolumeCloneJob::cloneRemoteVolume`), `trustedInternalHosts()` for the bundled MinIO.
+

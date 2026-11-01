@@ -134,6 +134,10 @@ pub fn routes(state: AppState) -> Router<AppState> {
             post(crate::ui_databases::delete),
         )
         .route(
+            "/ui/databases/{uuid}/flush",
+            post(crate::ui_databases::flush),
+        )
+        .route(
             "/ui/servers/{uuid}/validation",
             get(validation_state).post(start_validation),
         )

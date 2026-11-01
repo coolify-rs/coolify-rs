@@ -547,6 +547,7 @@ async fn create_application(
     let id = apps::create(
         &state.db,
         NewApplication {
+            destination_type: coolify_db::databases::STANDALONE_DOCKER_MORPH,
             uuid: uuid.clone(),
             environment_id: env.id,
             destination_id,
@@ -934,6 +935,7 @@ pub async fn create_dockerfile(
     let id = apps::create(
         &state.db,
         NewApplication {
+            destination_type: coolify_db::databases::STANDALONE_DOCKER_MORPH,
             uuid: uuid.clone(),
             environment_id: env.id,
             destination_id,

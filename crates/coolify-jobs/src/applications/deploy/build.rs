@@ -244,10 +244,15 @@ impl Run {
             self.server_name
         ))
         .await;
+        // Restart doesn't need the build server: the helper is created on the deployment server.
+        let original_use_build_server = self.use_build_server;
+        self.use_build_server = false;
         self.prepare_builder_image().await?;
         self.check_git_if_build_needed().await?;
         self.generate_image_names();
         self.check_image_locally_or_remotely().await?;
+        // Restored before should_skip_build(): a full rebuild needs the build server.
+        self.use_build_server = original_use_build_server;
         Box::pin(self.should_skip_build()).await?;
         self.complete_deployment().await;
         Ok(())
@@ -255,6 +260,7 @@ impl Run {
 
     /// `deploy_simple_dockerfile()`.
     async fn deploy_simple_dockerfile(&mut self) -> Step {
+        self.move_switch_to_build_server();
         let dockerfile = B64.encode(self.app.str("dockerfile").unwrap_or_default());
         self.info(&format!(
             "Starting deployment of {} to {}.",
@@ -281,6 +287,10 @@ impl Run {
         self.generate_image_names();
         let image = self.b.production_image.clone();
         self.generate_compose_file(&image).await?;
+        if self.pull_image_for_additional_server().await? {
+            self.save_runtime_environment().await?;
+            return self.rolling_update().await;
+        }
         self.save_buildtime_environment_variables().await?;
         self.generate_build_env_variables().await?;
         self.add_build_env_variables_to_dockerfile().await?;
@@ -292,6 +302,7 @@ impl Run {
 
     /// `deploy_dockerfile_buildpack()`.
     async fn deploy_dockerfile(&mut self) -> Step {
+        self.move_switch_to_build_server();
         self.info(&self.starting_line()).await;
         if let Some(loc) = self
             .app
@@ -324,6 +335,7 @@ impl Run {
 
     /// `deploy_static_buildpack()`.
     async fn deploy_static(&mut self) -> Step {
+        self.move_switch_to_build_server();
         self.info(&self.starting_line()).await;
         self.prepare_builder_image().await?;
         self.check_git_if_build_needed().await?;
@@ -347,6 +359,7 @@ impl Run {
 
     /// `deploy_nixpacks_buildpack()`.
     async fn deploy_nixpacks(&mut self) -> Step {
+        self.move_switch_to_build_server();
         self.info(&self.starting_line()).await;
         self.prepare_builder_image().await?;
         self.check_git_if_build_needed().await?;
@@ -372,6 +385,7 @@ impl Run {
 
     /// `deploy_railpack_buildpack()`.
     async fn deploy_railpack(&mut self) -> Step {
+        self.move_switch_to_build_server();
         self.info(&self.starting_line()).await;
         self.prepare_builder_image().await?;
         self.check_git_if_build_needed().await?;
@@ -1262,6 +1276,12 @@ impl Run {
             }
         }
         // create_workdir()
+        if self.use_build_server {
+            let cfg = format!("mkdir -p {}", self.cfg);
+            self.switch_to_main_server();
+            self.exec(vec![Cmd::new(cfg)]).await?;
+            self.switch_to_build_server();
+        }
         let mkdir = in_docker(&self.dep, &format!("mkdir -p {}", self.workdir));
         let cfg = format!("mkdir -p {}", self.cfg);
         self.exec(vec![Cmd::new(mkdir), Cmd::new(cfg)]).await?;
@@ -1380,6 +1400,33 @@ impl Run {
             .saved
             .get("local_image_found")
             .is_some_and(|v| !v.trim().is_empty());
+        if found && self.is_additional {
+            let img = self.b.production_image.clone();
+            self.info(&format!(
+                "Image found ({img}) with the same Git Commit SHA. Build step skipped."
+            ))
+            .await;
+            self.generate_compose_file(&img).await?;
+            self.save_runtime_environment().await?;
+            self.push_to_docker_registry().await?;
+            self.rolling_update().await?;
+            return Ok(true);
+        }
+        if !found && self.is_additional && self.build_pack() != "dockercompose" {
+            let img = self.b.production_image.clone();
+            let suffix = if self.server_can_build() {
+                " Additional servers do not build, so they run the same image as the main server."
+                    .to_owned()
+            } else {
+                format!(
+                    " The server ({}) is set to deployments only and cannot build it.",
+                    self.server_name
+                )
+            };
+            return Err(Fail::new(format!(
+                "Image ({img}) not found in the registry; the main server must push it first.{suffix}"
+            )));
+        }
         if found {
             let enc =
                 self.jobs.0.encrypter.clone().ok_or_else(|| {
@@ -1421,6 +1468,13 @@ impl Run {
         }
         if self.b.restart_only {
             self.b.restart_only = false;
+            if !self.use_build_server {
+                // The restart skipped build server selection.
+                self.select_build_server().await?;
+                if self.use_build_server {
+                    self.detect_buildkit().await;
+                }
+            }
             Box::pin(self.decide_what_to_do()).await?;
         }
         Ok(false)
@@ -2211,7 +2265,7 @@ impl Run {
         else {
             return Ok(());
         };
-        if self.b.restart_only || self.build_pack() == "dockerimage" {
+        if self.b.restart_only || self.build_pack() == "dockerimage" || self.is_additional {
             return Ok(());
         }
         let img = self.b.production_image.clone();

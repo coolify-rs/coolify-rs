@@ -46,6 +46,14 @@ pub struct QueueOptions {
     pub pull_request_id: i64,
     /// `$git_type`.
     pub git_type: Option<String>,
+    /// `$server`, instead of the server of the application's destination.
+    pub server_id: Option<i64>,
+    /// `$destination`, instead of the application's destination.
+    pub destination_id: Option<i64>,
+    /// `$only_this_server`.
+    pub only_this_server: bool,
+    /// `$parent_deployment_uuid`.
+    pub parent_deployment_uuid: Option<String>,
 }
 
 /// `validateGitRef($commit, 'deployment commit')`.
@@ -91,7 +99,10 @@ impl Jobs {
                 }),
         )?;
         let db = &self.0.db;
-        let server_id = a.server_id().ok_or("The application has no destination.")?;
+        let server_id = o
+            .server_id
+            .or_else(|| a.server_id())
+            .ok_or("The application has no destination.")?;
         let server = servers::find_by_id(db, server_id)
             .await
             .map_err(|e| e.to_string())?
@@ -144,7 +155,9 @@ impl Jobs {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_owned(),
-                destination_id: a.int("destination_id").unwrap_or_default(),
+                destination_id: o
+                    .destination_id
+                    .unwrap_or_else(|| a.int("destination_id").unwrap_or_default()),
                 deployment_uuid: deployment_uuid.to_owned(),
                 deployment_url: format!(
                     "/project/{project_uuid}/environment/{env_uuid}/application/{}/deployment/{deployment_uuid}",
@@ -158,11 +171,12 @@ impl Jobs {
                 is_api: o.is_api,
                 restart_only: o.restart_only,
                 rollback: o.rollback,
-                only_this_server: false,
+                only_this_server: o.only_this_server,
                 git_type: o.git_type.clone(),
                 commit_message: None,
                 docker_registry_image_tag: o.docker_registry_image_tag.clone(),
                 build_server_id: None,
+                parent_deployment_uuid: o.parent_deployment_uuid.clone(),
             };
             let now = Utc::now().naive_utc();
             queue_id = apps::insert_deployment(db, &new, now)

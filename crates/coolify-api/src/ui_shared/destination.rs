@@ -16,7 +16,6 @@ use serde_json::{Value, json};
 use super::{Class, Res, find};
 use crate::auth::AuthCtx;
 use crate::response::{ApiError, ApiResult, ok};
-use crate::routes::servers::effective_role_is_build;
 use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -269,6 +268,10 @@ async fn promote(
         state.now(),
     )
     .await?;
+    // refreshServers()
+    if let Some(jobs) = state.jobs.as_ref() {
+        jobs.check_server_applications(server.id).await;
+    }
     Ok(ok(json!({})).into_response())
 }
 
@@ -289,10 +292,14 @@ async fn stop(
         .ok_or(super::NOT_FOUND)?;
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     jobs.stop_application_on(&a, server.id).await;
+    // refreshServers()
+    if let Some(main) = res.server_id {
+        jobs.check_server_applications(main).await;
+    }
     Ok(ok(json!({})).into_response())
 }
 
-/// `redeploy($network_id, $server_id)`: the primary server only for now.
+/// `redeploy($network_id, $server_id)`.
 async fn redeploy(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -313,10 +320,9 @@ async fn redeploy(
         return Ok(ok(json!({"error": "Failed to deploy.", "details": "Before deploying to multiple servers, you must first set a Docker image in the General tab.<br>More information here: <a target=\"_blank\" class=\"underline\" href=\"https://coolify.io/docs/knowledge-base/server/multiple-servers\">documentation</a>"})).into_response());
     }
     let server = team_server(&state, &res, int(&body, "server_id")).await?;
-    if effective_role_is_build(&server.settings.clone().unwrap_or_default())
-        || res.server_id != Some(server.id)
-    {
-        return Err(ApiError::NotPorted);
+    let network_id = int(&body, "network_id");
+    if !ops::standalone_on_server(&state.db, network_id, server.id).await? {
+        return Err(super::NOT_FOUND);
     }
     let a = apps::find_in_team(&state.db, res.team_id, &res.uuid)
         .await?
@@ -328,6 +334,9 @@ async fn redeploy(
             &a,
             &deployment,
             QueueOptions {
+                server_id: Some(server.id),
+                destination_id: Some(network_id),
+                only_this_server: true,
                 no_questions_asked: true,
                 ..Default::default()
             },

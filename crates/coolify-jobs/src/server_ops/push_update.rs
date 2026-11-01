@@ -218,7 +218,7 @@ pub async fn push_server_update(jobs: &Jobs, server_id: i64, data: Value) -> Res
     let applications = apps::list_for_server(&db, server_id)
         .await
         .map_err(|e| e.to_string())?;
-    jobs.apply_application_containers(&applications, &inspected, snapshot)
+    jobs.apply_application_containers(&applications, &inspected, snapshot, false)
         .await;
     let databases = dbs::list_for_server(&db, server_id)
         .await

@@ -80,8 +80,8 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Deliberate divergence: upstream's `POST` and `PATCH /databases/{uuid}/storages` answers carry the relation the model
   loaded on the way (`resource` or `service`): the whole database with `destination.server`, including the saved proxy
   configuration, also for tokens without `read:sensitive`. coolify-rs leaves this relation out.
-- Clone with `clone_volumes`: same-server copies only, onto a plain `local` volume; `cloneRemoteVolume` and the source
-  volume's driver options are not ported. `migrate` answers 404 as upstream does in production.
+- Clone with `clone_volumes`: a database copy across servers was only checked for the new volume existing, not its
+  contents. `migrate` answers 404 as upstream does in production.
 - S3: `testConnection` signs its own `ListObjectsV2`; when the endpoint answers with an error, the message is shaped like
   Flysystem's but not identical to the AWS SDK's text. The S3 endpoint's DNS is not pinned for the request as
   `httpClientOptions` does. The "S3 connection error" email is not sent.
@@ -135,12 +135,11 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   `proxy.last_saved_proxy_configuration` for tokens without `read:sensitive`: an upstream leak kept for parity.
 - Application operations are ported in the API (`compat/diff/applications_ops_diff.py`): previews, clone, rollback,
   logs, move, destinations. What they do not do yet:
-  - Preview deployments build and run for every build pack (`preview-*` in `compat/diff/git_deploy_diff.py`). `ApplicationPullRequestUpdateJob` ran against a local fake of the GitHub API only. `POST /deploy` by tag answers 501. An application with
-    an additional destination answers 501 to start, restart and rollback (`unported_parts`).
+  - Preview deployments build and run for every build pack (`preview-*` in `compat/diff/git_deploy_diff.py`). `ApplicationPullRequestUpdateJob` ran against a local fake of the GitHub API only.
   - `POST /migrate` answers 404 like upstream outside a Coolify development instance (`isDev()`), so
     `MigrateResourceToDestination` is not ported.
-  - `clone_volumes` copies data on one server only. A copy to another server (upstream goes through scp on the Coolify
-    host) is logged and the new volume stays empty. A source the job cannot deploy answers 501 before anything is created.
+  - `clone_volumes` across servers goes through this host, as upstream's scp does. It ran for services; the application
+    path uses the same code but was not run. A source the job cannot deploy answers 501 before anything is created.
   - The preview routes read the service names and named volumes of a Compose preview from `docker_compose_raw`, where
     upstream's `composeServiceNamesForPreview()` runs `parse(pull_request_id)`: creating a preview does not yet add its bind
     mounts or store the rendered file; the deployment does. A clone of a Compose application with a named volume and a
@@ -187,7 +186,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - No backups, notifications or webhooks yet. SSH runs without
 - No proxy management, scheduler, notifications or webhooks yet. SSH runs without
 - The new-server page offers only "IP address or domain" (no cloud provisioning).
-- Deployments: additional servers, build servers and registry pushes are not ported or not compared with the reference (`git_deploy_diff.py` runs one server without a registry). `current_process_id` stays empty, and commands that upstream feeds on stdin carry their input inside the script. Jobs run in the coolify-rs process: a restart drops a running deployment.
+- Deployments: `current_process_id` stays empty, and commands that upstream feeds on stdin carry their input inside the script. Jobs run in the coolify-rs process: a restart drops a running deployment.
 - No proxy management, backups, scheduler, notifications or webhooks yet. SSH runs without
   connection multiplexing (one connection per command).
 - New installations (`scripts/install`, `coolify-rs boot`) use the baseline schema; a 4.5.0 database is served read-only
@@ -309,7 +308,6 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 | `Project/Shared/*` sections on service pages (variables, tags, danger, logs, volumes and others) | placeholder named after the section | connected when the shared components merge |
 | `addSuggestedDomain` on the Domains page | not ported | suggestions are not offered |
 | Configuration warning on service pages, with the diff of changes | the warning without the diff | no configuration diff yet |
-| `POST /services/{uuid}/clone` with `clone_volumes: true` | `501` | `VolumeCloneJob` is not ported |
 | `PATCH /services/{uuid}/databases/{database_uuid}` that changes `is_public` | `501` | `StartDatabaseProxy` / `StopDatabaseProxy` are not ported |
 | `POST /services/{uuid}/migrate` in a dev instance | `404`, as upstream outside dev | `MigrateResourceToDestination` only runs in dev upstream |
 | `get_service_templates(force: true)` | the shipped file, or `COOLIFY_RS_TEMPLATES_DIR`, which `PullTemplatesFromCDN` replaces | forcing a refresh from a page is not ported |
@@ -415,19 +413,41 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
 
 - Migrate to another server (`MigrateResourceToDestination`) is not ported. Upstream renders the section only in a development
   instance (`isDev()`) and its API answers 404 elsewhere, so the section is not shown here either.
-- Clone and clone-me copy no volume data: neither Blade view has a control for it. `POST /services/{uuid}/clone` with
-  `clone_volumes` still answers 501, and a database clone across servers skips the data.
+- Clone and clone-me copy no volume data: neither Blade view has a control for it.
 - Clones of an application made through the UI copy its previews without domains until the preview helpers of the application
   API are on this branch. Clone-me is not one transaction here: a failure partway leaves what was already cloned.
 - The toast after adding a domain is "Domain added.": the DNS check and record creation that upstream starts after adding
   (`configureDnsAfterDomainAdd`, `ConfigureDnsRecordJob`, the DNS gate of the add and edit dialogs) are not ported. Run them
   from the DNS menu. The www redirect is set from the domain dialog; suggested www rows are not offered.
-- Deploying to one additional server (`only_this_server`) answers 501: the deploy job has no multi-server path. Adding, removing,
-  promoting and stopping work. Deploying to Swarm is not ported.
+- Adding, removing, promoting and stopping an additional server work, and so does deploying to one (`only_this_server`).
 - File browser: downloads through an S3 file storage (`FileDownloadStorageService`) are not ported, so files always stream from
   the server. The helper container path for images without a shell is ported but was not run on the VM.
 - Maintenance mode: the Caddy configuration is ported but ran only against Traefik on the VM.
-- Flush all data on the Danger page of Redis, KeyDB and Dragonfly is not ported.
+
+## Additional servers, build servers, Swarm and S3 (deploy stream)
+
+Compared with `compat/diff/multi_server_diff.py`, `compat/diff/environment_details_diff.py` and
+`compat/diff/s3_backup_diff.py`. The S3 script needs `scripts/dev-server-container.sh`: the trusted host `coolify-minio`
+only resolves on the reference's Docker network.
+
+- `git_deploy_diff.py` was not rerun after the deploy job gained build servers and additional servers. Its last result
+  (652/662) predates that change, so the single-server paths have no fresh comparison.
+- Not run: the `deploykey` case, Bitbucket, GitLab and deploy-key previews, Force start screens. The `content` difference on
+  `is_based_on_git` file storages is still unexplained.
+- Swarm covers applications created through the API. Databases and services on a Swarm destination still answer 501
+  (`routes/databases.rs`, `routes/database_more.rs`), and the UI create forms write standalone destinations only.
+- No screen of this area was compared by screenshot: Flush all data, the Swarm heading and the additional server rows.
+- Flush all data ran on Redis only, not on KeyDB or Dragonfly.
+- Service clone with volumes: on the reference, the same-server chain can die in its `StopService` step with `Nesting level
+  too deep` (`Closure (services.php:783)`), leaving nothing copied and the source stopped. coolify-rs completes it, so
+  `multi_server_diff.py` reports those two reference checks as failed. That is an upstream bug, deliberately not copied.
+- `PreparesBackupDownloads` and S3 file downloads have still never run: they need `file_download_s3_storage_id` in
+  `instance_settings`. A restore of a volume backup from S3 was not run either.
+- The combined multi-server notification remembers "queued" and "notified" in memory, not in a cache, so a restart between
+  the deployments of one group sends none. Its delivery was not compared.
+- Custom-type service databases still answer 404 on their pages, and the `ip_previous` gap of the v1 create routes was not
+  looked at.
+- `MigrateResourceToDestination` is development-only upstream (`isDev()`), so it answers 404 on both sides and was not run.
 
 ## Canvas, Admin and Subscription
 

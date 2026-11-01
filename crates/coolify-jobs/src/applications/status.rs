@@ -9,6 +9,7 @@ use coolify_db::instance_jobs as queries;
 use coolify_db::records::Record;
 use coolify_db::servers::{self, ColumnValue};
 use coolify_remote::RunOptions;
+use coolify_remote::shell::quote;
 use serde_json::Value;
 
 use crate::Jobs;
@@ -164,6 +165,132 @@ fn owner<'a>(
 }
 
 impl Jobs {
+    /// `Server::getContainers()`: the replica counts become a status on a Swarm service.
+    async fn server_containers(&self, t: &coolify_remote::Target, swarm: bool) -> Vec<Value> {
+        let opts = || RunOptions::op("server.containers").timeout(Duration::from_secs(30));
+        let script = if swarm {
+            "docker service inspect $(docker service ls -q) --format '{{json .}}'"
+        } else {
+            "docker container inspect $(docker container ls -aq) --format '{{json .}}'"
+        };
+        let out = self
+            .remote()
+            .run_quiet(t, &[script], opts())
+            .await
+            .unwrap_or_default();
+        let mut containers: Vec<Value> = out
+            .lines()
+            .filter_map(|l| serde_json::from_str(l.trim()).ok())
+            .collect();
+        if swarm {
+            let replicas = self
+                .remote()
+                .run_quiet(t, &["docker service ls --format '{{json .}}'"], opts())
+                .await
+                .unwrap_or_default();
+            for line in replicas.lines() {
+                let Ok(replica) = serde_json::from_str::<Value>(line.trim()) else {
+                    continue;
+                };
+                let name = replica.get("Name").and_then(Value::as_str);
+                let counts = replica
+                    .get("Replicas")
+                    .and_then(Value::as_str)
+                    .unwrap_or("0/0");
+                let mut parts = counts.split('/');
+                let running = parts.next() == parts.next();
+                let (state, health) = if running {
+                    ("running", "healthy")
+                } else {
+                    ("starting", "unhealthy")
+                };
+                for c in &mut containers {
+                    if c.pointer("/Spec/Name").and_then(Value::as_str) == name
+                        && let Some(map) = c.as_object_mut()
+                    {
+                        map.insert(
+                            "State".into(),
+                            serde_json::json!({"Status": state, "Health": {"Status": health}}),
+                        );
+                    }
+                }
+            }
+        }
+        containers
+    }
+
+    /// `ComplexStatusCheck::handle($application)`.
+    async fn complex_status_check(
+        &self,
+        a: &ApplicationRow,
+        additional: &[coolify_db::application_ops::DestinationRow],
+    ) {
+        let db = &self.0.db;
+        let main = a.server_id();
+        let mut ids: Vec<i64> = additional.iter().map(|d| d.server_id).collect();
+        ids.extend(main);
+        for id in ids {
+            let is_main = main == Some(id);
+            let status = async {
+                let row = servers::find_by_id(db, id).await.ok().flatten()?;
+                let server = ServerInfo::from_row(&row);
+                if !server.is_functional() {
+                    return None;
+                }
+                let t = server.target(self).await.ok()?;
+                let containers = self
+                    .application_containers(&t, &a.uuid, false)
+                    .await
+                    .ok()?
+                    .into_iter()
+                    .filter(|c| {
+                        crate::applications::ops::matches_pull_request(
+                            c.get("Labels").and_then(Value::as_str).unwrap_or_default(),
+                            Some(0),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                if containers.is_empty() {
+                    return None;
+                }
+                let names: Vec<String> = containers
+                    .iter()
+                    .filter_map(|c| c.get("Names").and_then(Value::as_str).map(quote))
+                    .collect();
+                let inspect = format!(
+                    "docker container inspect {} --format '{{{{json .}}}}'",
+                    names.join(" ")
+                );
+                let out = self
+                    .remote()
+                    .run_quiet(&t, &[&inspect], RunOptions::op("server.containers"))
+                    .await?;
+                let statuses: Vec<String> = out
+                    .lines()
+                    .filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
+                    .map(|c| container_status(&c))
+                    .collect();
+                Some(aggregate(&statuses))
+            }
+            .await
+            .unwrap_or_else(|| "exited".to_owned());
+            let now = Utc::now().naive_utc();
+            if is_main {
+                if a.str("status") != Some(status.as_str()) {
+                    let _ = apps::update_if_changed(
+                        db,
+                        a.id,
+                        &[("status", ColumnValue::Text(Some(status)))],
+                        now,
+                    )
+                    .await;
+                }
+            } else {
+                let _ = apps::set_additional_status(db, a.id, id, &status, now).await;
+            }
+        }
+    }
+
     /// `GetContainersStatus::handle($server)` for the server's applications.
     pub async fn check_server_applications(&self, server_id: i64) {
         let db = &self.0.db;
@@ -171,30 +298,34 @@ impl Jobs {
             return;
         };
         let server = ServerInfo::from_row(&row);
-        if !server.is_functional() || server.is_swarm() {
+        if !server.is_functional() {
             return;
         }
-        let Ok(applications) = apps::list_for_server(db, server_id).await else {
+        let Ok(mut applications) = apps::list_for_server(db, server_id).await else {
             return;
         };
+        // An application with additional servers goes through `ComplexStatusCheck`.
+        let mut simple = Vec::with_capacity(applications.len());
+        for a in applications.drain(..) {
+            let additional = coolify_db::application_ops::additional_networks(db, a.id)
+                .await
+                .unwrap_or_default();
+            if additional.is_empty() {
+                simple.push(a);
+            } else {
+                self.complex_status_check(&a, &additional).await;
+            }
+        }
+        let applications = simple;
         if applications.is_empty() {
             return;
         }
         let Ok(t) = server.target(self).await else {
             return;
         };
-        let script = "docker container inspect $(docker container ls -aq) --format '{{json .}}'";
-        let opts = RunOptions::op("server.containers").timeout(Duration::from_secs(30));
-        let out = self
-            .remote()
-            .run_quiet(&t, &[script], opts)
-            .await
-            .unwrap_or_default();
-        let containers: Vec<Value> = out
-            .lines()
-            .filter_map(|l| serde_json::from_str(l.trim()).ok())
-            .collect();
-        self.apply_application_containers(&applications, &containers, Snapshot::POLLED)
+        let swarm = server.is_swarm();
+        let containers = self.server_containers(&t, swarm).await;
+        self.apply_application_containers(&applications, &containers, Snapshot::POLLED, swarm)
             .await;
     }
 
@@ -204,6 +335,7 @@ impl Jobs {
         applications: &[ApplicationRow],
         containers: &[Value],
         snapshot: Snapshot,
+        swarm: bool,
     ) {
         let db = &self.0.db;
         let not_found_counts = snapshot.not_found_counts(containers);
@@ -215,7 +347,12 @@ impl Jobs {
         // containers.
         let mut preview_restarts: BTreeMap<i64, (Record, i64, i64)> = BTreeMap::new();
         for c in containers {
-            let Some(labels) = c.pointer("/Config/Labels").and_then(Value::as_object) else {
+            let labels_at = if swarm {
+                "/Spec/Labels"
+            } else {
+                "/Config/Labels"
+            };
+            let Some(labels) = c.pointer(labels_at).and_then(Value::as_object) else {
                 continue;
             };
             let truthy = |k: &str| {
@@ -290,11 +427,18 @@ impl Jobs {
                 )
                 .await;
             }
-            if labels
-                .get("com.docker.compose.service")
-                .and_then(Value::as_str)
-                .is_some()
-            {
+            // Swarm services have other labels.
+            let service_label = labels.get("com.docker.compose.service").or_else(|| {
+                if swarm {
+                    labels
+                        .get("coolify.serviceName")
+                        .or_else(|| labels.get("coolify.name"))
+                        .or_else(|| labels.get("com.docker.stack.namespace"))
+                } else {
+                    None
+                }
+            });
+            if service_label.and_then(Value::as_str).is_some() {
                 let restarts = c.get("RestartCount").and_then(Value::as_i64).unwrap_or(0);
                 statuses
                     .entry(a.id)

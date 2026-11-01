@@ -209,6 +209,18 @@ pub(crate) async fn present(
     with_environment: bool,
     backup_configs: Option<Value>,
 ) -> Result<Value, ApiError> {
+    present_as(state, ctx, d, with_environment, backup_configs, false).await
+}
+
+/// `model`: the plain Eloquent model of `environment_details`, nothing hidden by the controller.
+pub(crate) async fn present_as(
+    state: &AppState,
+    ctx: &AuthCtx,
+    d: &DatabaseRow,
+    with_environment: bool,
+    backup_configs: Option<Value>,
+    model: bool,
+) -> Result<Value, ApiError> {
     let server = match d.server_id() {
         Some(id) => servers::find_by_id(&state.db, id).await?,
         None => None,
@@ -255,7 +267,12 @@ pub(crate) async fn present(
     if let Some(dest) = &d.destination {
         let mut dest = dest.clone();
         if let Some(s) = &server {
-            dest.insert("server".into(), nested_server(state, ctx, s)?);
+            let nested = if model {
+                nested_server_with(state, s, false, ctx.can_read_sensitive)?
+            } else {
+                nested_server(state, ctx, s)?
+            };
+            dest.insert("server".into(), nested);
         }
         r.insert("destination".into(), Value::Object(dest));
     }
@@ -268,6 +285,28 @@ pub(crate) async fn present(
     }
     if let Some(b) = backup_configs {
         r.insert("backup_configs".into(), b);
+    }
+    if model {
+        r.shift_remove("laravel_through_key");
+        if !ctx.can_read_sensitive {
+            return Ok(Value::Object(r));
+        }
+        // `makeVisible($model->getHidden())`: every hidden column, in the order of the table.
+        let mut out = Record::new();
+        for (k, raw) in &d.raw {
+            if k == "laravel_through_key" {
+                continue;
+            }
+            let v = r.shift_remove(k).unwrap_or_else(|| raw.clone());
+            out.insert(k.clone(), v);
+        }
+        for k in ["internal_db_url", "external_db_url"] {
+            if let Some(v) = r.shift_remove(k) {
+                out.insert(k.into(), v);
+            }
+        }
+        out.extend(r);
+        return Ok(Value::Object(out));
     }
     for hidden in ["id", "laravel_through_key"] {
         r.shift_remove(hidden);
@@ -1004,6 +1043,36 @@ pub(crate) async fn startable(state: &AppState, d: &DatabaseRow) -> Result<(), A
     } else {
         Ok(())
     }
+}
+
+/// The database branch of `deploy_resource()`: the message for the caller.
+pub(crate) async fn deploy_database(
+    state: &AppState,
+    ctx: &AuthCtx,
+    d: DatabaseRow,
+) -> Result<String, ApiError> {
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    if jobs.start_prerequisite_error(&d).await.is_some() {
+        return Ok(coolify_jobs::databases::ssl::MISSING_CA.to_owned());
+    }
+    let name = d.str("name").unwrap_or_default().to_owned();
+    let uuid = d.uuid.clone();
+    let (kind, id, started) = (d.kind, d.id, d.str("started_at").is_some());
+    if let Err(message) = jobs.spawn_database_start(d, Some(ctx.user_id)) {
+        return Ok(message.to_owned());
+    }
+    if !started {
+        dbs::update_if_changed(
+            &state.db,
+            kind,
+            id,
+            &[("started_at", servers::ColumnValue::Time(state.now()))],
+            state.now(),
+        )
+        .await?;
+    }
+    tracing::info!(target: "audit", event = "api.database.started", team_id = ctx.team_id, database_uuid = %uuid, "database started");
+    Ok(format!("Database {name} started."))
 }
 
 /// `StartDatabase::prerequisiteError`.

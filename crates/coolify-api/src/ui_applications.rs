@@ -258,6 +258,7 @@ pub async fn create_docker_image(
     let id = apps::create(
         &state.db,
         NewApplication {
+            destination_type: coolify_db::databases::STANDALONE_DOCKER_MORPH,
             uuid: uuid.clone(),
             environment_id: env.id,
             destination_id,
@@ -501,7 +502,7 @@ async fn queue(
         a.str("build_pack"),
         Some("dockerimage" | "dockerfile" | "static" | "nixpacks" | "railpack" | "dockercompose")
     );
-    if !built || !apps::unported_parts(&state.db, a.id).await?.is_empty() {
+    if !built {
         return Err(ApiError::NotPorted);
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
@@ -1421,10 +1422,6 @@ pub async fn settings(
     if m.get("reset_labels").and_then(Value::as_bool) == Some(true) {
         regenerate_labels(&state, a.id, true).await?;
         return Ok(ok(json!({"message": null})).into_response());
-    }
-    // The build server is not ported: the deployment would ignore the setting.
-    if m.get("is_build_server_enabled").and_then(Value::as_bool) == Some(true) {
-        return Err(ApiError::NotPorted);
     }
     let mut values: Vec<(&'static str, ColumnValue)> = Vec::new();
     for k in [

@@ -942,8 +942,7 @@ impl Jobs {
 
     /// The asynchronous part of `clone_application(..., cloneVolumeData: true)`, per volume:
     /// `StopApplication`, `VolumeCloneJob`, then a redeployment of the source. Upstream dispatches
-    /// them to queues; here they run in that order. A copy across servers is not ported (upstream
-    /// passes the archive through the Coolify host with scp): it is logged and that volume stays empty.
+    /// them to queues; here they run in that order.
     pub fn spawn_clone_volumes(
         &self,
         source: ApplicationRow,
@@ -952,14 +951,15 @@ impl Jobs {
     ) {
         let jobs = self.clone();
         tokio::spawn(async move {
+            let source_server = source.server_id().unwrap_or(target_server_id);
             for (source_volume, volume_id, target_volume) in volumes {
                 let _ = jobs.stop_application(&source, false, false, true).await;
                 if let Err(e) = jobs
-                    .clone_volume(
-                        &source,
+                    .clone_volume_data(
+                        source_server,
                         target_server_id,
                         &source_volume,
-                        volume_id,
+                        Some(volume_id),
                         &target_volume,
                     )
                     .await
@@ -984,19 +984,183 @@ impl Jobs {
         });
     }
 
-    /// `VolumeCloneJob::cloneLocalVolume()`.
-    async fn clone_volume(
+    /// `VolumeCloneJob::cloneRemoteVolume()`: the archive goes through this host.
+    async fn clone_remote_volume(
         &self,
-        source: &ApplicationRow,
+        source: &ServerInfo,
+        target: &ServerInfo,
+        source_volume: &str,
+        volume_id: Option<i64>,
+        target_volume: &str,
+    ) -> Result<(), String> {
+        let (ts, tt) = (source.target(self).await?, target.target(self).await?);
+        let opts = || {
+            RunOptions::op("application.clone_volume").timeout(std::time::Duration::from_secs(3600))
+        };
+        let inspected = self
+            .remote()
+            .run(
+                &ts,
+                &[&format!(
+                    "docker volume inspect {} 2>/dev/null || echo '[]'",
+                    quote(source_volume)
+                )],
+                opts(),
+            )
+            .await
+            .map_err(|e| e.message)?
+            .unwrap_or_default();
+        let (driver, options) = volume_configuration(&inspected);
+        let bind = driver == "local"
+            && options.iter().any(|(k, v)| k == "type" && v == "none")
+            && options
+                .iter()
+                .find(|(k, _)| k == "o")
+                .is_some_and(|(_, v)| v.split(',').any(|o| o.trim() == "bind"));
+        let create = if bind {
+            create_volume_command("local", &[], target_volume)
+        } else {
+            create_volume_command(&driver, &options, target_volume)
+        };
+        let plain = bind || (driver == "local" && options.is_empty());
+        if !bind {
+            // `createCloneArchiveDirectory()`.
+            let make_dir = async |server: &ServerInfo, t: &coolify_remote::Target, name: &str| {
+                if !server.is_non_root() {
+                    let dir = format!("/data/coolify/clone/{name}");
+                    let q = quote(&dir);
+                    self.remote()
+                        .run(
+                            t,
+                            &[&format!("mkdir -p {q}"), &format!("chmod 777 {q}")],
+                            opts(),
+                        )
+                        .await
+                        .map_err(|e| e.message)?;
+                    return Ok::<String, String>(dir);
+                }
+                let dir = self
+                    .remote()
+                    .run(t, &["mktemp -d /var/tmp/coolify-clone.XXXXXXXXXX"], opts())
+                    .await
+                    .map_err(|e| e.message)?
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned();
+                let q = quote(&dir);
+                self.remote()
+                    .run(
+                        t,
+                        &[
+                            &format!("chown {} {q}", quote(&server.user)),
+                            &format!("chmod 700 {q}"),
+                        ],
+                        opts(),
+                    )
+                    .await
+                    .map_err(|e| e.message)?;
+                Ok(dir)
+            };
+            let source_dir = make_dir(source, &ts, source_volume).await?;
+            let target_dir = make_dir(target, &tt, target_volume).await?;
+            let local = std::env::temp_dir()
+                .join("coolify-rs-volume-clones")
+                .join(coolify_domain::new_public_id());
+            let result: Result<(), String> = async {
+                tokio::fs::create_dir_all(&local)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let archive = local.join("volume-data.tar.gz");
+                self.remote()
+                    .run(
+                        &ts,
+                        &[&format!(
+                            "docker run --rm -v {}:/source -v {}:/clone alpine sh -c 'cd /source && tar czf /clone/volume-data.tar.gz .'",
+                            quote(source_volume),
+                            quote(&source_dir)
+                        )],
+                        opts(),
+                    )
+                    .await
+                    .map_err(|e| e.message)?;
+                let mut read = self
+                    .remote()
+                    .open_command(&ts, &format!("cat {}/volume-data.tar.gz", quote(&source_dir)))
+                    .await
+                    .map_err(|e| e.message)?;
+                let mut file = tokio::fs::File::create(&archive)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                tokio::io::copy(&mut read.stdout, &mut file)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                drop(file);
+                self.remote()
+                    .copy_file(&tt, &archive, &format!("{target_dir}/volume-data.tar.gz"))
+                    .await
+                    .map_err(|e| e.message)?;
+                self.remote()
+                    .run(
+                        &tt,
+                        &[
+                            create.as_str(),
+                            &format!(
+                                "docker run --rm -v {}:/target -v {}:/clone alpine sh -c 'cd /target && tar xzf /clone/volume-data.tar.gz'",
+                                quote(target_volume),
+                                quote(&target_dir)
+                            ),
+                        ],
+                        opts(),
+                    )
+                    .await
+                    .map_err(|e| e.message)?;
+                Ok(())
+            }
+            .await;
+            let _ = tokio::fs::remove_dir_all(&local).await;
+            for (t, dir) in [(&ts, &source_dir), (&tt, &target_dir)] {
+                let _ = self
+                    .remote()
+                    .run_quiet(t, &[&format!("rm -rf {}", quote(dir))], opts())
+                    .await;
+            }
+            result?;
+        } else {
+            self.remote()
+                .run(&tt, &[create.as_str()], opts())
+                .await
+                .map_err(|e| e.message)?;
+        }
+        if plain && let Some(id) = volume_id {
+            ops::set_ignores_driver_options(&self.0.db, id)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// `VolumeCloneJob::handle()`.
+    pub(crate) async fn clone_volume_data(
+        &self,
+        source_server: i64,
         target_server_id: i64,
         source_volume: &str,
-        volume_id: i64,
+        volume_id: Option<i64>,
         target_volume: &str,
     ) -> Result<(), String> {
         let db = &self.0.db;
-        let source_server = source.server_id().ok_or("The source has no server.")?;
         if source_server != target_server_id {
-            return Err("Copying volume data to another server is not ported.".into());
+            let load = async |id: i64| {
+                servers::find_by_id(db, id)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .map(|r| ServerInfo::from_row(&r))
+                    .ok_or_else(|| "Server not found.".to_owned())
+            };
+            let (source, target) = (load(source_server).await?, load(target_server_id).await?);
+            return self
+                .clone_remote_volume(&source, &target, source_volume, volume_id, target_volume)
+                .await;
         }
         if source_volume == target_volume {
             return Ok(());
@@ -1047,7 +1211,7 @@ impl Jobs {
             .run(&t, &refs, RunOptions::op("application.clone_volume"))
             .await
             .map_err(|e| e.message)?;
-        if remembered_plain {
+        if remembered_plain && let Some(volume_id) = volume_id {
             ops::set_ignores_driver_options(db, volume_id)
                 .await
                 .map_err(|e| e.to_string())?;

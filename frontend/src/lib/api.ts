@@ -394,6 +394,8 @@ export interface ActivityEntry {
 }
 
 export interface DatabaseState {
+  /** Redis, KeyDB and Dragonfly have "Flush all data". */
+  flushable?: boolean;
   /** Latest start (or restart) of the database. */
   activity: { id: number; status: 'queued' | 'in_progress' | 'finished' | 'error'; entries: ActivityEntry[] } | null;
   /** The saved configuration differs from the one the container was started with (`isConfigurationChanged`). */
