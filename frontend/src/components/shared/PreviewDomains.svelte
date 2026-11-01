@@ -320,7 +320,7 @@
 
 {#if editing}
   {@const row = editing}
-  <Modal title="Domain settings" onclose={() => (editing = null)}>
+  <Modal title="Domain settings" widthClass="lg:w-[33.125rem]!" onclose={() => (editing = null)}>
     <form
       class="flex flex-col gap-4"
       onsubmit={(e) => {
@@ -369,7 +369,7 @@
 {/if}
 
 {#if unknownPort !== null}
-  <Modal title="Use a different port?" onclose={() => (unknownPort = null)}>
+  <Modal title="Use a different port?" narrow onclose={() => (unknownPort = null)}>
     <Callout type="warning" title="Unrecognized internal port" class="mb-4">
       Port <strong>{unknownPort}</strong> is not listed in Ports Exposes and is not used by any application domain. The proxy will still route to it, but the container may not be listening there.
     </Callout>

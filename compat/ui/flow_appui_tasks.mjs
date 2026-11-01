@@ -84,6 +84,11 @@ const results = await flow(port, 'alice', async (h) => {
     const taskUrl = h.page.url().replace(h.base, '');
     await h.go(taskUrl);
     r.modalFromUrl = await h.page.locator('text=Edit scheduled task').count();
+    // `/tasks/{task_uuid}` redirects to the list with the task open.
+    const taskId = new URL(h.page.url()).searchParams.get('task_uuid');
+    await h.go(`${url}/tasks/${taskId}`);
+    r.taskRoute = h.page.url().replace(h.base, '').replace(taskId, 'TASK').replace(url, 'RES');
+    r.taskRouteModal = await h.page.locator('text=Edit scheduled task').count();
     await click(/^\s*Danger Zone\s*$/);
     await click(/^\s*Delete task\s*$/);
     await h.page.waitForTimeout(400);
@@ -105,7 +110,6 @@ const results = await flow(port, 'alice', async (h) => {
   await h.shot('task-details', false);
   rec.details = await h.page.locator('input[readonly]:visible').evaluateAll((list) => list.map((i) => i.value));
 
-  // `/tasks/{uuid}` redirects, an unknown uuid stays on the list's error.
   return rec;
 });
 void diff;
