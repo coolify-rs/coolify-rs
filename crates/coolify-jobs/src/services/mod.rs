@@ -657,6 +657,35 @@ impl Jobs {
     }
 
     /// `StopService::dispatch($service, false, $dockerCleanup)`.
+    /// The chain of `clone_service()`: `StopService`, one `VolumeCloneJob` per volume, `StartService`.
+    pub fn spawn_service_volume_clones(
+        &self,
+        s: ServiceRow,
+        source_server: i64,
+        target_server: i64,
+        clones: Vec<(String, i64, String)>,
+    ) {
+        let jobs = self.clone();
+        tokio::spawn(async move {
+            jobs.stop_service(&s, false).await;
+            for (source, volume_id, target) in clones {
+                if let Err(e) = jobs
+                    .clone_volume_data(
+                        source_server,
+                        target_server,
+                        &source,
+                        Some(volume_id),
+                        &target,
+                    )
+                    .await
+                {
+                    tracing::error!(volume = %source, error = %e, "Failed to copy volume data");
+                }
+            }
+            jobs.spawn_service_start(s.id, false, false);
+        });
+    }
+
     pub fn spawn_service_stop(&self, s: ServiceRow) {
         let jobs = self.clone();
         tokio::spawn(async move {

@@ -65,6 +65,37 @@ fn status_getter(v: Option<&str>) -> String {
     coolify_jobs::applications::status::normalize_status(v.unwrap_or_default())
 }
 
+/// `$application->additional_servers`, each with the `pivot` and its settings.
+async fn additional_servers(
+    state: &AppState,
+    ctx: &AuthCtx,
+    application_id: i64,
+    model: bool,
+) -> Result<Vec<Value>, ApiError> {
+    let mut out = Vec::new();
+    for row in apps::additional_pivots(&state.db, application_id).await? {
+        let Some(server) = servers::find_by_id(&state.db, row.1).await? else {
+            continue;
+        };
+        let expose = !model && ctx.can_read_sensitive;
+        let mut v =
+            super::databases::nested_server_with(state, &server, expose, ctx.can_read_sensitive)?;
+        if let Some(map) = v.as_object_mut() {
+            map.insert(
+                "pivot".into(),
+                json!({
+                    "application_id": application_id,
+                    "server_id": row.1,
+                    "standalone_docker_id": row.0,
+                    "status": row.2,
+                }),
+            );
+        }
+        out.push(v);
+    }
+    Ok(out)
+}
+
 /// `removeSensitiveData($application)` + `serializeApiResponse`.
 pub(crate) async fn present(
     state: &AppState,
@@ -128,13 +159,44 @@ pub(crate) async fn present_as(
             .unwrap_or_else(|_| v.clone());
         r.insert("custom_network_aliases".into(), Value::String(list));
     }
-    r.insert("additional_servers_count".into(), json!(0));
-    r.insert("additional_networks_count".into(), json!(0));
+    let additional = additional_servers(state, ctx, a.id, model).await?;
+    r.insert("additional_servers_count".into(), json!(additional.len()));
+    r.insert("additional_networks_count".into(), json!(additional.len()));
+    // `serverStatus`: the additional servers are loaded by the count above.
+    let additional_functional = additional.iter().all(|s| {
+        s.pointer("/settings/is_reachable").and_then(Value::as_bool) == Some(true)
+            && s.pointer("/settings/is_usable").and_then(Value::as_bool) == Some(true)
+            && s.pointer("/settings/force_disabled")
+                .and_then(Value::as_bool)
+                == Some(false)
+    });
     r.insert(
         "server_status".into(),
-        Value::Bool(server.as_ref().is_some_and(server_functional)),
+        Value::Bool(additional_functional && server.as_ref().is_some_and(server_functional)),
     );
-    r.insert("additional_servers".into(), json!([]));
+    // `status`: with additional servers, the worst of the pivots against the main server.
+    if !additional.is_empty() {
+        let raw = a.str("status").unwrap_or_default();
+        let (mut status, mut health) = match raw.split_once(':') {
+            Some((s, h)) => (s.to_owned(), h.to_owned()),
+            None => (raw.to_owned(), raw.to_owned()),
+        };
+        let (main_status, main_health) = (status.clone(), health.clone());
+        for pivot in apps::additional_statuses(&state.db, a.id).await? {
+            let (s, h) = match pivot.split_once(':') {
+                Some((s, h)) => (s, Some(h)),
+                None => (pivot.as_str(), None),
+            };
+            if s != main_status {
+                status = "degraded".to_owned();
+            }
+            if h.is_some_and(|h| h != main_health) {
+                health = "unhealthy".to_owned();
+            }
+        }
+        r.insert("status".into(), Value::String(format!("{status}:{health}")));
+    }
+    r.insert("additional_servers".into(), Value::Array(additional));
     if let Some(dest) = &a.destination {
         let mut dest = dest.clone();
         if let Some(s) = &server {
@@ -2522,12 +2584,36 @@ pub async fn deploy(
     let mut items = Vec::new();
     for u in list {
         let Some(a) = apps::find_in_team(&state.db, ctx.team_id, u).await? else {
-            // Services and databases are deployed by their own endpoints in coolify-rs.
-            if coolify_db::databases::find_in_team(&state.db, ctx.team_id, u)
-                .await?
-                .is_some()
+            // getResourceByUuid(): a service or a database.
+            if let Some(s) = coolify_db::services::find_in_team(&state.db, ctx.team_id, u).await? {
+                items.push(if pr != 0 {
+                    json!({"message": format!("Pull request {pr} not found for this resource."), "resource_uuid": u})
+                } else if !ctx.is_team_admin() {
+                    json!({"message": "Unauthorized to deploy this service.", "resource_uuid": u})
+                } else {
+                    jobs.spawn_service_start(s.id, false, false);
+                    tracing::info!(target: "audit", event = "api.service.deployed", team_id = ctx.team_id, service_uuid = %s.uuid, "service deployed");
+                    json!({
+                        "message": format!(
+                            "Service {} started. It could take a while, be patient.",
+                            s.str("name").unwrap_or_default()
+                        ),
+                        "resource_uuid": u,
+                    })
+                });
+            } else if let Some(d) =
+                coolify_db::databases::find_in_team(&state.db, ctx.team_id, u).await?
             {
-                return Err(ApiError::NotPorted);
+                items.push(if pr != 0 {
+                    json!({"message": format!("Pull request {pr} not found for this resource."), "resource_uuid": u})
+                } else if !ctx.is_team_admin() {
+                    json!({"message": "Unauthorized to start this database.", "resource_uuid": u})
+                } else {
+                    json!({
+                        "message": super::databases::deploy_database(&state, &ctx, d).await?,
+                        "resource_uuid": u,
+                    })
+                });
             }
             continue;
         };

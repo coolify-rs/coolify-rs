@@ -261,6 +261,7 @@ pub async fn state(
     }
     Ok(ok(json!({
         "activity": activity,
+        "flushable": matches!(d.kind, Kind::Redis | Kind::Keydb | Kind::Dragonfly),
         "configuration_changed": configuration_changed,
         "can_update": ctx.is_team_admin(),
         "kind": d.kind.name_prefix(),
@@ -932,6 +933,43 @@ fn is_shared_reference(value: &str) -> bool {
             .unwrap_or_else(|_| unreachable!())
     });
     !value.trim().is_empty() && RE.is_match(value.trim())
+}
+
+/// `Shared\Danger::flush($password)`.
+pub async fn flush(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+    body: axum::body::Bytes,
+) -> ApiResult {
+    let d = dbs::find_in_team(&state.db, ctx.team_id, &uuid)
+        .await?
+        .ok_or(NOT_FOUND)?;
+    if !matches!(d.kind, Kind::Redis | Kind::Keydb | Kind::Dragonfly) {
+        return Err(NOT_FOUND);
+    }
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Unauthorized);
+    }
+    let input: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    if !crate::ui::password_confirmed(
+        &state,
+        ctx.user_id,
+        input.get("password").and_then(Value::as_str),
+    )
+    .await?
+    {
+        return Err(ApiError::Message(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "The provided password is incorrect.",
+        ));
+    }
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    if let Err(message) = jobs.flush_database(&d).await {
+        return Ok(ok(json!({"error": message})).into_response());
+    }
+    tracing::info!(target: "audit", event = "ui.database.flushed", team_id = ctx.team_id, database_uuid = %d.uuid, "database flushed");
+    Ok(ok(json!({"message": "Database flushed."})).into_response())
 }
 
 /// `Shared\Danger::delete`, with the page's confirmation steps.

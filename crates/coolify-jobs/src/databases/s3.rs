@@ -782,8 +782,14 @@ impl Jobs {
             .encrypter
             .as_ref()
             .ok_or("No application encryption key has been specified.")?;
-        let policy = UrlPolicy::load(&self.0.db).await;
+        let mut policy = UrlPolicy::load(&self.0.db).await;
         let endpoint = parts::str_of(row, "endpoint").unwrap_or_default();
+        // `trustedInternalHosts()`: the bundled MinIO is not a user-supplied destination.
+        if parts::str_of(row, "uuid") == Some("minio")
+            && parse_url(endpoint).is_some_and(|u| u.host == "coolify-minio")
+        {
+            policy.allowed.push("coolify-minio".to_owned());
+        }
         let bucket = parts::str_of(row, "bucket").unwrap_or_default();
         let mut result: Result<(), String> = Ok(());
         if endpoint.is_empty() {

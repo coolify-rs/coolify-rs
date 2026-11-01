@@ -1045,6 +1045,36 @@ pub(crate) async fn startable(state: &AppState, d: &DatabaseRow) -> Result<(), A
     }
 }
 
+/// The database branch of `deploy_resource()`: the message for the caller.
+pub(crate) async fn deploy_database(
+    state: &AppState,
+    ctx: &AuthCtx,
+    d: DatabaseRow,
+) -> Result<String, ApiError> {
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    if jobs.start_prerequisite_error(&d).await.is_some() {
+        return Ok(coolify_jobs::databases::ssl::MISSING_CA.to_owned());
+    }
+    let name = d.str("name").unwrap_or_default().to_owned();
+    let uuid = d.uuid.clone();
+    let (kind, id, started) = (d.kind, d.id, d.str("started_at").is_some());
+    if let Err(message) = jobs.spawn_database_start(d, Some(ctx.user_id)) {
+        return Ok(message.to_owned());
+    }
+    if !started {
+        dbs::update_if_changed(
+            &state.db,
+            kind,
+            id,
+            &[("started_at", servers::ColumnValue::Time(state.now()))],
+            state.now(),
+        )
+        .await?;
+    }
+    tracing::info!(target: "audit", event = "api.database.started", team_id = ctx.team_id, database_uuid = %uuid, "database started");
+    Ok(format!("Database {name} started."))
+}
+
 /// `StartDatabase::prerequisiteError`.
 async fn prerequisite(state: &AppState, d: &DatabaseRow) -> Result<(), ApiError> {
     if let Some(jobs) = state.jobs.as_ref()

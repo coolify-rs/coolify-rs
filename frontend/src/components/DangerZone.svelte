@@ -2,11 +2,11 @@
   // Port of upstream components/danger-zone.blade.php.
   import type { Snippet } from 'svelte';
 
-  let { title, children, action }: { title: string; children: Snippet; action?: Snippet } = $props();
+  let { title, children, action, class: className = '' }: { title: string; children: Snippet; action?: Snippet; class?: string } = $props();
 </script>
 
 <div
-  class="flex flex-col gap-4 rounded-lg border border-red-200 bg-red-50 p-5 sm:flex-row sm:items-start sm:justify-between dark:border-red-500/25 dark:bg-red-500/[0.08]"
+  class="{className} flex flex-col gap-4 rounded-lg border border-red-200 bg-red-50 p-5 sm:flex-row sm:items-start sm:justify-between dark:border-red-500/25 dark:bg-red-500/[0.08]"
 >
   <div class="min-w-0">
     <div class="flex flex-wrap items-center gap-2">

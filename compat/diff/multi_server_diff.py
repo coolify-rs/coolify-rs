@@ -36,6 +36,7 @@ class Rs:
         self.base = d.BASES["rs"]
         login = os.path.join(d.ROOT, "compat/reference/secrets/ui-login.txt")
         password = re.search(r"^password:\s*(.+)$", open(login).read(), re.M).group(1).strip()
+        self.password = password
         self.csrf = ""
         _, b = self.post("/ui/session", {"email": "alice@example.test", "password": password})
         self.csrf = json.loads(b).get("csrf_token", "")
@@ -154,6 +155,9 @@ class Env:
         self.server2_id = None
         self.project = None
         self.apps = []
+        self.services = []
+        self.databases = []
+        self.cleanups = []
         self.dest_rows = []
         self.swarm_dest = None
 
@@ -207,6 +211,17 @@ class Env:
                 f"SELECT id, {self.dest2}, {self.server2_id}, 'exited', now(), now() FROM applications WHERE uuid='{u}'")
 
     def cleanup(self):
+        for u in self.services:
+            call("ref", "DELETE", f"/services/{u}?delete_volumes=true")
+        for u in self.databases:
+            call("ref", "DELETE", f"/databases/{u}?delete_volumes=true")
+        tables = {"services": self.services, "standalone_redis": self.databases}
+        for _ in range(60):
+            if all(not uuids or sql("SELECT count(*) FROM {} WHERE uuid IN ({})".format(t, ",".join(f"'{u}'" for u in uuids))) == "0" for t, uuids in tables.items()):
+                break
+            time.sleep(3)
+        for machine, command in self.cleanups:
+            vm(machine, command)
         for u in self.apps:
             call("ref", "DELETE", f"/applications/{u}?delete_volumes=true")
         for _ in range(60):
@@ -288,6 +303,18 @@ def case_multi(e, rs):
                (q[1]["parent_deployment_uuid"], q[0]["deployment_uuid"], q[1]["server_id"]))
     for side in ("ref", "rs"):
         record(f"[multi] {side}: runs on both servers", bool(containers(VM1, u[side])) and bool(containers(e.vm2, u[side])), (containers(VM1, u[side]), containers(e.vm2, u[side])))
+    # GET /applications with additional servers: one application through both sides.
+    for u_side in ("ref", "rs"):
+        c1, a1 = call("ref", "GET", f"/applications/{u[u_side]}")
+        c2, a2 = call("rs", "GET", f"/applications/{u[u_side]}")
+        # The schedulers touch the server rows and the status between the two requests.
+        drop = ("updated_at", "last_online_at", "destination", "additional_servers")
+        strip = lambda x: {k: v for k, v in x.items() if k not in drop} if isinstance(x, dict) else x
+        record(f"[multi] show of the {u_side} application", c1 == c2 and strip(a1) == strip(a2) and list(a1) == list(a2),
+               {k: (a1.get(k), a2.get(k)) for k in a1 if strip(a1).get(k) != strip(a2).get(k)})
+        s1 = {k: v for k, v in a1["additional_servers"][0].items() if k not in ("settings", "updated_at", "sentinel_updated_at")}
+        s2 = {k: v for k, v in a2["additional_servers"][0].items() if k not in ("settings", "updated_at", "sentinel_updated_at")}
+        record(f"[multi] additional_servers of the {u_side} application", s1 == s2 and list(s1) == list(s2), {k: (s1.get(k), s2.get(k)) for k in set(s1) | set(s2) if s1.get(k) != s2.get(k)})
     cr, sr = vm(e.vm2, f"cat /data/coolify/applications/{u['ref']}/docker-compose.yaml"), vm(e.vm2, f"cat /data/coolify/applications/{u['rs']}/docker-compose.yaml")
     record("[multi] additional compose file", norm(cr, pairs(u, "ref", "multi")) == norm(sr, pairs(u, "rs", "multi")), "differs")
     # Statuses: the reference's scheduler writes both; the status of coolify-rs comes from the page's refresh.
@@ -400,10 +427,160 @@ def case_swarm(e):
 
 
 
+
+COMPOSE = base64.b64encode(b"""services:
+  web:
+    image: nginx:alpine
+    volumes:
+      - webdata:/data
+  cache:
+    image: redis:7.2
+    volumes:
+      - cachedata:/data
+""").decode()
+
+
+def wait_sql(query, want, tries=60):
+    for _ in range(tries):
+        got = sql(query)
+        if got == want:
+            return got
+        time.sleep(3)
+    return sql(query)
+
+
+def running(u, machine=VM1):
+    return vm(machine, f"docker ps --format '{{{{.Names}}}}' --filter name={u}").split()
+
+
+def case_resources(e, rs):
+    """/deploy with services and databases, the public port of a service database, clones with volumes."""
+    created = {}
+    for side in ("ref", "rs"):
+        c, r = call("ref", "POST", "/services", {"name": f"res-{side}", "project_uuid": e.project, "environment_name": "production",
+                                                 "server_uuid": SERVER1, "docker_compose_raw": COMPOSE, "instant_deploy": False})
+        record(f"[resources] service {side} created", c == 201, r)
+        created[side] = r["uuid"]
+        e.services.append(r["uuid"])
+    # /deploy with a service.
+    for side in ("ref", "rs"):
+        c, r = call(side, "POST", f"/deploy?uuid={created[side]}")
+        want = {"deployments": [{"message": f"Service res-{side} started. It could take a while, be patient.", "resource_uuid": created[side]}]}
+        record(f"[resources] {side} /deploy with a service", c == 200 and r == want, r)
+    for side in ("ref", "rs"):
+        for _ in range(60):
+            if len(running(created[side])) >= 2:
+                break
+            time.sleep(3)
+        record(f"[resources] {side} service runs", len(running(created[side])) >= 2, running(created[side]))
+    # /deploy with a database, a member token too.
+    dbs = {}
+    for side in ("ref", "rs"):
+        c, r = call("ref", "POST", "/databases/redis", {"name": f"flush-{side}", "project_uuid": e.project, "environment_name": "production",
+                                                        "server_uuid": SERVER1, "instant_deploy": False})
+        record(f"[resources] redis {side} created", c == 200 or c == 201, r)
+        dbs[side] = r["uuid"]
+        e.databases.append(r["uuid"])
+    for side in ("ref", "rs"):
+        c, r = call(side, "POST", f"/deploy?uuid={dbs[side]}")
+        want = {"deployments": [{"message": f"Database flush-{side} started.", "resource_uuid": dbs[side]}]}
+        record(f"[resources] {side} /deploy with a database", c == 200 and r == want, r)
+    for side in ("ref", "rs"):
+        for _ in range(40):
+            if running(dbs[side]):
+                break
+            time.sleep(3)
+        record(f"[resources] {side} database runs", bool(running(dbs[side])))
+        record(f"[resources] {side} started_at", sql(f"SELECT started_at IS NOT NULL FROM standalone_redis WHERE uuid='{dbs[side]}'") == "t")
+    time.sleep(5)
+    # Flush all data: coolify-rs through its route, upstream through FlushDatabase::run.
+    for side in ("ref", "rs"):
+        u = dbs[side]
+        vm(VM1, f"docker exec {u} sh -c 'REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli SET flushme 1'")
+        before = vm(VM1, f"docker exec {u} sh -c 'REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli DBSIZE'").strip()
+        if side == "rs":
+            code, b = rs.post(f"/ui/databases/{u}/flush", {"password": "wrong"})
+            record("[resources] rs flush wrong password", code == 422 and b"incorrect" in b, b[:200])
+            code, b = rs.post(f"/ui/databases/{u}/flush", {"password": rs.password})
+            record("[resources] rs flush answer", code == 200 and b"Database flushed." in b, b[:200])
+        else:
+            subprocess.run(["docker", "exec", "coolify-rs-reference-coolify-1", "php", "/var/www/html/artisan", "tinker", "--execute",
+                            f'App\\Actions\\Database\\FlushDatabase::run(App\\Models\\StandaloneRedis::where("uuid","{u}")->first());'], capture_output=True, text=True)
+        time.sleep(1)
+        after = vm(VM1, f"docker exec {u} sh -c 'REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli DBSIZE'").strip()
+        record(f"[resources] {side} flush emptied the database", before == "1" and after == "0", (before, after))
+    code, b = rs.post(f"/ui/databases/{created['rs']}/flush", {"password": rs.password})
+    record("[resources] flush of something else is refused", code == 404, code)
+    # Public port of a service database.
+    for side in ("ref", "rs"):
+        u = created[side]
+        c, listed = call("ref", "GET", f"/services/{u}")
+        cache = next(x for x in listed["databases"] if x["name"] == "cache")
+        port = 15690 if side == "ref" else 15691
+        c, r = call(side, "PATCH", f"/services/{u}/databases/{cache['uuid']}", {"is_public": True, "public_port": port})
+        record(f"[resources] {side} service database public", c == 200 and r.get("is_public") is True, r)
+        for _ in range(30):
+            if str(port) in vm(VM1, "docker ps --format '{{.Ports}}'"):
+                break
+            time.sleep(2)
+        record(f"[resources] {side} proxy on the port", str(port) in vm(VM1, "docker ps --format '{{.Ports}}'"))
+        c, r = call(side, "PATCH", f"/services/{u}/databases/{cache['uuid']}", {"is_public": False})
+        record(f"[resources] {side} service database private", c == 200 and r.get("is_public") is False, r)
+        for _ in range(30):
+            if str(port) not in vm(VM1, "docker ps --format '{{.Ports}}'"):
+                break
+            time.sleep(2)
+        record(f"[resources] {side} proxy gone", str(port) not in vm(VM1, "docker ps --format '{{.Ports}}'"))
+    # Clone with volumes: same server, then to the second server.
+    dest1 = sql("SELECT uuid FROM standalone_dockers WHERE server_id=(SELECT id FROM servers WHERE uuid='" + SERVER1 + "') ORDER BY id LIMIT 1")
+    dest2 = sql(f"SELECT uuid FROM standalone_dockers WHERE id={e.dest2}")
+    for label, destination, machine in (("same server", dest1, VM1), ("second server", dest2, e.vm2)):
+        for side in ("ref", "rs"):
+            u = created[side]
+            vm(VM1, f"docker run --rm -v {u}_webdata:/d alpine sh -c 'echo {side} > /d/marker.txt'")
+            c, r = call(side, "POST", f"/services/{u}/clone", {"destination_uuid": destination, "clone_volumes": True, "name": f"clone-{side}"})
+            record(f"[resources] {label}: {side} clone answer", c == 201 and r.get("message") == "Service cloned.", r)
+            if c != 201:
+                continue
+            e.services.append(r["uuid"])
+            new = r["uuid"]
+            got = ""
+            for _ in range(60):
+                got = vm(machine, f"docker volume inspect {new}_webdata >/dev/null 2>&1 && docker run --rm -v {new}_webdata:/d alpine cat /d/marker.txt").strip()
+                if got:
+                    break
+                time.sleep(3)
+            record(f"[resources] {label}: {side} volume data copied", got == side, got)
+            for _ in range(40):
+                if len(running(u)) >= 2:
+                    break
+                time.sleep(3)
+            record(f"[resources] {label}: {side} source started again", len(running(u)) >= 2, running(u))
+            call("ref", "DELETE", f"/services/{new}?delete_volumes=true")
+            e.cleanups.append((machine, f"docker volume rm -f {new}_webdata {new}_cachedata >/dev/null 2>&1"))
+    # Clone of a database and of an application with a volume to the second server.
+    u = dbs["rs"]
+    vm(VM1, f"docker exec {u} sh -c 'REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli SET cloned 1; REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli SAVE'")
+    for side in ("ref", "rs"):
+        c, r = call(side, "POST", f"/databases/{dbs[side]}/clone", {"destination_uuid": dest2, "clone_volumes": True, "name": f"dbclone-{side}"})
+        record(f"[resources] {side} database clone answer", c == 201, r)
+        if c == 201:
+            e.databases.append(r["uuid"])
+            vols = ""
+            for _ in range(50):
+                vols = vm(e.vm2, f"docker volume ls -q --filter name={r['uuid']}")
+                if vols.strip():
+                    break
+                time.sleep(3)
+            record(f"[resources] {side} database volume on the second server", bool(vols.strip()), vols)
+            for v in vols.split():
+                e.cleanups.append((e.vm2, f"docker volume rm -f {v} >/dev/null 2>&1"))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--vm2", default="coolify-rs-agent-deploy")
-    ap.add_argument("--case", default="registry,missing-image,multi,build-noconfig,build,swarm")
+    ap.add_argument("--case", default="registry,missing-image,multi,build-noconfig,build,resources,swarm")
     ap.add_argument("--keep-server", action="store_true")
     a = ap.parse_args()
     e = Env(a)
@@ -424,6 +601,8 @@ def main():
                     case_build(e, True)
                 elif case == "swarm":
                     case_swarm(e)
+                elif case == "resources":
+                    case_resources(e, rs)
             except Exception as ex:  # noqa: BLE001
                 record(f"[{case}] ran to the end", False, repr(ex))
     finally:

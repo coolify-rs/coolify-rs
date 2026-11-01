@@ -204,7 +204,7 @@
             {/if}
           {:else if active === 'danger'}
             {#if dbState}
-              <DatabaseDanger {record} canDelete={canUpdate} back="/project/{uuid}/environment/{env}" />
+              <DatabaseDanger {record} canDelete={canUpdate} flushable={dbState?.flushable === true} back="/project/{uuid}/environment/{env}" />
             {/if}
           {:else if active === 'environment-variables'}
             <EnvironmentVariables kind="database" uuid={db} onconfigurationchanged={() => refresh().catch(() => {})} />

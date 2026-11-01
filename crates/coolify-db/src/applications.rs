@@ -710,6 +710,16 @@ pub async fn set_additional_status(
     Ok(())
 }
 
+/// The pivots of `$application->additional_servers`: `(standalone_docker_id, server_id, status)`.
+pub async fn additional_pivots(db: &Db, application_id: i64) -> DbResult<Vec<(i64, i64, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT standalone_docker_id, server_id, status FROM additional_destinations WHERE application_id = $1 ORDER BY id",
+    )
+    .bind(application_id)
+    .fetch_all(db.pool())
+    .await?)
+}
+
 /// `$this->additional_servers->pluck('pivot.status')`.
 pub async fn additional_statuses(db: &Db, application_id: i64) -> DbResult<Vec<String>> {
     Ok(sqlx::query_scalar(
