@@ -106,6 +106,7 @@ Upstream references are relative to the upstream repository root.
 | Persistent storage, volume backups | `LocalPersistentVolume`, `VolumeBackupJob` | |
 | Database backups to S3, restore | `DatabaseBackupJob` | |
 | Scheduled tasks, scheduler, Horizon queues | `app/Console/Kernel.php`, 72 jobs | application tasks API and `ScheduledTaskJob` ported; scheduler with a source interface (`coolify_jobs::scheduler`), tasks registered; backups, cleanups and other jobs not |
+| Application and service screens | `Project\Shared\ScheduledTask\*`, `Project\Application\{Previews, Preview\Form, PreviewDomains}`, `Project\Shared\ResourceDetails`, `Application\General` | scheduled tasks for applications and services; previews with domains, stop and delete; service details; Compose settings, basic auth, deployment commands and Docker options on General (`compat/ui/flow_appui_*.mjs`); DNS checks not |
 | Notifications (email, Discord, Slack, Telegram, Pushover, webhook) | `app/Notifications/*` | SSRF protections must be ported with them |
 | Terminal and file browser | `docker/coolify-terminal`, `ContainerFilesystemService` | high-risk; security review required |
 | Cloud providers (Hetzner, DigitalOcean, Vultr, Hostinger), cloud-init | controllers + jobs | |

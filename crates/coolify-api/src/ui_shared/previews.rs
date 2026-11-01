@@ -1152,7 +1152,7 @@ fn php_entry_to_json(entry: &PhpValue) -> Map<String, Value> {
 }
 
 /// `validatedDomain()`: the URL, or the message under the host field.
-fn validated_domain(body: &Value, port: &str) -> Result<String, Response> {
+fn validated_domain(body: &Value, port: &str) -> Result<String, String> {
     let domain = compose(
         body_text(body, "scheme"),
         body_text(body, "host"),
@@ -1160,10 +1160,10 @@ fn validated_domain(body: &Value, port: &str) -> Result<String, Response> {
         body_text(body, "path"),
     );
     if let Some(first) = domains::validate_domains(&domain).into_iter().next() {
-        return Err(field_error("domain", &first));
+        return Err(first);
     }
     domains::normalize_domains(Some(&domain))
-        .ok_or_else(|| field_error("domain", "Please enter a valid domain URL."))
+        .ok_or_else(|| "Please enter a valid domain URL.".to_owned())
 }
 
 /// `addDomain()`.
@@ -1194,7 +1194,7 @@ async fn domain_add(
     let port = body_port(&body);
     let domain = match validated_domain(&body, &port) {
         Ok(d) => d,
-        Err(failure) => return Ok(failure),
+        Err(message) => return Ok(field_error("domain", &message)),
     };
     let canonical = domains::without_port(&domain);
     let mut rows = rows_of(&a, &preview);
@@ -1335,7 +1335,7 @@ async fn domain_update(
     let port = body_port(&body);
     let domain = match validated_domain(&body, &port) {
         Ok(d) => d,
-        Err(failure) => return Ok(failure),
+        Err(message) => return Ok(field_error("domain", &message)),
     };
     let mut overrides = overrides_of(&preview);
     // `currentRowPort()`.
