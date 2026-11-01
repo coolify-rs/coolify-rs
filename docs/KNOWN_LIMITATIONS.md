@@ -186,7 +186,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   upstream's telemetry address is not ported on purpose.
 - `RootUserSeeder`: the password is not checked against the breach list, because the server sends nothing to a third party
   while it starts.
-- `upgrade-postgres.sh` is upstream's script unchanged and was not run.
+- `upgrade-postgres.sh` is upstream's script unchanged. It was run on a clean Ubuntu install, to Postgres 18 and back.
 - Browser sessions are kept in memory, not in the `sessions` table, so a restart or an upgrade signs users out. Upstream
   keeps them signed in. The upgrade's progress view still finishes, and its reload shows the login page.
 
