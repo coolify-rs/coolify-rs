@@ -39,7 +39,7 @@
         <SettingsSection
           title={kind === 'proxy' ? 'Proxy logs' : 'Sentinel logs'}
           description={kind === 'proxy'
-            ? 'Search, filter, follow, copy, or download recent output from the Coolify proxy container.'
+            ? 'Search, filter, follow, copy, or download recent output from the coolify-rs proxy container.'
             : 'Search, filter, follow, copy, or download recent output from the Sentinel container.'}
           flush
           class="logs-settings-section"
@@ -55,7 +55,7 @@
             {#if !session.isAdmin}
               <Callout type="info" title="Hidden (only admins can view)">Container logs can contain secrets.</Callout>
             {:else}
-            <LogViewer {fetchLogs} containerName={container} displayName={kind === 'proxy' ? 'Coolify Proxy' : 'Sentinel'} collapsible={false} />
+            <LogViewer {fetchLogs} containerName={container} displayName={kind === 'proxy' ? 'coolify-rs Proxy' : 'Sentinel'} collapsible={false} />
             {/if}
           </div>
         </SettingsSection>

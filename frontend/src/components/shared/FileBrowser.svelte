@@ -311,7 +311,7 @@
   {:else if !containerRunning}
     <Empty title="Container is not running" description="Start the container to browse its files." iconName="folder" iconClass="size-8" />
   {:else if shellUnavailable}
-    <Empty title="File browser is not available" description="Coolify cannot open the files of this container. {helperError ?? ''}" iconName="folder" iconClass="size-8" />
+    <Empty title="File browser is not available" description="coolify-rs cannot open the files of this container. {helperError ?? ''}" iconName="folder" iconClass="size-8" />
   {:else}
     <div class="relative">
       {#if busy}

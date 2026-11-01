@@ -499,7 +499,7 @@
               id="isForceHttpsEnabled"
               label="Redirect HTTP to HTTPS"
               disabled={!canUpdate}
-              helper="Disable only when Cloudflare Tunnel or another proxy connects to Coolify over HTTP. Keep enabled when Cloudflare uses Full or Full (Strict) SSL."
+              helper="Disable only when Cloudflare Tunnel or another proxy connects to coolify-rs over HTTP. Keep enabled when Cloudflare uses Full or Full (Strict) SSL."
               value={data.force_https}
               options={[
                 { value: true, label: 'Enabled' },
@@ -638,7 +638,7 @@
   {@const row = removing}
   <ConfirmModal
     title="Remove domain?"
-    checkboxes={[{ id: 'deleteManagedDns', label: 'Also delete the DNS record created by Coolify, if present.' }]}
+    checkboxes={[{ id: 'deleteManagedDns', label: 'Also delete the DNS record created by coolify-rs, if present.' }]}
     actions={['This domain will be removed from the application.', 'Redeploy or restart may be required for proxy changes.']}
     confirmWithText={false}
     confirmWithPassword={false}

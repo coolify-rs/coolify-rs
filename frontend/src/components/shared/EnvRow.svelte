@@ -283,7 +283,7 @@
 
       {#if legacy}
         <Callout type="warning" title="Old escaping">
-          This variable was saved before Coolify passed exact values, so the container gets a
+          This variable was saved before coolify-rs passed exact values, so the container gets a
           changed value (for example, with extra backslashes or quotes). To pass the exact value,
           delete this variable and add it again, then restart. If a database already uses this
           value as a password, update the password in the database too.

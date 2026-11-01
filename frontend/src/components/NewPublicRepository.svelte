@@ -348,7 +348,7 @@
         <div class="application-settings-section-header">
           <div>
             <h2>Build configuration</h2>
-            <p>Choose how Coolify builds and runs this repository.</p>
+            <p>Choose how coolify-rs builds and runs this repository.</p>
           </div>
           <button type="submit" class="button button-highlighted" disabled={submitting}>Continue</button>
         </div>

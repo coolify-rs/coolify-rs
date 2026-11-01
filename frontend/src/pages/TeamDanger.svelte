@@ -64,11 +64,11 @@
             {:else if blockers.length === 0}
               <p>
                 Permanently delete <strong class="font-semibold text-black dark:text-fg">{data.name}</strong>
-                from Coolify. This action cannot be undone.
+                from coolify-rs. This action cannot be undone.
               </p>
               <ul class="space-y-1 text-xs">
                 <li>• All members will lose access to this team.</li>
-                <li>• This team cannot be restored from Coolify after deletion.</li>
+                <li>• This team cannot be restored from coolify-rs after deletion.</li>
               </ul>
             {:else}
               <p>This team still owns:</p>
@@ -136,7 +136,7 @@
 {#if deleting && data}
   <ConfirmModal
     title="Confirm Team Deletion?"
-    actions={['The current team will be permanently deleted from Coolify and the database.']}
+    actions={['The current team will be permanently deleted from coolify-rs and the database.']}
     confirmationText={data.name}
     confirmationLabel="Enter the team name to confirm permanent deletion"
     shortConfirmationLabel="Team name"

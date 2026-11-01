@@ -66,7 +66,7 @@
       >
         <UnsavedBar {dirty} {saving} onsave={() => save()} onreset={() => ((form = { ...saved! }), (error = null))} />
 
-        <SettingsSection id="server-disk-usage-section" title="Disk usage" description="Control when Coolify checks this server and when your team is notified.">
+        <SettingsSection id="server-disk-usage-section" title="Disk usage" description="Control when coolify-rs checks this server and when your team is notified.">
           <div class="grid gap-4 lg:grid-cols-3">
             <FormInput
               disabled={!canEdit}

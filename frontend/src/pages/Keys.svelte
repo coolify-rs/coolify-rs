@@ -155,7 +155,7 @@
       {#if data && data.keys.length === 0}
         <Empty
           title="No private keys yet"
-          description="Generate or add an SSH key to connect Coolify to servers and private repositories."
+          description="Generate or add an SSH key to connect coolify-rs to servers and private repositories."
           iconName="keys"
         />
       {:else if data}

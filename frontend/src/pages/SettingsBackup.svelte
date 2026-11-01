@@ -228,7 +228,7 @@
               </SettingsSection>
             </form>
 
-            <SettingsSection title="Backup before update" description="Back up the Coolify database before an update is installed. If the backup fails, the update is not installed.">
+            <SettingsSection title="Backup before update" description="Back up the coolify-rs database before an update is installed. If the backup fails, the update is not installed.">
               <div class="max-w-md">
                 <Listbox
                   id="is_backup_before_update_enabled"
@@ -307,7 +307,7 @@
             </section>
           {:else}
             <SettingsSection title="Instance backup">
-              <Empty title="Backup is not configured" description="Coolify needs an internal database resource to create automatic backups." iconName="database" size="sm">
+              <Empty title="Backup is not configured" description="coolify-rs needs an internal database resource to create automatic backups." iconName="database" size="sm">
                 {#snippet contents()}
                   <button type="button" class="button button-highlighted" onclick={() => run('configure')}>Configure backup</button>
                 {/snippet}

@@ -156,7 +156,7 @@
                 {#if !data.is_scheduler_healthy}The scheduled job manager also appears inactive.{/if}
                 Run
                 <code class="rounded bg-black/10 px-1 dark:bg-white/10">php artisan cleanup:redis --clear-locks</code>
-                on the Coolify instance to clear stale locks.
+                on the coolify-rs instance to clear stale locks.
               </Callout>
             {:else}
             <div class="flex items-start gap-3">
@@ -259,9 +259,9 @@
   <ConfirmModal
     title="Confirm Docker Cleanup?"
     actions={[
-      'Deletes stopped containers managed by Coolify.',
+      'Deletes stopped containers managed by coolify-rs.',
       'Deletes unused images and clears the build cache.',
-      'Removes old Coolify helper images.',
+      'Removes old coolify-rs helper images.',
       'May delete unused volumes or networks when those options are enabled.',
     ]}
     confirmWithText={false}

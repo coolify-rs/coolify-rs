@@ -74,7 +74,7 @@
 <div>
   {#if !functional}
     <Callout type="warning" title="Server is not reachable" class="mb-4">
-      Coolify cannot stop or remove Docker resources on this server. Deleting removes this {resourceLabel} from Coolify only. Its containers, volumes, networks, and
+      coolify-rs cannot stop or remove Docker resources on this server. Deleting removes this {resourceLabel} from coolify-rs only. Its containers, volumes, networks, and
       configuration files remain on the server and can start again when the server is back.
     </Callout>
   {/if}
@@ -106,7 +106,7 @@
       <ul class="space-y-1 text-xs">
         <li>• Active deployments will be stopped.</li>
         <li>• Selected volumes and stored data may be permanently removed.</li>
-        <li>• This {resourceLabel} cannot be restored from Coolify after deletion.</li>
+        <li>• This {resourceLabel} cannot be restored from coolify-rs after deletion.</li>
       </ul>
       {#snippet action()}
         {#if canDelete}

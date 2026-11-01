@@ -50,8 +50,8 @@
   }
 
   function reviveMessage(minutes: number) {
-    if (minutes === 0) return `Waiting for Coolify to come back online... (attempt ${attempts})`;
-    if (minutes < 2) return `Waiting for Coolify to come back online... (${minutes} minute${minutes > 1 ? 's' : ''} elapsed)`;
+    if (minutes === 0) return `Waiting for coolify-rs to come back online... (attempt ${attempts})`;
+    if (minutes < 2) return `Waiting for coolify-rs to come back online... (${minutes} minute${minutes > 1 ? 's' : ''} elapsed)`;
     if (minutes < 5) return `Update in progress, this may take several minutes... (${minutes} minutes elapsed)`;
     if (minutes < 10) return `Large updates can take 10+ minutes. Please be patient... (${minutes} minutes elapsed)`;
     return `Still updating. If this takes longer than 15 minutes, please check server logs... (${minutes} minutes elapsed)`;
@@ -158,7 +158,7 @@
         }
         wentDown = true;
         currentStep = 4;
-        currentStatus = 'Coolify is restarting with the new version...';
+        currentStatus = 'coolify-rs is restarting with the new version...';
         if (statusTimer) clearInterval(statusTimer);
         statusTimer = null;
       } finally {
@@ -322,6 +322,6 @@
       {/if}
     </div>
   {:else if fullButton}
-    <p class="text-sm text-neutral-600 dark:text-fg-dim">Coolify is up to date.</p>
+    <p class="text-sm text-neutral-600 dark:text-fg-dim">coolify-rs is up to date.</p>
   {/if}
 </div>

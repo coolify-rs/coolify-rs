@@ -385,7 +385,7 @@
         <div class="application-settings-section-body">
           <DangerZone title="Delete account">
             {#if data.account_blockers.length === 0}
-              <p>Permanently delete your account from Coolify. This action cannot be undone.</p>
+              <p>Permanently delete your account from coolify-rs. This action cannot be undone.</p>
               <ul class="space-y-1 text-xs">
                 <li>• Teams where you are the only member are deleted.</li>
                 <li>• You are removed from all other teams.</li>

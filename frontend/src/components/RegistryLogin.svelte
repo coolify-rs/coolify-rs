@@ -102,7 +102,7 @@
       <FormInput id="password" type="password" label="Password or token" required bind:value={password} error={error?.field('password')} />
     {/if}
     <p class="text-[12px] text-neutral-500 dark:text-fg-dim">
-      Coolify does not save the token. Docker saves the login on the server in <code>~/.docker/config.json</code>, encoded but not encrypted.
+      coolify-rs does not save the token. Docker saves the login on the server in <code>~/.docker/config.json</code>, encoded but not encrypted.
     </p>
     <div class="flex justify-end">
       <button type="submit" class="button button-highlighted" disabled={saving}>{editRegistry ? 'Update login' : 'Log in'}</button>

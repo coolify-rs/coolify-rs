@@ -73,7 +73,7 @@
     class="application-settings-form flex flex-col gap-6"
   >
     <UnsavedBar {dirty} {saving} onsave={submit} onreset={() => (form = JSON.parse(saved))} />
-    <SettingsSection id="healthcheck-configuration-section" title="Healthcheck" description="Define how Coolify determines whether this application is ready to receive traffic.">
+    <SettingsSection id="healthcheck-configuration-section" title="Healthcheck" description="Define how coolify-rs determines whether this application is ready to receive traffic.">
       {#snippet actions()}
         {#if !form?.health_check_enabled}
           <button type="button" class="button button-highlighted" disabled={!canUpdate} onclick={() => (confirming = true)}>Enable</button>
@@ -90,7 +90,7 @@
         <Listbox id="healthCheckType" label="Check type" required disabled={!canUpdate} bind:value={form.health_check_type} options={[{ value: 'http', label: 'HTTP request' }, { value: 'cmd', label: 'Container command' }]} />
       </div>
       {#if form.health_check_type === 'http'}
-        <SettingsSubsection id="healthcheck-request-section" title="HTTP request" helper="Coolify sends this request from inside the container and evaluates the response.">
+        <SettingsSubsection id="healthcheck-request-section" title="HTTP request" helper="coolify-rs sends this request from inside the container and evaluates the response.">
           <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             <Listbox id="healthCheckMethod" label="Method" required disabled={!canUpdate} bind:value={form.health_check_method} options={['GET', 'HEAD', 'POST', 'OPTIONS'].map((m) => ({ value: m, label: m }))} />
             <Listbox id="healthCheckScheme" label="Scheme" required disabled={!canUpdate} bind:value={form.health_check_scheme} options={[{ value: 'http', label: 'HTTP' }, { value: 'https', label: 'HTTPS' }]} />

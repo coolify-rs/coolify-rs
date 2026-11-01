@@ -294,7 +294,7 @@
         {/if}
         <Checkbox
           id="include_coolify_default_variables"
-          label="Include Coolify default variables"
+          label="Include coolify-rs default variables"
           helper="Adds COOLIFY_APP_NAME, COOLIFY_PROJECT_NAME, COOLIFY_ENVIRONMENT_NAME and COOLIFY_SERVER_IP to the container at runtime. A variable that you define with the same name wins. Takes effect after the next deploy or restart."
           disabled={!canManage}
           bind:checked={defaults}

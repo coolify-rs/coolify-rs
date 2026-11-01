@@ -99,7 +99,7 @@
 {#if data}
   {#if data.is_application}
     <div class="flex flex-col gap-6">
-      <SettingsSection id="deploy-webhook-section" title="Deploy webhook" description="Trigger a deployment from an external service. Requests must include a valid Coolify API authorization token.">
+      <SettingsSection id="deploy-webhook-section" title="Deploy webhook" description="Trigger a deployment from an external service. Requests must include a valid coolify-rs API authorization token.">
         {#snippet actions()}
           {@render external('https://coolify.io/docs/api-reference/authorization', 'Documentation')}
         {/snippet}
@@ -168,13 +168,13 @@
         </SettingsSection>
       {:else}
         <SettingsSection id="manual-git-webhooks-section" title="Manual Git webhooks" description="Manual repository webhooks are only required when a repository is not connected through an official Git App.">
-          <Empty size="sm" title="Managed by your Git App" description="This application uses an official Git App, so Coolify configures repository webhooks automatically." iconName="notifications" />
+          <Empty size="sm" title="Managed by your Git App" description="This application uses an official Git App, so coolify-rs configures repository webhooks automatically." iconName="notifications" />
         </SettingsSection>
       {/if}
     </div>
   {:else}
     <div class="application-settings-form">
-      <SettingsSection title="Deploy webhook" description="Trigger an external deployment with a valid Coolify API authorization token.">
+      <SettingsSection title="Deploy webhook" description="Trigger an external deployment with a valid coolify-rs API authorization token.">
         {#snippet actions()}
           {@render external('https://coolify.io/docs/api-reference/authorization', 'Documentation')}
         {/snippet}

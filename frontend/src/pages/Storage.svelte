@@ -315,7 +315,7 @@
                 <p>
                   Permanently delete
                   <strong class="font-semibold text-black dark:text-fg">{data.name}</strong>
-                  from Coolify. Existing objects in the bucket are not deleted.
+                  from coolify-rs. Existing objects in the bucket are not deleted.
                 </p>
                 <ul class="space-y-1 text-xs">
                   <li>• Backup schedules pointing at this storage will stop writing to S3.</li>
@@ -323,7 +323,7 @@
                     <li>• {data.backup_count} backup schedule(s) currently use this destination.</li>
                   {/if}
                   <li>• Bucket contents on the provider are left untouched.</li>
-                  <li>• This storage destination cannot be restored from Coolify after deletion.</li>
+                  <li>• This storage destination cannot be restored from coolify-rs after deletion.</li>
                 </ul>
                 {#snippet action()}
                   {#if canUpdate}
@@ -350,7 +350,7 @@
   <ConfirmModal
     title="Confirm Storage Deletion?"
     actions={[
-      'The selected storage location will be permanently deleted from Coolify.',
+      'The selected storage location will be permanently deleted from coolify-rs.',
       ...(data.backup_count > 0 ? [`${data.backup_count} backup schedule(s) will stop saving to S3. Existing objects in this storage will not be deleted.`] : []),
     ]}
     confirmationText={data.name}

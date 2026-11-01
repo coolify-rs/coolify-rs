@@ -742,7 +742,7 @@
                           {/if}
                         </div>
                         <p class="mt-3 line-clamp-2 text-[12px] leading-5 text-neutral-600 dark:text-fg-dim">
-                          {service.slogan || service.description || 'Deploy this service with a ready-to-use Coolify template.'}
+                          {service.slogan || service.description || 'Deploy this service with a ready-to-use coolify-rs template.'}
                         </p>
                         <div class="mt-auto flex items-center gap-1.5 border-t border-neutral-200 pt-3 dark:border-white/[0.07]">
                           <a

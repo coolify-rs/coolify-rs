@@ -76,7 +76,8 @@ async function shoot(t, label) {
     await page.waitForTimeout(150);
     result.url = new URL(page.url()).pathname;
     Object.assign(result, await page.evaluate(collect));
-    await page.screenshot({ path: `${out}${prefix}-${t.name}-${label}.png`, fullPage: true });
+    // A very long page (the new resource list) is too tall to capture: fall back to the viewport.
+    await page.screenshot({ path: `${out}${prefix}-${t.name}-${label}.png`, fullPage: true }).catch(() => page.screenshot({ path: `${out}${prefix}-${t.name}-${label}.png` }));
   } catch (e) {
     result.error = String(e.message).split('\n')[0].slice(0, 200);
   }

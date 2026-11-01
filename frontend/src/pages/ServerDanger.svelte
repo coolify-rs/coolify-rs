@@ -79,12 +79,12 @@
     <div class="application-settings-form w-full">
       {#if !facts.is_coolify_host}
         <div class="server-danger-section">
-          <SettingsSection title="Delete server" description="Permanently remove this server and its configuration from Coolify.">
+          <SettingsSection title="Delete server" description="Permanently remove this server and its configuration from coolify-rs.">
             <DangerZone title="This action cannot be undone">
               <p>
-                The server will be removed from Coolify.
+                The server will be removed from coolify-rs.
                 {#if facts.transferred}
-                  This server was transferred to another Coolify instance. Only the records on this instance are deleted, also the records of its resources. The
+                  This server was transferred to another coolify-rs instance. Only the records on this instance are deleted, also the records of its resources. The
                   server, its containers, and its data stay as they are.
                 {:else if facts.resources > 0}
                   It currently contains managed resources. Enable force deletion in the confirmation only if those resources should also be removed.
@@ -108,8 +108,8 @@
   <ConfirmModal
     title="Confirm Server Deletion?"
     actions={facts.transferred
-      ? ['This server and the records of its resources will be permanently deleted from this Coolify instance. Nothing on the server changes.']
-      : ['This server will be permanently deleted from Coolify.']}
+      ? ['This server and the records of its resources will be permanently deleted from this coolify-rs instance. Nothing on the server changes.']
+      : ['This server will be permanently deleted from coolify-rs.']}
     {checkboxes}
     confirmWithText={confirm.text}
     confirmWithPassword={confirm.password}

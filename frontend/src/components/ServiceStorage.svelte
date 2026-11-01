@@ -84,11 +84,11 @@
       id="external-volumes-{part.uuid}"
       title="External volumes"
       flush
-      description="Docker volumes that the Docker Compose file declares with external: true. Coolify mounts them as written."
+      description="Docker volumes that the Docker Compose file declares with external: true. coolify-rs mounts them as written."
     >
       <div class="flex w-full flex-col">
         <div class="border-b border-neutral-200 px-4 py-3 text-[13px] leading-5 text-neutral-500 dark:border-white/[0.08] dark:text-fg-dim">
-          Managed outside Coolify. Coolify never removes these volumes.
+          Managed outside coolify-rs. coolify-rs never removes these volumes.
         </div>
         <div class="data-table w-full">
           <div class="data-table-header external-volumes-table-grid">

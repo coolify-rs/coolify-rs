@@ -143,7 +143,7 @@
       <FormInput id="name" label="Service name" required placeholder="My WordPress site" disabled={!canUpdate} bind:value={form.name} />
       <FormInput id="description" label="Description" disabled={!canUpdate} bind:value={form.description} />
     </div>
-    <SettingsSubsection id="service-network-section" title="Network" helper="Control whether this Compose stack joins Coolify's predefined network.">
+    <SettingsSubsection id="service-network-section" title="Network" helper="Control whether this Compose stack joins coolify-rs's predefined network.">
       <Listbox
         id="connectToDockerNetwork"
         label="Network attachment"
@@ -151,7 +151,7 @@
         value={connect}
         options={[
           { value: false, label: 'Use the stack network only' },
-          { value: true, label: 'Connect to the predefined Coolify network' },
+          { value: true, label: 'Connect to the predefined coolify-rs network' },
         ]}
         onchange={saveNetwork}
       />

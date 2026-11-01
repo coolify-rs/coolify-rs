@@ -73,7 +73,7 @@
       column: 'redis_conf',
       label: 'Custom Redis configuration',
       section: 'Override only the Redis directives you need. All other defaults remain active.',
-      helper: 'Coolify automatically applies requirepass using the password above. If you override requirepass here, keep both values identical.',
+      helper: 'coolify-rs automatically applies requirepass using the password above. If you override requirepass here, keep both values identical.',
       placeholder: '# maxmemory 256mb\n    # maxmemory-policy allkeys-lru\n    # timeout 300',
     },
     keydb: {
@@ -823,7 +823,7 @@
       description={conf ? 'Docker options, configuration, and log forwarding for the database container.' : 'Docker options and log forwarding for the database container.'}
     >
       <FormInput
-        helper="Add supported docker run options used when the container starts. Unsupported options can interfere with Coolify automation."
+        helper="Add supported docker run options used when the container starts. Unsupported options can interfere with coolify-rs automation."
         placeholder="--cap-add SYS_ADMIN --device=/dev/fuse"
         id="customDockerRunOptions"
         label="Custom Docker options"

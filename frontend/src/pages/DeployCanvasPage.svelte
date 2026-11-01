@@ -43,7 +43,7 @@
   {#if resetting}
     <ConfirmModal
       title="Reset the canvas?"
-      warningMessage="Your steps and their settings are removed from the canvas. Resources that you already deployed stay in Coolify."
+      warningMessage="Your steps and their settings are removed from the canvas. Resources that you already deployed stay in coolify-rs."
       actions={['Remove every step from the canvas.']}
       confirmWithText={false}
       step2ButtonText="Reset"

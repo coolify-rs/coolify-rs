@@ -109,7 +109,7 @@
 >
   {#snippet children(form: CloudForm, refreshKeys)}
     <form onsubmit={submit} class="flex flex-col gap-6">
-      <SettingsSection title="Vultr server" description="Choose the region, plan, operating system, and Coolify SSH key.">
+      <SettingsSection title="Vultr server" description="Choose the region, plan, operating system, and coolify-rs SSH key.">
         {#snippet actions()}
           <button type="submit" class="button button-highlighted" disabled={!privateKey || busy}>
             Buy and create
@@ -118,7 +118,7 @@
         {/snippet}
         <div class="grid gap-4 lg:grid-cols-2">
           <div class="lg:col-span-2">
-            <FormInput id="server_name" label="Server name" helper="A friendly name shown in Coolify." bind:value={serverName} error={error?.field('server_name')} />
+            <FormInput id="server_name" label="Server name" helper="A friendly name shown in coolify-rs." bind:value={serverName} error={error?.field('server_name')} />
           </div>
           <Listbox
             id="selected_region"

@@ -107,7 +107,7 @@
     <div class="flex h-full min-h-0 flex-col gap-3">
       {#if server.isCoolifyHost}
         <div class="shrink-0 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
-          <span class="font-semibold">Note:</span> This is the localhost server where Coolify runs. During proxy restart, the connection may be temporarily lost. If logs stop updating, please refresh the browser after a few minutes.
+          <span class="font-semibold">Note:</span> This is the localhost server where coolify-rs runs. During proxy restart, the connection may be temporarily lost. If logs stop updating, please refresh the browser after a few minutes.
         </div>
       {/if}
       <div class="flex min-h-0 flex-1 flex-col">
@@ -129,7 +129,7 @@
 {:else if confirm === 'stop'}
   <ConfirmModal
     title="Confirm Proxy Stopping?"
-    actions={['The Coolify proxy will be stopped.', 'All resources hosted on this server will be inaccessible.']}
+    actions={['The coolify-rs proxy will be stopped.', 'All resources hosted on this server will be inaccessible.']}
     confirmWithText={false}
     step2ButtonText="Stop Proxy"
     onconfirm={() => act('stop')}

@@ -152,7 +152,7 @@
           <div class="flex flex-wrap items-center gap-2 sm:justify-end">
             <a href="/server/{data.primary.server_uuid}" use:link class="button">Open server</a>
             {#if restartLimit !== null}
-              <span title="Container has crashed and Coolify stopped it after {restartLimit} restart attempts."><StatusBadge label="Restart limit reached" type="warning" /></span>
+              <span title="Container has crashed and coolify-rs stopped it after {restartLimit} restart attempts."><StatusBadge label="Restart limit reached" type="warning" /></span>
             {/if}
             {#if data.additional.length > 0 && data.can_deploy}
               <div class="relative">

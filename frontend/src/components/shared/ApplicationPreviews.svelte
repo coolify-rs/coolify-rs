@@ -200,7 +200,7 @@
       }}
     >
       <UnsavedBar dirty={template !== savedTemplate} {saving} onsave={submitTemplate} onreset={() => (template = savedTemplate)} />
-      <SettingsSection id="preview-template-section" title="Preview URL template" description="Define how Coolify generates domains for pull request deployments.">
+      <SettingsSection id="preview-template-section" title="Preview URL template" description="Define how coolify-rs generates domains for pull request deployments.">
         {#snippet actions()}
           {#if canUpdate}
             <button type="button" class="button" onclick={resetTemplate}>Reset template</button>

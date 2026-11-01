@@ -292,7 +292,7 @@
         {#if currentState === 'welcome'}
           <div class="w-full max-w-3xl">
             <div class="mb-6 text-center">
-              <h1 class="text-2xl! font-semibold!">Welcome to Coolify</h1>
+              <h1 class="text-2xl! font-semibold!">Welcome to coolify-rs</h1>
               <p class="mt-1 text-[13px] text-neutral-500 dark:text-fg-dim">Connect your first server and start deploying in minutes.</p>
             </div>
             <SettingsSection title="What you will set up" flush>
@@ -330,7 +330,7 @@
                 <p class="mb-3 text-sm text-neutral-500 dark:text-neutral-400">Use this machine or connect a server you already manage.</p>
                 <div class="grid w-full grid-cols-1 gap-4 lg:grid-cols-2">
                   <button class={card} onclick={() => setServerType('localhost')}>
-                    <span role="button" tabindex="-1" aria-label="About this machine" title="The machine running Coolify. Not recommended for production workloads due to resource contention." class={info}>i</span>
+                    <span role="button" tabindex="-1" aria-label="About this machine" title="The machine running coolify-rs. Not recommended for production workloads due to resource contention." class={info}>i</span>
                     <div class="flex flex-col gap-4 text-left">
                       <svg class="size-10" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                         <path
@@ -341,7 +341,7 @@
                       </svg>
                       <div>
                         <h3 class="mb-1 text-[14px] font-semibold">This machine</h3>
-                        <p class="text-sm dark:text-neutral-400">Deploy on the server running Coolify. Best for testing and single-server setups.</p>
+                        <p class="text-sm dark:text-neutral-400">Deploy on the server running coolify-rs. Best for testing and single-server setups.</p>
                       </div>
                     </div>
                   </button>
@@ -435,7 +435,7 @@
                   <p class="mb-2">If the connection details are correct, please ensure:</p>
                   <ul class="list-disc list-inside">
                     <li>The correct public key is in your <code class="bg-red-200 dark:bg-red-900 px-1 rounded-sm">~/.ssh/authorized_keys</code> file for the specified user</li>
-                    <li>Or skip the boarding process and manually add a new private key to Coolify and the server</li>
+                    <li>Or skip the boarding process and manually add a new private key to coolify-rs and the server</li>
                   </ul>
                 </div>
                 <p class="mb-4">
@@ -490,7 +490,7 @@
                 <span class={keyIcon}><Reicon name="plus" class="size-4" /></span>
                 <span class="min-w-0">
                   <span class="block text-[13px] font-semibold">Generate new key</span>
-                  <span class="mt-0.5 block text-[12px] leading-5 text-neutral-500 dark:text-fg-dim">Create an ED25519 key pair in Coolify.</span>
+                  <span class="mt-0.5 block text-[12px] leading-5 text-neutral-500 dark:text-fg-dim">Create an ED25519 key pair in coolify-rs.</span>
                 </span>
               </button>
             </div>
@@ -498,7 +498,7 @@
           {#snippet keyDetails()}
             <p>{@render high('SSH Key Authentication:')} Uses public-key cryptography for secure, password-less server access.</p>
             <p>{@render high('Public Key Deployment:')} Add the public key to your server's <code class={code}>~/.ssh/authorized_keys</code> file.</p>
-            <p>{@render high('Key Generation:')} Coolify generates ED25519 keys by default for optimal security and performance.</p>
+            <p>{@render high('Key Generation:')} coolify-rs generates ED25519 keys by default for optimal security and performance.</p>
           {/snippet}
           {@render step('SSH Authentication', 'Configure SSH key-based authentication for secure server access.', keyActions, keyDetails)}
         {:else if currentState === 'create-private-key'}
@@ -541,7 +541,7 @@
             </form>
           {/snippet}
           {#snippet createKeyDetails()}
-            <p>{@render high('Key Storage:')} Private keys are encrypted at rest in Coolify's database.</p>
+            <p>{@render high('Key Storage:')} Private keys are encrypted at rest in coolify-rs's database.</p>
             <p>{@render high('Public Key Distribution:')} Deploy the public key to <code class={code}>~/.ssh/authorized_keys</code> on your target server for the specified user.</p>
             <p>{@render high('Key Format:')} Supports RSA, ED25519, ECDSA, and DSA key types in OpenSSH format.</p>
           {/snippet}
@@ -600,14 +600,14 @@
             </div>
           {/snippet}
           {#snippet validateDetails()}
-            <p>{@render high('Automated Setup:')} Coolify installs Docker Engine, Docker Compose, and configures system requirements automatically.</p>
+            <p>{@render high('Automated Setup:')} coolify-rs installs Docker Engine, Docker Compose, and configures system requirements automatically.</p>
             <p>
               {@render high('Version Requirements:')} Minimum Docker Engine {minDockerVersion}.x required.
               <a target="_blank" class="underline hover:text-coollabs" href="https://docs.docker.com/engine/install/#server">Manual installation guide</a>
             </p>
             <p>{@render high('System Configuration:')} Sets up Docker networks, proxy configuration, and resource monitoring.</p>
           {/snippet}
-          {@render step('Server Validation', `Coolify will automatically install Docker ${minDockerVersion}+ if not present.`, validateActions, validateDetails)}
+          {@render step('Server Validation', `coolify-rs will automatically install Docker ${minDockerVersion}+ if not present.`, validateActions, validateDetails)}
         {:else if currentState === 'create-project'}
           {@render progressBar(3)}
           {#snippet projectActions()}

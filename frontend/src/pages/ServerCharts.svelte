@@ -259,7 +259,7 @@
               <div class="grid gap-4 lg:grid-cols-3">
                 <FormInput type="number" min="1" id="sentinelMetricsRefreshRateSeconds" label="Collection rate" required helper="Seconds between metric samples." disabled={!canEdit} bind:value={form.refresh} error={error?.field('sentinel_metrics_refresh_rate_seconds')} />
                 <FormInput type="number" min="1" id="sentinelMetricsHistoryDays" label="History retention" required helper="Days of CPU and memory history to retain." disabled={!canEdit} bind:value={form.history} error={error?.field('sentinel_metrics_history_days')} />
-                <FormInput type="number" min="10" id="sentinelPushIntervalSeconds" label="Push interval" required helper="Seconds between health reports sent to Coolify." disabled={!canEdit} bind:value={form.push} error={error?.field('sentinel_push_interval_seconds')} />
+                <FormInput type="number" min="10" id="sentinelPushIntervalSeconds" label="Push interval" required helper="Seconds between health reports sent to coolify-rs." disabled={!canEdit} bind:value={form.push} error={error?.field('sentinel_push_interval_seconds')} />
               </div>
               <div class="mt-4 max-w-xs">
                 <Listbox

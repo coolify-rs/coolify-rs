@@ -335,7 +335,7 @@
                         id="isSystemWide"
                         label="Availability"
                         disabled={inputsDisabled}
-                        helper="System-wide GitHub Apps can be used by every team on this Coolify instance."
+                        helper="System-wide GitHub Apps can be used by every team on this coolify-rs instance."
                         bind:value={form.isSystemWide}
                         options={[
                           { value: false, label: 'Only this team' },
@@ -377,12 +377,12 @@
                   <p>
                     Permanently delete
                     <strong class="font-semibold text-black dark:text-fg">{form.name || 'this GitHub App'}</strong>
-                    from Coolify. Applications using this source will need another Git provider configured.
+                    from coolify-rs. Applications using this source will need another Git provider configured.
                   </p>
                   <ul class="space-y-1 text-xs">
                     <li>• The App registration on GitHub is not removed automatically.</li>
                     <li>• Linked applications keep their Git settings until you change them.</li>
-                    <li>• This source cannot be restored from Coolify after deletion.</li>
+                    <li>• This source cannot be restored from coolify-rs after deletion.</li>
                   </ul>
                   {#snippet action()}
                     {#if data?.can_delete}
@@ -475,7 +475,7 @@
               <Listbox
                 id="use_custom_webhook_endpoint"
                 label="Webhook endpoint"
-                helper="Use a custom public URL when Coolify is behind a tunnel or reverse proxy."
+                helper="Use a custom public URL when coolify-rs is behind a tunnel or reverse proxy."
                 bind:value={useCustom}
                 options={[
                   { value: false, label: 'Use an instance endpoint' },
@@ -494,7 +494,7 @@
               <Listbox
                 id="preview_deployment_permissions"
                 label="Preview deployment access"
-                helper="Write access lets Coolify post deployment status and links on pull requests."
+                helper="Write access lets coolify-rs post deployment status and links on pull requests."
                 bind:value={previewPermissions}
                 options={[
                   { value: false, label: 'Do not update pull requests' },

@@ -98,7 +98,7 @@
                 <Listbox
                   id="is_dashboard_force_https_enabled"
                   label="Redirect HTTP to HTTPS"
-                  helper="Disable only when Cloudflare Tunnel or another proxy connects to Coolify over HTTP. Keep enabled when Cloudflare uses Full or Full (Strict) SSL."
+                  helper="Disable only when Cloudflare Tunnel or another proxy connects to coolify-rs over HTTP. Keep enabled when Cloudflare uses Full or Full (Strict) SSL."
                   bind:value={form.is_dashboard_force_https_enabled}
                   onchange={() => run('submit')}
                   options={[
@@ -108,7 +108,7 @@
                 />
               </div>
             {/if}
-            <FormInput id="instance_name" label="Name" placeholder="Coolify" helper="Custom name for this Coolify instance." bind:value={form.instance_name} />
+            <FormInput id="instance_name" label="Name" placeholder="coolify-rs" helper="Custom name for this coolify-rs instance." bind:value={form.instance_name} />
             <Listbox
               searchable
               id="instance_timezone"
@@ -132,7 +132,7 @@
               id="public_ipv4"
               type="password"
               label="Instance public IPv4"
-              helper="Coolify detects this address on start only when the field is empty. Set it when the detected address is wrong. Detect looks it up again and saves it."
+              helper="coolify-rs detects this address on start only when the field is empty. Set it when the detected address is wrong. Detect looks it up again and saves it."
               placeholder="1.2.3.4"
               autocomplete="new-password"
               bind:value={form.public_ipv4}
@@ -141,7 +141,7 @@
               id="public_ipv6"
               type="password"
               label="Instance public IPv6"
-              helper="Coolify detects this address on start only when the field is empty. Set it when the detected address is wrong. Detect looks it up again and saves it."
+              helper="coolify-rs detects this address on start only when the field is empty. Set it when the detected address is wrong. Detect looks it up again and saves it."
               placeholder="2001:db8::1"
               autocomplete="new-password"
               bind:value={form.public_ipv6}
@@ -193,10 +193,10 @@
               </div>
               <Callout type="warning" title="What will happen if you continue?" class="mb-4">
                 <ul class="mt-2 ml-4 list-disc">
-                  <li>The Coolify instance domain will conflict with existing resources.</li>
+                  <li>The coolify-rs instance domain will conflict with existing resources.</li>
                   <li>SSL certificates might not work correctly.</li>
                   <li>Routing behavior will be unpredictable.</li>
-                  <li>You may not be able to access the Coolify dashboard properly.</li>
+                  <li>You may not be able to access the coolify-rs dashboard properly.</li>
                 </ul>
               </Callout>
               <div class="mt-4 flex flex-wrap justify-end gap-2 border-t border-neutral-200 pt-4 dark:border-white/[0.08]">

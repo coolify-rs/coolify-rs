@@ -148,7 +148,7 @@
           {#if data.enabled}
             {#if data.managed_tunnel}
               <p class="mb-4 text-sm leading-6 text-neutral-600 dark:text-fg-dim">
-                Coolify manages this tunnel through the Cloudflare API (tunnel
+                coolify-rs manages this tunnel through the Cloudflare API (tunnel
                 <code>{data.managed_tunnel}</code>).
               </p>
             {/if}
@@ -223,7 +223,7 @@
                 </button>
                 {#if collapsed}
                   <div class="rounded-lg border border-neutral-200 p-4 dark:border-coolgray-400">
-                    <p class="text-sm leading-6 text-neutral-600 dark:text-fg-dim">For a tunnel you created in the Cloudflare dashboard. Coolify does not need a Cloudflare API token for this.</p>
+                    <p class="text-sm leading-6 text-neutral-600 dark:text-fg-dim">For a tunnel you created in the Cloudflare dashboard. coolify-rs does not need a Cloudflare API token for this.</p>
                     <form
                       class="mt-4"
                       onsubmit={(e) => {
@@ -264,7 +264,7 @@
           title="Disable Cloudflare Tunnel?"
           actions={[
             'Cloudflare Tunnel will be disabled for this server.',
-            ...(data.managed_tunnel ? ['The Cloudflare tunnel and the DNS record that Coolify created will be deleted.'] : []),
+            ...(data.managed_tunnel ? ['The Cloudflare tunnel and the DNS record that coolify-rs created will be deleted.'] : []),
             ...(data.has_previous_ip ? ['The server IP address will be restored to its previous value.'] : ['You must manually restore the direct server IP address.', 'The server may become inaccessible until the IP is corrected.']),
           ]}
           confirmationText="DISABLE CLOUDFLARE TUNNEL"

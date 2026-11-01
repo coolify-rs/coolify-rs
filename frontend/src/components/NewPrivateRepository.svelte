@@ -143,14 +143,14 @@
           </div>
         </div>
         {#if provider === 'github'}
-          <Empty title="No GitHub Apps" description="Create an app to grant Coolify access to selected repositories." iconName="sources">
+          <Empty title="No GitHub Apps" description="Create an app to grant coolify-rs access to selected repositories." iconName="sources">
             {#snippet contents()}
               {@render addApp()}
             {/snippet}
           </Empty>
         {:else}
           <div class="application-settings-section-body">
-            <Empty title="No {name_} Apps" description="Create an app to grant Coolify access to selected repositories." iconName="sources">
+            <Empty title="No {name_} Apps" description="Create an app to grant coolify-rs access to selected repositories." iconName="sources">
               {#snippet contents()}
                 {@render addApp()}
               {/snippet}

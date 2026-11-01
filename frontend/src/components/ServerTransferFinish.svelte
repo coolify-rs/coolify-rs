@@ -117,7 +117,7 @@
           <p class="mt-1 text-xs text-neutral-500 dark:text-fg-dim">
             {doneCount} of {totalCount} done.
             {#if openCount > 0}
-              Coolify checks the open steps every 30 seconds.
+              coolify-rs checks the open steps every 30 seconds.
             {/if}
           </p>
         </div>
@@ -249,7 +249,7 @@
     confirmWithText={false}
     confirmWithPassword={false}
     step2ButtonText="Finish the transfer"
-    warningMessage={`<strong>${openCount} steps are not OK or done.</strong> Coolify does not check them again. Webhooks, DNS records, or runners can still point to the other instance.`}
+    warningMessage={`<strong>${openCount} steps are not OK or done.</strong> coolify-rs does not check them again. Webhooks, DNS records, or runners can still point to the other instance.`}
     actions={groups.flatMap((g) => g.items).map((s) => `Skipped: ${s.label}`)}
     onconfirm={finishTransfer}
     onclose={() => (confirming = false)}

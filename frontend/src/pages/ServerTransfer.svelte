@@ -133,13 +133,13 @@
   {#snippet children()}
     <div class="application-settings-form flex w-full flex-col gap-6">
       {#if data?.is_localhost}
-        <SettingsSection id="server-transfer-section" title="Transfer server" description="Move this server’s control-plane config to another Coolify instance (same physical host).">
+        <SettingsSection id="server-transfer-section" title="Transfer server" description="Move this server’s control-plane config to another coolify-rs instance (same physical host).">
           <Callout type="warning" title="Localhost cannot be transferred">
-            The Coolify host (localhost) cannot be transferred between instances.
+            The coolify-rs host (localhost) cannot be transferred between instances.
           </Callout>
         </SettingsSection>
       {:else if data}
-        <SettingsSection id="server-transfer-section" title="Transfer server" description="Move this server’s control-plane config to another Coolify instance (same physical host).">
+        <SettingsSection id="server-transfer-section" title="Transfer server" description="Move this server’s control-plane config to another coolify-rs instance (same physical host).">
           {#snippet actions()}
             <span data-tooltip={exportTooltip}>
               {#if migration?.status === 'running'}
@@ -171,7 +171,7 @@
                 </p>
               </div>
               <div class="flex flex-col gap-3 md:max-w-xl">
-                <FormInput id="managerUrl" label="Instance that manages the server now" required placeholder="https://coolify.example.com" helper="The Coolify instance that this server was transferred to." bind:value={managerUrl} />
+                <FormInput id="managerUrl" label="Instance that manages the server now" required placeholder="https://coolify.example.com" helper="The coolify-rs instance that this server was transferred to." bind:value={managerUrl} />
                 <FormInput id="managerToken" type="password" label="API token of that instance" required placeholder="Paste token from that instance" autocomplete="off" helper="A token with root, or with read:sensitive and write, from an admin or owner of that instance." bind:value={managerToken} />
                 <FormInput id="thisInstanceUrl" label="URL of this instance" required helper="The URL at which the other instance reaches this instance. This instance gives it a token that expires in 1 hour." bind:value={thisInstanceUrl} />
               </div>
@@ -192,13 +192,13 @@
               <div>
                 <h3 class="text-sm font-semibold text-neutral-950 dark:text-fg">Transfer to another instance</h3>
                 <p class="mt-1 text-xs leading-5 text-neutral-500 dark:text-fg-dim">
-                  Enter the target Coolify URL and an API token from that instance (root recommended).
+                  Enter the target coolify-rs URL and an API token from that instance (root recommended).
                   This exports the server and imports it on the target, which then manages it. Management
                   is then disabled here.
                 </p>
               </div>
               <div class="flex flex-col gap-3 md:max-w-xl">
-                <FormInput id="targetUrl" label="Target instance URL" required placeholder="https://coolify.example.com" helper="Base URL of the other Coolify instance (no trailing path). It must use https." bind:value={targetUrl} />
+                <FormInput id="targetUrl" label="Target instance URL" required placeholder="https://coolify.example.com" helper="Base URL of the other coolify-rs instance (no trailing path). It must use https." bind:value={targetUrl} />
                 <FormInput id="targetToken" type="password" label="Target API token" required placeholder="Paste token from target instance" autocomplete="off" helper="Create a token on the target with root (or write + deploy). It is only used for this request." bind:value={targetToken} />
               </div>
               <div>
@@ -298,7 +298,7 @@
     step2ButtonText="Transfer server"
     warningMessage="All secrets of this server and its resources are sent to the target instance: private keys, credentials, and every environment variable value, also locked ones. Continue only if you trust that instance."
     actions={[
-      'Coolify first checks this server, the target instance, and the token. If a check fails, nothing is changed.',
+      'coolify-rs first checks this server, the target instance, and the token. If a check fails, nothing is changed.',
       'The server will be transferred to the target instance.',
       'Automations for this server will be disabled on this instance.',
     ]}

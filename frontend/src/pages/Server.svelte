@@ -307,7 +307,7 @@
         class="application-settings-form flex flex-col gap-6"
       >
         <UnsavedBar {dirty} {saving} onsave={save} onreset={() => ((form = { ...saved! }), (error = null))} />
-        <SettingsSection id="server-overview-section" title="Server overview" description="Operating system and hardware details for the server running this Coolify instance.">
+        <SettingsSection id="server-overview-section" title="Server overview" description="Operating system and hardware details for the server running this coolify-rs instance.">
           {#snippet actions()}
             {@render refreshDetailsButton()}
             <button type="button" class="button" {...facts?.functional ? {} : { ishighlighted: '' }} disabled={!canEdit} onclick={checkLocalhost}>
@@ -333,7 +333,7 @@
           {@render serverDetails()}
         </SettingsSection>
         {@render previousValidation()}
-        <SettingsSection id="server-connection-section" title="Connection" description="Configure how Coolify identifies and connects to this server.">
+        <SettingsSection id="server-connection-section" title="Connection" description="Configure how coolify-rs identifies and connects to this server.">
           <div class="grid gap-4 sm:grid-cols-2">
             <FormInput id="name" label="Name" required disabled={!canEdit} bind:value={form.name} error={err('name')} />
             <FormInput id="description" label="Description" disabled={!canEdit} bind:value={form.description} error={err('description')} />
@@ -359,7 +359,7 @@
         class="application-settings-form flex flex-col gap-6"
       >
         <UnsavedBar {dirty} {saving} onsave={save} onreset={() => ((form = { ...saved! }), (error = null))} />
-        <SettingsSection title="Connection" description="Configure how Coolify identifies, reaches, and validates this server.">
+        <SettingsSection title="Connection" description="Configure how coolify-rs identifies, reaches, and validates this server.">
           {#snippet badges()}
             {#if facts?.transferred}
               <StatusBadge label="Transferred away" type="warning" />
@@ -390,7 +390,7 @@
           {#if facts?.transferred}
             <Callout type="danger" title="Transferred to another instance" class="mb-4">
               This server was transferred to
-              <strong>{facts.transfer_target_url || 'another Coolify instance'}</strong>,
+              <strong>{facts.transfer_target_url || 'another coolify-rs instance'}</strong>,
               which manages it now. Use that instance. To undo the transfer, use
               <a href={`/server/${uuid}/transfer`} use:link class="underline">Transfer back</a>. Keep this archive until you are sure: it is the
               copy that an undo uses.
@@ -481,7 +481,7 @@
               <p class="truncate text-sm font-medium text-neutral-950 dark:text-fg">{facts.name}</p>
               <p class="mt-1 text-xs leading-5 text-neutral-500 dark:text-fg-dim">
                 {#if facts.transferred}
-                  This server was migrated away from this Coolify instance and cannot be managed here.
+                  This server was migrated away from this coolify-rs instance and cannot be managed here.
                 {:else if facts.functional}
                   The server is reachable, validated, and ready to host resources.
                 {:else}

@@ -70,7 +70,7 @@
         <div class="application-settings-section-header">
           <div>
             <h2>Private repository</h2>
-            <p>Choose the SSH key Coolify will use to clone this repository.</p>
+            <p>Choose the SSH key coolify-rs will use to clone this repository.</p>
           </div>
         </div>
         <div class="application-settings-section-body p-0!">
@@ -103,7 +103,7 @@
         deployKey
         freeBranch
         title="Repository configuration"
-        description="Enter the repository location and choose how Coolify should build it."
+        description="Enter the repository location and choose how coolify-rs should build it."
         {submitting}
         bind:branch
         bind:baseDirectory

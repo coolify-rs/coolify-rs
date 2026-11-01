@@ -286,7 +286,7 @@
         type="number"
         min="0"
         label="Max restart count"
-        helper="Maximum number of Docker restarts before Coolify stops this container. Set to 0 to disable the limit. Docker counts expected and unexpected restarts."
+        helper="Maximum number of Docker restarts before coolify-rs stops this container. Set to 0 to disable the limit. Docker counts expected and unexpected restarts."
         disabled={!canUpdate}
         bind:value={maxRestartCount}
         error={error?.field('max_restart_count')}

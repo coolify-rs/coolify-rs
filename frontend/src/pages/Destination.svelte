@@ -179,13 +179,13 @@
               <div class="application-settings-form">
                 <SettingsSection id="destination-danger-section" title="Danger zone" description="Destructive actions for this destination cannot be undone.">
                   <DangerZone title="Delete destination">
-                    <p>Permanently delete <strong class="font-semibold">{data.name}</strong> from Coolify. The Docker network is also removed from the server.</p>
+                    <p>Permanently delete <strong class="font-semibold">{data.name}</strong> from coolify-rs. The Docker network is also removed from the server.</p>
                     <p>Delete or move every attached resource before deleting this destination.</p>
                     {#snippet action()}
                       {#if data?.network !== 'coolify'}
                         <button type="button" class="button button-error flex gap-2" disabled={!data?.can_update} onclick={() => (deleting = true)}>Delete destination</button>
                       {:else}
-                        <button type="button" class="button button-error" disabled title="The default Coolify destination cannot be deleted.">Delete destination</button>
+                        <button type="button" class="button button-error" disabled title="The default coolify-rs destination cannot be deleted.">Delete destination</button>
                       {/if}
                     {/snippet}
                   </DangerZone>
