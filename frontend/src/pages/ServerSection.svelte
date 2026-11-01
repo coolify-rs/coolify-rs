@@ -24,6 +24,7 @@
   import ServerPrivateKey from './ServerPrivateKey.svelte';
   import ServerResources from './ServerResources.svelte';
   import ServerSwarm from './ServerSwarm.svelte';
+  import ServerTerminal from './ServerTerminal.svelte';
   import ServerTerminalAccess from './ServerTerminalAccess.svelte';
   import ServerPatches from './ServerPatches.svelte';
   import ServerCloudflareTunnel from './ServerCloudflareTunnel.svelte';
@@ -53,6 +54,7 @@
     'private-key': ServerPrivateKey,
     resources: ServerResources,
     swarm: ServerSwarm,
+    terminal: ServerTerminal,
     'security/terminal-access': ServerTerminalAccess,
     'security/patches': ServerPatches,
     'cloudflare-tunnel': ServerCloudflareTunnel,

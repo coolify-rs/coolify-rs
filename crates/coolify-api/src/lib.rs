@@ -20,6 +20,7 @@ pub mod serialize;
 pub mod server_transfer;
 pub mod session;
 pub mod state;
+pub mod terminal_ws;
 pub mod ui;
 pub mod ui_applications;
 pub mod ui_auth;

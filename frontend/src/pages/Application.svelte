@@ -30,6 +30,7 @@
   import ResourceOperations from '../components/shared/ResourceOperations.svelte';
   import Destination from '../components/shared/Destination.svelte';
   import FileBrowser from '../components/shared/FileBrowser.svelte';
+  import ExecuteContainerCommand from '../components/shared/ExecuteContainerCommand.svelte';
   import ApplicationSwarm from '../components/shared/ApplicationSwarm.svelte';
   import ApplicationDomains from '../components/shared/ApplicationDomains.svelte';
   import Maintenance from '../components/shared/Maintenance.svelte';
@@ -253,6 +254,8 @@
               <ResourceOperations kind="application" uuid={app} />
             {:else if active === 'files'}
               <FileBrowser kind="application" uuid={app} />
+            {:else if active === 'terminal'}
+              <ExecuteContainerCommand kind="application" uuid={app} />
             {:else if active === 'servers'}
               <Destination kind="application" uuid={app} {base} onchange={() => refresh().catch(() => {})} />
             {:else if active === 'tags'}

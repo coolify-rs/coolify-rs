@@ -1,13 +1,16 @@
 <script lang="ts">
-  // Port of upstream livewire/terminal/index.blade.php (App\Livewire\Terminal\Index). The target list
-  // is complete. A selected target opens the session frame without a shell: Project\Shared\Terminal
-  // and upstream's websocket service are not ported.
+  import { tick } from 'svelte';
+  // Port of upstream livewire/terminal/index.blade.php (App\Livewire\Terminal\Index).
   import Empty from '../components/Empty.svelte';
   import ErrorPage from '../components/ErrorPage.svelte';
   import Helper from '../components/Helper.svelte';
   import Reicon from '../components/Reicon.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
+  import TerminalSession from '../components/shared/TerminalSession.svelte';
+  import TerminalToolbarSelectors from '../components/shared/TerminalToolbarSelectors.svelte';
   import { ApiError, request } from '../lib/api';
+  import { ConsoleChrome } from '../lib/terminal/chrome.svelte';
+  import { terminalApi } from '../lib/terminalApi';
   import { notify } from '../lib/toast.svelte';
 
   document.title = 'Terminal | coolify-rs';
@@ -20,6 +23,55 @@
   let forbidden = $state(false);
   let search = $state('');
   let selected = $state<Target | null>(null);
+  let targetOpen = $state(false);
+  let session = $state<TerminalSession>();
+  let picker = $state<HTMLElement>();
+
+  const chrome = new ConsoleChrome();
+  chrome.init();
+  $effect(() => chrome.listen());
+  $effect(() => {
+    const outside = (e: MouseEvent) => {
+      if (picker && !picker.contains(e.target as Node)) targetOpen = false;
+    };
+    window.addEventListener('click', outside);
+    return () => window.removeEventListener('click', outside);
+  });
+
+  function failMessage(e: unknown): string {
+    return e instanceof ApiError ? e.message : String(e);
+  }
+
+  /** `connectToContainer()`: the target as `send-terminal-command` receives it. */
+  function connection(target: Target): [boolean, string, string] {
+    const container = containers.find((c) => c.uuid === target.value);
+    return [Boolean(container), container?.name ?? target.value, container?.server_uuid ?? target.value];
+  }
+
+  async function connect(target: Target, mode?: string) {
+    const [isContainer, identifier, serverUuid] = connection(target);
+    try {
+      session?.apply(await terminalApi.session(isContainer, identifier, serverUuid, mode));
+    } catch (e) {
+      session?.fail(failMessage(e));
+    }
+  }
+
+  chrome.onModeChange = (mode) => {
+    // `Terminal::setMode()` only reconnects a container.
+    if (selected && connection(selected)[0]) connect(selected, mode);
+  };
+
+  /** `selectTarget()`: the first choice replaces the page with the session canvas. */
+  async function selectTarget(target: Target) {
+    window.dispatchEvent(new CustomEvent('terminal-starting'));
+    selected = target;
+    targetOpen = false;
+    search = '';
+    await tick();
+    window.dispatchEvent(new CustomEvent('terminal-starting'));
+    connect(target);
+  }
 
   async function load() {
     try {
@@ -116,7 +168,7 @@
                       <span class="terminal-target-group-count">{group.targets.length}</span>
                     </div>
                     {#each group.targets as target (target.value)}
-                      <button type="button" class="command-palette-item cursor-pointer" onclick={() => (selected = target)}>
+                      <button type="button" class="command-palette-item cursor-pointer" onclick={() => selectTarget(target)}>
                         <Reicon name={target.type === 'server' ? 'servers' : 'layers'} class="size-3.5 shrink-0 text-neutral-400 dark:text-fg-faint" />
                         <span class="command-palette-item-name min-w-0 flex-1">{target.name}</span>
                         {#if servers.length > 1}
@@ -135,24 +187,75 @@
           </SettingsSection>
         </div>
       {:else}
-        <div class="application-console-shell flex h-full min-h-0 flex-col overflow-hidden rounded-lg" data-terminal-session-canvas data-console-theme="system">
+        <div
+          class="application-console-shell flex h-full min-h-0 flex-col overflow-hidden rounded-lg"
+          data-terminal-session-canvas
+          data-console-theme={chrome.consoleTheme}
+          style="--terminal-scrollbar: {chrome.accent}"
+        >
           <header class="terminal-session-toolbar flex items-center gap-3 text-white select-none">
-            <div class="relative flex min-w-0 flex-1 items-center gap-2">
+            <div class="relative flex min-w-0 flex-1 items-center gap-2" bind:this={picker}>
               <button
                 type="button"
                 class="terminal-session-target-trigger flex h-8 min-w-0 max-w-sm cursor-pointer items-center gap-2 rounded-md px-2.5 text-left text-xs font-medium text-white/70 transition-colors hover:bg-white/[0.08] hover:text-white"
                 aria-label="Choose terminal target"
-                onclick={() => (selected = null)}
+                aria-expanded={targetOpen}
+                onclick={() => (targetOpen = !targetOpen)}
               >
                 <span class="min-w-0 truncate text-[11px] font-semibold text-white/80">{selected.label}</span>
+                <svg class="size-2.5 shrink-0 text-white/35" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                  <path d="m3.5 4.75 2.5 2.5 2.5-2.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
               </button>
+
+              {#if targetOpen}
+                <div class="terminal-target-picker absolute top-11 left-0 z-50 w-80 overflow-hidden rounded-lg border shadow-[var(--shadow-dropdown)]">
+                  <div class="border-b border-white/[0.08] p-1.5">
+                    <div class="relative">
+                      <Reicon name="search" class="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-white/35" />
+                      <input
+                        bind:value={search}
+                        type="search"
+                        placeholder="Filter targets…"
+                        class="h-7! w-full rounded-md! border-white/[0.08]! bg-white/[0.05]! py-0! pr-2! pl-7! text-[11px]! text-white! shadow-none! placeholder:text-white/30 focus:border-accent! focus:ring-0!"
+                      />
+                    </div>
+                  </div>
+                  <div class="terminal-target-list max-h-72 overflow-y-auto p-1">
+                    {#each groups as group (group.type)}
+                      <section class="not-last:mb-1">
+                        <div class="px-2 py-1.5 text-[9px] font-semibold tracking-wider text-white/35 uppercase">{group.label}</div>
+                        {#each group.targets as target (target.value)}
+                          <button
+                            type="button"
+                            class="flex min-h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[11px] text-white/65 transition-colors hover:bg-white/[0.07] hover:text-white"
+                            onclick={() => selectTarget(target)}
+                          >
+                            <Reicon name={target.type === 'server' ? 'servers' : 'layers'} class="size-3.5 shrink-0 text-white/35" />
+                            <span class="min-w-0 flex-1 truncate">{target.label}</span>
+                            {#if selected.value === target.value}
+                              <svg class="size-3 text-[#fcd452]" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                                <path d="m2.5 6.25 2.1 2.1 4.9-5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+                              </svg>
+                            {/if}
+                          </button>
+                        {/each}
+                      </section>
+                    {/each}
+                    {#if groups.length === 0}
+                      <div class="px-2 py-5 text-center text-[11px] text-white/35">No matching targets</div>
+                    {/if}
+                  </div>
+                </div>
+              {/if}
             </div>
+
+            <TerminalToolbarSelectors {chrome} />
           </header>
+
           <div class="terminal-session-panel flex min-h-0 flex-1 flex-col overflow-hidden p-3 sm:p-6">
             <div class="application-console-block min-h-0 flex-1 overflow-hidden">
-              <div class="flex h-full min-h-0 items-center justify-center bg-[#141414] px-4">
-                <Empty size="lg" title="The terminal session is not available yet" description="coolify-rs lists the targets, but does not open a shell from the browser yet." iconName="browser-terminal" />
-              </div>
+              <TerminalSession bind:this={session} />
             </div>
           </div>
         </div>

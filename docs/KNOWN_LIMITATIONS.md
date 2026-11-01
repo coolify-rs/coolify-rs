@@ -34,7 +34,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   Certificate, Swarm, server Destinations, Resources, Proxy (configuration, dynamic configurations, TLS
   list, logs, start/stop/restart), Sentinel (configuration, logs), Docker Cleanup with executions, Images, Log Drains,
   Registries (server and `/registries`), Terminal Access, Security Patches, Cloudflare Tunnel, GitHub Runners and the settings of Traffic Analytics. Not ported yet (the page
-  says "not available"): the Terminal page. Log drains: the secret fields stay empty for a
+  says "not available"): nothing. Log drains: the secret fields stay empty for a
   member, where upstream's Livewire snapshot carries them. Proxy status toasts come from real-time events upstream
   (`ProxyStatusChangedUI`); the UI here polls, and neither side shows them when the real-time service is down.
   Traffic analytics: the charts of the server page and of `/analytics` are ported (Traefik verified, the Caddy proxy not run);
@@ -104,7 +104,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   application (no repository), "Force start" of a queued
   deployment and the other application pages (Domains, Environment Variables, Storage, Advanced, Healthcheck,
   application (no repository), switching the Git source to a GitLab or Gitea App and the other application pages (Domains, Environment Variables, Storage, Advanced, Healthcheck,
-  Runtime Logs, Terminal, …). The General page's instant saves (site type, labels) store only the setting they
+  Runtime Logs, …). The General page's instant saves (site type, labels) store only the setting they
   change, while upstream's `syncData()` also persists unsaved form edits when it regenerates the Nginx
   configuration. Log export does not apply upstream's secret redaction beyond what the deployment already wrote
   redacted.
@@ -375,8 +375,8 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
 | Onboarding validation | `validate-and-install`, which installs prerequisites and Docker when missing | checks through the existing validation dialog, then the proxy start. A server without Docker stops with upstream's message | the dialog has no install progress |
 | `api.auth.unauthenticated` deduplication | per source, reason, server and email through the cache | per source, in memory | only API requests reach it, with one reason |
 | Audit events of the wizard | `Auditable` on every model | written for the key, server, shared variables, project, environment and team; only one `ui.server.updated` (`proxy`) of upstream's three, and the `changes` hold the name only | |
-| Terminal shell | `Project\Shared\Terminal`, xterm.js and a node-pty websocket service | the page lists targets; a selected target shows that no session is available | a shell needs the websocket service, its token flow (`TerminalSessionService`) and security review |
-| `Server\Security\TerminalAccess` | toggle at `/server/{uuid}/security/terminal-access` | not ported | |
+| Terminal websocket | a separate Node server on port 6002, `TERMINAL_PROTOCOL`, `TERMINAL_HOST`, `TERMINAL_PORT` | `/terminal/ws` on the port of the UI; those settings do not apply. A page of another origin is refused (close 4401) where upstream relies on `SameSite`. Multiplexed ssh does not apply: upstream drops it for terminals too | one server; the extra check does not change what a browser on this instance sees |
+| Terminal for a non-root ssh user | `sudo docker exec`, `sudo docker attach` | the same commands, checked as strings against `containerCommand()` on the reference and in tests, not run on a server | the test VM only has root |
 | Shared resource sections | `Project\Shared\*`, `Project\Service\{Storage, FileStorage}` and `Project\Application\{Advanced, Rollback}` for every resource | environment variables, persistent storage, runtime logs, resource limits, healthcheck, tags, webhooks and Advanced are ported and mounted on application pages as `frontend/src/components/shared/*` with `/ui/resources/{kind}/{uuid}/...` | Not ported: Resource operations (clone, move, migrate), Servers (`Destination`), Previews UI, Swarm, Maintenance, Files (`FileBrowser`), resource Metrics charts (only the states before charts), starting a rollback, Refresh GPUs, linking a secret manager source (it contacts a third party; only the empty state), volume backup modals, external Compose volumes, stale Compose volume actions |
 
 ## Server transfer

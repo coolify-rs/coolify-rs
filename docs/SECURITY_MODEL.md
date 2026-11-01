@@ -35,7 +35,10 @@ controls implemented so far. Upstream paths are relative to the upstream reposit
 - User-supplied build/start/pre/post-deploy commands run by design (`SECURITY_ADVISORY.md`): not a vulnerability
   in itself; in-scope classes are authorization bypass, cross-team access, execution without deploy permission,
   and secret leakage.
-- Web terminal: one-time 64-char tokens (60s), Node websocket server re-validates SSH arguments against an allowlist.
+- Web terminal: one-time 64-char tokens (60s) bound to user and team. Upstream's Node websocket server re-validates SSH
+  arguments against an allowlist; in coolify-rs the websocket is in the same process and the browser never sends a command,
+  so a token selects a session prepared on the server, and the session, team, terminal setting, key owner and container are
+  checked again when it is redeemed. A socket from another origin is refused.
 - File browser: admin + view permission, path character blocklist, `escapeshellarg`, optional locked-down helper container.
 - SSRF: `SafeWebhookUrl` resolves all A/AAAA records, blocks link-local always, loopback/RFC1918/CGNAT unless
   allowlisted, pins DNS with `CURLOPT_RESOLVE`, disallows cross-origin redirects.

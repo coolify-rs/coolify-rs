@@ -26,6 +26,7 @@
   import ResourceOperations from '../components/shared/ResourceOperations.svelte';
   import Destination from '../components/shared/Destination.svelte';
   import FileBrowser from '../components/shared/FileBrowser.svelte';
+  import ExecuteContainerCommand from '../components/shared/ExecuteContainerCommand.svelte';
   import Unported from './Unported.svelte';
   import { dbUi, uiApi, ApiError, type DatabaseRecord, type DatabaseState } from '../lib/api';
   import { backupNavContext, databaseNavContext, databaseSection, teleport } from '../lib/databaseMenu';
@@ -128,10 +129,6 @@
     const poll = setInterval(() => record && refresh().catch(() => {}), 10000);
     return () => clearInterval(poll);
   });
-  // Sections that only render `Project/Shared/*` (ported by the shared branch).
-  const sharedSections: Record<string, string> = {
-    terminal: 'Project/Shared/ExecuteContainerCommand',
-  };
 
   const running = $derived((record?.status ?? '').startsWith('running'));
   const backupEnabled = $derived(!!backupEdit?.form.enabled);
@@ -227,10 +224,8 @@
             <Tags kind="database" uuid={db} />
           {:else if active === 'logs'}
             <div class="runtime-logs-column min-w-0"><RuntimeLogs kind="database" uuid={db} /></div>
-          {:else if sharedSections[active]}
-            <div data-upstream-section={sharedSections[active]}>
-              <Unported description="{sharedSections[active]} is connected from the shared sections." />
-            </div>
+          {:else if active === 'terminal'}
+            <ExecuteContainerCommand kind="database" uuid={db} />
           {:else}
             <Unported />
           {/if}

@@ -200,6 +200,8 @@
     const to = canvasRedirect(router.current.name, router.current.params);
     if (to) router.go(to, true);
   });
+  // `can.access.terminal` on the terminal page of a resource or server.
+  const isTerminalSection = $derived(params.section === 'terminal' && /-section$|^server/.test(router.current.name));
 </script>
 
 {#if !session.loaded}
@@ -246,7 +248,7 @@
 {:else if router.current.name === 'admin' && !((session.info.features.cloud || session.info.features.dev) && (session.info.user.id === 0 || session.info.features.impersonating))}
   <!-- `Admin\\Index::mount`: abort(403). -->
   <ErrorPage code={403} />
-{:else if (router.current.name === 'team-danger' && !session.isOwner) || ((router.current.name === 'team-audit' || router.current.name === 'terminal') && !session.isAdmin)}
+{:else if (router.current.name === 'team-danger' && !session.isOwner) || ((router.current.name === 'team-audit' || router.current.name === 'terminal' || isTerminalSection) && !session.isAdmin)}
   <ErrorPage code={403} />
 {:else}
   <Shell {fullBleed}>

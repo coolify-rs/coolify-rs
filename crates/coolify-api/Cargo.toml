@@ -34,11 +34,13 @@ tower.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+pty-process = { version = "0.5", features = ["async"] }
 
 [dev-dependencies]
 rsa.workspace = true
 coolify-db = { workspace = true, features = ["testing"] }
 http-body-util.workspace = true
+tokio-tungstenite = "0.29"
 tempfile.workspace = true
 sqlx.workspace = true
 tokio.workspace = true

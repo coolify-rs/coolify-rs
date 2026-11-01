@@ -655,6 +655,43 @@ pub(crate) fn session_id(headers: &HeaderMap) -> Option<String> {
 const TEAM_2FA_REQUIRED: &str =
     "Your team requires two-factor authentication. Configure it to continue.";
 
+/// The team context of a browser session behind the web gates.
+fn web_ctx(live: &Live, path: &str) -> Result<AuthCtx, ApiError> {
+    web_gates(live, path)?;
+    let m = live
+        .memberships
+        .iter()
+        .find(|m| m.team_id == live.team_id)
+        .ok_or(ApiError::Message(
+            StatusCode::FORBIDDEN,
+            "You are no longer a member of this team.",
+        ))?;
+    Ok(AuthCtx {
+        token_id: 0,
+        user_id: live.user.id,
+        team_id: m.team_id,
+        team_id_raw: m.team_id.to_string(),
+        role: m.role,
+        can_read_sensitive: m.role.is_admin(),
+        abilities: abilities_for(m.role),
+    })
+}
+
+/// Whether the request carries a session cookie at all, valid or not.
+pub(crate) fn has_session_cookie(headers: &HeaderMap) -> bool {
+    session_cookie(headers).is_some()
+}
+
+/// What [`ui_guard`] gives the requests of the terminal server to Coolify (`/terminal/auth`,
+/// `/terminal/session`), for a websocket that has no such requests of its own.
+pub(crate) async fn terminal_ctx(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<AuthCtx, ApiError> {
+    let live = live_session(state, headers).await?;
+    web_ctx(&live, "/terminal/ws")
+}
+
 /// Guard for `/ui/api/v1/...`: session → CSRF → forced reset → membership → team 2FA policy.
 pub async fn ui_guard(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     let headers = req.headers().clone();
@@ -668,25 +705,7 @@ pub async fn ui_guard(State(state): State<AppState>, mut req: Request, next: Nex
                 "CSRF token mismatch.",
             ));
         }
-        web_gates(&live, &path)?;
-        let m = live
-            .memberships
-            .iter()
-            .find(|m| m.team_id == live.team_id)
-            .ok_or(ApiError::Message(
-                StatusCode::FORBIDDEN,
-                "You are no longer a member of this team.",
-            ))?;
-        let abilities = abilities_for(m.role);
-        Ok(AuthCtx {
-            token_id: 0,
-            user_id: live.user.id,
-            team_id: m.team_id,
-            team_id_raw: m.team_id.to_string(),
-            role: m.role,
-            can_read_sensitive: m.role.is_admin(),
-            abilities,
-        })
+        web_ctx(&live, &path)
     }
     .await;
     match result {
