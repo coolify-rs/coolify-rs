@@ -1,6 +1,6 @@
 // Interaction states on both sides: opens modals and dropdowns, submits forms, catches toasts, and shoots the result.
 //   node full_interact.mjs --rs=18088 [--light] [--only=substr] scenarios.json
-// Scenario: { name, path, steps: [ {click: selector, nth?} | {fill: selector, value} | {key: 'Meta+k'} | {wait: ms} ], w?, h? }
+// Scenario: { name, path, steps: [ {click: selector, nth?} | {fill: selector, value} | {key: 'Meta+k'} | {wait: ms} | {reload: true} ], w?, h? }
 // Output: shots/ix-<name>-{ref,rs}.png and a step log. A step that fails is reported for that side.
 import { chromium } from 'playwright-core';
 import fs from 'node:fs';
@@ -19,7 +19,15 @@ const browser = await chromium.launch({ executablePath: '/Applications/Google Ch
 async function context(w = 1440, h = 900, storageState) {
   const ctx = await browser.newContext({ viewport: { width: w, height: h }, colorScheme: light ? 'light' : 'dark', storageState });
   await ctx.route('**/*', (r) => (new URL(r.request().url()).hostname === '127.0.0.1' ? r.continue() : r.abort()));
-  await ctx.addInitScript((l) => { try { localStorage.setItem('theme', l ? 'light' : 'dark'); } catch {} }, light);
+  await ctx.addInitScript((l) => { try {
+    // Only on the first load of a tab: a theme the scenario saved has to survive a reload.
+    if (!sessionStorage.getItem('ixInit')) { localStorage.setItem('theme', l ? 'light' : 'dark'); sessionStorage.setItem('ixInit', '1'); }
+    // The layout popups are compared in their own pairs and would cover what a scenario clicks. popupRealtime only shows
+    // on the reference: Reverb's port is not published here. All three are localStorage only (layout-popups.blade.php).
+    localStorage.setItem('popupRealtime', 'disabled');
+    localStorage.setItem('popupNotification', String(Date.now()));
+    localStorage.setItem('popupSponsorship', String(Date.now()));
+  } catch {} }, light);
   return ctx;
 }
 async function login(base) {
@@ -46,7 +54,7 @@ for (const sc of scenarios) {
     await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {});
     await page.waitForTimeout(1200);
     for (let i = 0; i < 2; i++) {
-      const popup = page.locator('button:has-text("Accept And Close"), button:has-text("Accept and Close"), button:has-text("Maybe next time")').first();
+      const popup = page.locator('button:has-text("Accept And Close"), button:has-text("Accept and Close"), button:has-text("Maybe next time")').filter({ visible: true }).first();
       if (await popup.isVisible().catch(() => false)) await popup.click({ timeout: 2000 }).catch(() => {});
     }
     for (const st of sc.steps) {
@@ -55,6 +63,7 @@ for (const sc of scenarios) {
         else if (st.fill) await page.locator(st.fill).filter({ visible: true }).nth(st.nth ?? 0).fill(st.value, { timeout: 4000 });
         else if (st.key) await page.keyboard.press(st.key);
         else if (st.wait) await page.waitForTimeout(st.wait);
+        else if (st.reload) { await page.reload(); await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {}); await page.waitForTimeout(800); }
       } catch (e) {
         fails.push(`${JSON.stringify(st)}: ${String(e.message).split('\n')[0].slice(0, 80)}`);
       }
@@ -67,4 +76,6 @@ for (const sc of scenarios) {
   }));
   console.log(sc.name, log.ref.fails.length || log.rs.fails.length ? JSON.stringify({ ref: log.ref.fails.length, rs: log.rs.fails.length, first: log.ref.fails[0] ?? log.rs.fails[0] }).slice(0, 170) : 'steps ok');
 }
-await browser.close();
+// Chrome sometimes never answers the close; every screenshot is on disk by now.
+await Promise.race([browser.close(), new Promise((r) => setTimeout(r, 5000))]);
+process.exit(0);

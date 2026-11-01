@@ -58,7 +58,7 @@ fn parse_provider(name: &str) -> Result<Provider, ApiError> {
     Provider::from_name(name).ok_or(NOT_FOUND)
 }
 
-fn decrypt(state: &AppState, encrypted: Option<&str>) -> Result<String, ApiError> {
+pub(crate) fn decrypt(state: &AppState, encrypted: Option<&str>) -> Result<String, ApiError> {
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     encrypted
         .and_then(|c| enc.decrypt_string(c).ok())

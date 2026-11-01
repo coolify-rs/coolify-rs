@@ -1,0 +1,181 @@
+[
+ {
+  "name": "theme-card",
+  "path": "/profile/appearance",
+  "steps": []
+ },
+ {
+  "name": "theme-dialog",
+  "path": "/profile/appearance",
+  "steps": [
+   {
+    "click": "[aria-haspopup=dialog]"
+   }
+  ]
+ },
+ {
+  "name": "theme-nord",
+  "path": "/profile/appearance",
+  "steps": [
+   {
+    "click": "[aria-haspopup=dialog]"
+   },
+   {
+    "click": "[role=dialog] button:has-text(\"Nord\")"
+   }
+  ]
+ },
+ {
+  "name": "theme-invalid",
+  "path": "/profile/appearance",
+  "steps": [
+   {
+    "click": "[aria-haspopup=dialog]"
+   },
+   {
+    "fill": "#custom-theme-share-code",
+    "value": "nope"
+   }
+  ]
+ },
+ {
+  "name": "theme-saved-nord",
+  "path": "/profile/appearance",
+  "steps": [
+   {
+    "click": "[aria-haspopup=dialog]"
+   },
+   {
+    "click": "[role=dialog] button:has-text(\"Nord\")"
+   },
+   {
+    "click": "[role=dialog] button:has-text(\"Save theme\")"
+   },
+   {
+    "wait": 400
+   }
+  ]
+ },
+ {
+  "name": "theme-saved-aubergine",
+  "path": "/profile/appearance",
+  "steps": [
+   {
+    "click": "[aria-haspopup=dialog]"
+   },
+   {
+    "click": "[role=dialog] button:has-text(\"Aubergine\")"
+   },
+   {
+    "click": "[role=dialog] button:has-text(\"Save theme\")"
+   },
+   {
+    "wait": 400
+   }
+  ]
+ },
+ {
+  "name": "theme-saved-reopen",
+  "path": "/profile/appearance",
+  "steps": [
+   {
+    "click": "[aria-haspopup=dialog]"
+   },
+   {
+    "click": "[role=dialog] button:has-text(\"Paper\")"
+   },
+   {
+    "click": "[role=dialog] button:has-text(\"Save theme\")"
+   },
+   {
+    "wait": 400
+   },
+   {
+    "click": "[aria-haspopup=dialog]"
+   }
+  ]
+ },
+ {
+  "name": "theme-dialog-phone",
+  "path": "/profile/appearance",
+  "w": 390,
+  "h": 844,
+  "steps": [
+   {
+    "click": "[aria-haspopup=dialog]"
+   }
+  ]
+ },
+ {
+  "name": "theme-saved-reload",
+  "path": "/profile/appearance",
+  "steps": [
+   {
+    "click": "[aria-haspopup=dialog]"
+   },
+   {
+    "click": "[role=dialog] button:has-text(\"Forest\")"
+   },
+   {
+    "click": "[role=dialog] button:has-text(\"Save theme\")"
+   },
+   {
+    "reload": true
+   }
+  ]
+ },
+ {
+  "name": "theme-saved-then-dark",
+  "path": "/profile/appearance",
+  "steps": [
+   {
+    "click": "[aria-haspopup=dialog]"
+   },
+   {
+    "click": "[role=dialog] button:has-text(\"Forest\")"
+   },
+   {
+    "click": "[role=dialog] button:has-text(\"Save theme\")"
+   },
+   {
+    "wait": 300
+   },
+   {
+    "click": "[role=button]:has-text(\"Dark surfaces\")"
+   },
+   {
+    "wait": 300
+   }
+  ]
+ },
+ {
+  "name": "theme-builtin-preset-save",
+  "path": "/profile/appearance",
+  "steps": [
+   {
+    "click": "[aria-haspopup=dialog]"
+   },
+   {
+    "click": "[role=dialog] button:has-text(\"Forest\")"
+   },
+   {
+    "click": "[role=dialog] button:has-text(\"Save theme\")"
+   },
+   {
+    "wait": 300
+   },
+   {
+    "click": "[aria-haspopup=dialog]"
+   },
+   {
+    "click": "[role=dialog] button[aria-pressed]"
+   },
+   {
+    "click": "[role=dialog] button:has-text(\"Save theme\")"
+   },
+   {
+    "wait": 300
+   }
+  ]
+ }
+]

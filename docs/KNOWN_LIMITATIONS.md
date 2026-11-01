@@ -13,7 +13,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - A path upstream does not have goes home, as `Route::any('/{any}')` does, also a section of an application, database or
   server that upstream does not have. `compat/ui/fallback_urls.mjs` compares those URLs. A section upstream renders only
   under a condition (`source` without git, `swarm` without Swarm) is empty on both sides.
-- Within the ported pages: no custom color themes; the dashboard's server status does not include
+- Within the ported pages: the dashboard's server status does not include
   the Traefik-outdated and Sentinel checks; table/grid choices are remembered per browser, not per user.
 - Browser sessions live in memory: a restart signs everyone out. Session limits: 10,000 sessions, 7-day idle
   (`SESSION_LIFETIME`), 30-day absolute.
@@ -459,7 +459,7 @@ only resolves on the reference's Docker network.
 
 ## UI differences from the full screenshot pass
 
-- Profile > Appearance has no Custom theme card and dialog (`components/theme-controls.blade.php`).
-- The server page has no "Link provider" button and modal (`x-server.provider-link-modal`), shown upstream when the team has a cloud token and the server is not linked.
-- A database's persistent storage row opens the Backups page from its Backup button; upstream opens `CreateScheduledBackup` in a modal there.
+- The server page's Link provider menu does not show the provider status badge, refresh and power controls after linking (Server overview, show.blade.php). Its searches and link are verified only against a local fake, because the reference would call the real provider.
+- The Servers list has no Patches column (`livewire/server/index.blade.php`); upstream shows it, for example "5 security updates", when a server has a patch status.
+- Pages answer 200 with the app shell where upstream's `auth` middleware or catch-all route answers 302: a guest on any signed-in page except `/admin` and `/invitations/{uuid}`, and anyone on an unknown path. The browser ends up in the same place, from the client-side router.
 - User-visible strings sent by the backend (some toasts and messages in `coolify-api`) still say Coolify, because API messages are kept identical to upstream. Lines that name upstream itself also stay: the sponsorship popup, Coolify Cloud, Coolify v5, Coolify's affiliate links.

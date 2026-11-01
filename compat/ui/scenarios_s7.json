@@ -1,0 +1,47 @@
+[
+ {
+  "name": "s7-deploy-detail",
+  "path": "/project/j8xm2emlllhfnyebjzgyzp7z/environment/uj3st9yvtvzxh7rul3c3opcz/application/g7t4gb4khp30qrzbciw44pgp/deployment/06lizvesqil50jf6j4xr49t8",
+  "steps": [
+   {
+    "wait": 1500
+   }
+  ]
+ },
+ {
+  "name": "s7-bk-mariadb",
+  "path": "/project/j8xm2emlllhfnyebjzgyzp7z/environment/uj3st9yvtvzxh7rul3c3opcz/database/mv64yzhffceetnk78bijukmc/backups/lsbkmariadb",
+  "steps": [
+   {
+    "wait": 600
+   }
+  ]
+ },
+ {
+  "name": "s7-bk-mongodb",
+  "path": "/project/j8xm2emlllhfnyebjzgyzp7z/environment/uj3st9yvtvzxh7rul3c3opcz/database/6dblfvncib17qq7qanvau6zi/backups/lsbkmongodb",
+  "steps": [
+   {
+    "wait": 600
+   }
+  ]
+ },
+ {
+  "name": "s7-bk-clickhouse",
+  "path": "/project/j8xm2emlllhfnyebjzgyzp7z/environment/uj3st9yvtvzxh7rul3c3opcz/database/id6flkk0kr5i3zxu5bj28umo/backups/lsbkclickhouse",
+  "steps": [
+   {
+    "wait": 600
+   }
+  ]
+ },
+ {
+  "name": "s7-bk-mysql",
+  "path": "/project/j8xm2emlllhfnyebjzgyzp7z/environment/uj3st9yvtvzxh7rul3c3opcz/database/gv54x3ioi2yiq6whdmjonbc2/backups/lsbkmysql",
+  "steps": [
+   {
+    "wait": 600
+   }
+  ]
+ }
+]

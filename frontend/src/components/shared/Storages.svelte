@@ -15,6 +15,7 @@
   import SettingsSection from '../SettingsSection.svelte';
   import FileStorage from './FileStorage.svelte';
   import BackupTargetForm from '../BackupTargetForm.svelte';
+  import NewScheduledBackup from '../NewScheduledBackup.svelte';
   import { link, router } from '../../lib/router.svelte';
   import { volumeBackupsUi, type BackupOwner, type BackupTargetOption } from '../../lib/volumeBackupsApi';
   import { ApiError, request } from '../../lib/api';
@@ -42,6 +43,7 @@
   let error = $state<ApiError | null>(null);
   let deleting = $state<Volume | null>(null);
   let backupModal = $state<number | null>(null);
+  let databaseBackupOpen = $state(false);
   let backupTargets = $state<BackupTargetOption[]>([]);
   const backupOwner = $derived<BackupOwner>(kind === 'application' ? 'application' : 'service');
   const backupOwnerUuid = $derived<string>(kind === 'application' ? uuid : (data?.service_uuid ?? ''));
@@ -283,8 +285,7 @@
                   {#if data.show_backup_action}
                     <button type="button" class="button !px-2.5 !text-xs" onclick={() => openBackup(v.id)}>Backup</button>
                   {:else if data.database_backup_available}
-                    <!-- `Project\\Database\\CreateScheduledBackup` is on the Backups page here, not in a modal on this row. -->
-                    <a use:link href={router.path.replace(/\/persistent-storage$/, '/backups')} class="button !px-2.5 !text-xs">Backup</a>
+                    <button type="button" class="button !px-2.5 !text-xs" onclick={() => (databaseBackupOpen = true)}>Backup</button>
                   {/if}
                   <button type="button" class="button button-error" onclick={() => (deleting = v)}>Delete</button>
                 {/if}
@@ -439,6 +440,9 @@
     </Modal>
   {/if}
 
+  {#if databaseBackupOpen}
+    <NewScheduledBackup {uuid} onclose={() => (databaseBackupOpen = false)} />
+  {/if}
   {#if backupModal !== null}
     <Modal title="Configure Volume Backup" onclose={() => (backupModal = null)}>
       <BackupTargetForm

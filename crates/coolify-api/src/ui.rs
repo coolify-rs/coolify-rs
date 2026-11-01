@@ -156,6 +156,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .merge(crate::ui_server_tunnel::routes())
         .merge(crate::ui_server_github_runners::routes())
         .merge(crate::ui_server_cloud::routes())
+        .merge(crate::ui_server_link::routes())
         .merge(crate::ui_server_proxy::routes())
         .merge(crate::ui_server_transfer::routes())
         .merge(crate::ui_sources_routes::routes())

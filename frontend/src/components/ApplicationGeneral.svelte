@@ -428,17 +428,16 @@
   >
     <UnsavedBar {dirty} {saving} onsave={submit} onreset={() => (form = JSON.parse(JSON.stringify(saved)))} />
     <div class="application-settings-grid flex flex-col gap-6">
+      {#snippet reloadComposeAction()}
+          <button type="button" class="button" disabled={composeBusy} onclick={reloadCompose}>Reload compose</button>
+      {/snippet}
       <SettingsSection
         id="application-details-section"
         class="application-details-card"
         title="Application details"
         description="Name the application and choose the build strategy coolify-rs should use to deploy it."
+        actions={buildPack === 'dockercompose' && record.docker_compose_raw && canUpdate ? reloadComposeAction : undefined}
       >
-        {#snippet actions()}
-          {#if buildPack === 'dockercompose' && record.docker_compose_raw && canUpdate}
-            <button type="button" class="button" disabled={composeBusy} onclick={reloadCompose}>Reload compose</button>
-          {/if}
-        {/snippet}
         <div class="grid gap-4">
           <FormInput label="Name" id="name" required disabled={!canUpdate} bind:value={form.name} error={err('name')} />
           <FormInput label="Description" id="description" disabled={!canUpdate} bind:value={form.description} error={err('description')} />

@@ -9,7 +9,7 @@
 use std::sync::LazyLock;
 
 use axum::extract::{Request, State};
-use axum::http::{HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use tower::ServiceExt;
@@ -79,7 +79,38 @@ const CSP: &str = "default-src 'self'; script-src 'self'; worker-src 'self' blob
                    img-src 'self' data: https://www.vultr.com https://flagcdn.com https://icons.duckduckgo.com; connect-src 'self'; font-src 'self' data:; \
                    frame-ancestors 'none'; base-uri 'self'; form-action 'self' https: http:";
 
-pub async fn fallback(State(state): State<AppState>, req: Request) -> Response {
+/// What upstream answers for the document of a page that is refused before it renders. The page is
+/// still the app shell, which shows the same error page from its own request.
+enum PageAnswer {
+    Status(StatusCode),
+    Login,
+}
+
+/// `routes/web.php`: `/admin` and `/invitations/{uuid}` are behind `auth`, then `Admin\\Index::mount`
+/// and `Controller::showInvitation` decide.
+async fn page_answer(state: &AppState, headers: &HeaderMap, path: &str) -> Option<PageAnswer> {
+    let invitation = path
+        .strip_prefix("/invitations/")
+        .filter(|u| !u.is_empty() && !u.contains('/'));
+    if path != "/admin" && invitation.is_none() {
+        return None;
+    }
+    let Ok(live) = crate::session::live_session(state, headers).await else {
+        return Some(PageAnswer::Login);
+    };
+    let status = match invitation {
+        Some(uuid) => crate::ui_teams::invitation_page_status(state, live.user.id, uuid)
+            .await
+            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        None if crate::ui_subscription::admin_allowed(state, live.user.id, headers) => {
+            StatusCode::OK
+        }
+        None => StatusCode::FORBIDDEN,
+    };
+    Some(PageAnswer::Status(status))
+}
+
+pub async fn fallback(State(state): State<AppState>, mut req: Request) -> Response {
     let path = req.uri().path().to_string();
     if is_api_path(&path) {
         return if upstream_has_route(req.method().as_str(), &path) {
@@ -94,6 +125,15 @@ pub async fn fallback(State(state): State<AppState>, req: Request) -> Response {
     if !matches!(*req.method(), Method::GET | Method::HEAD) {
         return (StatusCode::METHOD_NOT_ALLOWED, "").into_response();
     }
+    let answer = page_answer(&state, &req.headers().clone(), &path).await;
+    if matches!(answer, Some(PageAnswer::Login)) {
+        return (StatusCode::FOUND, [(header::LOCATION, "/login")]).into_response();
+    }
+    if answer.is_some() {
+        // A 304 would hide the status.
+        req.headers_mut().remove(header::IF_MODIFIED_SINCE);
+        req.headers_mut().remove(header::IF_NONE_MATCH);
+    }
     let index = dir.join("index.html");
     let svc = ServeDir::new(&dir)
         .append_index_html_on_directories(true)
@@ -102,6 +142,9 @@ pub async fn fallback(State(state): State<AppState>, req: Request) -> Response {
         Ok(r) => r.into_response(),
         Err(_) => return ApiError::Internal.into_response(),
     };
+    if let Some(PageAnswer::Status(status)) = answer {
+        *res.status_mut() = status;
+    }
     let h = res.headers_mut();
     h.insert(
         header::CONTENT_SECURITY_POLICY,
