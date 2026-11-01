@@ -6,13 +6,15 @@
 The reference runs under tinker with Http::fake. Every row is tracked and removed at the end.
 """
 import base64
+import hashlib
+import hmac
 import json
 import re
 import sys
 import urllib.request
 
 from dns_flows_diff import FAKE, add_zone, cleanup, create_server, create_token, created, guard_hour, lw_prelude
-from integrations_diff import compare, fake, fake_log, login, norm_requests, record, results, sql, team_id, tinker
+from integrations_diff import ENVIRONMENT, RS, compare, fake, fake_log, login, norm_requests, record, results, sql, team_id, tinker
 from transfer_diff import bundle, call, delete_import
 
 UNREACHABLE = "10.255.255.8"
@@ -38,8 +40,7 @@ def rows(tid):
     return json.loads(sql(f"SELECT coalesce(json_agg(json_build_object('name', name, 'owned', owned) ORDER BY name), '[]') FROM managed_dns_records WHERE integration_token_id = {tid}") or "[]")
 
 
-def reclaim(ui):
-    srv = create_server()
+def reclaim(ui, srv):
     tid = create_token("dns2-reclaim")
     add_zone(tid)
     zone = sql(f"SELECT id FROM dns_provider_zones WHERE integration_token_id = {tid}")
@@ -71,6 +72,55 @@ echo '<<<'.json_encode($r).'>>>';"""
         compare(f"reclaim {label}: status", (ref.get("status"), ref.get("message"), ref.get("error")), (rs.get("status"), rs.get("message"), rs.get("error")))
         compare(f"reclaim {label}: requests", ref_req, rs_req)
         compare(f"reclaim {label}: rows", ref_rows, rs_rows)
+    sql(f"UPDATE servers SET server_metadata = NULL WHERE id = {srv['id']}")
+
+
+def receipts(ui, srv):
+    """recordWebhook: the signed manual GitHub webhook and the finish list step. The server is not usable, so nothing deploys."""
+    php = f"""
+$e = \\App\\Models\\Environment::where('uuid', '{ENVIRONMENT}')->first();
+$a = new \\App\\Models\\Application(['name' => 'dns2-hook', 'repository_project_id' => 0, 'git_repository' => 'dns2/webhook', 'git_branch' => 'main', 'build_pack' => 'dockerimage', 'ports_exposes' => '80', 'environment_id' => $e->id, 'destination_id' => {srv['dest']}, 'destination_type' => \\App\\Models\\StandaloneDocker::class, 'docker_registry_image_name' => 'nginx', 'docker_registry_image_tag' => 'alpine']);
+$a->manual_webhook_secret_github = 'dns2-hook-secret';
+$a->save();
+echo '<<<'.json_encode(['id' => $a->id, 'uuid' => $a->uuid]).'>>>';"""
+    app = tinker(php, fake=False)
+    created["apps"].append(app["id"])
+    key = f"manual_webhook:{app['uuid']}"
+
+    def seed():
+        meta = {"transfer": {"finish": {"started_at": "2026-11-01T00:00:00+00:00", "items": [{"key": key, "type": "manual_webhook", "subject": app["uuid"], "title": "Manual webhook", "group": "git", "status": "action", "message": "", "error": None, "instructions": None, "details": [], "link": None, "link_label": None}]}}}
+        sql(f"UPDATE servers SET server_metadata = '{json.dumps(meta)}' WHERE id = {srv['id']}")
+
+    def hook(base):
+        body = json.dumps({"ref": "refs/heads/main", "repository": {"full_name": "dns2/webhook"}, "commits": [], "head_commit": {"id": "a" * 40, "message": "m"}, "after": "a" * 40, "before": "b" * 40}).encode()
+        sign = hmac.new(b"dns2-hook-secret", body, hashlib.sha256).hexdigest()
+        req = urllib.request.Request(base + "/webhooks/source/github/events/manual", data=body, method="POST")
+        for k, v in {"Content-Type": "application/json", "X-GitHub-Event": "push", "X-Hub-Signature-256": "sha256=" + sign}.items():
+            req.add_header(k, v)
+        with urllib.request.urlopen(req) as r:
+            return r.read().decode()
+
+    def ref_check():
+        php = lw_prelude() + f"""$s = \\App\\Models\\Server::find({srv['id']}); $r = app(\\App\\Services\\ServerTransfer\\TransferFinishChecklist::class)->check($s, {json.dumps(key)}); echo '<<<'.json_encode($r).'>>>';"""
+        return tinker(php)
+
+    def rs_check():
+        return ui("POST", f"/ui/server-page/{srv['uuid']}/transfer-finish/check", {"key": key})[1]
+
+    view = lambda r: (r.get("status"), re.sub(r"\d\d:\d\d", "HH:MM", r.get("message") or ""))
+    seed()
+    ref_before = view(ref_check())
+    ref_answer = hook("http://127.0.0.1:18000")
+    ref_after = view(ref_check())
+    print("reference answers", ref_answer[:200])
+    seed()
+    rs_before = view(rs_check())
+    rs_answer = hook(RS)
+    rs_after = view(rs_check())
+    compare("receipt: before a webhook", ref_before, rs_before)
+    compare("receipt: the webhook answers", ref_answer, rs_answer)
+    compare("receipt: after a webhook", ref_after, rs_after)
+    record("receipt: it turned ok", rs_after[0] == "ok", rs_after)
     sql(f"UPDATE servers SET server_metadata = NULL WHERE id = {srv['id']}")
 
 
@@ -133,7 +183,9 @@ def main():
     guard_hour()
     ui = login()
     try:
-        reclaim(ui)
+        srv = create_server()
+        reclaim(ui, srv)
+        receipts(ui, srv)
         adoption()
     finally:
         cleanup()
