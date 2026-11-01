@@ -371,6 +371,11 @@ impl Client {
         .map(|_| ())
     }
 
+    /// `HetznerService::getServers`
+    pub async fn hetzner_servers(&self) -> Result<Vec<Value>, CloudError> {
+        self.paged("/servers", "servers", &[]).await
+    }
+
     pub async fn hetzner_get_server(&self, id: i64) -> Result<Value, CloudError> {
         let r = self.get(&format!("/servers/{id}"), None).await?;
         Ok(r.get("server").cloned().unwrap_or_else(|| json!({})))
@@ -418,6 +423,11 @@ impl Client {
         }
         let r = self.post("/instances", &p).await?;
         Ok(r.get("instance").cloned().unwrap_or_else(|| json!({})))
+    }
+
+    /// `VultrService::getInstances`
+    pub async fn vultr_instances(&self) -> Result<Vec<Value>, CloudError> {
+        self.cursored("/instances", "instances").await
     }
 
     pub async fn vultr_get_instance(&self, id: &str) -> Result<Value, CloudError> {
@@ -530,6 +540,11 @@ impl Client {
     pub async fn do_create_droplet(&self, params: &Value) -> Result<Value, CloudError> {
         let r = self.post("/droplets", params).await?;
         Ok(r.get("droplet").cloned().unwrap_or_else(|| json!({})))
+    }
+
+    /// `DigitalOceanService::getDroplets`
+    pub async fn do_droplets(&self) -> Result<Vec<Value>, CloudError> {
+        self.paged("/droplets", "droplets", &[]).await
     }
 
     pub async fn do_get_droplet(&self, id: i64) -> Result<Value, CloudError> {
@@ -655,7 +670,7 @@ impl Client {
             .await
     }
 
-    async fn hostinger_vms(&self) -> Result<Vec<Value>, CloudError> {
+    pub async fn hostinger_vms(&self) -> Result<Vec<Value>, CloudError> {
         let r = self.get("/api/vps/v1/virtual-machines", None).await?;
         Ok(match r {
             Value::Array(a) => a,

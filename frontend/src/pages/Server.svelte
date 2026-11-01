@@ -1,8 +1,8 @@
 <script lang="ts">
   // Port of upstream livewire/server/show.blade.php (General). Validation runs
-  // over SSH (ADR 0009); fetching server details and cloud provider links are
-  // not ported yet, nor is the localhost server's page.
+  // over SSH (ADR 0009); fetching server details is not ported yet.
   import Reicon from '../components/Reicon.svelte';
+  import ServerProviderLink from '../components/ServerProviderLink.svelte';
   import Callout from '../components/Callout.svelte';
   import ServerTransferFinish from '../components/ServerTransferFinish.svelte';
   import { link } from '../lib/router.svelte';
@@ -368,6 +368,7 @@
             {/if}
           {/snippet}
           {#snippet actions()}
+            <ServerProviderLink uuid={uuid} onlinked={load} />
             {#if !facts?.transferred}
               <button
                 type="button"

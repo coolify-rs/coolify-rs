@@ -43,6 +43,7 @@ pub mod ui_server_cloud;
 pub mod ui_server_destinations;
 pub mod ui_server_general;
 pub mod ui_server_github_runners;
+pub mod ui_server_link;
 pub mod ui_server_metrics;
 pub mod ui_server_ops;
 pub mod ui_server_patches;
