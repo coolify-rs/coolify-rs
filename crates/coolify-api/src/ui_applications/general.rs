@@ -29,6 +29,11 @@ static DOCKER_TARGET: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::n
     regex::Regex::new(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$").unwrap_or_else(|_| unreachable!())
 });
 
+/// `ValidationPatterns::CONTAINER_NAME_PATTERN`.
+static CONTAINER_NAME: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$").unwrap_or_else(|_| unreachable!())
+});
+
 /// `General::rules()` for the build fields (snake_case keys).
 pub(super) fn rules() -> Vec<Field> {
     let shell = || {
@@ -88,6 +93,35 @@ pub(super) fn rules() -> Vec<Field> {
         Field {
             name: "dockerfile_target_build",
             rules: path(&DOCKER_TARGET, 128),
+        },
+        Field {
+            name: "docker_compose_location",
+            rules: path(&FILE_PATH, 255),
+        },
+        Field {
+            name: "docker_compose_custom_start_command",
+            rules: shell(),
+        },
+        Field {
+            name: "docker_compose_custom_build_command",
+            rules: shell(),
+        },
+        Field {
+            name: "custom_docker_run_options",
+            rules: vec![
+                Rule::Nullable,
+                Rule::String,
+                Rule::Max(2000),
+                Rule::Regex(&SHELL_SAFE_COMMAND),
+            ],
+        },
+        Field {
+            name: "pre_deployment_command_container",
+            rules: path(&CONTAINER_NAME, 255),
+        },
+        Field {
+            name: "post_deployment_command_container",
+            rules: path(&CONTAINER_NAME, 255),
         },
     ]
 }

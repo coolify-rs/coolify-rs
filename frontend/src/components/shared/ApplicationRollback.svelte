@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SkeletonList from '../SkeletonList.svelte';
   // Port of upstream livewire/project/application/rollback.blade.php.
   import Callout from '../Callout.svelte';
   import Empty from '../Empty.svelte';
@@ -111,4 +112,8 @@
       </div>
     </SettingsSection>
   </div>
+{:else}
+  <SettingsSection id="rollback-section" title="Rollback images" flush>
+    <SkeletonList rows={3} label="Loading available images" />
+  </SettingsSection>
 {/if}

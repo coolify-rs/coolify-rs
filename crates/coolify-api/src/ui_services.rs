@@ -298,7 +298,10 @@ async fn links(
 }
 
 /// `redactLockedValuesInGeneratedCompose()` for the variables of the service.
-fn redact_locked(compose: Option<&str>, rows: &[(Record, Option<String>)]) -> Option<String> {
+pub(crate) fn redact_locked(
+    compose: Option<&str>,
+    rows: &[(Record, Option<String>)],
+) -> Option<String> {
     let mut compose = compose?.to_owned();
     if compose.trim().is_empty() {
         return Some(compose);

@@ -495,7 +495,7 @@ pub(super) fn gpu_options_throws(input: &Input) -> bool {
         .is_some_and(|v| v.is_array() || v.is_object())
 }
 
-pub(super) fn field(name: &'static str, rules: Vec<Rule>) -> Field {
+pub(crate) fn field(name: &'static str, rules: Vec<Rule>) -> Field {
     Field { name, rules }
 }
 

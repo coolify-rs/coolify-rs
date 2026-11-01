@@ -67,6 +67,7 @@ export function applicationNavContext(
     }),
     'Swarm': item('Swarm', 'swarm', 'destinations', { visible: !!opts.swarm }),
     'Healthcheck': item('Healthcheck', 'healthcheck', 'feedback', {
+      visible: !opts.compose,
       children: [
         { id: 'healthcheck-configuration-section', label: 'Configuration' },
         { id: 'healthcheck-timing-section', label: 'Timing and retries' },

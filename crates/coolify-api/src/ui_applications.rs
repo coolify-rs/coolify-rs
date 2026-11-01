@@ -21,6 +21,7 @@ use crate::response::{ApiError, ApiResult, PhpJson, created, ok};
 use crate::state::AppState;
 use crate::validation::{Field, Messages, Rule, patterns, validate};
 
+pub mod compose;
 mod general;
 pub mod private_git;
 pub mod public_git;
@@ -434,12 +435,46 @@ pub async fn state(
         "running_deployment_url": running_url,
         "configuration_changed": changed,
         "server_timezone": timezone,
+        // `syncData()`: only who can update reads these.
+        "http_basic_auth_password": if ctx.is_team_admin() {
+            state.encrypter.as_ref().and_then(|enc| basic_auth_password(&fresh, enc))
+        } else {
+            None
+        },
+        "supports_argon2id": server.as_ref().is_some_and(coolify_jobs::applications::labels::caddy_supports_argon2id),
+        "proxy_type": server.as_ref().and_then(|s| s.record.get("proxy")).and_then(|p| match p {
+            Value::String(t) => serde_json::from_str::<Value>(t).ok(),
+            other => Some(other.clone()),
+        }).and_then(|p| p.get("type").and_then(Value::as_str).map(str::to_owned)),
+        // `$application->additional_servers()->exists()`.
+        "has_additional_servers": !coolify_db::application_ops::additional_networks(&state.db, fresh.id).await?.is_empty(),
         "custom_labels": labels_text,
         "server_ip": server.as_ref().and_then(|s| s.record.get("ip")).cloned().unwrap_or(Value::Null),
         "server_id": server.as_ref().map(|s| s.id),
         "is_swarm": a.str("destination_type") == Some(r"App\Models\SwarmDocker") || server.as_ref().is_some_and(|s| coolify_jobs::server::ServerInfo::from_row(s).is_swarm()),
     }))
     .into_response())
+}
+
+/// `$application->http_basic_auth_password` (an `encrypted` cast).
+fn basic_auth_password(
+    a: &ApplicationRow,
+    enc: &coolify_compat::encrypter::Encrypter,
+) -> Option<String> {
+    a.str("http_basic_auth_password")
+        .and_then(|c| enc.decrypt_string(c).ok())
+        .filter(|p| !p.is_empty())
+}
+
+/// `$server->caddySupportsArgon2idBasicAuth()` of the application's server.
+async fn caddy_supports_argon2id(state: &AppState, a: &ApplicationRow) -> Result<bool, ApiError> {
+    let server = match a.server_id() {
+        Some(id) => servers::find_by_id(&state.db, id).await?,
+        None => None,
+    };
+    Ok(server
+        .as_ref()
+        .is_some_and(coolify_jobs::applications::labels::caddy_supports_argon2id))
 }
 
 /// The label text of `custom_labels` (`parseContainerLabels()` decodes the stored base64).
@@ -890,6 +925,30 @@ pub async fn internal_hostname(
 
 /// `Application\General` messages and `$validationAttributes` (snake_case keys).
 const GENERAL_MESSAGES: Messages = &[
+    (
+        "docker_compose_custom_start_command.regex",
+        "The Docker Compose start command contains invalid characters. Allowed: alphanumerics, && / || chaining, balanced quotes, globs (*, ?), !, and safe path/arg chars. Blocked: bare &, bare |, ;, $, backtick, (, ), <, >, \\\\, newlines.",
+    ),
+    (
+        "docker_compose_custom_build_command.regex",
+        "The Docker Compose build command contains invalid characters. Allowed: alphanumerics, && / || chaining, balanced quotes, globs (*, ?), !, and safe path/arg chars. Blocked: bare &, bare |, ;, $, backtick, (, ), <, >, \\\\, newlines.",
+    ),
+    (
+        "custom_docker_run_options.regex",
+        "The custom Docker run options contain invalid characters. Allowed: alphanumerics, && / || chaining, balanced quotes, globs (*, ?), !, and safe path/arg chars. Blocked: bare &, bare |, ;, $, backtick, (, ), <, >, \\\\, newlines.",
+    ),
+    (
+        "pre_deployment_command_container.regex",
+        "The pre-deployment command container name must contain only alphanumeric characters, dots, hyphens, and underscores.",
+    ),
+    (
+        "post_deployment_command_container.regex",
+        "The post-deployment command container name must contain only alphanumeric characters, dots, hyphens, and underscores.",
+    ),
+    (
+        "docker_compose_location.regex",
+        "The Docker Compose must start with a letter or underscore and may only contain letters, numbers, underscores, and dots.",
+    ),
     ("name.required", "The Name field is required."),
     (
         "name.regex",
@@ -1074,15 +1133,19 @@ pub async fn update(
             "watch_paths",
             "dockerfile",
             "generate_nginx",
-            "custom_docker_run_options",
             "pre_deployment_command",
             "post_deployment_command",
+            "http_basic_auth_username",
         ]
         .map(|name| Field {
             name,
             rules: vec![Rule::Nullable],
         }),
     );
+    fields.push(Field {
+        name: "http_basic_auth_password",
+        rules: vec![Rule::Nullable, Rule::String, Rule::Max(72)],
+    });
     let result = validate(&input, &fields, GENERAL_MESSAGES, &keys);
     if let Err(ApiError::Validation(errors)) = result {
         return Ok(PhpJson(
@@ -1090,27 +1153,6 @@ pub async fn update(
             json!({"message": summary(&errors), "errors": errors}),
         )
         .into_response());
-    }
-    for k in [
-        "custom_docker_run_options",
-        "pre_deployment_command",
-        "post_deployment_command",
-    ] {
-        if m.get(k)
-            .and_then(Value::as_str)
-            .is_some_and(|v| !v.trim().is_empty())
-        {
-            return Err(ApiError::NotPorted);
-        }
-    }
-    // A Dockerfile stored on the application (no repository) is not ported.
-    if m.contains_key("dockerfile")
-        && m.get("dockerfile")
-            .and_then(Value::as_str)
-            .filter(|v| !v.is_empty())
-            != a.str("dockerfile")
-    {
-        return Err(ApiError::NotPorted);
     }
     let text = |k: &str| match m.get(k) {
         Some(Value::String(s)) => Some(s.clone()).filter(|s| !s.is_empty()),
@@ -1151,9 +1193,65 @@ pub async fn update(
             (!aliases.is_empty()).then(|| coolify_compat::php_json::encode(&json!(aliases)));
         values.push(("custom_network_aliases", ColumnValue::Text(stored)));
     }
+    // `syncData(toModel: true)`: what the deployment reads as it is.
+    for k in [
+        "pre_deployment_command",
+        "pre_deployment_command_container",
+        "post_deployment_command",
+        "post_deployment_command_container",
+        "docker_compose_custom_start_command",
+        "docker_compose_custom_build_command",
+        "http_basic_auth_username",
+    ] {
+        if m.contains_key(k) {
+            values.push((k, ColumnValue::Text(text(k))));
+        }
+    }
+    if m.contains_key("docker_compose_location") {
+        values.push((
+            "docker_compose_location",
+            ColumnValue::Text(text("docker_compose_location")),
+        ));
+    }
+    if m.contains_key("custom_docker_run_options") {
+        values.push((
+            "custom_docker_run_options",
+            ColumnValue::Text(text("custom_docker_run_options").map(|v| v.trim().to_owned())),
+        ));
+    }
+    if m.contains_key("http_basic_auth_password") {
+        let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+        let plain = text("http_basic_auth_password");
+        if plain != basic_auth_password(&a, enc) {
+            values.push((
+                "http_basic_auth_password",
+                ColumnValue::Text(plain.map(|p| enc.encrypt_string(&p))),
+            ));
+        }
+    }
     let ports_changed = m.contains_key("ports_exposes")
         && text("ports_exposes").as_deref() != a.str("ports_exposes");
     let fx = general::apply(&a, &m, &mut values);
+    // `isDirty('dockerfile')`: the health check and the port come from the new Dockerfile.
+    if m.contains_key("dockerfile") && text("dockerfile").as_deref() != a.str("dockerfile") {
+        let dockerfile = text("dockerfile");
+        values.retain(|(k, _)| *k != "dockerfile");
+        values.push(("dockerfile", ColumnValue::Text(dockerfile.clone())));
+        values.extend(
+            crate::routes::application_fields::healthcheck_from_dockerfile(
+                &a,
+                dockerfile.as_deref(),
+            ),
+        );
+        if text("ports_exposes").is_none()
+            && let Some(port) = dockerfile
+                .as_deref()
+                .and_then(crate::routes::application_fields::port_from_dockerfile)
+        {
+            values.retain(|(k, _)| *k != "ports_exposes");
+            values.push(("ports_exposes", ColumnValue::Text(Some(port.to_string()))));
+        }
+    }
     // syncData(toModel: true) assigns `settings->is_static`, whose mutator saves `ports_exposes = 80`
     // on its own copy of the application: it stays unless this save changes the ports.
     if a.setting_bool("is_static") && !ports_changed {
@@ -1163,6 +1261,42 @@ pub async fn update(
     let now = state.now();
     apps::update_settings(&state.db, a.id, &fx.settings, now).await?;
     apps::update_if_changed(&state.db, a.id, &values, now).await?;
+    // Validates a changed Compose path before it counts, and puts the old values back on failure.
+    let form_pack = m
+        .get("build_pack")
+        .and_then(Value::as_str)
+        .or(a.str("build_pack"));
+    let changed =
+        |key: &str| m.contains_key(key) && m.get(key).and_then(Value::as_str) != a.str(key);
+    if form_pack == Some("dockercompose")
+        && a.str("build_pack") == Some("dockercompose")
+        && (changed("docker_compose_location") || changed("base_directory"))
+    {
+        let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+        if let Err(e) = coolify_jobs::compose_parser::load_compose_file(jobs, a.id, false).await {
+            apps::update_if_changed(
+                &state.db,
+                a.id,
+                &[
+                    (
+                        "docker_compose_location",
+                        ColumnValue::Text(a.str("docker_compose_location").map(str::to_owned)),
+                    ),
+                    (
+                        "base_directory",
+                        ColumnValue::Text(a.str("base_directory").map(str::to_owned)),
+                    ),
+                ],
+                now,
+            )
+            .await?;
+            return Ok(PhpJson(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({"message": e.message()}),
+            )
+            .into_response());
+        }
+    }
     if fx.remove_service_variables {
         sqlx::query(
             "DELETE FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 AND (key LIKE 'SERVICE_FQDN_%' OR key LIKE 'SERVICE_URL_%')",
@@ -1196,8 +1330,46 @@ pub async fn update(
         )
         .into_response());
     }
+    // `composeDomainsForStorage()`: a changed value resets the labels, and with them the Compose file.
+    let mut error = None;
+    if pack == "dockercompose" && a.str("build_pack") == Some("dockercompose") {
+        use coolify_jobs::compose_parser::domains::rekey_compose_domains_to_service_names;
+        use coolify_jobs::compose_parser::php;
+        let stored = a.str("docker_compose_domains");
+        let names: Vec<String> = a
+            .str("docker_compose_raw")
+            .and_then(|raw| {
+                coolify_jobs::compose_parser::validate::parse_docker_compose_yaml(raw).ok()
+            })
+            .and_then(|parsed| match php::get(&parsed, "services") {
+                Some(coolify_compat::yaml::PhpValue::Array(items)) => {
+                    Some(items.iter().map(|(k, _)| k.as_string()).collect())
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
+        let rekeyed = rekey_compose_domains_to_service_names(&php::json_array(stored), &names);
+        let encoded = php::json_encode(&coolify_compat::yaml::PhpValue::Array(rekeyed));
+        if stored != Some(encoded.as_str()) {
+            apps::update_if_changed(
+                &state.db,
+                a.id,
+                &[("docker_compose_domains", ColumnValue::Text(Some(encoded)))],
+                state.now(),
+            )
+            .await?;
+            regenerate_labels(&state, a.id, false).await?;
+            if a.setting_bool("is_container_label_readonly_enabled")
+                && let Some(jobs) = state.jobs.as_ref()
+                && let Err(e) =
+                    coolify_jobs::compose_parser::load_compose_file(jobs, a.id, false).await
+            {
+                error = Some(e.message().to_owned());
+            }
+        }
+    }
     Ok(
-        ok(json!({"message": "Application settings updated!", "toasts": fx.toasts}))
+        ok(json!({"message": "Application settings updated!", "toasts": fx.toasts, "error": error}))
             .into_response(),
     )
 }
@@ -1261,6 +1433,7 @@ pub async fn settings(
         "is_static",
         "is_spa",
         "is_build_server_enabled",
+        "is_preserve_repository_enabled",
     ] {
         if let Some(b) = m.get(k).and_then(Value::as_bool) {
             values.push((k, ColumnValue::Bool(b)));
@@ -1268,6 +1441,66 @@ pub async fn settings(
     }
     let now = state.now();
     apps::update_settings(&state.db, a.id, &values, now).await?;
+    // instantSave(): turning it off detaches the file storages from the repository.
+    if m.get("is_preserve_repository_enabled")
+        .and_then(Value::as_bool)
+        == Some(false)
+        && a.setting_bool("is_preserve_repository_enabled")
+    {
+        sqlx::query(
+            "UPDATE local_file_volumes SET is_based_on_git = false, updated_at = $1 \
+             WHERE resource_type = $2 AND resource_id = $3 AND is_based_on_git",
+        )
+        .bind(now)
+        .bind(apps::MORPH)
+        .bind(a.id)
+        .execute(state.db.pool())
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "file storages could not be updated");
+            ApiError::Internal
+        })?;
+    }
+    // The HTTP Basic Authentication fields of `instantSave()`.
+    let mut auth: Vec<(&'static str, ColumnValue)> = Vec::new();
+    if let Some(b) = m.get("is_http_basic_auth_enabled").and_then(Value::as_bool) {
+        auth.push(("is_http_basic_auth_enabled", ColumnValue::Bool(b)));
+    }
+    if let Some(algorithm) = m
+        .get("http_basic_auth_hash_algorithm")
+        .and_then(Value::as_str)
+    {
+        if algorithm == "argon2id" && !caddy_supports_argon2id(&state, &a).await? {
+            return Ok(PhpJson(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({"message": "Argon2id needs a server that runs the Caddy proxy, version 2.11 or newer."}),
+            )
+            .into_response());
+        }
+        auth.push((
+            "http_basic_auth_hash_algorithm",
+            ColumnValue::Text(Some(algorithm.to_owned())),
+        ));
+    }
+    for (k, min, max) in [
+        ("http_basic_auth_bcrypt_cost", 4, 14),
+        ("http_basic_auth_argon2id_memory_cost", 8192, 262_144),
+        ("http_basic_auth_argon2id_time_cost", 1, 12),
+    ] {
+        if let Some(n) = m.get(k).and_then(Value::as_i64) {
+            if !(min..=max).contains(&n) {
+                return Ok(PhpJson(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    json!({"message": format!("The {} field must be between {min} and {max}.", k.replace('_', " "))}),
+                )
+                .into_response());
+            }
+            auth.push((k, ColumnValue::Int(n)));
+        }
+    }
+    if !auth.is_empty() {
+        apps::update_if_changed(&state.db, a.id, &auth, now).await?;
+    }
     // The `isStatic` mutator of ApplicationSetting: a static site listens on port 80.
     if m.get("is_static").and_then(Value::as_bool) == Some(true) {
         apps::update_if_changed(
@@ -1309,7 +1542,16 @@ pub async fn settings(
         .await?;
     }
     regenerate_labels(&state, a.id, false).await?;
-    Ok(ok(json!({"message": "Settings saved.", "toasts": toasts})).into_response())
+    // resetDefaultLabels(): a Compose application reads its file again; handleError() shows a failure.
+    let mut error = None;
+    if a.str("build_pack") == Some("dockercompose")
+        && a.setting_bool("is_container_label_readonly_enabled")
+        && let Some(jobs) = state.jobs.as_ref()
+        && let Err(e) = coolify_jobs::compose_parser::load_compose_file(jobs, a.id, false).await
+    {
+        error = Some(e.message().to_owned());
+    }
+    Ok(ok(json!({"message": "Settings saved.", "toasts": toasts, "error": error})).into_response())
 }
 
 /// `Shared\Danger::delete` for an application, with the page's confirmation steps.

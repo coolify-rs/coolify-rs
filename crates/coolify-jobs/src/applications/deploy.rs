@@ -6,7 +6,7 @@
 
 mod build;
 mod commands;
-mod compose_pack;
+pub(super) mod compose_pack;
 mod git;
 mod preview;
 mod secrets;

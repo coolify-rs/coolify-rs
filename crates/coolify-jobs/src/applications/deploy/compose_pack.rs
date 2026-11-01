@@ -942,7 +942,7 @@ fn with_project_directory(command: &str, directory: &str) -> String {
 }
 
 /// `injectDockerComposeFlags($command, $composeFilePath, $envFilePath)`.
-fn inject_compose_flags(command: &str, compose_file: &str, env_file: &str) -> String {
+pub fn inject_compose_flags(command: &str, compose_file: &str, env_file: &str) -> String {
     static FILE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?:^|\s)(?:-f(?:[=\s]|[./~]|$)|--file(?:=|\s))")
             .unwrap_or_else(|_| unreachable!())
@@ -965,7 +965,7 @@ fn inject_compose_flags(command: &str, compose_file: &str, env_file: &str) -> St
 }
 
 /// `injectDockerComposeBuildArgs($command, $buildArgsString)`.
-fn inject_build_args(command: &str, build_args: &str) -> String {
+pub fn inject_build_args(command: &str, build_args: &str) -> String {
     static BUILD: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"( builder build| buildx build| build)(?:\s|$)")
             .unwrap_or_else(|_| unreachable!())

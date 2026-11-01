@@ -35,7 +35,21 @@
   let data = $state<DeploymentPage | null>(null);
   let search = $state('');
   let filters = $state<string[]>([]);
-  let pullRequestId = $state<number | null>(null);
+  // `protected $queryString = ['pull_request_id']`: an invalid value is dropped.
+  function pullRequestFromUrl(): number | null {
+    const raw = new URLSearchParams(location.search).get('pull_request_id');
+    const n = raw === null || raw === '' ? NaN : Number(raw);
+    return Number.isFinite(n) && n > 0 && n <= 2147483647 ? Math.trunc(n) : null;
+  }
+  let pullRequestId = $state<number | null>(pullRequestFromUrl());
+  $effect(() => {
+    if (embedded) return;
+    const q = new URLSearchParams(location.search);
+    if (pullRequestId) q.set('pull_request_id', String(pullRequestId));
+    else q.delete('pull_request_id');
+    const search = q.toString();
+    history.replaceState(history.state, '', `${location.pathname}${search ? `?${search}` : ''}`);
+  });
   let sort = $state<'newest' | 'oldest'>('newest');
   let page = $state(1);
   let pageSize = $state(untrack(() => (embedded ? 3 : 10)));

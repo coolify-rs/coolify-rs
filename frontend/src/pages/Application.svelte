@@ -3,9 +3,7 @@
   // Port of upstream livewire/project/application/configuration.blade.php (+
   // Project\Application\Configuration), deployment/index.blade.php and
   // deployment/show.blade.php: the heading, the application menu (shown by the
-  // main sidebar) and the section. General, Git Source, Deployment Logs and
-  // Danger zone are ported; the other sections show the "not available in
-  // coolify-rs yet" page in the same frame.
+  // main sidebar) and the section.
   import ApplicationBackups from '../components/ApplicationBackups.svelte';
   import VolumeBackups from '../components/shared/VolumeBackups.svelte';
   import { volumeBackupsUi } from '../lib/volumeBackupsApi';
@@ -32,6 +30,8 @@
   import FileBrowser from '../components/shared/FileBrowser.svelte';
   import ExecuteContainerCommand from '../components/shared/ExecuteContainerCommand.svelte';
   import ApplicationSwarm from '../components/shared/ApplicationSwarm.svelte';
+  import ApplicationPreviews from '../components/shared/ApplicationPreviews.svelte';
+  import ScheduledTasks from '../components/shared/ScheduledTasks.svelte';
   import ApplicationDomains from '../components/shared/ApplicationDomains.svelte';
   import Maintenance from '../components/shared/Maintenance.svelte';
   import Unported from './Unported.svelte';
@@ -51,7 +51,8 @@
     dep = null,
     backup = null,
     backupSection = null,
-  }: { uuid: string; env: string; app: string; section: string; dep?: string | null; backup?: string | null; backupSection?: string | null } = $props();
+    taskUuid = null,
+  }: { uuid: string; env: string; app: string; section: string; dep?: string | null; backup?: string | null; backupSection?: string | null; taskUuid?: string | null } = $props();
 
   let record = $state<ApplicationRecord | null>(null);
   let appState = $state<ApplicationState | null>(null);
@@ -74,9 +75,32 @@
     const [r, s] = await Promise.all([appUi.get(app), appUi.state(app)]);
     record = r;
     appState = s;
+    setNav(r);
+  }
+
+  function setNav(r: ApplicationRecord) {
+    const bp = r.build_pack ?? '';
+    const menu = applicationNavContext(base, active, {
+      canAccessTerminal: session.isAdmin,
+      // Application::git_based()
+      gitBased: !r.dockerfile && bp !== 'dockerimage',
+      dockerImage: bp === 'dockerimage',
+      compose: bp === 'dockercompose',
+      swarm: appState?.is_swarm ?? false,
+      // `server-status-badge`.
+      serverBadge:
+        r.server_status === false
+          ? 'One or more servers are unreachable or misconfigured.'
+          : appState?.has_additional_servers && (r.status ?? '').includes('degraded')
+            ? 'Application is in degraded state across multiple servers.'
+            : undefined,
+    });
+    page.navContext = backup ? applicationBackupNavContext(base, backup, currentBackupSection, menu) : menu;
   }
 
   async function load() {
+    // `Route::get('/tasks/{task_uuid}')` redirects with the parameter as a query string.
+    if (taskUuid) return router.go(`${base}/scheduled-tasks?task_uuid=${encodeURIComponent(taskUuid)}`, true);
     let r: ApplicationRecord;
     try {
       r = await appUi.get(app);
@@ -104,18 +128,7 @@
     record = r;
     const suffix = dep ? 'Deployment' : active === 'deployment' ? 'Deployments' : active === 'backups' ? 'Backups' : 'Configuration';
     document.title = `${limit10(r.name ?? '')} > ${suffix} | coolify-rs`;
-    const bp = r.build_pack ?? '';
-    const menu = applicationNavContext(base, active, {
-      canAccessTerminal: session.isAdmin,
-      // Application::git_based()
-      gitBased: !r.dockerfile && bp !== 'dockerimage',
-      dockerImage: bp === 'dockerimage',
-      compose: bp === 'dockercompose',
-      swarm: appState?.is_swarm ?? false,
-      // `server-status-badge`.
-      serverBadge: r.server_status === false ? 'One or more servers are unreachable or misconfigured.' : undefined,
-    });
-    page.navContext = backup ? applicationBackupNavContext(base, backup, currentBackupSection, menu) : menu;
+    setNav(r);
     if (backup) {
       // `Route::redirect('/backups/{backup_uuid}/s3')` and `/retention`.
       if (backupSection === 's3' || backupSection === 'retention') return router.go(`${base}/backups/${backup}`, true);
@@ -204,11 +217,7 @@
           <aside class="application-settings-navigation in-main-nav min-w-0"></aside>
           <div class="min-w-0">
             {#if active === 'general'}
-              {#if ['dockerimage', 'dockerfile', 'static', 'nixpacks', 'railpack'].includes(record.build_pack ?? '')}
-                <ApplicationGeneral {record} {appState} {base} onsaved={() => refresh().catch(() => {})} />
-              {:else}
-                <Unported description="The settings of this build pack are not ported to coolify-rs yet." />
-              {/if}
+              <ApplicationGeneral {record} {appState} {base} onsaved={() => refresh().catch(() => {})} />
             {:else if active === 'source' && !record.dockerfile && record.build_pack !== 'dockerimage'}
               <ApplicationSource uuid={app} onsaved={() => refresh().catch(() => {})} />
             {:else if active === 'domains'}
@@ -244,6 +253,10 @@
               <ApplicationSwarm uuid={app} onchange={() => refresh().catch(() => {})} />
             {:else if active === 'metrics'}
               <Metrics kind="application" uuid={app} />
+            {:else if active === 'preview-deployments' && (record.build_pack === 'dockerimage' || !record.dockerfile)}
+              <ApplicationPreviews uuid={app} {base} onchange={() => refresh().catch(() => {})} />
+            {:else if active === 'scheduled-tasks'}
+              <ScheduledTasks kind="application" uuid={app} />
             {:else if active === 'webhooks'}
               <Webhooks kind="application" uuid={app} />
             {:else if active === 'healthcheck' && record.build_pack !== 'dockercompose'}

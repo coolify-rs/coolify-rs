@@ -244,6 +244,7 @@ export interface ServerFacts {
   is_localhost: boolean;
   is_build: boolean;
   is_swarm: boolean;
+  has_additional_servers?: boolean;
   is_swarm_worker: boolean;
   team_uses_swarm?: boolean;
   is_cloudflare_tunnel?: boolean;
@@ -462,6 +463,10 @@ export interface ApplicationState {
   server_ip: string | null;
   server_id: number | null;
   is_swarm?: boolean;
+  has_additional_servers?: boolean;
+  http_basic_auth_password?: string | null;
+  supports_argon2id?: boolean;
+  proxy_type?: string | null;
   /** `Server::buildServers($teamId)->exists()`. */
   /** `is_public_repository()`. */
   source_is_public?: boolean;
@@ -603,9 +608,13 @@ export const appUi = {
     request<{ message: string }>('PATCH', `${appPath(uuid)}/source`, body),
   changeSource: (uuid: string, body: { source_id?: number; source_type?: string; private_key_id?: number }) =>
     request<{ message: string }>('POST', `${appPath(uuid)}/source/change`, body),
-  update: (uuid: string, body: Record<string, unknown>) => request<{ message: string; toasts?: string[] }>('PATCH', appPath(uuid), body),
+  parseCompose: (uuid: string) => request<{ error?: string; docker_compose?: string | null }>('POST', `${appPath(uuid)}/compose/parse`, {}),
+  loadCompose: (uuid: string, isInit = false) => request<{ message?: string }>('POST', `${appPath(uuid)}/compose/load`, { is_init: isInit }),
+  composePreviews: (uuid: string, body: { build: string; start: string; base_directory: string; docker_compose_location: string }) =>
+    request<{ build: string; start: string }>('POST', `${appPath(uuid)}/compose/previews`, body),
+  update: (uuid: string, body: Record<string, unknown>) => request<{ message: string; toasts?: string[]; error?: string | null }>('PATCH', appPath(uuid), body),
   settings: (uuid: string, body: Record<string, unknown>) =>
-    request<{ message: string | null; toasts?: string[] }>('POST', `${appPath(uuid)}/settings`, body),
+    request<{ message: string | null; toasts?: string[]; error?: string | null }>('POST', `${appPath(uuid)}/settings`, body),
   deploy: (uuid: string, force = false) => request<QueueAnswer>('POST', `${appPath(uuid)}/deploy`, { force }),
   restart: (uuid: string) => request<QueueAnswer>('POST', `${appPath(uuid)}/restart`, {}),
   stop: (uuid: string) => request<{ message: string }>('POST', `${appPath(uuid)}/stop`, {}),

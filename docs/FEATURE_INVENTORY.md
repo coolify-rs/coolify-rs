@@ -108,6 +108,7 @@ Upstream references are relative to the upstream repository root.
 | Persistent storage, volume backups | `LocalPersistentVolume`, `VolumeBackupJob` | |
 | Database backups to S3, restore | `DatabaseBackupJob` | |
 | Scheduled tasks, scheduler, Horizon queues | `app/Console/Kernel.php`, 72 jobs | one scheduler (`coolify_jobs::scheduler`, `kernel`, `schedule_sources`): every source of `ScheduledJobManager`, `ServerManagerJob`, the Kernel's jobs and commands; `compat/diff/kernel_schedule_diff.py`, `compat/diff/scheduler_window.py` |
+| Application and service screens | `Project\Shared\ScheduledTask\*`, `Project\Application\{Previews, Preview\Form, PreviewDomains}`, `Project\Shared\ResourceDetails`, `Application\General` | scheduled tasks for applications and services; previews with domains, stop and delete; service details; Compose settings, basic auth, deployment commands and Docker options on General (`compat/ui/flow_appui_*.mjs`); DNS checks not |
 | Notifications (email, Discord, Slack, Telegram, Pushover, webhook) | `app/Notifications/*` | SSRF protections must be ported with them |
 | Cloud providers (Hetzner, DigitalOcean, Vultr, Hostinger), cloud-init | controllers + jobs | |
 | MCP server, Sentinel metrics, traffic analytics | `routes/ai.php`, `SentinelController` | |

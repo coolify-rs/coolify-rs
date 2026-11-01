@@ -65,6 +65,18 @@ pub fn routes(state: AppState) -> Router<AppState> {
             get(crate::ui_applications::state),
         )
         .route(
+            "/ui/applications/{uuid}/compose/parse",
+            post(crate::ui_applications::compose::parse),
+        )
+        .route(
+            "/ui/applications/{uuid}/compose/load",
+            post(crate::ui_applications::compose::load),
+        )
+        .route(
+            "/ui/applications/{uuid}/compose/previews",
+            post(crate::ui_applications::compose::previews),
+        )
+        .route(
             "/ui/applications/{uuid}/deploy",
             post(crate::ui_applications::deploy),
         )

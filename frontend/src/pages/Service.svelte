@@ -3,7 +3,6 @@
   // Port of upstream livewire/project/service/configuration.blade.php (+
   // Project\Service\Configuration). `Index::mount` redirects `/{stack_service_uuid}`
   // to this page: a compose resource is edited in the modal of its card.
-  // `Project/Shared/*` sections not ported yet stay placeholders.
   import Empty from '../components/Empty.svelte';
   import EnvironmentVariables from '../components/shared/EnvironmentVariables.svelte';
   import RuntimeLogs from '../components/shared/RuntimeLogs.svelte';
@@ -18,6 +17,7 @@
   import ServiceImportBackup from '../components/ServiceImportBackup.svelte';
   import ServiceSharedPlaceholder from '../components/ServiceSharedPlaceholder.svelte';
   import ExecuteContainerCommand from '../components/shared/ExecuteContainerCommand.svelte';
+  import ScheduledTasks from '../components/shared/ScheduledTasks.svelte';
   import ResourceOperations from '../components/shared/ResourceOperations.svelte';
   import Maintenance from '../components/shared/Maintenance.svelte';
   import FileBrowser from '../components/shared/FileBrowser.svelte';
@@ -44,16 +44,22 @@
     route = 'service',
     stack = null,
     backup = null,
-  }: { uuid: string; env: string; service: string; section: string; route?: string; stack?: string | null; backup?: string | null } = $props();
+    taskUuid = null,
+  }: { uuid: string; env: string; service: string; section: string; route?: string; stack?: string | null; backup?: string | null; taskUuid?: string | null } = $props();
 
   const base = $derived(`/project/${uuid}/environment/${env}/service/${service}`);
-  const isSection = $derived(section === 'general' || SERVICE_SECTIONS.includes(section));
+  const isSection = $derived(section === 'general' || SERVICE_SECTIONS.includes(section) || route === 'service-task');
 
   /**
    * `VolumeBackup/Show`, `DatabaseBackups` and the `{stack}/import` route never render: they check the
    * record and redirect. Answers whether this page redirected.
    */
   async function redirected(): Promise<boolean> {
+    // `Route::get('/tasks/{task_uuid}')` redirects with the parameter as a query string.
+    if (taskUuid) {
+      router.go(`${base}/scheduled-tasks?task_uuid=${encodeURIComponent(taskUuid)}`, true);
+      return true;
+    }
     if (route === 'service-database-import') {
       router.go(`${base}/import-backup/${stack}`, true);
       return true;
@@ -228,7 +234,7 @@
             <EnvironmentVariables kind="service" uuid={service} onconfigurationchanged={refreshQuiet} />
             <SecretManagerLinks kind="service" uuid={service} />
           {:else if section === 'scheduled-tasks'}
-            <ServiceSharedPlaceholder section="Project/Shared/ScheduledTask/All" />
+            <ScheduledTasks kind="service" uuid={service} />
           {:else if section === 'webhooks'}
             <Webhooks kind="service" uuid={service} />
           {:else if section === 'resource-operations'}

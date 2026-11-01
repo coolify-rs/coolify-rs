@@ -377,7 +377,7 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
 | Audit events of the wizard | `Auditable` on every model | written for the key, server, shared variables, project, environment and team; only one `ui.server.updated` (`proxy`) of upstream's three, and the `changes` hold the name only | |
 | Terminal websocket | a separate Node server on port 6002, `TERMINAL_PROTOCOL`, `TERMINAL_HOST`, `TERMINAL_PORT` | `/terminal/ws` on the port of the UI; those settings do not apply. A page of another origin is refused (close 4401) where upstream relies on `SameSite`. Multiplexed ssh does not apply: upstream drops it for terminals too | one server; the extra check does not change what a browser on this instance sees |
 | Terminal for a non-root ssh user | `sudo docker exec`, `sudo docker attach` | the same commands, checked as strings against `containerCommand()` on the reference and in tests, not run on a server | the test VM only has root |
-| Shared resource sections | `Project\Shared\*`, `Project\Service\{Storage, FileStorage}` and `Project\Application\{Advanced, Rollback}` for every resource | environment variables, persistent storage, runtime logs, resource limits, healthcheck, tags, webhooks and Advanced are ported and mounted on application pages as `frontend/src/components/shared/*` with `/ui/resources/{kind}/{uuid}/...` | Not ported: Resource operations (clone, move, migrate), Servers (`Destination`), Previews UI, Swarm, Maintenance, Files (`FileBrowser`), resource Metrics charts (only the states before charts), starting a rollback, Refresh GPUs, linking a secret manager source (it contacts a third party; only the empty state), volume backup modals, external Compose volumes, stale Compose volume actions |
+| Shared resource sections | `Project\Shared\*`, `Project\Service\{Storage, FileStorage}` and `Project\Application\{Advanced, Rollback}` for every resource | environment variables, persistent storage, runtime logs, resource limits, healthcheck, tags, webhooks and Advanced are ported and mounted on application pages as `frontend/src/components/shared/*` with `/ui/resources/{kind}/{uuid}/...` | Not ported: Resource operations (clone, move, migrate), Servers (`Destination`), Swarm, Maintenance, Files (`FileBrowser`), resource Metrics charts (only the states before charts), starting a rollback, Refresh GPUs, linking a secret manager source (it contacts a third party; only the empty state), volume backup modals, external Compose volumes, stale Compose volume actions |
 
 ## Server transfer
 
@@ -394,6 +394,17 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
 - `TransferFinishChanged` is not broadcast: the list refreshes through its 15 second poll.
 - `MigrateServerToInstanceJob::failed` (`recordStoppedMigration`) has no equivalent, because this job has no worker timeout. A restart during a
   transfer leaves the state "running" until `STALE_MIGRATION_SECONDS` passes.
+
+## Previews, scheduled tasks and the General page
+
+- Preview domains make no DNS check, as on the application Domains page: a new domain stays "Not checked" and the toast has no
+  "DNS check started", and "Check DNS" and "Check all DNS" only say that checks are not available.
+- "Load pull requests" (`githubApi`) has never run against GitHub or a fake: the comparisons do not press it, because it contacts GitHub.
+- A Preview ID that is not a number answers with a message under the field; upstream's `?int` property fails with an error page.
+- A Compose preview that generates domains without a service does not use `generateWithoutApplicationDomain`.
+- "Execute now" and running task executions were not compared: the fixtures were not running applications.
+- Saving Compose domains on General does not run `validateDNSEntry` or `checkDomainUsage`; the domains are edited on the Domains page.
+- "Building on a build server" on General still answers 501: build servers belong to the deploy job.
 
 ## Resource operations and application sections
 

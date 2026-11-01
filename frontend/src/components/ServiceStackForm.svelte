@@ -10,7 +10,7 @@
   import Modal from './Modal.svelte';
   import MonacoEditor from './MonacoEditor.svelte';
   import Reicon from './Reicon.svelte';
-  import ServiceSharedPlaceholder from './ServiceSharedPlaceholder.svelte';
+  import ResourceDetails from './shared/ResourceDetails.svelte';
   import SettingsSection from './SettingsSection.svelte';
   import SettingsSubsection from './SettingsSubsection.svelte';
   import UnsavedBar from './UnsavedBar.svelte';
@@ -240,6 +240,6 @@
 
 {#if detailsOpen}
   <Modal title="Resource details" onclose={() => (detailsOpen = false)}>
-    <ServiceSharedPlaceholder section="Project/Shared/ResourceDetails" />
+    <ResourceDetails uuid={data.service.uuid} />
   </Modal>
 {/if}

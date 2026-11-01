@@ -138,7 +138,7 @@ pub async fn update_preview(
         return Ok(false);
     }
     db.ensure_writable()?;
-    let is_json = |c: &str| c == "domain_port_overrides";
+    let is_json = |c: &str| matches!(c, "domain_port_overrides" | "domain_dns_statuses");
     let set = values
         .iter()
         .enumerate()
