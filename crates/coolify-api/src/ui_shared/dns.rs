@@ -683,6 +683,40 @@ pub async fn release_after_remove(
     release_warning(result, "removed")
 }
 
+/// `queueReleaseOfRemovedHostnames` after a resource's domains were saved by the API, General or
+/// a preview. `previous` comes from [`previous_hostnames`], read before the save.
+pub fn queue_release_of_removed_hostnames(
+    state: &AppState,
+    morph: &str,
+    id: i64,
+    previous: Vec<String>,
+    team_id: i64,
+) {
+    let Some(enc) = state.encrypter.as_ref() else {
+        return;
+    };
+    cf::queue_release_of_removed_hostnames(
+        &state.db,
+        enc,
+        DnsResource {
+            morph: morph.to_owned(),
+            id,
+            uuid: None,
+            name: None,
+            type_name: String::new(),
+        },
+        previous,
+        team_id,
+    );
+}
+
+/// `$dnsCleanup->hostnamesOf($resource)` before a save.
+pub async fn previous_hostnames(state: &AppState, morph: &str, id: i64) -> Vec<String> {
+    cf::hostnames_of_resource(&state.db, morph, id)
+        .await
+        .unwrap_or_default()
+}
+
 /// `ReleaseManagedDnsRecordsJob` after a resource is deleted; a failed provider is retried three times.
 pub fn spawn_release_resource(state: &AppState, resource_type: &'static str, id: i64) {
     let state = state.clone();

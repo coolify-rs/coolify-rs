@@ -1128,7 +1128,17 @@ async fn persist(
             }
         }
     }
+    let morph = "App\\Models\\ApplicationPreview";
+    let previous_dns_hostnames =
+        crate::ui_shared::dns::previous_hostnames(state, morph, id_of(preview)).await;
     ops::update_preview(&state.db, id_of(preview), &values, state.now()).await?;
+    crate::ui_shared::dns::queue_release_of_removed_hostnames(
+        state,
+        morph,
+        id_of(preview),
+        previous_dns_hostnames,
+        a.team_id,
+    );
     if !changed.is_empty() {
         audit_preview(
             state,

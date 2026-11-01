@@ -358,7 +358,7 @@ struct Maps {
     service_applications: HashMap<String, Res>,
     databases: HashMap<String, Res>,
     pending_sqlite: Vec<(i64, String, String)>,
-    pending_dns: Vec<(i64, String)>,
+    pending_dns: Vec<(i64, String, String)>,
     warnings: Vec<String>,
     git_source_applications: Vec<String>,
     columns: HashMap<String, HashSet<String>>,
@@ -2679,7 +2679,7 @@ impl Import<'_> {
                     )
                     .await?;
                 if owned {
-                    self.m.pending_dns.push((id, name.clone()));
+                    self.m.pending_dns.push((id, name.clone(), previous));
                 }
                 total += 1;
                 id
@@ -3407,9 +3407,25 @@ pub async fn import(
     let pending_dns = std::mem::take(&mut import.m.pending_dns);
     tx.commit().await?;
 
-    // Provider calls run after the commit. The Cloudflare adoption is not ported, so an owned
-    // record stays unowned here: `adoptManagedDnsRecords` when the provider cannot be reached.
-    for (id, name) in pending_dns {
+    // `adoptManagedDnsRecords`: provider calls run after the commit. A record that cannot be adopted
+    // is no longer owned, so this instance never changes or deletes it.
+    for (id, name, previous) in pending_dns {
+        let dns = coolify_jobs::integrations::cloudflare::Dns {
+            db: &state.db,
+            enc,
+            now: state.now(),
+            source: "system",
+        };
+        let adopted = match coolify_db::managed_dns::record_by_id(&state.db, id)
+            .await
+            .map_err(|e| TransferError::Message(e.to_string()))?
+        {
+            Some(record) => dns.adopt_record(&record, &previous).await,
+            None => continue,
+        };
+        if adopted {
+            continue;
+        }
         sqlx::query("UPDATE managed_dns_records SET owned = false WHERE id = $1")
             .bind(id)
             .execute(state.db.pool())

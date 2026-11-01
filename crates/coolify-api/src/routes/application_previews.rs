@@ -116,6 +116,8 @@ fn id_of(r: &Record) -> i64 {
 }
 
 /// `GET /applications/{uuid}/previews` (`index`).
+const PREVIEW_MORPH: &str = "App\\Models\\ApplicationPreview";
+
 pub async fn list(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -800,9 +802,18 @@ pub async fn update(
             )))),
         ));
     }
+    let previous_dns_hostnames =
+        crate::ui_shared::dns::previous_hostnames(&state, PREVIEW_MORPH, id_of(&preview)).await;
     ops::update_preview(&state.db, id_of(&preview), &values, state.now())
         .await
         .map_err(fields::save_error)?;
+    crate::ui_shared::dns::queue_release_of_removed_hostnames(
+        &state,
+        PREVIEW_MORPH,
+        id_of(&preview),
+        previous_dns_hostnames,
+        ctx.team_id,
+    );
     tracing::info!(target: "audit", event = "api.application.preview_updated", team_id = ctx.team_id, application_uuid = %a.uuid, pull_request_id = id, "preview updated");
     let overrides_value = overrides_text
         .as_deref()

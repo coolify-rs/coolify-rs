@@ -533,7 +533,13 @@ async fn run_check(
                     .unwrap_or(None);
             match owned {
                 None => done("unchecked", "This instance does not track this record anymore.".into(), None),
-                Some((true,)) => done("action", "Cloudflare does not confirm the record.".into(), Some("The record changed at Cloudflare, or Cloudflare cannot be reached with the token.".into())),
+                Some((true,)) => {
+                    if reclaim_record(state, &subject).await {
+                        done("ok", "This instance manages the record at Cloudflare.".into(), None)
+                    } else {
+                        done("action", "Cloudflare does not confirm the record.".into(), Some("The record changed at Cloudflare, or Cloudflare cannot be reached with the token.".into()))
+                    }
+                }
                 Some((false,)) => done("action", "This instance does not own the record yet.".into(), Some("Until it owns the record, this instance does not change or delete it.".into())),
             }
         }
@@ -725,7 +731,7 @@ pub async fn check_when_stale(state: &AppState, server_id: i64) -> Result<(), St
     Ok(())
 }
 
-/// `fix`: Sentinel restarts in the background. GitHub and Cloudflare calls are not ported.
+/// `fix`: Sentinel restarts in the background. The GitHub call is not ported.
 pub async fn fix(state: &AppState, server_id: i64, key: &str) -> Result<Value, String> {
     let kind = key.split(':').next().unwrap_or("");
     if fix_label(kind).is_none() {
@@ -760,7 +766,42 @@ pub async fn fix(state: &AppState, server_id: i64, key: &str) -> Result<Value, S
         )
         .await;
     }
+    if kind == "dns_record" {
+        let subject = key.split_once(':').map_or("", |(_, s)| s);
+        if reclaim_record(state, subject).await {
+            let _ = sqlx::query("UPDATE managed_dns_records SET owned = true WHERE uuid = $1")
+                .bind(subject)
+                .execute(state.db.pool())
+                .await;
+            return check(state, server_id, key).await;
+        }
+    }
     update_item(state, server_id, key, "action", "Coolify could not do this step.", Some(if kind == "dns_record" { "Coolify could not take ownership: the record changed at Cloudflare, or Cloudflare cannot be reached.".to_owned() } else { "GitHub cannot be reached from this build.".to_owned() })).await
+}
+
+/// `CloudflareDnsProvider::reclaimRecord` of the record with this uuid.
+pub(crate) async fn reclaim_record(state: &AppState, uuid: &str) -> bool {
+    let Some(enc) = state.encrypter.as_ref() else {
+        return false;
+    };
+    let id: Option<i64> = sqlx::query_scalar("SELECT id FROM managed_dns_records WHERE uuid = $1")
+        .bind(uuid)
+        .fetch_optional(state.db.pool())
+        .await
+        .unwrap_or(None);
+    let Some(id) = id else {
+        return false;
+    };
+    let Ok(Some(record)) = coolify_db::managed_dns::record_by_id(&state.db, id).await else {
+        return false;
+    };
+    let dns = coolify_jobs::integrations::cloudflare::Dns {
+        db: &state.db,
+        enc,
+        now: state.now(),
+        source: "system",
+    };
+    dns.reclaim_record(&record).await
 }
 
 /// `markDone`.

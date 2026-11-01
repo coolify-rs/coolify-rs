@@ -6,8 +6,7 @@
 //! `versions:refresh-local` (Coolify Cloud only), `cleanup:redis --clear-locks` and
 //! `horizon:snapshot` (no Redis, no Horizon), `uploads:clear` (the import route appends to the
 //! final file, so there is no chunk directory), and the `isDev()` branch of the schedule.
-//! `dns:release-orphaned-records` is not ported (`docs/KNOWN_LIMITATIONS.md`), and `UpdateCoolifyJob`
-//! is in [`crate::updates`].
+//! `UpdateCoolifyJob` is in [`crate::updates`].
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -47,6 +46,7 @@ pub enum KernelJob {
     CleanupStuckedResources,
     PruneExpiredTokens,
     CleanupDatabaseImportUploads,
+    ReleaseOrphanedDnsRecords,
     ApiTokenExpirationWarning,
     CheckMissingDatabaseBackups,
     CheckMissingVolumeBackups,
@@ -152,6 +152,12 @@ pub fn schedule(
             "0 * * * *",
             3600,
             KernelJob::CleanupDatabaseImportUploads,
+        ),
+        entry(
+            "dns:release-orphaned-records",
+            "0 * * * *",
+            3600,
+            KernelJob::ReleaseOrphanedDnsRecords,
         ),
         entry(
             "ApiTokenExpirationWarningJob",
@@ -301,6 +307,7 @@ pub async fn run_job(jobs: &Jobs, job: KernelJob, now: DateTime<Utc>) -> Result<
             cleanup_database_import_uploads(&data_dir());
             Ok(())
         }
+        KernelJob::ReleaseOrphanedDnsRecords => release_orphaned_dns_records(jobs).await,
         KernelJob::ApiTokenExpirationWarning => api_token_expiration_warning(jobs).await,
         KernelJob::CheckMissingDatabaseBackups => check_missing_database_backups(jobs).await,
         KernelJob::CheckMissingVolumeBackups => check_missing_volume_backups(jobs).await,
@@ -426,6 +433,26 @@ async fn cleanup_database(db: &Db) -> Result<(), String> {
     queries::delete_finished_runner_executions(db, keep, DELETE_BATCH_SIZE)
         .await
         .map_err(text)?;
+    Ok(())
+}
+
+/// `ReleaseOrphanedManagedDnsRecords::handle` (`dns:release-orphaned-records`).
+async fn release_orphaned_dns_records(jobs: &Jobs) -> Result<(), String> {
+    let Some(enc) = jobs.0.encrypter.as_ref() else {
+        return Ok(());
+    };
+    let dns = crate::integrations::cloudflare::Dns {
+        db: &jobs.0.db,
+        enc,
+        now: Jobs::now(),
+        source: "system",
+    };
+    let counts = dns.release_orphaned_records().await?;
+    if counts.is_empty() {
+        tracing::info!("No orphaned managed DNS records found.");
+    } else {
+        tracing::info!(?counts, "Orphaned managed DNS records processed.");
+    }
     Ok(())
 }
 
@@ -1005,6 +1032,7 @@ mod tests {
                 "cleanup:scheduled-job-occurrences",
                 "sanctum:prune-expired",
                 "cleanup:database-import-uploads",
+                "dns:release-orphaned-records",
                 "ApiTokenExpirationWarningJob",
                 "CheckMissingDatabaseBackupsJob",
                 "CheckMissingVolumeBackupsJob",

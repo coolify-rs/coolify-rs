@@ -447,6 +447,18 @@ pub async fn reference_target_exists(db: &Db, resource_type: &str, id: i64) -> D
     Ok(matches!(row, Some(None)))
 }
 
+/// `releaseOrphanedRecords`: records with references, or created before the grace period ended.
+pub async fn orphan_candidates(db: &Db, cutoff: NaiveDateTime) -> DbResult<Vec<Record>> {
+    let rows: Vec<Record> = sqlx::query_as(&format!(
+        "SELECT {RECORD_COLUMNS} FROM managed_dns_records r WHERE created_at <= $1 \
+         OR EXISTS (SELECT 1 FROM managed_dns_record_references x WHERE x.managed_dns_record_id = r.id) ORDER BY id"
+    ))
+    .bind(cutoff)
+    .fetch_all(db.pool())
+    .await?;
+    Ok(rows)
+}
+
 /// `$resource->fqdn` and `docker_compose_domains` of a resource, for `hostnamesOf`.
 pub async fn resource_domains(
     db: &Db,

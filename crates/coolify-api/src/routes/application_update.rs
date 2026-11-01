@@ -749,12 +749,21 @@ async fn apply(
     }
 
     let now = state.now();
+    let previous_dns_hostnames =
+        crate::ui_shared::dns::previous_hostnames(&state, apps::MORPH, original.id).await;
     apps::update_settings(&state.db, original.id, &settings, now)
         .await
         .map_err(fields::save_error)?;
     apps::update_if_changed(&state.db, original.id, &p.writes, now)
         .await
         .map_err(fields::save_error)?;
+    crate::ui_shared::dns::queue_release_of_removed_hostnames(
+        &state,
+        apps::MORPH,
+        original.id,
+        previous_dns_hostnames,
+        ctx.team_id,
+    );
     if delete_service_variables {
         apps::delete_service_url_variables(&state.db, original.id).await?;
     }

@@ -201,8 +201,7 @@ async fn transfer_back(
     ok(json!({"message": "The other instance started the transfer back."}))
 }
 
-/// `Show::enableManagement` with `ServerTransferClaimer::restoreAfterTakeBack`. The parked DNS
-/// records stay not owned: asking Cloudflare to confirm them is not ported.
+/// `Show::enableManagement` with `ServerTransferClaimer::restoreAfterTakeBack`.
 async fn enable_management(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -220,6 +219,36 @@ async fn enable_management(
     let url = instance_url(&state.db).await;
     if let Err(e) = coolify_jobs::server_transfer::claim(jobs, s.id, &url).await {
         return Ok(failed(e));
+    }
+    // Provider calls run here, after the claim committed.
+    let parked: Vec<i64> = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT server_metadata::jsonb #>> '{transfer,parked_dns_record_ids}' FROM servers WHERE id = $1",
+    )
+    .bind(s.id)
+    .fetch_one(state.db.pool())
+    .await
+    .ok()
+    .flatten()
+    .and_then(|t| serde_json::from_str(&t).ok())
+    .unwrap_or_default();
+    if let Some(enc) = state.encrypter.as_ref() {
+        let dns = coolify_jobs::integrations::cloudflare::Dns {
+            db: &state.db,
+            enc,
+            now: state.now(),
+            source: "system",
+        };
+        for id in parked {
+            if let Ok(Some(record)) = coolify_db::managed_dns::record_by_id(&state.db, id).await
+                && dns.reclaim_record(&record).await
+            {
+                let _ = sqlx::query("UPDATE managed_dns_records SET owned = true, updated_at = $2 WHERE id = $1")
+                    .bind(id)
+                    .bind(state.now())
+                    .execute(state.db.pool())
+                    .await;
+            }
+        }
     }
     let mut tx = state
         .db

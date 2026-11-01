@@ -341,6 +341,7 @@ async fn submit_application(
         values.push(("restart_limit_reached", ColumnValue::Bool(false)));
     }
     values.push(("max_restart_count", ColumnValue::Int(max_restart)));
+    let previous_dns_hostnames = crate::ui_shared::dns::previous_hostnames(state, "App\\Models\\ServiceApplication", part.id).await;
     svc::sub_update(
         &state.db,
         SubKind::Application,
@@ -350,6 +351,7 @@ async fn submit_application(
     )
     .await?;
     crate::routes::services::save_application_urls(state, s, part, normalized.clone()).await?;
+    crate::ui_shared::dns::queue_release_of_removed_hostnames(state, "App\\Models\\ServiceApplication", part.id, previous_dns_hostnames, ctx.team_id);
     tracing::info!(target: "audit", event = "ui.service_application.updated", team_id = ctx.team_id, service_uuid = %s.uuid, service_application_uuid = %part.uuid, "service application updated");
     let multiple = normalized.as_deref().is_some_and(|f| f.contains(','));
     Ok(ok(json!({
