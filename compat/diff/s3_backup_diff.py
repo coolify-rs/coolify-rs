@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """S3 paths of database and volume backups against a local MinIO, upstream vs coolify-rs.
 
-    python3 compat/diff/s3_fake_proxy.py &     # after this script's sidecar is up, see below
-    HTTP_PROXY=http://127.0.0.1:18990 scripts/dev-server.sh 18090
+    scripts/dev-server-container.sh 18090
     COOLIFY_RS_BASE=http://127.0.0.1:18090 s3_backup_diff.py [--case standalone,volume,service]
 
-MinIO runs on the test VM as `coolify-minio` on the `coolify` network. A socat sidecar with the same name on the
-reference's Docker network forwards to it, and publishes 127.0.0.1:19000 for the proxy. The S3 row has upstream's
-trusted uuid `minio`, so `instance_settings` stays as it is. Not run here because they need `instance_settings`:
-`PreparesBackupDownloads` and S3 file downloads (`file_download_s3_storage_id`).
-Everything created is tracked and deleted, also after a failure.
+MinIO runs on the test VM as `coolify-minio` on the `coolify` network; its image is copied from this Mac's Docker.
+A socat sidecar with the same name on the reference's Docker network forwards to it, so the reference and an instance
+on that network resolve it. The S3 row has upstream's trusted uuid `minio`, so `instance_settings` stays as it is.
+Not run here because they need `instance_settings`: `PreparesBackupDownloads` and S3 file downloads
+(`file_download_s3_storage_id`). Everything created is tracked and deleted, also after a failure.
 """
 import argparse
 import base64
@@ -29,6 +28,7 @@ SERVER = "hml20fsj5eles0xfiqidq8j5"
 MINIO = "coolify-minio"
 KEY, SECRET, BUCKET = "s3diffkey", "s3diffsecret123", "s3diff"
 NET = "coolify-rs-reference_default"
+HELPER = "coollabsio/coolify-helper:1.0.19"
 SERVICE_DBS = {
     "mysql": ("mysql:8.4", "MYSQL_ROOT_PASSWORD=s3diffpw", "/var/lib/mysql"),
     "mariadb": ("mariadb:11", "MARIADB_ROOT_PASSWORD=s3diffpw", "/var/lib/mysql"),
@@ -50,7 +50,7 @@ def vm(cmd):
 
 def objects():
     """Every object in the bucket, by key."""
-    out = vm(f"docker run --rm --network coolify --entrypoint sh minio/mc -c 'mc alias set x http://{MINIO}:9000 {KEY} {SECRET} >/dev/null; mc ls -r x/{BUCKET}'")
+    out = vm(f"docker run --rm --network coolify {HELPER} sh -c 'mc alias set x http://{MINIO}:9000 {KEY} {SECRET} >/dev/null; mc ls -r x/{BUCKET}'")
     return [line.split()[-1] for line in out.splitlines() if line.strip()]
 
 
@@ -75,14 +75,23 @@ class Env:
         self.project = None
         self.databases, self.services = [], []
         self.s3_created = False
+        self.image_loaded = False
 
     def prepare(self):
+        # Docker Hub refuses the pull here; the image is in this Mac's Docker.
+        if not vm("docker images -q minio/minio:latest").strip():
+            saved = subprocess.Popen(["docker", "save", "minio/minio:latest"], stdout=subprocess.PIPE)
+            subprocess.run(["orb", "-m", VM1, "-u", "root", "docker", "load"], stdin=saved.stdout, capture_output=True)
+            saved.wait()
+            self.image_loaded = True
         vm(f"docker inspect {MINIO} >/dev/null 2>&1 || docker run -d --name {MINIO} --restart=no --network coolify -p 9000:9000 -e MINIO_ROOT_USER={KEY} -e MINIO_ROOT_PASSWORD={SECRET} minio/minio server /data")
+        ip = vm("hostname -I | cut -d' ' -f1").strip()
         subprocess.run(["docker", "rm", "-f", MINIO], capture_output=True)
-        subprocess.run(["docker", "run", "-d", "--name", MINIO, "--restart=no", "--network", NET, "-p", "127.0.0.1:19000:9000", "alpine/socat",
-                        "tcp-listen:9000,fork,reuseaddr", f"tcp-connect:{VM1}.orb.local:9000"], capture_output=True)
-        time.sleep(5)
-        vm(f"docker run --rm --network coolify --entrypoint sh minio/mc -c 'mc alias set x http://{MINIO}:9000 {KEY} {SECRET} >/dev/null; mc mb -p x/{BUCKET}'")
+        subprocess.run(["docker", "run", "-d", "--name", MINIO, "--restart=no", "--network", NET, "alpine/socat",
+                        "tcp-listen:9000,fork,reuseaddr", f"tcp-connect:{ip}:9000"], capture_output=True)
+        time.sleep(8)
+        record("minio answers", vm(f"curl -s -o /dev/null -w '%{{http_code}}' http://127.0.0.1:9000/minio/health/live") == "200")
+        vm(f"docker run --rm --network coolify {HELPER} sh -c 'mc alias set x http://{MINIO}:9000 {KEY} {SECRET} >/dev/null; mc mb -p x/{BUCKET}'")
         record("no s3 row with the trusted uuid before the run", sql("SELECT count(*) FROM s3_storages WHERE uuid='minio'") == "0")
         tinker(f'$s=new App\\Models\\S3Storage;$s->forceFill(["uuid"=>"minio","name"=>"s3-diff","region"=>"us-east-1","key"=>"{KEY}","secret"=>"{SECRET}","bucket"=>"{BUCKET}","endpoint"=>"http://{MINIO}:9000","team_id"=>4,"is_usable"=>true]);$s->save();')
         self.s3_created = sql("SELECT count(*) FROM s3_storages WHERE uuid='minio'") == "1"
@@ -105,6 +114,9 @@ class Env:
             sql("DELETE FROM s3_storages WHERE uuid='minio' AND name='s3-diff'")
         subprocess.run(["docker", "rm", "-f", MINIO], capture_output=True)
         vm(f"docker rm -f -v {MINIO} >/dev/null 2>&1")
+        # Only the copy this run loaded.
+        if self.image_loaded:
+            vm("docker rmi minio/minio:latest >/dev/null 2>&1")
 
 
 def start_postgres(e, side):
@@ -116,6 +128,8 @@ def start_postgres(e, side):
     call(side, "POST", f"/databases/{u}/start")
     for _ in range(60):
         if "accepting" in vm(f"docker exec {u} pg_isready 2>&1"):
+            # The backup is skipped while the start activity is open, on both sides.
+            time.sleep(20)
             return u
         time.sleep(3)
     return u
@@ -147,7 +161,7 @@ def case_standalone(e):
             continue
         backup = r["uuid"]
         ex = execution(backup)
-        seen[side] = shape(ex, [(u, "DB")])
+        seen[side] = shape(ex, [(u, "DB"), (f"s3-{side}", "NAME"), (ex["uuid"] if ex else "-", "EXEC")])
         record(f"[standalone] {side} uploaded", bool(ex) and ex["status"] == "success" and ex["s3_uploaded"] is True, ex)
         keys = [k for k in objects() if u in k]
         record(f"[standalone] {side} object in the bucket", len(keys) == 1, keys)
@@ -159,7 +173,7 @@ def case_standalone(e):
         record(f"[standalone] {side} S3 import accepted", c in (200, 201, 202), r)
         found = ""
         for _ in range(40):
-            found = vm(f"docker exec {u} sh -c 'psql -U postgres -d postgres -Atc \"select to_regclass(\\'s3marker\\')\"'").strip()
+            found = vm(f"""docker exec {u} psql -U postgres -d postgres -Atc "select to_regclass('s3marker')" """).strip()
             if found == "s3marker":
                 break
             time.sleep(3)
@@ -188,9 +202,9 @@ def case_volume(e):
         c, r = call(side, "POST", path + "/run")
         record(f"[volume] {side} run accepted", c in (200, 201, 202), r)
         ex = wait_row("SELECT row_to_json(r) FROM (SELECT e.* FROM scheduled_volume_backup_executions e JOIN scheduled_volume_backups b ON b.id=e.scheduled_volume_backup_id "
-                      f"JOIN local_persistent_volumes v ON v.id=b.local_persistent_volume_id WHERE v.uuid='{st}' ORDER BY e.id DESC LIMIT 1) r")
+                      f"JOIN local_persistent_volumes v ON v.id=b.backupable_id AND b.backupable_type LIKE '%LocalPersistentVolume' WHERE v.uuid='{st}' ORDER BY e.id DESC LIMIT 1) r")
         record(f"[volume] {side} uploaded", bool(ex) and ex["status"] == "success" and ex.get("s3_uploaded") is True, ex)
-        seen[side] = shape(ex, [(u, "DB"), (st, "ST")])
+        seen[side] = shape(ex, [(u, "DB"), (st, "ST"), (f"s3-{side}", "NAME"), (ex["uuid"] if ex else "-", "EXEC")])
         keys = [k for k in objects() if u in k and "volume" in k.lower()] or [k for k in objects() if st in k]
         record(f"[volume] {side} object in the bucket", bool(keys), objects()[:6])
     record("[volume] executions alike", seen.get("ref") == seen.get("rs"), (seen.get("ref"), seen.get("rs")))
@@ -232,7 +246,7 @@ def case_service(e):
                 code, b = rs.post(f"/ui/databases/{dbuuid}/backups/{backup}/action", {"action": "backupNow"})
                 record(f"[service {kind}] rs backup accepted", code == 200, b[:300])
             ex = execution(backup)
-            seen[side] = shape(ex, [(dbuuid, "DB"), (u, "SVC")])
+            seen[side] = shape(ex, [(dbuuid, "DB"), (u, "SVC"), (f"s3svc-{kind}-{side}", "NAME"), (ex["uuid"] if ex else "-", "EXEC")])
             record(f"[service {kind}] {side} dump", bool(ex) and ex["status"] == "success" and (ex.get("size") or 0) > 0, ex)
             sql(f"DELETE FROM scheduled_database_backup_executions WHERE scheduled_database_backup_id=(SELECT id FROM scheduled_database_backups WHERE uuid='{backup}')")
             sql(f"DELETE FROM scheduled_database_backups WHERE uuid='{backup}'")
