@@ -62,9 +62,9 @@ for (const sc of scenarios) {
     }
     await page.waitForTimeout(sc.settle ?? 500);
     await page.screenshot({ path: `${out}${prefix}-${sc.name}-${label}.png` });
-    log[label] = { fails, toast: await page.locator('.toast, [data-sonner-toast], [role=status]').allInnerTexts().catch(() => []) };
+    log[label] = { fails };
     await ctx.close();
   }));
-  console.log(sc.name, log.ref.fails.length || log.rs.fails.length ? JSON.stringify({ ref: log.ref.fails, rs: log.rs.fails }) : 'steps ok', JSON.stringify({ ref: log.ref.toast, rs: log.rs.toast }).slice(0, 200));
+  console.log(sc.name, log.ref.fails.length || log.rs.fails.length ? JSON.stringify({ ref: log.ref.fails.length, rs: log.rs.fails.length, first: log.ref.fails[0] ?? log.rs.fails[0] }).slice(0, 170) : 'steps ok');
 }
 await browser.close();

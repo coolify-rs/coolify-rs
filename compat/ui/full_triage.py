@@ -47,7 +47,10 @@ for path in sorted(glob.glob(f"{HERE}/{prefix}-*.json")):
         continue
     d = json.load(open(path))
     r, s = d["ref"], d["rs"]
-    tl = [x for x in difflib.ndiff(lines(r.get("text")), lines(s.get("text"))) if x[0] in "+-" and x[2:] not in EXPECTED]
+    # The product name is compared as one, and a bare number is the counter of deployments running elsewhere.
+    rname = [x.replace("Coolify", "coolify-rs") for x in lines(r.get("text"))]
+    sname = [x.replace("Coolify", "coolify-rs") for x in lines(s.get("text"))]
+    tl = [x for x in difflib.ndiff(rname, sname) if x[0] in "+-" and x[2:] not in EXPECTED and not x[2:].isdigit()]
     ol = [x for x in difflib.unified_diff(r.get("outline", []), s.get("outline", []), lineterm="", n=0) if x[0] in "+-" and not x.startswith(("+++", "---"))]
     share, box, sizes = pixels(name)
     flags = []

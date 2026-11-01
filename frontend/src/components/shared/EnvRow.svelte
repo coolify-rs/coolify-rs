@@ -218,9 +218,11 @@
           </span>
         </button>
       {/if}
+      <div class="relative h-auto w-auto">
       <button type="button" data-env-settings-trigger class="icon-button shrink-0" title="Edit environment variable" aria-label="Edit environment variable" onclick={openEditor}>
         <Reicon name="settings" class="size-3.5" />
       </button>
+      </div>
     </div>
   </div>
 </div>

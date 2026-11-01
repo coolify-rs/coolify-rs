@@ -14,7 +14,8 @@
   import { session } from '../lib/session.svelte';
   import { router } from '../lib/router.svelte';
 
-  let { server }: { server: ServerTopbar } = $props();
+  // `mobile`: the copy below the desktop action HUD (`server-mobile-actions`), in the page heading.
+  let { server, mobile = false }: { server: ServerTopbar; mobile?: boolean } = $props();
   let open = $state(false);
   let confirm = $state<'restart' | 'stop' | null>(null);
   let root: HTMLDivElement | undefined = $state();
@@ -72,9 +73,7 @@
 
 <svelte:window onclick={(e) => open && root && !root.contains(e.target as Node) && (open = false)} onkeydown={(e) => e.key === 'Escape' && (open = false)} />
 
-{#if session.isAdmin}
-  <div use:teleport={'resource-action-hud-slot'} class="hidden xl:flex xl:w-auto xl:items-center">
-    <div class="resource-heading-navbar application-heading-actions flex w-auto min-w-0 items-center justify-end gap-1 overflow-visible">
+{#snippet splitAction()}
       <div class="split-action relative resource-heading-actions shrink-0" bind:this={root}>
         <button type="button" class="split-action-main" onclick={() => (canStop ? (confirm = 'restart') : act('start'))}>
           <Reicon name={canStop ? 'restart' : 'play-circle'} class="size-3.5" />
@@ -98,6 +97,14 @@
           </div>
         {/if}
       </div>
+{/snippet}
+
+{#if session.isAdmin && mobile}
+  {@render splitAction()}
+{:else if session.isAdmin}
+  <div use:teleport={'resource-action-hud-slot'} class="hidden xl:flex xl:w-auto xl:items-center">
+    <div class="resource-heading-navbar application-heading-actions flex w-auto min-w-0 items-center justify-end gap-1 overflow-visible">
+      {@render splitAction()}
     </div>
   </div>
 {/if}

@@ -3,6 +3,9 @@
   // xl + the settings workspace with the in-page copy of the server menu,
   // which upstream's CSS hides because the main sidebar shows it).
   import type { Snippet } from 'svelte';
+  import { page } from '../lib/page.svelte';
+  import ServerProxyActions from './ServerProxyActions.svelte';
+  import ServerTopbar from './ServerTopbar.svelte';
 
   let { name, children }: { name: string; children: Snippet } = $props();
 </script>
@@ -16,9 +19,18 @@
             <h1 data-testid="server-subtitle" class="min-w-0 truncate text-[24px]! leading-7! font-semibold! tracking-tight! text-black dark:text-fg">
               {name}
             </h1>
+            {#if page.server}
+              <div class="flex w-full min-w-0 items-center gap-2">
+                <ServerTopbar server={page.server} statusOnly />
+              </div>
+            {/if}
           </div>
         </div>
-        <div class="ml-auto shrink-0"></div>
+        <div class="ml-auto shrink-0">
+          {#if page.server?.proxySet}
+            <ServerProxyActions server={page.server} mobile />
+          {/if}
+        </div>
       </div>
     </div>
   </nav>

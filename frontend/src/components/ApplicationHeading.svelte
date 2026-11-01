@@ -217,7 +217,7 @@
         <button type="button" class="button" disabled={busy} onclick={() => loadComposeFile(false)}>Load compose</button>
       {/if}
       {#if canDeploy}
-        <button type="button" {id} class="button split-action-main rounded-md!" disabled title="Load the Compose file before you deploy.">
+        <button type="button" {id} class="split-action-main rounded-md!" disabled title="Load the Compose file before you deploy.">
           <Reicon name="play-circle" class="size-3.5" />
           Deploy
         </button>
@@ -336,7 +336,7 @@
       <div class="min-w-0 flex-1">
         <div class="flex min-w-0 flex-col items-start gap-2">
           <h1 class="min-w-0 max-w-full truncate text-[24px]! leading-7! font-semibold! tracking-tight! text-black dark:text-fg">{record.name}</h1>
-          <div class="relative flex w-full min-w-0 flex-wrap items-center gap-2">
+          <div class="relative flex w-full min-w-0 items-center gap-2">
             <DatabaseStatusSummary {status} {healthcheckUrl} title="Application status" />
             {@render linksMenu('mobile', true)}
             {@render deploying('')}
@@ -346,6 +346,7 @@
               >
             {/if}
           </div>
+          <div class="flex w-full flex-wrap gap-1"></div>
         </div>
       </div>
       <div class="shrink-0">

@@ -9,7 +9,7 @@
   import ServerProxyActions from './ServerProxyActions.svelte';
   import type { ServerTopbar } from '../lib/page.svelte';
 
-  let { server }: { server: ServerTopbar } = $props();
+  let { server, statusOnly = false }: { server: ServerTopbar; statusOnly?: boolean } = $props();
 
   let open = $state(false);
   let statusOpen = $state(false);
@@ -59,44 +59,7 @@
   onkeydown={(e) => e.key === 'Escape' && ((open = false), (statusOpen = false))}
 />
 
-<div data-testid="server-topbar-context" class="flex min-w-0 items-center gap-1 text-[13px]">
-  <span class="shrink-0 px-0.5 text-neutral-300 dark:text-fg-faint">/</span>
-  <span class="relative flex min-w-0 shrink items-center gap-2 px-1" bind:this={switcher}>
-    <button
-      type="button"
-      class="flex h-8 max-w-56 min-w-0 items-center gap-1.5 rounded-md px-2 transition-colors hover:bg-neutral-100 dark:hover:bg-white/[0.05] xl:max-w-72"
-      onclick={() => (open = !open)}
-      aria-expanded={open}
-      aria-label="Switch server"
-    >
-      <span class="min-w-0 truncate font-semibold text-black dark:text-fg">{server.name}</span>
-      <svg class="size-4 shrink-0 text-neutral-400 dark:text-fg-faint" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M8 9l4-4 4 4M8 15l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
-    </button>
-    {#if open}
-      <div class="listbox-panel top-9! left-1! z-[90]! w-64! min-w-0!">
-        <div class="border-b border-neutral-200 p-1.5 dark:border-white/[0.08]">
-          <div class="relative">
-            <Reicon name="search" class="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-neutral-400 dark:text-fg-faint" />
-            <input
-              type="search"
-              bind:value={search}
-              placeholder="Filter servers…"
-              class="input h-7! w-full rounded-md! border-neutral-200! bg-white! py-0! pr-2! pl-7! text-[11px]! text-black! placeholder:text-neutral-400! dark:border-white/[0.08]! dark:bg-white/[0.04]! dark:text-fg!"
-            />
-          </div>
-        </div>
-        {#each filtered as option (option.uuid)}
-          <a href="/server/{option.uuid}" use:link class="listbox-option gap-2.5!" onclick={() => (open = false)}>
-            <span class="size-1.5 shrink-0 rounded-full {option.functional ? 'bg-success' : 'bg-error'}"></span>
-            <span class="min-w-0 flex-1 truncate">{option.name}</span>
-            {#if option.uuid === server.uuid}<Reicon name="check" class="size-3.5 shrink-0 text-black dark:text-fg" />{/if}
-          </a>
-        {/each}
-      </div>
-    {/if}
-  </span>
+{#snippet statusSummary()}
   <div class="relative shrink-0" bind:this={status}>
     <button
       type="button"
@@ -162,8 +125,53 @@
       </div>
     {/if}
   </div>
+{/snippet}
+
+{#if statusOnly}
+  {@render statusSummary()}
+{:else}
+<div data-testid="server-topbar-context" class="flex min-w-0 items-center gap-1 text-[13px]">
+  <span class="shrink-0 px-0.5 text-neutral-300 dark:text-fg-faint">/</span>
+  <span class="relative flex min-w-0 shrink items-center gap-2 px-1" bind:this={switcher}>
+    <button
+      type="button"
+      class="flex h-8 max-w-56 min-w-0 items-center gap-1.5 rounded-md px-2 transition-colors hover:bg-neutral-100 dark:hover:bg-white/[0.05] xl:max-w-72"
+      onclick={() => (open = !open)}
+      aria-expanded={open}
+      aria-label="Switch server"
+    >
+      <span class="min-w-0 truncate font-semibold text-black dark:text-fg">{server.name}</span>
+      <svg class="size-4 shrink-0 text-neutral-400 dark:text-fg-faint" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M8 9l4-4 4 4M8 15l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    </button>
+    {#if open}
+      <div class="listbox-panel top-9! left-1! z-[90]! w-64! min-w-0!">
+        <div class="border-b border-neutral-200 p-1.5 dark:border-white/[0.08]">
+          <div class="relative">
+            <Reicon name="search" class="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-neutral-400 dark:text-fg-faint" />
+            <input
+              type="search"
+              bind:value={search}
+              placeholder="Filter servers…"
+              class="input h-7! w-full rounded-md! border-neutral-200! bg-white! py-0! pr-2! pl-7! text-[11px]! text-black! placeholder:text-neutral-400! dark:border-white/[0.08]! dark:bg-white/[0.04]! dark:text-fg!"
+            />
+          </div>
+        </div>
+        {#each filtered as option (option.uuid)}
+          <a href="/server/{option.uuid}" use:link class="listbox-option gap-2.5!" onclick={() => (open = false)}>
+            <span class="size-1.5 shrink-0 rounded-full {option.functional ? 'bg-success' : 'bg-error'}"></span>
+            <span class="min-w-0 flex-1 truncate">{option.name}</span>
+            {#if option.uuid === server.uuid}<Reicon name="check" class="size-3.5 shrink-0 text-black dark:text-fg" />{/if}
+          </a>
+        {/each}
+      </div>
+    {/if}
+  </span>
+  {@render statusSummary()}
 </div>
 
 {#if server.proxySet}
   <ServerProxyActions {server} />
+{/if}
 {/if}

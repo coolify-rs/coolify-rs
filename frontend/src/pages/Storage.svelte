@@ -199,6 +199,17 @@
   <Empty title="Not found" description="This S3 storage does not exist." iconName="storages" />
 {:else if data && form}
   <div>
+    <!-- x-dashboard.navbar :mobileTitleOnly="true" -->
+    <div class="flex flex-col">
+      <header class="order-1 mb-4 flex min-w-0 items-start justify-between gap-4 lg:order-2 lg:hidden">
+        <div class="min-w-0 flex-1">
+          <div class="flex min-w-0 flex-wrap items-center gap-2">
+            <h1 class="min-w-0 truncate text-[24px]! leading-7! font-semibold! tracking-tight!">{data.name}</h1>
+          </div>
+          <p class="mt-1 text-[13px] text-neutral-500 dark:text-fg-dim">{data.description || 'S3-compatible backup destination'}</p>
+        </div>
+      </header>
+    </div>
     <section class="application-settings-workspace mt-4 w-full max-w-none lg:mt-0">
       <div class="min-w-0">
         {#if section === 'general'}

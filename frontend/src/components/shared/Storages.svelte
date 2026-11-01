@@ -282,6 +282,9 @@
                 {#if !v.is_shared}
                   {#if data.show_backup_action}
                     <button type="button" class="button !px-2.5 !text-xs" onclick={() => openBackup(v.id)}>Backup</button>
+                  {:else if data.database_backup_available}
+                    <!-- `Project\\Database\\CreateScheduledBackup` is on the Backups page here, not in a modal on this row. -->
+                    <a use:link href={router.path.replace(/\/persistent-storage$/, '/backups')} class="button !px-2.5 !text-xs">Backup</a>
                   {/if}
                   <button type="button" class="button button-error" onclick={() => (deleting = v)}>Delete</button>
                 {/if}
@@ -315,7 +318,7 @@
       >
         {#snippet actions()}
           {#if data.build_pack !== 'dockercompose' && canUpdate}
-            <Dropdown panelClass="left-0! right-auto! z-[90]! w-52! min-w-52! sm:left-auto! sm:right-0!" role="menu">
+            <Dropdown panelClass="z-[90]! w-52! min-w-52!" role="menu">
               {#snippet trigger({ open: isOpen })}
                 <button type="button" class="button button-highlighted" aria-haspopup="menu" aria-expanded={isOpen}>
                   <Reicon name="plus" class="size-3.5" />
