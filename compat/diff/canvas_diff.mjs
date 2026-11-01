@@ -381,8 +381,9 @@ try {
     icons.push({ none, stored, removed: iconRow() });
   }
   // A missing icon is a 404 on both; upstream's body is the HTML error page, which an <img> never shows.
-  delete icons[0].none.type;
-  delete icons[1].none.type;
+  // Its headers are Laravel's defaults for an error response, so only the status is compared.
+  icons[0].none = icons[0].none.status;
+  icons[1].none = icons[1].none.status;
   record('project icon lifecycle', { json: icons[0] }, { json: icons[1] });
 
   // A member: read only, no IPs, no editing.
