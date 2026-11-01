@@ -157,6 +157,7 @@ class Env:
         self.apps = []
         self.services = []
         self.databases = []
+        self.databases_any = []
         self.cleanups = []
         self.dest_rows = []
         self.swarm_dest = None
@@ -215,7 +216,11 @@ class Env:
             call("ref", "DELETE", f"/services/{u}?delete_volumes=true")
         for u in self.databases:
             call("ref", "DELETE", f"/databases/{u}?delete_volumes=true")
+        for _, _, u in self.databases_any:
+            call("ref", "DELETE", f"/databases/{u}?delete_volumes=true")
         tables = {"services": self.services, "standalone_redis": self.databases}
+        for table, _, u in self.databases_any:
+            tables.setdefault(table, []).append(u)
         for _ in range(60):
             if all(not uuids or sql("SELECT count(*) FROM {} WHERE uuid IN ({})".format(t, ",".join(f"'{u}'" for u in uuids))) == "0" for t, uuids in tables.items()):
                 break
@@ -581,6 +586,33 @@ def case_resources(e, rs):
                 e.cleanups.append((e.vm2, f"docker volume rm -f {v} >/dev/null 2>&1"))
 
 
+def case_flush(e, rs):
+    """Flush all data on KeyDB and Dragonfly: coolify-rs through its route, upstream through FlushDatabase::run."""
+    for path, table, model, cli in (("keydb", "standalone_keydbs", "StandaloneKeydb", "keydb-cli"), ("dragonfly", "standalone_dragonflies", "StandaloneDragonfly", "redis-cli")):
+        for side in ("ref", "rs"):
+            c, r = call("ref", "POST", f"/databases/{path}", {"name": f"flush-{path}-{side}", "project_uuid": e.project, "environment_name": "production", "server_uuid": SERVER1, "instant_deploy": True})
+            record(f"[flush] {path} {side} created", c in (200, 201), r)
+            u = r["uuid"]
+            e.databases_any.append((table, path, u))
+            for _ in range(60):
+                if running(u):
+                    break
+                time.sleep(3)
+            time.sleep(5)
+            size = f"docker exec {u} sh -c 'REDISCLI_AUTH=\"$REDIS_PASSWORD\" {cli} DBSIZE'"
+            vm(VM1, f"docker exec {u} sh -c 'REDISCLI_AUTH=\"$REDIS_PASSWORD\" {cli} SET flushme 1'")
+            before = vm(VM1, size).strip()
+            if side == "rs":
+                code, b = rs.post(f"/ui/databases/{u}/flush", {"password": rs.password})
+                record(f"[flush] {path} rs answer", code == 200 and b"Database flushed." in b, b[:200])
+            else:
+                subprocess.run(["docker", "exec", "coolify-rs-reference-coolify-1", "php", "/var/www/html/artisan", "tinker", "--execute",
+                                f'App\\Actions\\Database\\FlushDatabase::run(App\\Models\\{model}::where("uuid","{u}")->first());'], capture_output=True, text=True)
+            time.sleep(2)
+            after = vm(VM1, size).strip()
+            record(f"[flush] {path} {side} emptied", before == "1" and after == "0", (before, after))
+
+
 def case_missing_destination(e):
     """A row whose destination is gone: the 500s of `$resource->destination->server`, and the delete that still works."""
     uuids = e.create_pair("nodest", image=False)
@@ -622,10 +654,11 @@ def case_server_delete(e):
     key = sql(f"SELECT uuid FROM private_keys WHERE id={KEY_ID}")
     result = {}
     for side in ("ref", "rs"):
-        c, srv = call("ref", "POST", "/servers", {"name": f"sdel-{side}", "ip": ip, "port": 22, "user": "root", "private_key_uuid": key,
+        c, srv = call(side, "POST", "/servers", {"name": f"sdel-{side}", "ip": ip, "port": 22, "user": "root", "private_key_uuid": key,
                                                   "instant_validate": False, "proxy_type": "none"})
         record(f"[server-delete] {side} server created", c == 201, srv)
         u = srv["uuid"]
+        record(f"[server-delete] {side} no ip_previous after create", sql(f"SELECT ip_previous IS NULL FROM servers WHERE uuid='{u}'") == "t")
         sid = sql(f"SELECT id FROM servers WHERE uuid='{u}'")
         sql(f"UPDATE server_settings SET is_reachable=true, is_usable=true WHERE server_id={sid}")
         if not sql(f"SELECT id FROM standalone_dockers WHERE server_id={sid}"):
@@ -664,7 +697,7 @@ def case_server_delete(e):
 
 def case_swarm_database(e):
     """Create and clone of a database, and a service, on a Swarm destination, through each side's API."""
-    vm(e.vm2, "docker info --format '{{.Swarm.LocalNodeState}}' | grep -q active || docker swarm init >/dev/null 2>&1")
+    vm(e.vm2, "docker swarm init >/dev/null 2>&1; docker network inspect coolify-overlay >/dev/null 2>&1 || docker network create --driver overlay --attachable coolify-overlay")
     sql(f"UPDATE server_settings SET is_swarm_manager=true WHERE server_id={e.server2_id}")
     if not e.swarm_dest:
         e.swarm_dest = f"msds{os.getpid()}"
@@ -705,7 +738,7 @@ def case_swarm_database(e):
     # The services create takes the same destination rows.
     svc = {}
     for side in ("ref", "rs"):
-        c, r = call(side, "POST", "/services", {"type": "whoami", "server_uuid": e.server2, "project_uuid": e.project, "environment_name": "production", "name": f"swsvc-{side}",
+        c, r = call(side, "POST", "/services", {"type": "uptime-kuma", "server_uuid": e.server2, "project_uuid": e.project, "environment_name": "production", "name": f"swsvc-{side}",
                                                 "destination_uuid": e.swarm_dest, "instant_deploy": False})
         svc[side] = (c, sorted(r) if isinstance(r, dict) else r)
         if c == 201:
@@ -720,7 +753,7 @@ def case_swarm_database(e):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--vm2", default="coolify-rs-agent-deploy")
-    ap.add_argument("--case", default="registry,missing-image,multi,build-noconfig,build,resources,swarm,swarm-db,missing-destination,server-delete")
+    ap.add_argument("--case", default="registry,missing-image,multi,build-noconfig,build,resources,flush,swarm-db,swarm,missing-destination,server-delete")
     ap.add_argument("--keep-server", action="store_true")
     a = ap.parse_args()
     e = Env(a)
@@ -743,6 +776,8 @@ def main():
                     case_swarm(e)
                 elif case == "resources":
                     case_resources(e, rs)
+                elif case == "flush":
+                    case_flush(e, rs)
                 elif case == "missing-destination":
                     case_missing_destination(e)
                 elif case == "server-delete":

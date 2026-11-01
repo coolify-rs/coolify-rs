@@ -107,11 +107,13 @@ pub async fn application_parser_at(
         );
     }
     let parsed = application::application_parser(&mut run, pull_request_id, commit).await;
-    // `dispatch(new ServerFilesFromServerJob($originalResource))` for a named volume.
-    if run.named_volume {
+    // `dispatch(new ServerFilesFromServerJob($originalResource))`, once per volume upstream.
+    if run.saw_volume {
         let jobs = jobs.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::services::storage::application_files_from_server(&jobs, app_id).await {
+            if let Err(e) =
+                crate::services::storage::application_files_from_server(&jobs, app_id).await
+            {
                 tracing::warn!(application = app_id, error = %e, "ServerFilesFromServerJob failed");
             }
         });

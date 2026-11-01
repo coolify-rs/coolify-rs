@@ -280,7 +280,7 @@ def main():
     copy_name = f"git-deploy-diff-{run_id}.git"
     copy_path = f"/home/git/{copy_name}"
     vm(f"cp -a {a.mirror} {copy_path} && cd {copy_path} && export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*' "
-       f"&& for n in {PREVIEW_PR} 75; do git update-ref refs/merge-requests/$n/head refs/pull/$n/head; done && chown -R git:git {copy_path}")
+       f"&& git config uploadpack.allowAnySHA1InWant true && for n in {PREVIEW_PR} 75; do git update-ref refs/merge-requests/$n/head refs/pull/$n/head; done && chown -R git:git {copy_path}")
     key_dir = tempfile.mkdtemp(prefix="git-deploy-diff-")
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"git-deploy-diff-{run_id}", "-f", f"{key_dir}/key"], check=True)
     key_public = open(f"{key_dir}/key.pub").read().strip()
@@ -378,7 +378,7 @@ def main():
             if case in PREPARE_SQL:
                 for u in (ur, us):
                     sql(PREPARE_SQL[case].replace("{u}", u))
-            if (case in ENVS or case in PREPARE_SQL) and spec.get("build_pack") == "dockercompose":
+            if spec.get("build_pack") == "dockercompose":
                 # The job that stored the file still creates the SERVICE_* and storage rows; their order is compared.
                 time.sleep(15)
             for body in ENVS.get(case, []):
@@ -430,7 +430,7 @@ def main():
                 label = f"[{case}] deploy {n}"
                 expected = EXPECTED_STATUS.get((case, n), "finished")
                 record(f"{label}: both {expected}", qr and qs and qr["status"] == qs["status"] == expected,
-                       f"{qr and qr['status']} / {qs and qs['status']}")
+                       f"{qr and qr['status']} / {qs and qs['status']}: " + " | ".join(e["output"][:500] for e in json.loads((qr or {}).get("logs") or "[]") if e["type"] == "stderr")[-1200:])
                 if not (qr and qs):
                     continue
                 skip = {"id", "application_id", "deployment_uuid", "created_at", "updated_at", "finished_at", "deployment_url",
@@ -585,6 +585,16 @@ def main():
                 for u in (ur, us):
                     rows.append(sql(f"SELECT coalesce(json_agg(json_build_object('fs', replace(fs_path, '{u}', 'U'), 'mount', mount_path, 'dir', is_directory, 'host', is_host_file, 'git', is_based_on_git, 'chmod', chmod, 'chown', chown, 'content', content IS NOT NULL AND NOT is_based_on_git) ORDER BY mount_path)::text, '') FROM local_file_volumes WHERE resource_type = 'App\\Models\\Application' AND resource_id = (SELECT id FROM applications WHERE uuid='{u}')"))
                 record(f"[{case}] local_file_volumes rows alike", rows[0] == rows[1], rows)
+                # `ServerFilesFromServerJob` after a parse reads the files based on the repository into `content`.
+                if case.startswith("preserve"):
+                    time.sleep(20)
+                    decrypted = []
+                    for u in (ur, us):
+                        code = (f'$a = App\\Models\\Application::where("uuid", "{u}")->first();'
+                                'echo "@@".json_encode($a->fileStorages()->orderBy("mount_path")->get()->map(fn ($f) => [$f->mount_path, $f->is_based_on_git, $f->is_directory, $f->content])->values())."@@";')
+                        out = subprocess.run(["docker", "exec", "coolify-rs-reference-coolify-1", "php", "/var/www/html/artisan", "tinker", "--execute", code], capture_output=True, text=True).stdout
+                        decrypted.append(out.split("@@")[1] if "@@" in out else out[-300:])
+                    record(f"[{case}] file storage content alike", decrypted[0] == decrypted[1], [x[:1500] for x in decrypted])
             if case in STORAGES:
                 inside = []
                 for u in (ur, us):
@@ -623,14 +633,23 @@ def main():
             for u in (ur, us):
                 fqdn = json.loads(sql(f"SELECT to_json(fqdn)::text FROM applications WHERE uuid='{u}'") or "null") or ""
                 host = fqdn.split("://", 1)[-1].split("/")[0]
-                codes.append(vm(f"curl -s -o /dev/null -w '%{{http_code}}' -H 'Host: {host}' http://127.0.0.1/"))
+                # A container without the rolling update (--ip) is still starting when its deployment ends.
+                for _ in range(15):
+                    code = vm(f"curl -s -o /dev/null -w '%{{http_code}}' -H 'Host: {host}' http://127.0.0.1/")
+                    if code != "503":
+                        break
+                    time.sleep(2)
+                codes.append(code)
                 if spec.get("is_http_basic_auth_enabled"):
                     authed.append(vm(f"curl -s -o /dev/null -w '%{{http_code}}' -u {spec['http_basic_auth_username']}:{spec['http_basic_auth_password']} -H 'Host: {host}' http://127.0.0.1/"))
             if authed:
                 record(f"[{case}] the proxy asks for the password", codes[0] == codes[1] == "401", codes)
                 record(f"[{case}] the proxy accepts the password", authed[0] == authed[1] == "200", authed)
             else:
-                record(f"[{case}] both answer through the proxy", codes[0] == codes[1] == "200", codes)
+                record(f"[{case}] both answer through the proxy", codes[0] == codes[1] == "200",
+                       [codes, vm(f"docker ps -a --filter label=coolify.applicationUuid={ur} --format '{{{{.Names}}}} {{{{.Status}}}} {{{{.Networks}}}}'"),
+                        vm(f"docker inspect --format '{{{{json .NetworkSettings.Networks}}}}' $(docker ps -q --filter label=coolify.applicationUuid={ur})")[:700],
+                        vm(f"docker network inspect coolify --format '{{{{json .IPAM.Config}}}}'")])
             if case not in STATUS_CASES:
                 own_delete()
                 continue

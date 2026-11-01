@@ -742,7 +742,7 @@ async fn load_into_row(
 }
 
 /// `getFilesystemVolumesFromServer($application, isInit: true)`: the job `applicationParser()`
-/// dispatches for a named volume. It runs beside the deployment that parsed, as upstream's queue does.
+/// dispatches for each volume. It runs beside the deployment that parsed, as upstream's queue does.
 pub async fn application_files_from_server(jobs: &Jobs, app_id: i64) -> Result<(), String> {
     let db = &jobs.0.db;
     let a = coolify_db::applications::find_by_id(db, app_id)
@@ -760,7 +760,12 @@ pub async fn application_files_from_server(jobs: &Jobs, app_id: i64) -> Result<(
         .await
         .map_err(|e| e.to_string())?;
     let dir = owner.workdir.clone();
-    run(jobs, &t, &format!("mkdir -p -- {} > /dev/null 2>&1 || true", quote(&dir))).await?;
+    run(
+        jobs,
+        &t,
+        &format!("mkdir -p -- {} > /dev/null 2>&1 || true", quote(&dir)),
+    )
+    .await?;
     let rows = coolify_db::storages::list(
         db,
         coolify_db::storages::StorageKind::File,
@@ -812,7 +817,11 @@ pub async fn application_files_from_server(jobs: &Jobs, app_id: i64) -> Result<(
             let mkdir = format!("mkdir -p -- \"$(dirname -- {escaped})\"");
             let write = format!("echo '{encoded}' | base64 -d | tee -- {escaped}");
             jobs.remote()
-                .run(&t, &[mkdir.as_str(), write.as_str()], RunOptions::op("application.storage"))
+                .run(
+                    &t,
+                    &[mkdir.as_str(), write.as_str()],
+                    RunOptions::op("application.storage"),
+                )
                 .await
                 .map_err(|e| e.message)?;
         } else {

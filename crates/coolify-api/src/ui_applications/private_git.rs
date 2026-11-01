@@ -547,7 +547,11 @@ async fn create_application(
     let id = apps::create(
         &state.db,
         NewApplication {
-            destination_type: coolify_db::databases::destination_morph(&state.db, &s(m, "destination_uuid")).await?,
+            destination_type: coolify_db::databases::destination_morph(
+                &state.db,
+                &s(m, "destination_uuid"),
+            )
+            .await?,
             uuid: uuid.clone(),
             environment_id: env.id,
             destination_id,
@@ -935,7 +939,11 @@ pub async fn create_dockerfile(
     let id = apps::create(
         &state.db,
         NewApplication {
-            destination_type: coolify_db::databases::destination_morph(&state.db, &s(&m, "destination_uuid")).await?,
+            destination_type: coolify_db::databases::destination_morph(
+                &state.db,
+                &s(&m, "destination_uuid"),
+            )
+            .await?,
             uuid: uuid.clone(),
             environment_id: env.id,
             destination_id,

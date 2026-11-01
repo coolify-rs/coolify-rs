@@ -94,8 +94,8 @@ impl ServerInfo {
 /// One run of the parser: the application model as loaded (and changed in memory), its server
 /// and the database.
 pub struct Run<'a> {
-    /// The compose file has a named volume: upstream's parser then dispatches `ServerFilesFromServerJob`.
-    pub named_volume: bool,
+    /// The parser walked a volume of the compose file: upstream then dispatches `ServerFilesFromServerJob`.
+    pub saw_volume: bool,
     db: &'a Db,
     enc: &'a Encrypter,
     now: NaiveDateTime,
@@ -181,7 +181,7 @@ impl<'a> Run<'a> {
             docker_compose_raw: app.str("docker_compose_raw").map(str::to_owned),
         };
         Ok(Run {
-            named_volume: false,
+            saw_volume: false,
             db,
             enc,
             now,
@@ -1224,8 +1224,8 @@ pub(crate) async fn application_parser(
                         ))
                     },
                 );
-                run.named_volume = true;
             }
+            run.saw_volume = true;
             php::put(&mut volumes_parsed, index.clone(), volume);
         }
 
