@@ -451,3 +451,10 @@ only resolves on the reference's Docker network.
   the 500 page, not Laravel's debug renderer. `/__livewire-request-failure` previews Livewire's failure dialog, which has no counterpart here.
   A `/files/download/{token}` with an unknown token answers JSON where upstream answers its HTML 404 page.
 - `/realtime` answers "Look at your other tab." for the root team without sending `TestEvent`.
+
+## UI differences from the full screenshot pass
+
+- Profile > Appearance has no Custom theme card and dialog (`components/theme-controls.blade.php`).
+- The server page has no "Link provider" button and modal (`x-server.provider-link-modal`), shown upstream when the team has a cloud token and the server is not linked.
+- A database's persistent storage row opens the Backups page from its Backup button; upstream opens `CreateScheduledBackup` in a modal there.
+- User-visible strings sent by the backend (some toasts and messages in `coolify-api`) still say Coolify, because API messages are kept identical to upstream. Lines that name upstream itself also stay: the sponsorship popup, Coolify Cloud, Coolify v5, Coolify's affiliate links.

@@ -1180,3 +1180,16 @@ pub async fn environment_services(
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod headline_tests {
+    use super::headline;
+
+    #[test]
+    fn title_cases_like_str_headline() {
+        assert_eq!(headline("n8n"), "N8N");
+        assert_eq!(headline("9router"), "9Router");
+        assert_eq!(headline("n8n-with-postgresql"), "N8N With Postgresql");
+        assert_eq!(headline("wordpress"), "Wordpress");
+    }
+}
