@@ -75,6 +75,10 @@ Frontend project per ADR 0003 starts once the API covers the main workflows.
 
 ## Milestone 7: new installation and upgrades
 
+Status: `scripts/install`, `coolify-rs boot`, the first-run rows, `UpdateCoolify` and the upgrade progress view are
+built. `compat/diff/install/run.py` runs the whole comparison on two fresh VMs. Publishing an image and an address for
+`COOLIFY_RS_CDN` is still to be decided.
+
 coolify-rs installs on a clean server without upstream Coolify. Starts once the current parity work is merged, and
 finishes before the final differential and screenshot pass.
 
