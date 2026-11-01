@@ -11,7 +11,7 @@
   import Modal from '../Modal.svelte';
   import Reicon from '../Reicon.svelte';
   import SettingsSection from '../SettingsSection.svelte';
-  import SkeletonTable from '../SkeletonTable.svelte';
+  import SkeletonList from '../SkeletonList.svelte';
   import UnsavedBar from '../UnsavedBar.svelte';
   import PreviewDomains from './PreviewDomains.svelte';
   import { ApiError } from '../../lib/api';
@@ -381,7 +381,7 @@
       </div>
       <div class="-m-4">
         {#if prsLoading}
-          <SkeletonTable rows={3} />
+          <SkeletonList rows={3} label="Loading pull requests" />
         {:else}
           {#each pullRequests as pull (pull.number)}
             <div class="flex flex-col gap-3 border-b border-neutral-200 px-4 py-3.5 last:border-b-0 sm:flex-row sm:items-center dark:border-white/[0.07]">
