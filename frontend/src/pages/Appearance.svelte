@@ -1,8 +1,11 @@
 <script lang="ts">
   // Port of upstream livewire/profile/appearance.blade.php
-  // (components/theme-controls.blade.php) without the custom color theme.
+  // (components/theme-controls.blade.php).
+  import CustomThemeDialog from '../components/CustomThemeDialog.svelte';
   import Reicon from '../components/Reicon.svelte';
+  import ThemeSwatch from '../components/ThemeSwatch.svelte';
   import { layout, type Theme } from '../lib/layout.svelte';
+  import { serializeCustomTheme, storedCustomTheme, type CustomTheme } from '../lib/customTheme';
 
   const card =
     'group relative overflow-hidden rounded-[10px] border border-neutral-200 bg-white text-left transition-[border-color,box-shadow] hover:border-neutral-300 hover:shadow-sm dark:border-white/[0.07] dark:bg-white/[0.05] dark:hover:border-white/[0.12]';
@@ -13,6 +16,24 @@
     { value: 'system', label: 'System', description: 'Follow your operating system.', preview: 'bg-gradient-to-r from-white via-neutral-400 to-[#050505]' },
     { value: 'dark', label: 'Dark', description: 'Dark surfaces and soft contrast.', preview: 'bg-[#181818]' },
   ];
+  let customTheme = $state(storedCustomTheme());
+  let dialogOpen = $state(false);
+  // `saveCustomTheme()`: a null draft is the built-in Dark theme.
+  function saveCustomTheme(draft: CustomTheme | null) {
+    dialogOpen = false;
+    try {
+      if (draft === null) {
+        localStorage.removeItem('customTheme');
+      } else {
+        customTheme = { ...draft };
+        localStorage.setItem('customTheme', serializeCustomTheme(customTheme));
+        localStorage.setItem('themeColor', customTheme.accent);
+      }
+    } catch {
+      // Storage can be unavailable (private mode).
+    }
+    layout.setTheme(draft === null ? 'dark' : 'custom');
+  }
   const chartOptions = [
     { value: 'local', label: 'Your time', description: 'Show the time in the time zone of this browser.', lines: ['Oct 24, 12:30:33'] },
     { value: 'utc', label: 'Your time and UTC', description: 'Also show the UTC time. Use it to compare with server logs.', lines: ['Your time: Oct 24, 12:30:33 GMT+2', 'UTC: Oct 24, 10:30:33 UTC'] },
@@ -84,6 +105,20 @@
             {@render footer(o.label, o.description, layout.theme === o.value)}
           </div>
         {/each}
+        <div
+          role="button"
+          tabindex="0"
+          onclick={() => (dialogOpen = true)}
+          onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), (dialogOpen = true))}
+          aria-haspopup="dialog"
+          aria-expanded={dialogOpen}
+          class="group block w-full overflow-hidden rounded-[10px] border border-neutral-200 bg-white text-left transition-[border-color,box-shadow] hover:border-neutral-300 hover:shadow-sm dark:border-white/[0.07] dark:bg-white/[0.05] dark:hover:border-white/[0.12] {layout.theme === 'custom' ? selected : ''}"
+        >
+          <div class="flex h-20 items-center justify-center border-b border-neutral-200 bg-neutral-100 dark:border-white/[0.07] dark:bg-black/20">
+            <ThemeSwatch theme={customTheme} class="h-12 w-24" />
+          </div>
+          {@render footer('Custom', 'Pick a preset or your own colors.', layout.theme === 'custom')}
+        </div>
       </div>
     </section>
 
@@ -206,3 +241,7 @@
     </section>
   </div>
 </div>
+
+{#if dialogOpen}
+  <CustomThemeDialog initial={layout.theme === 'custom' ? { ...customTheme } : null} onclose={() => (dialogOpen = false)} onsave={saveCustomTheme} />
+{/if}

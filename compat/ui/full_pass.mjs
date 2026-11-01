@@ -70,7 +70,7 @@ async function shoot(t, label) {
     await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
     await page.waitForTimeout(1800);
     for (let i = 0; i < 2; i++) {
-      const popup = page.locator('button:has-text("Accept And Close"), button:has-text("Accept and Close"), button:has-text("Maybe next time")').first();
+      const popup = page.locator('button:has-text("Accept And Close"), button:has-text("Accept and Close"), button:has-text("Maybe next time")').filter({ visible: true }).first();
       if (await popup.isVisible().catch(() => false)) await popup.click({ timeout: 2000 }).catch(() => {});
     }
     await page.waitForTimeout(150);
