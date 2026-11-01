@@ -296,6 +296,30 @@ def main():
                    lambda h: ref_add_app(app["uuid"], h), rs_app, "application", app["uuid"])
         sql(f"UPDATE servers SET ip = '1.2.3.4' WHERE id = {srv['id']}")
 
+        # 6b. CheckDomainDnsJob on both sides, on names that leak nothing (the settings' resolver is asked).
+        urls = ["https://dns2-nx.example.test", "https://dns2-sub.1.2.3.4.sslip.io", "https://1.2.3.4", "https://dns2-b.example.test:8443/path"]
+        for table, rid, kind, uuid, cls in [("applications", app["id"], "application", app["uuid"], "Application"),
+                                            ("service_applications", svc["sub"], "service", svc["uuid"], "ServiceApplication")]:
+            reset(table, rid, tid)
+            sql(f"UPDATE {table} SET fqdn = '{','.join(urls)}' WHERE id = {rid}")
+            php = f"""$m = \\App\\Models\\{cls}::find({rid}); $srv = \\App\\Models\\Server::find({srv['id']});
+$urls = json_decode('{json.dumps(urls)}', true); $st = []; foreach ($urls as $u) {{ $st[$u] = ['status' => 'checking', 'message' => '', 'expected_ip' => '1.2.3.4', 'checked_at' => now()->toIso8601String(), 'check_id' => 'chk']; }}
+$m->domain_dns_statuses = $st; $m->save();
+foreach ($urls as $u) {{ (new \\App\\Jobs\\CheckDomainDnsJob($m->fresh(), $u, $u, $srv, '1.2.3.4', 'chk'))->handle(); }}
+echo '<<<null>>>';"""
+            tinker(php, fake=False)
+            ref_st = statuses(table, rid)
+            reset(table, rid, tid)
+            sql(f"UPDATE {table} SET fqdn = '{','.join(urls)}' WHERE id = {rid}")
+            code, _ = ui("POST", f"/ui/resources/{kind}/{uuid}/dns/check", {})
+            for _i in range(40):
+                rs_st = statuses(table, rid)
+                if rs_st and all(v["status"] != "checking" for v in rs_st.values()):
+                    break
+                time.sleep(0.5)
+            compare(f"{kind}: CheckDomainDns statuses", ref_st, rs_st)
+            sql(f"UPDATE {table} SET fqdn = NULL, domain_dns_statuses = NULL WHERE id = {rid}")
+
         # 7. API PATCH: queueReleaseOfRemovedHostnames and ReleaseRemovedDnsHostnamesJob.
         def seed_record(side):
             reset("applications", app["id"], tid)
