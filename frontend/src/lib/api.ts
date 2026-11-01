@@ -34,6 +34,12 @@ export function setUnauthenticatedHandler(fn: () => void): void {
   onUnauthenticated = fn;
 }
 
+/** While an upgrade restarts the server, a gone session is expected and must not leave the page. */
+let keepPageWithoutSession = false;
+export function setKeepPageWithoutSession(keep: boolean): void {
+  keepPageWithoutSession = keep;
+}
+
 export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -53,7 +59,7 @@ export async function request<T>(method: string, path: string, body?: unknown): 
   }
   if (!res.ok) {
     const d = (data ?? {}) as { message?: string; errors?: Record<string, string[]>; details?: string };
-    if (res.status === 401 && !path.startsWith('/ui/session')) onUnauthenticated();
+    if (res.status === 401 && !path.startsWith('/ui/session') && !keepPageWithoutSession) onUnauthenticated();
     throw new ApiError(res.status, d.message ?? `Request failed (${res.status})`, d.errors ?? {}, d.details);
   }
   return data as T;

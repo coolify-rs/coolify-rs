@@ -2,7 +2,7 @@
   // Port of upstream livewire/upgrade.blade.php (App\Livewire\Upgrade) and components/upgrade-progress.blade.php.
   import Callout from './Callout.svelte';
   import Reicon from './Reicon.svelte';
-  import { ApiError } from '../lib/api';
+  import { ApiError, setKeepPageWithoutSession } from '../lib/api';
   import { settingsUi, type UpgradeState } from '../lib/settingsApi';
   import { notify } from '../lib/toast.svelte';
   import { portal } from '../lib/portal';
@@ -75,6 +75,7 @@
 
   function showError(message?: string) {
     stopTimers();
+    setKeepPageWithoutSession(false);
     upgradeError = true;
     currentStatus = `Error: ${message}`;
   }
@@ -168,6 +169,7 @@
 
   async function confirmed() {
     showProgress = true;
+    setKeepPageWithoutSession(true);
     startTime = Date.now();
     elapsedTimer = setInterval(() => (elapsedTime = Math.floor((Date.now() - startTime) / 1000)), 1000);
     window.addEventListener('beforeunload', beforeUnload);
