@@ -53,6 +53,9 @@ enum Cmd {
         job: String,
         server_uuid: String,
     },
+    /// `dns:release-orphaned-records`: release managed DNS records no live resource references.
+    #[command(name = "dns:release-orphaned-records")]
+    ReleaseOrphanedDnsRecords,
 }
 
 #[derive(Debug)]
@@ -347,6 +350,15 @@ async fn run() -> Result<()> {
             let remote = Remote::new(cfg.remote.clone()).context("remote execution")?;
             let jobs = coolify_jobs::Jobs::new(db.clone(), remote, cfg.encrypter.clone());
             let out = coolify_jobs::server_ops::run_named(&jobs, &job, &server_uuid)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
+            println!("{out}");
+            Ok(())
+        }
+        Cmd::ReleaseOrphanedDnsRecords => {
+            let remote = Remote::new(cfg.remote.clone()).context("remote execution")?;
+            let jobs = coolify_jobs::Jobs::new(db.clone(), remote, cfg.encrypter.clone());
+            let out = coolify_jobs::kernel::release_orphaned_dns_records(&jobs)
                 .await
                 .map_err(|e| anyhow::anyhow!(e))?;
             println!("{out}");

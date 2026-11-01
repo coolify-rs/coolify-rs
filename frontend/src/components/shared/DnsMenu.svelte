@@ -41,6 +41,11 @@
       fail(e);
     }
   }
+  /** `$showDnsProviderModal = true` of `configureDnsAfterDomainAdd`. */
+  export async function openProviders() {
+    await load();
+    showProviders = true;
+  }
   /** `openManualDnsRecords`. */
   async function manualRecords() {
     open = false;

@@ -286,8 +286,8 @@ pub enum DnsError {
 impl std::fmt::Display for DnsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DnsError::Conflict { .. } => {
-                f.write_str("Another DNS record already uses this hostname.")
+            DnsError::Conflict { current, .. } => {
+                write!(f, "DNS record already points to {current}.")
             }
             DnsError::Busy => f.write_str("Another DNS change is in progress."),
             DnsError::Other(m) => f.write_str(m),

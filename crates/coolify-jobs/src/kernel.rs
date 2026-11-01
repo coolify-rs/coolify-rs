@@ -307,7 +307,7 @@ pub async fn run_job(jobs: &Jobs, job: KernelJob, now: DateTime<Utc>) -> Result<
             cleanup_database_import_uploads(&data_dir());
             Ok(())
         }
-        KernelJob::ReleaseOrphanedDnsRecords => release_orphaned_dns_records(jobs).await,
+        KernelJob::ReleaseOrphanedDnsRecords => release_orphaned_dns_records(jobs).await.map(|_| ()),
         KernelJob::ApiTokenExpirationWarning => api_token_expiration_warning(jobs).await,
         KernelJob::CheckMissingDatabaseBackups => check_missing_database_backups(jobs).await,
         KernelJob::CheckMissingVolumeBackups => check_missing_volume_backups(jobs).await,
@@ -437,9 +437,9 @@ async fn cleanup_database(db: &Db) -> Result<(), String> {
 }
 
 /// `ReleaseOrphanedManagedDnsRecords::handle` (`dns:release-orphaned-records`).
-async fn release_orphaned_dns_records(jobs: &Jobs) -> Result<(), String> {
+pub async fn release_orphaned_dns_records(jobs: &Jobs) -> Result<String, String> {
     let Some(enc) = jobs.0.encrypter.as_ref() else {
-        return Ok(());
+        return Err("No application encryption key has been specified.".to_owned());
     };
     let dns = crate::integrations::cloudflare::Dns {
         db: &jobs.0.db,
@@ -449,11 +449,15 @@ async fn release_orphaned_dns_records(jobs: &Jobs) -> Result<(), String> {
     };
     let counts = dns.release_orphaned_records().await?;
     if counts.is_empty() {
-        tracing::info!("No orphaned managed DNS records found.");
-    } else {
-        tracing::info!(?counts, "Orphaned managed DNS records processed.");
+        return Ok("No orphaned managed DNS records found.".to_owned());
     }
-    Ok(())
+    let summary = counts
+        .iter()
+        .map(|(outcome, count)| format!("{outcome}: {count}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    tracing::info!(?counts, "Orphaned managed DNS records processed.");
+    Ok(format!("Orphaned managed DNS records processed ({summary})."))
 }
 
 /// `CleanupDatabaseImportUploads::handle`. `Cache::lock(StartDatabaseImport::lockKey(...))` is held
