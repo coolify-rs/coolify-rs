@@ -216,7 +216,7 @@
 {#if showProviders && data}
   <Modal title="Configure DNS" onclose={() => (showProviders = false)}>
     <div class="flex flex-col gap-3">
-      <p class="text-sm text-neutral-600 dark:text-fg-dim">Coolify matched each hostname to a zone available through your connected DNS providers.</p>
+      <p class="text-sm text-neutral-600 dark:text-fg-dim">coolify-rs matched each hostname to a zone available through your connected DNS providers.</p>
       {#if data.proposals.some((p) => !p.target)}
         <Callout type="warning" title="No public IP">{data.no_public_address_message}</Callout>
       {/if}
@@ -228,7 +228,7 @@
             <div class="text-xs text-neutral-500 dark:text-fg-dim">{p.credential} · {p.zone}</div>
           </div>
           {#if p.managed}
-            <span class="text-xs text-green-600">Managed by Coolify</span>
+            <span class="text-xs text-green-600">Managed by coolify-rs</span>
           {:else if conflict}
             <div class="flex flex-col items-end gap-2 text-xs">
               <span class="text-red-600 dark:text-red-400">Currently {conflict.current}</span>

@@ -164,7 +164,7 @@
   <div class="mt-8">
     <SettingsSection
       title="Secret manager"
-      description={'Reference remote secrets in your environment variables with {{vault.KEY}}. Values are fetched at deployment time and are never stored in the Coolify database. Changing the source does not re-check existing references — missing keys fail the next deployment.'}
+      description={'Reference remote secrets in your environment variables with {{vault.KEY}}. Values are fetched at deployment time and are never stored in the coolify-rs database. Changing the source does not re-check existing references — missing keys fail the next deployment.'}
     >
       {#if !data.linked && data.available_tokens.length === 0}
         <Empty title="No secret manager tokens" description="Add a Doppler, Infisical, or HashiCorp Vault token first." iconName="keys" size="sm">

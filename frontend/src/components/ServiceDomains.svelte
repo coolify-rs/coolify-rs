@@ -157,7 +157,7 @@
 
   async function generate() {
     try {
-      newParts = (await servicesApi.generateDomain(serviceUuid)).parts;
+      newParts = (await servicesApi.generateDomain(serviceUuid, newApp)).parts;
     } catch (e) {
       notify.error(message(e));
     }
@@ -310,7 +310,7 @@
               {#if hasHttps}
                 <div class="flex w-full items-center gap-2 sm:w-auto service-domains-https">
                   <span class="mb-0! whitespace-nowrap text-[12px]!">Redirect HTTP to HTTPS</span>
-                  <Helper helper="Disable only when Cloudflare Tunnel or another proxy connects to Coolify over HTTP. Keep enabled when Cloudflare uses Full or Full (strict) SSL." />
+                  <Helper helper="Disable only when Cloudflare Tunnel or another proxy connects to coolify-rs over HTTP. Keep enabled when Cloudflare uses Full or Full (strict) SSL." />
                   <Listbox
                     id="service-force-https-{group.app.id}"
                     disabled={!canUpdate}
@@ -372,7 +372,7 @@
                       <span class="service-domain-detail-label">Domain redirect</span>
                       <span>{group.app.redirect === 'www' ? 'non-www → www' : group.app.redirect === 'non-www' ? 'www → non-www' : 'Disabled'}</span>
                     </div>
-                    <div class="service-domain-detail" title={row.has_port_override ? 'Custom internal port for this domain' : 'Inherited from the Coolify service port'}>
+                    <div class="service-domain-detail" title={row.has_port_override ? 'Custom internal port for this domain' : 'Inherited from the coolify-rs service port'}>
                       <span class="service-domain-detail-label">Internal port</span>
                       <span>{row.internal_port ?? '—'}</span>
                     </div>
@@ -550,7 +550,7 @@
   {@const row = removing}
   <ConfirmModal
     title="Remove domain?"
-    checkboxes={[{ id: 'deleteManagedDns', label: 'Also delete the DNS record created by Coolify, if present.' }]}
+    checkboxes={[{ id: 'deleteManagedDns', label: 'Also delete the DNS record created by coolify-rs, if present.' }]}
     actions={['This domain will be removed from the service application.', 'Redeploy or restart may be required for proxy changes.']}
     confirmWithText={false}
     confirmWithPassword={false}

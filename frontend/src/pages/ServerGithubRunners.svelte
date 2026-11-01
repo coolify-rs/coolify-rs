@@ -323,7 +323,7 @@
 
               <div class="mt-4 grid gap-4 lg:grid-cols-2">
                 <Listbox id="githubAppId" label="GitHub App" required disabled={!canEdit} bind:value={form.app} options={data.apps.map((a) => ({ value: String(a.id), label: `${a.name} (${a.organization})` }))} helper="Organization GitHub App that receives the Workflow job webhook events." error={error?.field('github_app_id')} />
-                <FormInput id="labels" label="Labels" required disabled={!canEdit} placeholder="coolify" helper="Comma-separated custom labels. Coolify also registers self-hosted and linux. Jobs must ask for at least one custom label." bind:value={form.labels} error={error?.field('labels')} />
+                <FormInput id="labels" label="Labels" required disabled={!canEdit} placeholder="coolify" helper="Comma-separated custom labels. coolify-rs also registers self-hosted and linux. Jobs must ask for at least one custom label." bind:value={form.labels} error={error?.field('labels')} />
                 {#if data.is_build_server}
                   <Listbox id="isDedicated" label="Application builds" disabled={!canEdit} bind:value={form.isDedicated} options={[{ value: 'false', label: 'Also build applications' }, { value: 'true', label: 'Dedicated to runners' }]} helper="Dedicated servers are not used for application builds while runners are enabled." />
                 {/if}
@@ -350,7 +350,7 @@
                   helper="Docker: each job gets a private Docker daemon. The daemon runs privileged, so a job can get root access to this server. Use it only for trusted repositories.<br><br>Isolated Docker: each job gets a private Docker daemon in an unprivileged Sysbox container. Everything that needs Docker works, and root in the job has no rights on this server. Needs Sysbox on the server.<br><br>No Docker: jobs run in an unprivileged container. JavaScript actions, composite actions, and shell steps work. Docker container actions, services, container jobs, and docker commands fail.<br><br>The host Docker socket is never shared."
                   error={error?.field('docker_mode')}
                 />
-                <FormInput id="runnerImage" label="Runner image" disabled={!canEdit} placeholder={RUNNER_IMAGE} helper="Empty uses the latest official runner image, which Coolify pulls for every runner. Set a tag, for example ghcr.io/actions/actions-runner:2.337.0, to pin a version, or use a custom image based on the official one to add tools. GitHub stops sending jobs to runners that are more than 30 days old." bind:value={form.runnerImage} error={error?.field('runner_image')} />
+                <FormInput id="runnerImage" label="Runner image" disabled={!canEdit} placeholder={RUNNER_IMAGE} helper="Empty uses the latest official runner image, which coolify-rs pulls for every runner. Set a tag, for example ghcr.io/actions/actions-runner:2.337.0, to pin a version, or use a custom image based on the official one to add tools. GitHub stops sending jobs to runners that are more than 30 days old." bind:value={form.runnerImage} error={error?.field('runner_image')} />
               </div>
               {#if form.dockerMode === 'sysbox'}
                 <div class="mt-4">
@@ -358,7 +358,7 @@
                     <Callout type="success" title="Sysbox is installed">Jobs get a private Docker daemon in an unprivileged container.</Callout>
                   {:else if sysbox === false}
                     <Callout type="warning" title="Sysbox is not installed">
-                      Isolated Docker needs the Sysbox runtime. Coolify installs Sysbox {SYSBOX_VERSION} from the official package (Debian and Ubuntu, kernel 5.12 or newer). Docker reloads its configuration, and running containers are not restarted.
+                      Isolated Docker needs the Sysbox runtime. coolify-rs installs Sysbox {SYSBOX_VERSION} from the official package (Debian and Ubuntu, kernel 5.12 or newer). Docker reloads its configuration, and running containers are not restarted.
                       {#if canEdit}
                         <div class="mt-3">
                           <button type="button" class="button" onclick={installSysbox}>Install Sysbox</button>
@@ -366,7 +366,7 @@
                       {/if}
                     </Callout>
                   {:else}
-                    <Callout type="info" title="Checking Sysbox">Coolify checks if Sysbox is installed on this server.</Callout>
+                    <Callout type="info" title="Checking Sysbox">coolify-rs checks if Sysbox is installed on this server.</Callout>
                   {/if}
                 </div>
               {/if}

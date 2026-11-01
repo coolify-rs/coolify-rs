@@ -74,7 +74,7 @@
 
 {#snippet limitWarning()}
   {#if restartLimit !== null}
-    <span title="Container has crashed and Coolify stopped it after {restartLimit} restart attempts."
+    <span title="Container has crashed and coolify-rs stopped it after {restartLimit} restart attempts."
       ><StatusBadge label="Restart limit reached" type="warning" /></span
     >
   {/if}

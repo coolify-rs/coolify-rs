@@ -155,7 +155,7 @@
                         <button type="button" class="button button-error" disabled={iconBusy} onclick={removeIcon}>Remove</button>
                       {/if}
                     </div>
-                    <p class="text-xs text-neutral-500 dark:text-fg-dim">JPG, PNG, or WebP. Shown in the projects list, on the dashboard, and in resource headers.</p>
+                    <p class="text-xs text-neutral-500 dark:text-fg-dim">JPG, PNG, or WebP. Shown in the projects list.</p>
                     {#if iconError}<p class="text-xs text-red-500">{iconError}</p>{/if}
                   </div>
                 </div>

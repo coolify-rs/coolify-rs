@@ -90,7 +90,7 @@
           {/if}
         </SettingsSection>
         {#if networks.length > 0}
-          <SettingsSection id="server-found-networks-section" title="Discovered networks" description="Networks found on the server that are not registered as Coolify destinations." flush>
+          <SettingsSection id="server-found-networks-section" title="Discovered networks" description="Networks found on the server that are not registered as coolify-rs destinations." flush>
             {#each networks as name (name)}
               <div class="flex items-center justify-between gap-4 border-b border-neutral-200 px-4 py-3 last:border-b-0 dark:border-white/[0.08]">
                 <div>

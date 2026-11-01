@@ -128,7 +128,7 @@
           </div>
           <SettingsSubsection id="api-section" title="API and MCP">
             <div class="grid gap-4 lg:grid-cols-2">
-              <Listbox id="is_api_enabled" label="API access" helper="Allow authenticated requests to the Coolify REST API." bind:value={form.is_api_enabled} onchange={instant} options={onOff} />
+              <Listbox id="is_api_enabled" label="API access" helper="Allow authenticated requests to the coolify-rs REST API." bind:value={form.is_api_enabled} onchange={instant} options={onOff} />
               <Listbox
                 id="is_mcp_server_enabled"
                 label="MCP server"
@@ -237,7 +237,7 @@
           </div>
         </SettingsSection>
 
-        <SettingsSection id="storage-section" title="Storage" description="Where Coolify stores uploaded images and how users download files.">
+        <SettingsSection id="storage-section" title="Storage" description="Where coolify-rs stores uploaded images and how users download files.">
           <SettingsSubsection
             first
             id="avatar-storage-section"
@@ -249,7 +249,7 @@
               <FormInput
                 id="image_cdn_url"
                 label="Image CDN URL"
-                helper="Optional public URL (for example a CDN or public bucket domain) that serves profile pictures and project icons stored on S3. Leave empty to serve them through Coolify."
+                helper="Optional public URL (for example a CDN or public bucket domain) that serves profile pictures and project icons stored on S3. Leave empty to serve them through coolify-rs."
                 placeholder="https://images.example.com"
                 bind:value={form.image_cdn_url}
               />
@@ -261,7 +261,7 @@
           <SettingsSubsection
             id="file-download-storage-section"
             title="File downloads"
-            helper="Choose how files from the container file browser and backups are downloaded. Streaming sends each file through this Coolify instance (file browser: up to 1 GB). With S3, the server uploads the file to the bucket and the browser downloads it from S3, up to 5 GB; larger backups are streamed. S3 download links expire after 15 minutes, and the files are deleted after 6 hours."
+            helper="Choose how files from the container file browser and backups are downloaded. Streaming sends each file through this coolify-rs instance (file browser: up to 1 GB). With S3, the server uploads the file to the bucket and the browser downloads it from S3, up to 5 GB; larger backups are streamed. S3 download links expire after 15 minutes, and the files are deleted after 6 hours."
           >
             <div class="flex max-w-md flex-col gap-4">
               <Listbox
@@ -269,11 +269,11 @@
                 label="Download method"
                 bind:value={form.file_download_storage}
                 onchange={instant}
-                options={[{ value: 'stream', label: 'Stream through Coolify' }, ...options.filter((o) => o.value !== 'local')]}
+                options={[{ value: 'stream', label: 'Stream through coolify-rs' }, ...options.filter((o) => o.value !== 'local')]}
               />
             </div>
             <Callout type="info" title="Bucket auto-delete rule" class="mt-4">
-              When you select an S3 storage, Coolify adds a lifecycle rule that deletes objects under
+              When you select an S3 storage, coolify-rs adds a lifecycle rule that deletes objects under
               <span class="font-mono">coolify-file-downloads/</span> after 1 day, as a safety net. The selected storage must be reachable from your servers, and the S3 provider must support lifecycle rules.
             </Callout>
           </SettingsSubsection>

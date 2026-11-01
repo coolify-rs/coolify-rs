@@ -62,7 +62,7 @@
     <div class="flex flex-col gap-4">
       <div class="auth-guidance">
         <Reicon name="teams" class="mt-0.5 size-4 shrink-0" />
-        <p>You have been invited to collaborate on Coolify.</p>
+        <p>You have been invited to collaborate on coolify-rs.</p>
       </div>
       <dl class="divide-y divide-neutral-200 rounded-lg border border-neutral-200 text-sm dark:divide-white/10 dark:border-white/10">
         <div class="flex items-center justify-between gap-4 px-3 py-2.5">

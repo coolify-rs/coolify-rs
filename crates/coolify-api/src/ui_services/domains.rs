@@ -9,7 +9,6 @@ use coolify_db::servers::ColumnValue;
 use coolify_db::services::{self as svc, ServiceRow, SubKind, SubRow};
 use coolify_jobs::applications::domains as app_domains;
 use coolify_jobs::compose_parser::domains::{UrlBase, get_fqdn_without_port};
-use coolify_jobs::services::templates;
 use serde_json::{Map, Value, json};
 
 use super::resources::port_requires_confirmation;
@@ -142,6 +141,16 @@ async fn applications(state: &AppState, s: &ServiceRow) -> Result<Vec<SubRow>, A
     Ok(apps)
 }
 
+/// `ServiceApplication::getRequiredPort()`.
+fn required_port(s: &ServiceRow, app: &SubRow) -> Option<i64> {
+    coolify_jobs::compose_parser::service_parser::application_required_port(
+        s.str("service_type"),
+        s.str("docker_compose_raw"),
+        s.str("docker_compose"),
+        &app.name,
+    )
+}
+
 /// `domainRowFromStored` and `effectiveDomainInternalPort`.
 fn row_json(s: &ServiceRow, app: &SubRow, url: &str) -> Value {
     let stored = app.raw.get("domain_dns_statuses").and_then(|d| d.get(url));
@@ -154,7 +163,7 @@ fn row_json(s: &ServiceRow, app: &SubRow, url: &str) -> Value {
     let legacy = app_domains::UrlParts::parse(url)
         .and_then(|p| p.port_number())
         .filter(|p| *p > 0);
-    let required = templates::required_port(s.str("service_type")).filter(|p| *p > 0);
+    let required = required_port(s, app).filter(|p| *p > 0);
     let (port, has_override) = match (overridden, legacy) {
         (Some(p), _) | (None, Some(p)) => (Some(p), true),
         _ => (required, false),
@@ -202,7 +211,7 @@ pub async fn index(
             "uuid": app.uuid,
             "name": app.str("human_name").filter(|h| !h.is_empty()).unwrap_or(&app.name),
             "image": app.raw.get("image"),
-            "required_port": templates::required_port(s.str("service_type")),
+            "required_port": required_port(&s, app),
             "redirect": if ["www", "non-www", "both"].contains(&redirect) { redirect } else { "both" },
             "force_https": app.bool_or("is_force_https_enabled", true),
             "permanent_redirect": app.bool("is_permanent_redirect_enabled"),
@@ -272,7 +281,7 @@ async fn save_list(
     }
     if options.check_ports
         && !options.force_port
-        && let Some(required) = templates::required_port(s.str("service_type"))
+        && let Some(required) = required_port(s, app)
         && list
             .iter()
             .any(|f| port_requires_confirmation(app, f, required, app.str("fqdn")))
@@ -666,9 +675,15 @@ pub async fn generate(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
     Path(uuid): Path<String>,
+    axum::Json(body): axum::Json<Value>,
 ) -> ApiResult {
     let s = find_service(&state, &ctx, &uuid).await?;
     require_admin(&ctx)?;
+    // `$this->findServiceApp($this->newServiceApplicationId)`; regenerating keeps the row's own port.
+    let app = match body.get("app_id").and_then(Value::as_i64) {
+        Some(id) => Some(find_app(&state, &s, id).await?),
+        None => None,
+    };
     let Some(server) = (match s.server_id() {
         Some(id) => coolify_db::servers::find_by_id(&state.db, id).await?,
         None => None,
@@ -693,7 +708,7 @@ pub async fn generate(
     let domain = base.generate_url(&coolify_domain::new_public_id());
     let mut parts = parts_json(&domain);
     if let (Some(port), Value::Object(m)) =
-        (templates::required_port(s.str("service_type")), &mut parts)
+        (app.as_ref().and_then(|a| required_port(&s, a)), &mut parts)
         && m.get("port").and_then(Value::as_str) == Some("")
     {
         m.insert("port".into(), json!(port.to_string()));

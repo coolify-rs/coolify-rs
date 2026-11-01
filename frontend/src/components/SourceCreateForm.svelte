@@ -170,7 +170,7 @@
           <Checkbox
             id="is_system_wide"
             label="System wide"
-            helper="If checked, this {meta.name} {provider === 'github' ? 'App' : 'App'} will be available for everyone in this Coolify instance."
+            helper="If checked, this {meta.name} {provider === 'github' ? 'App' : 'App'} will be available for everyone in this coolify-rs instance."
             bind:checked={isSystemWide}
           />
         </div>

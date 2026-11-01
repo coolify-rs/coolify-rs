@@ -190,7 +190,7 @@
                   id="patchCheckFrequency"
                   label="Check frequency"
                   placeholder="weekly (default, on Sunday)"
-                  helper="Cron expression or preset such as daily, weekly, or monthly. Leave empty for the default: weekly, at a fixed time on Sunday. Coolify notifies your team when updates are available and when a check starts to fail."
+                  helper="Cron expression or preset such as daily, weekly, or monthly. Leave empty for the default: weekly, at a fixed time on Sunday. coolify-rs notifies your team when updates are available and when a check starts to fail."
                   disabled={!canEdit}
                   bind:value={form.frequency}
                 />
@@ -200,7 +200,7 @@
                       <!-- svelte-ignore a11y_label_has_associated_control -->
                       <label class="mb-0! flex items-center gap-1 text-sm font-medium leading-4">Automatic security updates</label>
                       <Helper
-                        helper="{packageManager === 'apt' ? 'Uses unattended-upgrades for the security origins only.' : 'Uses dnf-automatic with upgrade_type = security.'} Turning it off removes the Coolify configuration and keeps the operating system default."
+                        helper="{packageManager === 'apt' ? 'Uses unattended-upgrades for the security origins only.' : 'Uses dnf-automatic with upgrade_type = security.'} Turning it off removes the coolify-rs configuration and keeps the operating system default."
                       />
                     </div>
                     <div class="input flex items-center justify-between gap-2 pr-1!">
@@ -370,9 +370,9 @@
         {#if data.auto_security_updates}
           <ConfirmModal
             title="Turn off automatic security updates?"
-            warningMessage="Security fixes are then not installed automatically by Coolify."
+            warningMessage="Security fixes are then not installed automatically by coolify-rs."
             confirmWithText={false}
-            actions={['Coolify removes its configuration from the server.', 'The server uses the default of the operating system again. Check it if you want no automatic updates at all.']}
+            actions={['coolify-rs removes its configuration from the server.', 'The server uses the default of the operating system again. Check it if you want no automatic updates at all.']}
             step2ButtonText="Turn off"
             onconfirm={toggleAuto}
             onclose={() => (modal = null)}
@@ -384,9 +384,9 @@
             confirmWithText={false}
             actions={[
               'Every day at the time in Maintenance window (time zone of the server), the server installs security updates without asking.',
-              'If Docker comes from the operating system packages (for example docker.io or moby-engine), a security update of Docker restarts it, and all containers on this server stop and start again. Docker from the Docker repository (docker-ce, as Coolify installs it) has no security updates there and is not updated.',
+              'If Docker comes from the operating system packages (for example docker.io or moby-engine), a security update of Docker restarts it, and all containers on this server stop and start again. Docker from the Docker repository (docker-ce, as coolify-rs installs it) has no security updates there and is not updated.',
               'Services that use an updated library (for example OpenSSL or glibc) can restart.',
-              'A new kernel is installed, but the server is not rebooted. Coolify then shows Reboot required.',
+              'A new kernel is installed, but the server is not rebooted. coolify-rs then shows Reboot required.',
             ]}
             step2ButtonText="Turn on"
             onconfirm={toggleAuto}

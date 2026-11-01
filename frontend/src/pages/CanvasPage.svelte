@@ -76,8 +76,8 @@
         rememberView(remembered[kind], 'canvas');
         document.title = pageTitle(s);
         if (kind === 'server') loadServerContext(uuid, 'resources');
-        if (kind === 'project') uiApi.project(uuid).then((d) => setProjectCrumbs(d));
-        if (kind === 'environment') uiApi.project(uuid).then((d) => setProjectCrumbs(d, environment));
+        if (kind === 'project' || kind === 'project_variables') uiApi.project(uuid).then((d) => setProjectCrumbs(d));
+        if (kind === 'environment' || kind === 'environment_variables') uiApi.project(uuid).then((d) => setProjectCrumbs(d, environment));
       })
       .catch(() => (missing = true));
   });

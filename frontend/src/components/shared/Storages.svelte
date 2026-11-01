@@ -280,7 +280,12 @@
               <div class="volumes-col-actions volumes-cell-actions flex flex-nowrap items-center justify-end gap-1.5">
                 <button type="submit" class="button !px-2.5 !text-xs">Update</button>
                 {#if !v.is_shared}
-                  <button type="button" class="button !px-2.5 !text-xs" onclick={() => openBackup(v.id)}>Backup</button>
+                  {#if data.show_backup_action}
+                    <button type="button" class="button !px-2.5 !text-xs" onclick={() => openBackup(v.id)}>Backup</button>
+                  {:else if data.database_backup_available}
+                    <!-- `Project\\Database\\CreateScheduledBackup` is on the Backups page here, not in a modal on this row. -->
+                    <a use:link href={router.path.replace(/\/persistent-storage$/, '/backups')} class="button !px-2.5 !text-xs">Backup</a>
+                  {/if}
                   <button type="button" class="button button-error" onclick={() => (deleting = v)}>Delete</button>
                 {/if}
               </div>
@@ -313,7 +318,7 @@
       >
         {#snippet actions()}
           {#if data.build_pack !== 'dockercompose' && canUpdate}
-            <Dropdown panelClass="left-0! right-auto! z-[90]! w-52! min-w-52! sm:left-auto! sm:right-0!" role="menu">
+            <Dropdown panelClass="z-[90]! w-52! min-w-52!" role="menu">
               {#snippet trigger({ open: isOpen })}
                 <button type="button" class="button button-highlighted" aria-haspopup="menu" aria-expanded={isOpen}>
                   <Reicon name="plus" class="size-3.5" />
@@ -404,7 +409,7 @@
             <code class="break-all">{previewPath}</code>
           </div>
           <FormInput placeholder="/etc/nginx/nginx.conf" id="file_storage_path" label="Destination Path" required helper="File location inside the container" bind:value={filePath} error={error?.field('file_storage_path')} />
-          <FormInput placeholder="/srv/config/app.conf" id="file_storage_source" label="Source Path" helper="Optional. File location on the host: an absolute path anywhere on the host, or a path relative to the resource directory. Empty: Coolify keeps the file in the resource directory. Coolify never deletes a file outside the resource directory." bind:value={fileSource} />
+          <FormInput placeholder="/srv/config/app.conf" id="file_storage_source" label="Source Path" helper="Optional. File location on the host: an absolute path anywhere on the host, or a path relative to the resource directory. Empty: coolify-rs keeps the file in the resource directory. coolify-rs never deletes a file outside the resource directory." bind:value={fileSource} />
           <FormTextarea label="Content" id="file_storage_content" bind:value={fileContent} />
           <div class="flex justify-end pt-2"><button type="submit" class="button">Add file</button></div>
         </div>
@@ -413,7 +418,7 @@
   {:else if modal === 'host-file'}
     <Modal narrow title="Add host file mount" onclose={() => (modal = null)}>
       <form class="flex w-full flex-col gap-4" onsubmit={(e) => submitNew(e, 'host-file', { host_file_storage_source: hostSource, host_file_storage_destination: hostDestination }, 'files')}>
-        <p class="text-[13px] leading-5 text-neutral-500 dark:text-fg-dim">Bind an existing host file into the container. Coolify will not modify or delete the source file.</p>
+        <p class="text-[13px] leading-5 text-neutral-500 dark:text-fg-dim">Bind an existing host file into the container. coolify-rs will not modify or delete the source file.</p>
         <div class="flex flex-col gap-4">
           <FormInput placeholder="/etc/nginx/nginx.conf" id="host_file_storage_source" label="Host File Path" required helper="Existing file on the host system." bind:value={hostSource} error={error?.field('host_file_storage_source')} />
           <FormInput placeholder="/etc/nginx/nginx.conf" id="host_file_storage_destination" label="Destination Path" required helper="File location inside the container." bind:value={hostDestination} error={error?.field('host_file_storage_destination')} />
@@ -426,7 +431,7 @@
       <form class="flex w-full flex-col gap-4" onsubmit={(e) => submitNew(e, 'directory', { file_storage_directory_source: dirSource, file_storage_directory_destination: dirDestination }, 'directories')}>
         <p class="text-[13px] leading-5 text-neutral-500 dark:text-fg-dim">Bind a directory from the host system into the container.</p>
         <div class="flex flex-col gap-4">
-          <FormInput placeholder="{hostPath}/etc/nginx" id="file_storage_directory_source" label="Source Directory" required helper="Directory on the host: an absolute path anywhere on the host, or a path relative to the resource directory. Coolify creates it when it is missing, and never deletes a directory outside the resource directory." bind:value={dirSource} error={error?.field('file_storage_directory_source')} />
+          <FormInput placeholder="{hostPath}/etc/nginx" id="file_storage_directory_source" label="Source Directory" required helper="Directory on the host: an absolute path anywhere on the host, or a path relative to the resource directory. coolify-rs creates it when it is missing, and never deletes a directory outside the resource directory." bind:value={dirSource} error={error?.field('file_storage_directory_source')} />
           <FormInput placeholder="/etc/nginx" id="file_storage_directory_destination" label="Destination Directory" required helper="Directory inside the container." bind:value={dirDestination} error={error?.field('file_storage_directory_destination')} />
           <div class="flex justify-end pt-2"><button type="submit" class="button">Add directory</button></div>
         </div>

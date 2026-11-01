@@ -234,7 +234,7 @@
                           <span class="env-type-desktop text-[13px] text-neutral-500 dark:text-fg-dim">{scopeLabel}</span>
                           <span class="min-w-0 truncate font-mono text-[13px]" title={v.value ?? undefined}>{v.value}</span>
                           <span class="data-table-cell-dash">-</span>
-                          <span class="justify-self-end text-neutral-400 dark:text-fg-faint" title="Built-in variable, managed by Coolify"><Reicon name="keys" class="size-3.5" /></span>
+                          <span class="justify-self-end text-neutral-400 dark:text-fg-faint" title="Built-in variable, managed by coolify-rs"><Reicon name="keys" class="size-3.5" /></span>
                         </div>
                       </div>
                     {:else}

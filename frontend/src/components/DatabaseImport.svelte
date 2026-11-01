@@ -199,7 +199,7 @@
       </SettingsSection>
     {:else if !data.status.startsWith('running')}
       <SettingsSection title="Restore database" description="Import a backup into this database.">
-        <Empty title="Start the database first" description="The database must be running before Coolify can restore a backup." iconName="database" size="sm" />
+        <Empty title="Start the database first" description="The database must be running before coolify-rs can restore a backup." iconName="database" size="sm" />
       </SettingsSection>
     {:else}
       <div class="application-settings-workspace flex flex-col gap-6">
@@ -211,9 +211,9 @@
           <div class="space-y-4">
             {#if type === 'standalone-postgresql' && dumpAll}
               <Callout type="warning" title="Full restore runs as a superuser">
-                Restoring all databases needs a PostgreSQL superuser (it recreates databases and roles), so Coolify cannot restrict it. Only use a backup you trust.
+                Restoring all databases needs a PostgreSQL superuser (it recreates databases and roles), so coolify-rs cannot restrict it. Only use a backup you trust.
                 <span class="mt-1 block">
-                  The backup also replaces PostgreSQL administrator role passwords, including the destination administrator password. If the administrator password in the backup differs from the one in Coolify, later backups and connections can fail until you synchronize them.
+                  The backup also replaces PostgreSQL administrator role passwords, including the destination administrator password. If the administrator password in the backup differs from the one in coolify-rs, later backups and connections can fail until you synchronize them.
                 </span>
               </Callout>
             {/if}
@@ -222,7 +222,7 @@
               rows={10}
               readonly
               label="Import command"
-              helper="Coolify detects the backup format (SQL, archive, gzip, bz2, xz, zip, or tar) before it changes the database."
+              helper="coolify-rs detects the backup format (SQL, archive, gzip, bz2, xz, zip, or tar) before it changes the database."
               value={restoreCommand}
             />
             {#if type !== 'standalone-sqlite'}
@@ -275,7 +275,7 @@
               {#if restoreMysqlUsers}
                 <Callout type="warning" title="Restoring users changes passwords">
                   The backup replaces all users, passwords, and privileges, including the root password. After the next restart of the database, the passwords from the backup apply.
-                  <span class="mt-1 block">Update the passwords in Coolify's database configuration after the restore.</span>
+                  <span class="mt-1 block">Update the passwords in coolify-rs's database configuration after the restore.</span>
                 </Callout>
               {/if}
             {/if}
@@ -284,7 +284,7 @@
                 <Listbox
                   id="sqliteDatabase"
                   label="Restore into"
-                  helper="The database file the backup replaces. Coolify preselects the file named in the backup file name."
+                  helper="The database file the backup replaces. coolify-rs preselects the file named in the backup file name."
                   disabled={!canUpdate}
                   bind:value={sqliteDatabase}
                   onchange={refreshCommand}

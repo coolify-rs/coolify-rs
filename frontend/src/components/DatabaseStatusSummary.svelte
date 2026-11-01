@@ -67,7 +67,7 @@
 
   const dot: Record<string, string> = { success: 'bg-success', warning: 'bg-warning', error: 'bg-error' };
   const healthHelper =
-    'No healthcheck is configured, so Coolify can only report the container state. Traffic can still be routed to the container, but Coolify cannot verify that the application inside it is ready to receive requests.';
+    'No healthcheck is configured, so coolify-rs can only report the container state. Traffic can still be routed to the container, but coolify-rs cannot verify that the application inside it is ready to receive requests.';
 </script>
 
 <svelte:window
@@ -123,7 +123,7 @@
     {/if}
   </div>
   {#if restartLimit !== null}
-    <span title="Container has crashed and Coolify stopped it after {restartLimit} restart attempts."
+    <span title="Container has crashed and coolify-rs stopped it after {restartLimit} restart attempts."
       ><StatusBadge label="Restart limit reached" type="warning" /></span
     >
   {/if}

@@ -151,7 +151,7 @@ await flow(port, 'alice', async (h) => {
   rec.sort_toast = await h.toasts(900);
   await h.listbox('Environment values in logs', 'Hide locked values only');
   rec.redact_toast = await h.toasts(900);
-  await h.page.locator('label:visible', { hasText: 'Include Coolify default variables' }).first().click();
+  await h.page.locator('label:visible', { hasText: 'default variables' }).first().click();
   rec.defaults_toast = await h.toasts(900);
   rec.settings = settings(app);
   rec.settings_audit = audit(start, name);

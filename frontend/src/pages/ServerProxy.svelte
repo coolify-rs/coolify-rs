@@ -152,9 +152,9 @@
     }
   }
   const options = [
-    { value: 'NONE', title: 'Custom', description: 'Manage the proxy outside Coolify.' },
-    { value: 'TRAEFIK', title: 'Traefik', description: 'Use the default Coolify proxy.' },
-    { value: 'CADDY', title: 'Caddy', description: 'Use the Coolify Caddy integration.' },
+    { value: 'NONE', title: 'Custom', description: 'Manage the proxy outside coolify-rs.' },
+    { value: 'TRAEFIK', title: 'Traefik', description: 'Use the default coolify-rs proxy.' },
+    { value: 'CADDY', title: 'Caddy', description: 'Use the coolify-rs Caddy integration.' },
   ];
 </script>
 
@@ -187,13 +187,13 @@
           {#if !data.proxy_type}
             {@render chooser()}
           {:else if data.proxy_type === 'NONE'}
-            <SettingsSection title="Custom proxy" description="Coolify will not manage a reverse proxy for this server.">
+            <SettingsSection title="Custom proxy" description="coolify-rs will not manage a reverse proxy for this server.">
               {#snippet actions()}
                 {#if canEdit}
                   <button type="button" class="button" onclick={switchProxy}>Switch proxy</button>
                 {/if}
               {/snippet}
-              <Callout type="info" title="Custom proxy selected">Configure and operate the proxy outside Coolify.</Callout>
+              <Callout type="info" title="Custom proxy selected">Configure and operate the proxy outside coolify-rs.</Callout>
             </SettingsSection>
           {:else}
             <form
@@ -281,7 +281,7 @@
                       rows={10}
                       monospace
                       label="Custom error page (HTML)"
-                      placeholder="Leave empty to use the Coolify default error page."
+                      placeholder="Leave empty to use the coolify-rs default error page."
                       helper={`One self-contained HTML file (max ${data.error_page_kb} KB) with inline CSS and images. Visitors see it with a 503 status for unknown domains and for stopped, deploying or unhealthy resources. A Redirect URL takes priority over this page.`}
                       bind:value={form.customErrorPage}
                       error={error?.field('custom_error_page')}
@@ -328,9 +328,13 @@
                     </div>
                   {:else if form.proxySettings}
                     <div class="relative mt-4" aria-live="polite">
-                      <!-- svelte-ignore a11y_label_has_associated_control -->
-                      <label class="flex gap-1 items-center mb-1 text-sm font-medium text-black dark:text-white">Configuration file · {data.configuration_path}</label>
-                      <MonacoEditor bind:value={form.proxySettings} language="yaml" rows={30} readonly={!canEdit} />
+                      <div class="flex-1 form-control">
+                        <div class="mb-1.5 flex h-4 w-full items-center gap-1.5">
+                          <!-- svelte-ignore a11y_label_has_associated_control -->
+                          <label class="mb-0! flex items-center gap-1 text-sm font-medium leading-4">Configuration file · {data.configuration_path}</label>
+                        </div>
+                        <MonacoEditor bind:value={form.proxySettings} language="yaml" rows={30} readonly={!canEdit} />
+                      </div>
                     </div>
                   {/if}
                 </SettingsSection>
@@ -343,7 +347,7 @@
     {#if confirm === 'reset'}
       <ConfirmModal
         title="Reset Proxy Configuration?"
-        actions={['Reset the proxy configuration to Coolify defaults.', 'Remove custom ports, entrypoints, and other manual changes.']}
+        actions={['Reset the proxy configuration to coolify-rs defaults.', 'Remove custom ports, entrypoints, and other manual changes.']}
         confirmationText={f.name}
         confirmationLabel="Confirm by entering the server name"
         shortConfirmationLabel="Server Name"

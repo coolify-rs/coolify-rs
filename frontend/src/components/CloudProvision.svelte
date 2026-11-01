@@ -90,7 +90,7 @@
 <div class="w-full">
   {#if form && !selected}
     <div class="flex flex-col gap-6">
-      <SettingsSection title="{providerLabel} account" description="Choose the cloud credential Coolify should use for this server." flush>
+      <SettingsSection title="{providerLabel} account" description="Choose the cloud credential coolify-rs should use for this server." flush>
         {#if form.tokens.length === 0}
           <Empty title="No {providerLabel} tokens" description="Add an API token to continue provisioning." iconName="keys" size="sm">
             {#snippet contents()}

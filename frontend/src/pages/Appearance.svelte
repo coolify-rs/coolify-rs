@@ -1,7 +1,6 @@
 <script lang="ts">
   // Port of upstream livewire/profile/appearance.blade.php
-  // (components/theme-controls.blade.php) without the custom color theme
-  // and chart time settings, which coolify-rs has no use for yet.
+  // (components/theme-controls.blade.php) without the custom color theme.
   import Reicon from '../components/Reicon.svelte';
   import { layout, type Theme } from '../lib/layout.svelte';
 
@@ -14,6 +13,27 @@
     { value: 'system', label: 'System', description: 'Follow your operating system.', preview: 'bg-gradient-to-r from-white via-neutral-400 to-[#050505]' },
     { value: 'dark', label: 'Dark', description: 'Dark surfaces and soft contrast.', preview: 'bg-[#181818]' },
   ];
+  const chartOptions = [
+    { value: 'local', label: 'Your time', description: 'Show the time in the time zone of this browser.', lines: ['Oct 24, 12:30:33'] },
+    { value: 'utc', label: 'Your time and UTC', description: 'Also show the UTC time. Use it to compare with server logs.', lines: ['Your time: Oct 24, 12:30:33 GMT+2', 'UTC: Oct 24, 10:30:33 UTC'] },
+  ];
+  // `setChartTimes()` of layouts/base.blade.php; lib/charts.ts reads it for the tooltips.
+  function storedChartTimes(): string {
+    try {
+      return localStorage.getItem('chartTimes') === 'utc' ? 'utc' : 'local';
+    } catch {
+      return 'local';
+    }
+  }
+  let chartTimes = $state(storedChartTimes());
+  function setChartTimes(value: string) {
+    chartTimes = value;
+    try {
+      localStorage.setItem('chartTimes', value);
+    } catch {
+      // Kept for this page only.
+    }
+  }
   const widths = [
     { value: 'full', label: 'Full width', description: 'Use all available space for page content.' },
     { value: 'centered', label: 'Centered', description: 'Keep content centered at a comfortable maximum width.' },
@@ -156,6 +176,30 @@
               {/each}
             </div>
             {@render footer(o.label, o.description, layout.navItems === o.value)}
+          </button>
+        {/each}
+      </div>
+    </section>
+
+    <section class="application-settings-section">
+      <div class="application-settings-section-header">
+        <div>
+          <h2>Chart times</h2>
+          <p>Choose which times chart tooltips show.</p>
+        </div>
+      </div>
+      <div class="application-settings-section-body grid gap-3 sm:grid-cols-2">
+        {#each chartOptions as o (o.value)}
+          <button type="button" onclick={() => setChartTimes(o.value)} class="{card} {chartTimes === o.value ? selected : ''}">
+            <div class="flex h-20 items-center justify-center border-b border-neutral-200 bg-neutral-50 px-4 dark:border-white/[0.07] dark:bg-black/15">
+              <div class="rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-[11px] leading-4 dark:border-white/15 dark:bg-[#181818]">
+                <div class="text-black dark:text-fg">CPU: <span class="font-semibold">4.3%</span></div>
+                {#each o.lines as line (line)}
+                  <div class="text-neutral-500 dark:text-fg-dim">{line}</div>
+                {/each}
+              </div>
+            </div>
+            {@render footer(o.label, o.description, chartTimes === o.value)}
           </button>
         {/each}
       </div>

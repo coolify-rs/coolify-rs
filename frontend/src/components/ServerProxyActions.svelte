@@ -14,7 +14,8 @@
   import { session } from '../lib/session.svelte';
   import { router } from '../lib/router.svelte';
 
-  let { server }: { server: ServerTopbar } = $props();
+  // `mobile`: the copy below the desktop action HUD (`server-mobile-actions`), in the page heading.
+  let { server, mobile = false }: { server: ServerTopbar; mobile?: boolean } = $props();
   let open = $state(false);
   let confirm = $state<'restart' | 'stop' | null>(null);
   let root: HTMLDivElement | undefined = $state();
@@ -72,9 +73,7 @@
 
 <svelte:window onclick={(e) => open && root && !root.contains(e.target as Node) && (open = false)} onkeydown={(e) => e.key === 'Escape' && (open = false)} />
 
-{#if session.isAdmin}
-  <div use:teleport={'resource-action-hud-slot'} class="hidden xl:flex xl:w-auto xl:items-center">
-    <div class="resource-heading-navbar application-heading-actions flex w-auto min-w-0 items-center justify-end gap-1 overflow-visible">
+{#snippet splitAction()}
       <div class="split-action relative resource-heading-actions shrink-0" bind:this={root}>
         <button type="button" class="split-action-main" onclick={() => (canStop ? (confirm = 'restart') : act('start'))}>
           <Reicon name={canStop ? 'restart' : 'play-circle'} class="size-3.5" />
@@ -98,6 +97,14 @@
           </div>
         {/if}
       </div>
+{/snippet}
+
+{#if session.isAdmin && mobile}
+  {@render splitAction()}
+{:else if session.isAdmin}
+  <div use:teleport={'resource-action-hud-slot'} class="hidden xl:flex xl:w-auto xl:items-center">
+    <div class="resource-heading-navbar application-heading-actions flex w-auto min-w-0 items-center justify-end gap-1 overflow-visible">
+      {@render splitAction()}
     </div>
   </div>
 {/if}
@@ -107,7 +114,7 @@
     <div class="flex h-full min-h-0 flex-col gap-3">
       {#if server.isCoolifyHost}
         <div class="shrink-0 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
-          <span class="font-semibold">Note:</span> This is the localhost server where Coolify runs. During proxy restart, the connection may be temporarily lost. If logs stop updating, please refresh the browser after a few minutes.
+          <span class="font-semibold">Note:</span> This is the localhost server where coolify-rs runs. During proxy restart, the connection may be temporarily lost. If logs stop updating, please refresh the browser after a few minutes.
         </div>
       {/if}
       <div class="flex min-h-0 flex-1 flex-col">
@@ -129,7 +136,7 @@
 {:else if confirm === 'stop'}
   <ConfirmModal
     title="Confirm Proxy Stopping?"
-    actions={['The Coolify proxy will be stopped.', 'All resources hosted on this server will be inaccessible.']}
+    actions={['The coolify-rs proxy will be stopped.', 'All resources hosted on this server will be inaccessible.']}
     confirmWithText={false}
     step2ButtonText="Stop Proxy"
     onconfirm={() => act('stop')}

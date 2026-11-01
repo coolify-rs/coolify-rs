@@ -189,7 +189,7 @@
                   placeholder="Select an application"
                   searchPlaceholder="Search applications…"
                   searchEmptyText="No matching applications"
-                  helper="Docker Compose applications mount the volume from their compose file. Coolify shows the lines to add."
+                  helper="Docker Compose applications mount the volume from their compose file. coolify-rs shows the lines to add."
                   bind:value={applicationUuid}
                   error={connectError?.field('application_uuid')}
                 />
@@ -240,7 +240,7 @@
 
     <SettingsSection id="container-section" title="Container" description="Docker options and log forwarding for the database container.">
       <FormInput
-        helper="Add supported docker run options used when the container starts. Unsupported options can interfere with Coolify automation."
+        helper="Add supported docker run options used when the container starts. Unsupported options can interfere with coolify-rs automation."
         placeholder="--cap-add SYS_ADMIN --device=/dev/fuse"
         id="customDockerRunOptions"
         label="Custom Docker options"

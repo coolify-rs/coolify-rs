@@ -264,7 +264,7 @@
   };
 </script>
 
-<svelte:head><title>Metrics | Coolify</title></svelte:head>
+<svelte:head><title>Metrics | coolify-rs</title></svelte:head>
 
 {#snippet usageCell(percent: number | null, kind: string)}
   {@const level = pressureLevel(percent, kind)}
@@ -399,7 +399,7 @@
               <div class="flex flex-wrap items-center gap-x-2 text-[10px] text-neutral-500 dark:text-fg-dim">
                 <span>{sHealthy} healthy</span>
                 {#if sAttention > 0}<span class="text-orange-500 dark:text-warning">{sAttention} attention</span>{/if}
-                {#if sNoMetrics > 0}<span title="Coolify can reach these servers, but Sentinel did not return current metrics.">{sNoMetrics} no metrics</span>{/if}
+                {#if sNoMetrics > 0}<span title="coolify-rs can reach these servers, but Sentinel did not return current metrics.">{sNoMetrics} no metrics</span>{/if}
                 {#if sOffline > 0}<span class="text-red-500 dark:text-red-400">{sOffline} offline</span>{/if}
               </div>
             </div>
@@ -484,7 +484,7 @@
                 {#if !row.online}
                   <span class="table-badge table-badge-warning shrink-0">Offline</span>
                 {:else if !row.reporting}
-                  <span class="table-badge shrink-0" title="Coolify can reach this server, but Sentinel did not return current metrics.">No metrics</span>
+                  <span class="table-badge shrink-0" title="coolify-rs can reach this server, but Sentinel did not return current metrics.">No metrics</span>
                 {/if}
               </div>
               <div>{@render usageCell(row.cpu, 'cpu')}</div>

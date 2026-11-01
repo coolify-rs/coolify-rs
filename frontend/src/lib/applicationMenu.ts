@@ -148,7 +148,7 @@ export function applicationNavContext(
       labels
         .map((l) => items[l])
         .filter((e) => e.visible !== false)
-        .map(({ visible: _visible, ...rest }) => ({ ...rest, children: rest.active ? rest.children : undefined })),
+        .map(({ visible: _visible, ...rest }) => ({ ...rest, grouped: true, children: rest.active ? rest.children : undefined })),
     )
     .filter((g) => g.length > 0);
   return { label: 'Dashboard', backTitle: 'Back to the main menu', ariaLabel: 'Application settings', groups };

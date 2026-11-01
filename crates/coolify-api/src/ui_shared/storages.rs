@@ -353,6 +353,9 @@ async fn show(
         "build_pack": res.str("build_pack"),
         "supports_preview_suffix": res.git_based() && res.str("git_repository").is_some_and(|v| !v.is_empty()),
         "show_backup_action": backup_available,
+        // `method_exists($resource, 'isBackupSolutionAvailable') && $resource->isBackupSolutionAvailable()`.
+        "database_backup_available": matches!(res.class, Class::Database)
+            && !["standalone-redis", "standalone-keydb", "standalone-dragonfly"].contains(&res.type_name.as_str()),
         "preserve_repository": git,
         "host_path": dir,
         "default_volume_name": format!("{}-data", if name_slug.is_empty() { "volume".to_owned() } else { name_slug }),

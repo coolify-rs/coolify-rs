@@ -232,13 +232,13 @@
           <FormInput {disabled} id="name" label="Name" bind:value={form.name} error={err('name')} />
           {#if data.can_make_system_wide || !gitlab}
             <div class="lg:col-span-2 max-w-xs">
-              <Checkbox id="isSystemWide" {disabled} label="System wide" helper="If checked, this {name_} App will be available for everyone in this Coolify instance." bind:checked={form.isSystemWide} />
+              <Checkbox id="isSystemWide" {disabled} label="System wide" helper="If checked, this {name_} App will be available for everyone in this coolify-rs instance." bind:checked={form.isSystemWide} />
             </div>
           {/if}
           {#if form.isSystemWide}
             <div class="lg:col-span-2">
               <Callout type="warning" title="Shared with every team">
-                System-wide {name_} Apps are shared across all teams on this Coolify instance. Prefer team-specific apps when you need repository isolation.
+                System-wide {name_} Apps are shared across all teams on this coolify-rs instance. Prefer team-specific apps when you need repository isolation.
               </Callout>
             </div>
           {/if}
@@ -269,7 +269,7 @@
         </SettingsSubsection>
       </SettingsSection>
 
-      <SettingsSection id="connection-section" title="Connection" description="OAuth credentials and the endpoints Coolify uses to reach this source.">
+      <SettingsSection id="connection-section" title="Connection" description="OAuth credentials and the endpoints coolify-rs uses to reach this source.">
         <SettingsSubsection first title="OAuth credentials" helper={gitlab ? 'Application credentials from your GitLab OAuth application.' : 'Client credentials from your Gitea OAuth2 application.'}>
           <div class="grid gap-4 lg:grid-cols-2">
             <FormInput {disabled} id="clientId" label={gitlab ? 'Application ID' : 'Client ID'} bind:value={form.clientId} />
@@ -372,14 +372,14 @@
           <div class="mt-4 grid gap-4 lg:grid-cols-2">
             <div class="lg:col-span-2 text-[12px] text-neutral-500 dark:text-fg-dim">
               {gitlab
-                ? 'GitLab will redirect back to this Coolify URL. It must match the Callback URL on your GitLab OAuth Application exactly.'
-                : 'Gitea will redirect back to this Coolify URL. It must match the Redirect URI on your Gitea OAuth2 application exactly.'}
+                ? 'GitLab will redirect back to this coolify-rs URL. It must match the Callback URL on your GitLab OAuth Application exactly.'
+                : 'Gitea will redirect back to this coolify-rs URL. It must match the Redirect URI on your Gitea OAuth2 application exactly.'}
             </div>
             <div class="lg:col-span-2 max-w-md">
               <Listbox
                 id="use_custom_webhook_endpoint"
                 label="Webhook endpoint"
-                helper="Use a custom public URL when Coolify is behind a tunnel or reverse proxy."
+                helper="Use a custom public URL when coolify-rs is behind a tunnel or reverse proxy."
                 bind:value={useCustom}
                 onchange={persistRedirect}
                 options={[
@@ -418,7 +418,7 @@
                 <FormInput type="number" id="customPort" label="SSH port" bind:value={form.customPort} />
                 {#if data.can_make_system_wide || !gitlab}
                   <div class="max-w-xs lg:col-span-2">
-                    <Checkbox id="isSystemWide" label="System wide" helper="If checked, this {name_} App will be available for everyone in this Coolify instance." bind:checked={form.isSystemWide} />
+                    <Checkbox id="isSystemWide" label="System wide" helper="If checked, this {name_} App will be available for everyone in this coolify-rs instance." bind:checked={form.isSystemWide} />
                   </div>
                 {/if}
               </div>
@@ -429,8 +429,8 @@
 
       {#if saved.clientId}
         <SettingsSection title="Step 3 · Authorize with {name_}" description={gitlab
-            ? 'Authorize Coolify with your GitLab instance. The redirect URI must match the Callback URL configured in GitLab.'
-            : 'Authorize Coolify with your Gitea instance. The redirect URI must match the one configured in Gitea.'}>
+            ? 'Authorize coolify-rs with your GitLab instance. The redirect URI must match the Callback URL configured in GitLab.'
+            : 'Authorize coolify-rs with your Gitea instance. The redirect URI must match the one configured in Gitea.'}>
           <a href={oauthUrl} class="button button-highlighted">
             Connect to {name_}
             {@render externalLink()}

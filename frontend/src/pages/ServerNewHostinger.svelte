@@ -138,7 +138,7 @@
 >
   {#snippet children(form: CloudForm, refreshKeys)}
     <form onsubmit={submit} class="flex flex-col gap-6">
-      <SettingsSection title="Hostinger server" description="Choose the data center, plan, operating system, and Coolify SSH key.">
+      <SettingsSection title="Hostinger server" description="Choose the data center, plan, operating system, and coolify-rs SSH key.">
         {#snippet actions()}
           <button type="submit" class="button button-highlighted" disabled={!privateKey || busy}>
             Buy and create
@@ -154,7 +154,7 @@
         {/snippet}
         <div class="grid gap-4 lg:grid-cols-2">
           <div class="lg:col-span-2">
-            <FormInput id="server_name" label="Server name" helper="A friendly name shown in Coolify and used as the VPS hostname." bind:value={serverName} error={error?.field('server_name')} />
+            <FormInput id="server_name" label="Server name" helper="A friendly name shown in coolify-rs and used as the VPS hostname." bind:value={serverName} error={error?.field('server_name')} />
           </div>
           <Listbox
             id="selected_data_center_id"
@@ -194,7 +194,7 @@
             label="Operating system with application"
             disabled={!priceId}
             placeholder="Or select an operating system with an application"
-            helper="Replaces the operating system selected above. Applications and panels, such as another Coolify or CyberPanel, can conflict with the Coolify proxy on ports 80 and 443."
+            helper="Replaces the operating system selected above. Applications and panels, such as another coolify-rs or CyberPanel, can conflict with the coolify-rs proxy on ports 80 and 443."
             bind:value={appTemplate}
             onchange={appChanged}
             error={error?.field('selected_app_template_id')}

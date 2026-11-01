@@ -40,7 +40,7 @@
       ['permissionGroupKeys', JSON.stringify(permissions)],
       ['accountId', '*'],
       ['zoneId', 'all'],
-      ['name', tunnel ? 'Coolify DNS and Tunnel Management' : 'Coolify DNS Management'],
+      ['name', tunnel ? 'coolify-rs DNS and Tunnel Management' : 'coolify-rs DNS Management'],
     ]
       .map(([k, v]) => `${k}=${encodeURIComponent(v).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`)
       .join('&');
@@ -309,7 +309,7 @@
         {:else}
           <div class={box}>
             <div class="font-medium text-black dark:text-fg">Capability: Secrets (read-only)</div>
-            <p>Coolify reads secrets from this provider at deployment time and writes them into the generated <code>.{'env'}</code> file. Secret values are never stored in the Coolify database.</p>
+            <p>coolify-rs reads secrets from this provider at deployment time and writes them into the generated <code>.{'env'}</code> file. Secret values are never stored in the coolify-rs database.</p>
           </div>
         {/if}
 
@@ -323,7 +323,7 @@
                 <li>Account - Cloudflare Tunnel - Edit</li>
               {/if}
             </ul>
-            <p>Limit zone resources to the zones Coolify should manage.</p>
+            <p>Limit zone resources to the zones coolify-rs should manage.</p>
             <a href={templateUrl(capabilities)} target="_blank" rel="noopener noreferrer" class="button mt-2">
               Create token at Cloudflare
               <svg class="inline-flex w-3 h-3 dark:text-neutral-400 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -438,7 +438,7 @@
         {:else}
           <div class={box}>
             <div class="font-medium text-black dark:text-fg">Capability: Secrets (read-only)</div>
-            <p>Coolify reads secrets from this provider at deployment time. Secret values are never stored in the Coolify database.</p>
+            <p>coolify-rs reads secrets from this provider at deployment time. Secret values are never stored in the coolify-rs database.</p>
           </div>
         {/if}
 

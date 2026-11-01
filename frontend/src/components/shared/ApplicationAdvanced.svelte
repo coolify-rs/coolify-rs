@@ -115,7 +115,7 @@
       <SettingsSection id="advanced-build-section" title="Build & deploy" description="How images are built, how deployments start, and how the repository is cloned.">
         <div class="grid w-full gap-4 sm:grid-cols-2">
           <Listbox id="disableBuildCache" label="Build cache" helper="Disabling the cache forces a completely fresh Docker build on every deployment." disabled={!canUpdate} bind:value={s.disable_build_cache} onchange={instantSave} options={[{ value: false, label: 'Use Docker build cache' }, { value: true, label: 'Rebuild from scratch every time' }]} />
-          <Listbox id="injectBuildArgsToDockerfile" label="Build arguments" helper="When injected automatically, Coolify adds ARG statements to your Dockerfile for build-time variables. Manage them manually to preserve Docker build cache." disabled={!canUpdate} bind:value={s.inject_build_args_to_dockerfile} onchange={instantSave} options={[{ value: true, label: 'Inject build args automatically' }, { value: false, label: 'Managed manually in Dockerfile' }]} />
+          <Listbox id="injectBuildArgsToDockerfile" label="Build arguments" helper="When injected automatically, coolify-rs adds ARG statements to your Dockerfile for build-time variables. Manage them manually to preserve Docker build cache." disabled={!canUpdate} bind:value={s.inject_build_args_to_dockerfile} onchange={instantSave} options={[{ value: true, label: 'Inject build args automatically' }, { value: false, label: 'Managed manually in Dockerfile' }]} />
           <Listbox id="includeSourceCommitInBuild" label="Source commit availability" helper="SOURCE_COMMIT (git commit hash) is always available at runtime. Making it available during build invalidates the cache on every commit." disabled={!canUpdate} bind:value={s.include_source_commit_in_build} onchange={instantSave} options={[{ value: false, label: 'Runtime only (preserves cache)' }, { value: true, label: 'Available during build' }]} />
         </div>
         {#if d.git_based}
@@ -135,8 +135,8 @@
         {#if d.build_pack === 'dockercompose'}
           <SettingsSubsection id="advanced-compose-section" title="Docker compose" helper="Advanced behavior for compose-based deployments.">
             <div class="grid w-full gap-4 sm:grid-cols-2">
-              <Listbox id="isRawComposeDeploymentEnabled" label="Compose deployment" helper="WARNING: Advanced use cases only. In raw mode your compose file is deployed as-is. Nothing is modified by Coolify and you need to configure the proxy parts. More info in the <a class='underline dark:text-white' href='https://coolify.io/docs/knowledge-base/docker/compose#raw-docker-compose-deployment'>documentation</a>." disabled={!canUpdate} bind:value={s.is_raw_compose_deployment_enabled} onchange={instantSave} options={[{ value: false, label: 'Managed by Coolify' }, { value: true, label: 'Raw (deploy file as-is)' }]} />
-              <Listbox id="isConnectToDockerNetworkEnabled" label="Predefined network" helper="By default a compose resource only gets its own internal network. Connecting to a Coolify predefined network may require different internal DNS names. More info <a class='underline dark:text-white' target='_blank' href='https://coolify.io/docs/knowledge-base/docker/compose#connect-to-predefined-networks'>here</a>." disabled={!canUpdate} bind:value={s.connect_to_docker_network} onchange={instantSave} options={[{ value: false, label: 'Isolated network only' }, { value: true, label: 'Connect to predefined network' }]} />
+              <Listbox id="isRawComposeDeploymentEnabled" label="Compose deployment" helper="WARNING: Advanced use cases only. In raw mode your compose file is deployed as-is. Nothing is modified by coolify-rs and you need to configure the proxy parts. More info in the <a class='underline dark:text-white' href='https://coolify.io/docs/knowledge-base/docker/compose#raw-docker-compose-deployment'>documentation</a>." disabled={!canUpdate} bind:value={s.is_raw_compose_deployment_enabled} onchange={instantSave} options={[{ value: false, label: 'Managed by coolify-rs' }, { value: true, label: 'Raw (deploy file as-is)' }]} />
+              <Listbox id="isConnectToDockerNetworkEnabled" label="Predefined network" helper="By default a compose resource only gets its own internal network. Connecting to a coolify-rs predefined network may require different internal DNS names. More info <a class='underline dark:text-white' target='_blank' href='https://coolify.io/docs/knowledge-base/docker/compose#connect-to-predefined-networks'>here</a>." disabled={!canUpdate} bind:value={s.connect_to_docker_network} onchange={instantSave} options={[{ value: false, label: 'Isolated network only' }, { value: true, label: 'Connect to predefined network' }]} />
             </div>
           </SettingsSubsection>
         {/if}
@@ -163,7 +163,7 @@
             {#if d.build_pack !== 'dockercompose'}
               <FormInput type="number" min="0" max="300" id="rollingUpdateDrainSeconds" label="Rolling update drain time (seconds)" helper="How long to wait after the new container is healthy before the old containers stop during a rolling update. The proxy needs this time to send traffic to the new container. Saved automatically. Default: 5 seconds. Range: 0-300 seconds. Set to 0 to turn off the wait." disabled={!canUpdate} bind:value={drain} error={errors.rollingUpdateDrainSeconds?.[0]} onchange={() => save('drain', { rollingUpdateDrainSeconds: drain })} />
             {/if}
-            <FormInput type="number" min="0" id="maxRestartCount" label="Max restart count" helper="Maximum number of restarts before Coolify automatically stops the application and sends a notification. Saved automatically. Set to 0 to disable the limit." disabled={!canUpdate} bind:value={maxRestart} onchange={() => save('max_restart', { maxRestartCount: maxRestart })} />
+            <FormInput type="number" min="0" id="maxRestartCount" label="Max restart count" helper="Maximum number of restarts before coolify-rs automatically stops the application and sends a notification. Saved automatically. Set to 0 to disable the limit." disabled={!canUpdate} bind:value={maxRestart} onchange={() => save('max_restart', { maxRestartCount: maxRestart })} />
           </div>
         </SettingsSubsection>
         <SettingsSubsection id="advanced-logs-section" title="Logs" helper="Forward container logs to an external endpoint.">
@@ -248,7 +248,7 @@
             {/if}
           </div>
         {:else}
-          <Empty size="sm" title="Proxy behavior is managed through labels" description="Container labels are managed manually for this application. Switch label management back to Coolify to configure the proxy here." iconName="globe">
+          <Empty size="sm" title="Proxy behavior is managed through labels" description="Container labels are managed manually for this application. Switch label management back to coolify-rs to configure the proxy here." iconName="globe">
             {#snippet contents()}
               <a class="button" href="{base}#container-labels-section">Go to Container labels</a>
             {/snippet}

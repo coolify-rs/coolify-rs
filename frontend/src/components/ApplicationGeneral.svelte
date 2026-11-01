@@ -146,7 +146,7 @@
   );
   const buildServerFallback = $derived(
     appState.build_server_fallback
-      ? 'If no usable build server is available, Coolify builds on the deployment server.'
+      ? 'If no usable build server is available, coolify-rs builds on the deployment server.'
       : 'If no usable build server is available, the deployment fails.',
   );
   const NIXPACKS_HELPER = (pack: string) => `If you modify this, you probably need to have a ${pack === 'railpack' ? 'railpack.json' : 'nixpacks.toml'}`;
@@ -408,10 +408,14 @@
 </script>
 
 {#snippet composeEditor(title: string, content: string)}
-          <div class="mb-1.5 flex h-4 w-full items-center gap-1.5">
-            <span class="flex items-center gap-1.5 text-sm font-medium leading-4">{title}<Helper helper="You need to modify the docker compose file in the git repository." /></span>
+          <div class="flex-1 form-control">
+            <div class="mb-1.5 flex h-4 w-full items-center gap-1.5">
+              <!-- svelte-ignore a11y_label_has_associated_control -->
+              <label class="mb-0! flex items-center gap-1 text-sm font-medium leading-4">{title}</label>
+              <Helper helper="You need to modify the docker compose file in the git repository." />
+            </div>
+            {#key content}<div class="font-mono"><MonacoEditor value={content} language="yaml" readonly rows={10} /></div>{/key}
           </div>
-          {#key content}<div class="font-mono"><MonacoEditor value={content} language="yaml" readonly rows={10} /></div>{/key}
         {/snippet}
 
 <div>
@@ -426,8 +430,9 @@
     <div class="application-settings-grid flex flex-col gap-6">
       <SettingsSection
         id="application-details-section"
+        class="application-details-card"
         title="Application details"
-        description="Name the application and choose the build strategy Coolify should use to deploy it."
+        description="Name the application and choose the build strategy coolify-rs should use to deploy it."
       >
         {#snippet actions()}
           {#if buildPack === 'dockercompose' && record.docker_compose_raw && canUpdate}
@@ -491,7 +496,7 @@
               <Empty
                 size="sm"
                 title="Authentication is managed through labels"
-                description="Authentication is managed via manual proxy labels. Switch label management back to Coolify to configure it here."
+                description="Authentication is managed via manual proxy labels. Switch label management back to coolify-rs to configure it here."
                 iconName="admin"
               >
                 {#snippet contents()}
@@ -508,7 +513,7 @@
               <Listbox
                 id="isHttpBasicAuthEnabled"
                 label="Method"
-                helper="HTTP Basic Authentication adds the required authentication labels to the proxy. Coolify currently supports a single username and password."
+                helper="HTTP Basic Authentication adds the required authentication labels to the proxy. coolify-rs currently supports a single username and password."
                 disabled={!canUpdate}
                 bind:value={basicAuth}
                 onchange={() => instantSave({ is_http_basic_auth_enabled: basicAuth })}
@@ -623,7 +628,7 @@
       <SettingsSection
         id="build-pipeline-section"
         title="Build & deploy"
-        description="How Coolify builds the application, where it pushes the image, and the commands it runs around each deployment."
+        description="How coolify-rs builds the application, where it pushes the image, and the commands it runs around each deployment."
       >
         {#if !hasDockerfile && storedPack !== 'dockerimage'}
           <div class="application-build-pack-options mb-5 border-b border-neutral-200 pb-5 dark:border-white/[0.07]">
@@ -832,7 +837,7 @@
                   <Listbox
                     id="isBuildServerEnabled"
                     label="Builder selection"
-                    helper="Build your application on a dedicated build server. If several build servers are connected, Coolify picks an available one automatically. {buildServerFallback} More info in the <a href='https://coolify.io/docs/knowledge-base/server/build-server' class='underline' target='_blank'>documentation</a>."
+                    helper="Build your application on a dedicated build server. If several build servers are connected, coolify-rs picks an available one automatically. {buildServerFallback} More info in the <a href='https://coolify.io/docs/knowledge-base/server/build-server' class='underline' target='_blank'>documentation</a>."
                     disabled={!canUpdate}
                     bind:value={buildServer}
                     onchange={async () => {
@@ -907,9 +912,11 @@
         {/if}
         {#if hasDockerfile}
           <div class="mt-6">
-            <div class="w-full">
-              <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="flex items-center gap-1 mb-1 text-sm font-medium">Dockerfile</label>
+            <div class="flex-1 form-control">
+              <div class="mb-1.5 flex h-4 w-full items-center gap-1.5">
+                <!-- svelte-ignore a11y_label_has_associated_control -->
+                <label class="mb-0! flex items-center gap-1 text-sm font-medium leading-4">Dockerfile</label>
+              </div>
               <MonacoEditor language="dockerfile" rows={6} readonly={!canUpdate} bind:value={form.dockerfile} />
             </div>
           </div>
@@ -1027,7 +1034,7 @@
             label="Custom Docker options"
             id="customDockerRunOptions"
             placeholder="--cap-add SYS_ADMIN --device=/dev/fuse --security-opt apparmor:unconfined --ulimit nofile=1024:1024 --tmpfs /run:rw,noexec,nosuid,size=65536k --hostname=myapp"
-            helper="You can add custom docker run options that will be used when your container is started.<br>Note: Not all options are supported, as they could mess up Coolify's automation and could cause bad experience for users.<br><br>Check the <a class='underline dark:text-white' href='https://coolify.io/docs/knowledge-base/docker/custom-commands'>docs.</a>"
+            helper="You can add custom docker run options that will be used when your container is started.<br>Note: Not all options are supported, as they could mess up coolify-rs's automation and could cause bad experience for users.<br><br>Check the <a class='underline dark:text-white' href='https://coolify.io/docs/knowledge-base/docker/custom-commands'>docs.</a>"
             disabled={!canUpdate}
             bind:value={form.customDockerRunOptions}
             error={err('custom_docker_run_options')}
@@ -1037,12 +1044,12 @@
               <Listbox
                 id="isContainerLabelReadonlyEnabled"
                 label="Label management"
-                helper="When Coolify manages the labels, they are regenerated automatically and manual edits can be lost.<br><br>If you edit them yourself, be careful: a wrong label set can break the proxy configuration after a restart (you can always reset to the Coolify defaults)."
+                helper="When coolify-rs manages the labels, they are regenerated automatically and manual edits can be lost.<br><br>If you edit them yourself, be careful: a wrong label set can break the proxy configuration after a restart (you can always reset to the coolify-rs defaults)."
                 disabled={!canUpdate}
                 bind:value={labelsManaged}
                 onchange={() => instantSave({ is_container_label_readonly_enabled: labelsManaged })}
                 options={[
-                  { value: true, label: 'Managed by Coolify (auto-generated)' },
+                  { value: true, label: 'Managed by coolify-rs (auto-generated)' },
                   { value: false, label: 'Managed manually (edit labels yourself)' },
                 ]}
               />
@@ -1172,7 +1179,7 @@
 
 {#if resetting}
   <ConfirmModal
-    title="Confirm Labels Reset to Coolify Defaults?"
+    title="Confirm Labels Reset to coolify-rs Defaults?"
     actions={['All your custom proxy labels will be lost.', 'Proxy labels (traefik, caddy, etc) will be reset to the coolify defaults.']}
     confirmationText={str(record.fqdn) + '/'}
     confirmationLabel="Please confirm the execution of the actions by entering the Application URL below"

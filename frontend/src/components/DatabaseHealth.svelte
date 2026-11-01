@@ -72,7 +72,7 @@
 
     {#if !enabled}
       <Callout type="warning" title="Healthcheck disabled">
-        Docker is not running a healthcheck probe, so Coolify cannot report a healthy or unhealthy state.
+        Docker is not running a healthcheck probe, so coolify-rs cannot report a healthy or unhealthy state.
       </Callout>
     {/if}
 

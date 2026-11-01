@@ -1063,10 +1063,18 @@ fn headline(v: &str) -> String {
     words
         .iter()
         .map(|w| {
-            let mut chars = w.chars();
-            chars.next().map_or_else(String::new, |f| {
-                f.to_uppercase().collect::<String>() + chars.as_str()
-            })
+            // `Str::title`: a letter after anything but a letter is capitalized (`n8n` is `N8N`).
+            let mut out = String::new();
+            let mut after_letter = false;
+            for c in w.chars() {
+                if after_letter {
+                    out.push(c);
+                } else {
+                    out.extend(c.to_uppercase());
+                }
+                after_letter = c.is_alphabetic();
+            }
+            out
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -1117,7 +1125,20 @@ pub async fn service_templates(State(_state): State<AppState>) -> ApiResult {
         }));
     }
     categories.sort_by_key(|c| c.to_lowercase());
-    Ok(ok(json!({"services": services, "categories": categories})).into_response())
+    // `serviceTemplatesLastUpdated()`: the file's time; here the templates are part of the binary.
+    let last_updated = std::env::current_exe()
+        .and_then(std::fs::metadata)
+        .and_then(|m| m.modified())
+        .ok()
+        .map(|t| {
+            chrono::DateTime::<chrono::Utc>::from(t)
+                .format("%b %-d, %Y %H:%M")
+                .to_string()
+        });
+    Ok(
+        ok(json!({"services": services, "categories": categories, "last_updated": last_updated}))
+            .into_response(),
+    )
 }
 
 /// `CarbonImmutable::parse($timestamp)->format('M j, Y H:i')`.
@@ -1158,4 +1179,17 @@ pub async fn environment_services(
         }));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod headline_tests {
+    use super::headline;
+
+    #[test]
+    fn title_cases_like_str_headline() {
+        assert_eq!(headline("n8n"), "N8N");
+        assert_eq!(headline("9router"), "9Router");
+        assert_eq!(headline("n8n-with-postgresql"), "N8N With Postgresql");
+        assert_eq!(headline("wordpress"), "Wordpress");
+    }
 }

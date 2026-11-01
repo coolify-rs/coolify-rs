@@ -123,7 +123,7 @@
               <div class="mt-6 flex flex-col gap-2">
                 <div>
                   <h4 class="text-sm font-medium text-neutral-950 dark:text-fg">acme.json backups</h4>
-                  <p class="mt-1 text-xs text-neutral-500 dark:text-fg-dim">Coolify saves a copy of acme.json before it changes the file and keeps the last {keep} copies.</p>
+                  <p class="mt-1 text-xs text-neutral-500 dark:text-fg-dim">coolify-rs saves a copy of acme.json before it changes the file and keeps the last {keep} copies.</p>
                 </div>
                 <div class="overflow-hidden rounded-lg ring-1 ring-neutral-200 dark:ring-white/[0.08]">
                   <div class="overflow-x-auto">

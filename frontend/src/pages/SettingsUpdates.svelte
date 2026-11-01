@@ -74,7 +74,7 @@
         }}
       >
         <UnsavedBar {dirty} {saving} onsave={() => run('submit')} onreset={() => form && (form = { ...saved })} />
-        <SettingsSection title="Updates" description="Install the latest Coolify version manually when an update is available.">
+        <SettingsSection title="Updates" description="Install the latest coolify-rs version manually when an update is available.">
           {#snippet actions()}
             <UpgradeBadge fullButton state={upgrade} />
             <button type="button" class="button" onclick={() => run('check')}>

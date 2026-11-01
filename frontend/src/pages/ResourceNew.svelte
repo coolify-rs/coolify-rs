@@ -268,6 +268,7 @@
   // `filteredServices`: the templates of `Select::loadServices`, by search and category.
   let services = $state<ServiceTemplate[]>([]);
   let categories = $state<string[]>([]);
+  let servicesLastUpdated = $state<string | null>(null);
   let category = $state('');
   $effect(() => {
     servicesApi
@@ -275,6 +276,7 @@
       .then((r) => {
         services = r.services;
         categories = r.categories;
+        servicesLastUpdated = r.last_updated;
       })
       .catch(() => {});
   });
@@ -680,6 +682,13 @@
                     <Reicon name="layers" class="size-4 text-neutral-400 dark:text-fg-faint" />
                     <h2>Services</h2>
                   </div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    {#if servicesLastUpdated}
+                      <div class="text-[11px] text-neutral-500 dark:text-fg-faint">
+                        Updated <span>{servicesLastUpdated}</span>
+                      </div>
+                    {/if}
+                  </div>
                 </div>
                 <div class="application-settings-section-body">
                   <Callout type="info" title="Trademarks policy" class="mb-4">
@@ -733,7 +742,7 @@
                           {/if}
                         </div>
                         <p class="mt-3 line-clamp-2 text-[12px] leading-5 text-neutral-600 dark:text-fg-dim">
-                          {service.slogan || service.description || 'Deploy this service with a ready-to-use Coolify template.'}
+                          {service.slogan || service.description || 'Deploy this service with a ready-to-use coolify-rs template.'}
                         </p>
                         <div class="mt-auto flex items-center gap-1.5 border-t border-neutral-200 pt-3 dark:border-white/[0.07]">
                           <a

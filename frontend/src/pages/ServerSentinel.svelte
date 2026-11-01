@@ -118,17 +118,17 @@
                         <a class="font-medium underline underline-offset-2" href="/server/{uuid}/sentinel/logs" use:link>Open Sentinel logs</a>
                         and review recent connection or push errors.
                       </li>
-                      <li>Confirm that the Coolify URL and Sentinel token match this configuration.</li>
+                      <li>Confirm that the coolify-rs URL and Sentinel token match this configuration.</li>
                     </ul>
                     {#if data.is_localhost}
-                      <p>Sync Sentinel to recreate it on the Coolify Docker network.</p>
+                      <p>Sync Sentinel to recreate it on the coolify-rs Docker network.</p>
                     {:else}
                       <div class="space-y-2">
-                        <p>The remote server needs outbound access to this Coolify URL. Sentinel reporting does not require an inbound listening port.</p>
+                        <p>The remote server needs outbound access to this coolify-rs URL. Sentinel reporting does not require an inbound listening port.</p>
                         {#if url}
                           <p>From the remote server, test <code class="break-all">curl -fsS {shellArg(`${url.replace(/\/+$/, '')}/api/health`)}</code>.</p>
                         {:else}
-                          <p>Set a reachable Coolify URL before syncing Sentinel.</p>
+                          <p>Set a reachable coolify-rs URL before syncing Sentinel.</p>
                         {/if}
                         <p>Check DNS, TLS certificates, outbound firewall rules, and proxy settings.</p>
                       </div>
@@ -136,7 +136,7 @@
                   </div>
                 </Callout>
               {:else if data.status === 'in_sync'}
-                <p class="text-sm text-neutral-500 dark:text-fg-dim">Sentinel is connected and reporting server health to this Coolify instance.</p>
+                <p class="text-sm text-neutral-500 dark:text-fg-dim">Sentinel is connected and reporting server health to this coolify-rs instance.</p>
               {:else if data.status === 'restarting'}
                 <p class="text-sm text-neutral-500 dark:text-fg-dim">Sentinel is restarting.</p>
               {:else}
@@ -145,7 +145,7 @@
             </SettingsSection>
 
             {#if data.enabled}
-              <SettingsSection id="server-sentinel-connection-section" title="Connection" description="Configure how Sentinel authenticates with and reports to Coolify.">
+              <SettingsSection id="server-sentinel-connection-section" title="Connection" description="Configure how Sentinel authenticates with and reports to coolify-rs.">
                 {#snippet actions()}
                   <div class="flex items-center gap-2">
                     {#if canEdit}
@@ -155,7 +155,7 @@
                   </div>
                 {/snippet}
                 <div class="grid gap-4 lg:grid-cols-2">
-                  <FormInput disabled={!canEdit} id="sentinelCustomUrl" required label="Coolify URL" helper="Public URL used by Sentinel to reach this Coolify instance." bind:value={url} error={error?.field('sentinel_custom_url')} />
+                  <FormInput disabled={!canEdit} id="sentinelCustomUrl" required label="coolify-rs URL" helper="Public URL used by Sentinel to reach this coolify-rs instance." bind:value={url} error={error?.field('sentinel_custom_url')} />
                   <FormInput disabled={!canEdit} type="password" id="sentinelToken" label="Sentinel token" required helper="Authentication token used by Sentinel." bind:value={token} error={error?.field('sentinel_token')} />
                 </div>
               </SettingsSection>
@@ -171,12 +171,12 @@
   <ConfirmModal
     title="Restore default Sentinel configuration?"
     actions={[
-      'Restore the generated Coolify URL and default collection settings.',
+      'Restore the generated coolify-rs URL and default collection settings.',
       'Clear debug logging and the development image override.',
       'The Sentinel token and metrics setting will be preserved.',
       'Restart Sentinel to apply the restored configuration.',
     ]}
-    warningMessage="Your custom Sentinel configuration will be replaced with Coolify defaults."
+    warningMessage="Your custom Sentinel configuration will be replaced with coolify-rs defaults."
     confirmWithText={false}
     step2ButtonText="Restore defaults"
     onconfirm={() => call('restore', 'Default Sentinel configuration restored. Restarting Sentinel.')}

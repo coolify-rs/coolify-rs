@@ -120,7 +120,7 @@
       onsave={submit}
       onreset={() => (form = JSON.parse(baseline))}
     />
-    <SettingsSection id="task-configuration-section" title="Task configuration" description="Configure when this task runs and which command Coolify executes.">
+    <SettingsSection id="task-configuration-section" title="Task configuration" description="Configure when this task runs and which command coolify-rs executes.">
       {#snippet actions()}
         {#if isRunning && canUpdate}
           <button type="button" class="button" onclick={() => run(() => scheduledTasksUi.execute(kind, uuid, task.uuid))}>Execute now</button>

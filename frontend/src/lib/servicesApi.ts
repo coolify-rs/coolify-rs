@@ -185,7 +185,7 @@ const base = (uuid: string) => `/ui/services/${encodeURIComponent(uuid)}`;
 const part = (uuid: string, resource: string) => `${base(uuid)}/resources/${encodeURIComponent(resource)}`;
 
 export const servicesApi = {
-  templates: () => request<{ services: ServiceTemplate[]; categories: string[] }>('GET', '/ui/service-templates'),
+  templates: () => request<{ services: ServiceTemplate[]; categories: string[]; last_updated: string | null }>('GET', '/ui/service-templates'),
   create: (body: { project_uuid: string; environment_uuid: string; destination_uuid: string; type: string }) =>
     request<{ uuid: string }>('POST', '/ui/services', body),
   page: (uuid: string) => request<ServicePage>('GET', base(uuid)),
@@ -222,7 +222,7 @@ export const servicesApi = {
   removeDomain: (uuid: string, body: Record<string, unknown>) => request<DomainAnswer>('DELETE', `${base(uuid)}/domains`, body),
   domainSettings: (uuid: string, body: Record<string, unknown>) =>
     request<{ message: string }>('POST', `${base(uuid)}/domains/settings`, body),
-  generateDomain: (uuid: string) => request<{ parts: DomainParts }>('POST', `${base(uuid)}/domains/generate`, {}),
+  generateDomain: (uuid: string, appId?: number | null) => request<{ parts: DomainParts }>('POST', `${base(uuid)}/domains/generate`, appId ? { app_id: appId } : {}),
   storages: (uuid: string) => request<{ parts: ServiceStoragePart[] }>('GET', `${base(uuid)}/storages`),
   saveFile: (uuid: string, id: number, content: string | null) =>
     request<{ message: string }>('PATCH', `${base(uuid)}/file-storages/${id}`, { content }),
@@ -241,7 +241,7 @@ export function formatContainerStatus(status: string | null | undefined): string
     v
       .replace(/[_-]+/g, ' ')
       .trim()
-      .replace(/\b\w/g, (c) => c.toUpperCase());
+      .replace(/(^|[^a-zA-Z])([a-z])/g, (_, before, c) => before + c.toUpperCase());
   if (s.includes('(') || parts.length === 1) return head(s);
   const rest = parts.slice(1).filter((p) => p !== 'excluded');
   if (parts.includes('excluded')) return `${head(parts[0])}${rest.length ? ` (${rest[0]})` : ''} (excluded)`;

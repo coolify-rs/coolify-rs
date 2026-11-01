@@ -77,7 +77,7 @@
 <ServerFrame {uuid} active="private-key" title="Private Key" onloaded={load}>
   {#snippet children()}
     <div class="application-settings-form flex w-full flex-col gap-6">
-      <SettingsSection id="server-private-keys-section" title="Private key" description="Choose the SSH key Coolify uses to connect to this server." flush>
+      <SettingsSection id="server-private-keys-section" title="Private key" description="Choose the SSH key coolify-rs uses to connect to this server." flush>
         {#snippet actions()}
           <div class="flex items-center gap-2">
             <button type="button" class="button" disabled={!canEdit} onclick={checkConnection}>

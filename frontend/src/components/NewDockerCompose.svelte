@@ -36,8 +36,12 @@
         <button type="submit" class="button button-highlighted" disabled={saving}>Create service</button>
       </div>
       <div class="application-settings-section-body">
-        <label class="flex items-center gap-1 mb-1 text-sm font-medium" for="dockerComposeRaw">Docker Compose file</label>
-        <MonacoEditor language="yaml" rows={20} bind:value={dockerComposeRaw} />
+        <div class="flex-1 form-control">
+          <div class="mb-1.5 flex h-4 w-full items-center gap-1.5">
+            <label class="mb-0! flex items-center gap-1 text-sm font-medium leading-4" for="dockerComposeRaw">Docker Compose file</label>
+          </div>
+          <MonacoEditor language="yaml" rows={20} bind:value={dockerComposeRaw} />
+        </div>
       </div>
     </section>
   </form>

@@ -96,8 +96,8 @@ export function navigationItems(c: NavContext, teamId: number | undefined): Sear
     out.push(
       nav('Settings', 'Instance settings and configuration', '/settings', 'settings general configuration instance url domain name timezone public ip https redirect'),
       nav('Advanced Settings', 'Registration, API access, MCP server, DNS validation and telemetry', '/settings/advanced', 'settings advanced registration api access allowed ips mcp server dns validation custom dns domain connect confirmation telemetry sponsorship cdn'),
-      nav('Update Settings', 'Configure Coolify auto updates', '/settings/updates', 'settings updates auto update upgrade version frequency'),
-      nav('Instance Backup', 'Back up the Coolify instance database', '/settings/backup', 'settings instance backup coolify database restore'),
+      nav('Update Settings', 'Configure coolify-rs auto updates', '/settings/updates', 'settings updates auto update upgrade version frequency'),
+      nav('Instance Backup', 'Back up the coolify-rs instance database', '/settings/backup', 'settings instance backup coolify database restore'),
       nav('Instance Email', 'Configure SMTP or Resend for system emails', '/settings/email', 'settings instance email smtp resend transactional mail'),
       nav('Authentication', 'Configure OAuth login providers', '/settings/oauth', 'settings authentication oauth sso login providers github google gitlab azure'),
     );

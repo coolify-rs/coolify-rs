@@ -218,9 +218,11 @@
           </span>
         </button>
       {/if}
+      <div class="relative h-auto w-auto">
       <button type="button" data-env-settings-trigger class="icon-button shrink-0" title="Edit environment variable" aria-label="Edit environment variable" onclick={openEditor}>
         <Reicon name="settings" class="size-3.5" />
       </button>
+      </div>
     </div>
   </div>
 </div>
@@ -283,7 +285,7 @@
 
       {#if legacy}
         <Callout type="warning" title="Old escaping">
-          This variable was saved before Coolify passed exact values, so the container gets a
+          This variable was saved before coolify-rs passed exact values, so the container gets a
           changed value (for example, with extra backslashes or quotes). To pass the exact value,
           delete this variable and add it again, then restart. If a database already uses this
           value as a password, update the password in the database too.

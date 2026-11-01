@@ -100,7 +100,7 @@
             monospace
             disabled={!data.can_update}
             label="Custom maintenance page (HTML)"
-            placeholder="Leave empty to use the Coolify default maintenance page."
+            placeholder="Leave empty to use the coolify-rs default maintenance page."
             helper="One self-contained HTML file (max 1024 KB) with inline CSS and images."
             bind:value={page}
           />

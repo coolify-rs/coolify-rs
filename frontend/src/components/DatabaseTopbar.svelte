@@ -38,7 +38,7 @@
   onkeydown={(e) => e.key === 'Escape' && (open = false)}
 />
 
-<div class="flex min-w-0 items-center gap-0.5 text-[13px]">
+<div class="ml-0.5 flex min-w-0 items-center gap-0.5 text-[13px]">
   <span class="shrink-0 px-0.5 text-neutral-300 dark:text-fg-faint">/</span>
   <div class="relative min-w-0 shrink" bind:this={root}>
     <div class="flex h-8 min-w-0 items-center gap-1">

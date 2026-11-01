@@ -133,7 +133,7 @@
     >
       <UnsavedBar {dirty} {saving} onsave={submit} onreset={() => (form = { ...saved })} />
 
-      <SettingsSection title="Repository" description="Configure the Git repository, branch, and commit Coolify deploys.">
+      <SettingsSection title="Repository" description="Configure the Git repository, branch, and commit coolify-rs deploys.">
         {#snippet actions()}
           <div class="flex flex-wrap items-center gap-2">
             <a target="_blank" class="button" href={data?.branch_location ?? ''}>
@@ -173,7 +173,7 @@
     </form>
 
     {#if data.private_key_id != null}
-      <SettingsSection title="Deploy key" description="The SSH key Coolify uses to clone this private repository.">
+      <SettingsSection title="Deploy key" description="The SSH key coolify-rs uses to clone this private repository.">
         <div
           class="mb-4 flex items-center justify-between gap-3 rounded-lg bg-neutral-50 px-3 py-2.5 ring-1 ring-neutral-200 dark:bg-white/[0.05] dark:ring-white/[0.07]"
         >
@@ -197,7 +197,7 @@
         {/if}
       </SettingsSection>
     {:else if canUpdate}
-      <SettingsSection title="Git source" description="Switch the Git provider App Coolify uses to clone this repository.">
+      <SettingsSection title="Git source" description="Switch the Git provider App coolify-rs uses to clone this repository.">
         <div class="grid gap-2 sm:grid-cols-2">
           {#if data.current_source}
             <div

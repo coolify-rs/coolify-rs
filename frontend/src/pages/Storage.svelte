@@ -199,6 +199,17 @@
   <Empty title="Not found" description="This S3 storage does not exist." iconName="storages" />
 {:else if data && form}
   <div>
+    <!-- x-dashboard.navbar :mobileTitleOnly="true" -->
+    <div class="flex flex-col">
+      <header class="order-1 mb-4 flex min-w-0 items-start justify-between gap-4 lg:order-2 lg:hidden">
+        <div class="min-w-0 flex-1">
+          <div class="flex min-w-0 flex-wrap items-center gap-2">
+            <h1 class="min-w-0 truncate text-[24px]! leading-7! font-semibold! tracking-tight!">{data.name}</h1>
+          </div>
+          <p class="mt-1 text-[13px] text-neutral-500 dark:text-fg-dim">{data.description || 'S3-compatible backup destination'}</p>
+        </div>
+      </header>
+    </div>
     <section class="application-settings-workspace mt-4 w-full max-w-none lg:mt-0">
       <div class="min-w-0">
         {#if section === 'general'}
@@ -315,7 +326,7 @@
                 <p>
                   Permanently delete
                   <strong class="font-semibold text-black dark:text-fg">{data.name}</strong>
-                  from Coolify. Existing objects in the bucket are not deleted.
+                  from coolify-rs. Existing objects in the bucket are not deleted.
                 </p>
                 <ul class="space-y-1 text-xs">
                   <li>• Backup schedules pointing at this storage will stop writing to S3.</li>
@@ -323,7 +334,7 @@
                     <li>• {data.backup_count} backup schedule(s) currently use this destination.</li>
                   {/if}
                   <li>• Bucket contents on the provider are left untouched.</li>
-                  <li>• This storage destination cannot be restored from Coolify after deletion.</li>
+                  <li>• This storage destination cannot be restored from coolify-rs after deletion.</li>
                 </ul>
                 {#snippet action()}
                   {#if canUpdate}
@@ -350,7 +361,7 @@
   <ConfirmModal
     title="Confirm Storage Deletion?"
     actions={[
-      'The selected storage location will be permanently deleted from Coolify.',
+      'The selected storage location will be permanently deleted from coolify-rs.',
       ...(data.backup_count > 0 ? [`${data.backup_count} backup schedule(s) will stop saving to S3. Existing objects in this storage will not be deleted.`] : []),
     ]}
     confirmationText={data.name}

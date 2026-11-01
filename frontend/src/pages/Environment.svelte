@@ -116,7 +116,7 @@
       maxRestartCount,
       hrefLink: `/project/${uuid}/environment/${env}/application/${app.uuid}`,
       server: app.destination?.server?.name || 'Unknown',
-      tags: [],
+      tags: Array.isArray(app.tags) ? (app.tags as { id: number | string; name: string }[]) : [],
     };
   }
 
@@ -146,6 +146,14 @@
       ? [...(resources.applications ?? []).map(applicationItem), ...resources.databases.map(toItem), ...(resources.services ?? []).map(serviceItem)]
       : [],
   );
+  // `firstDomain()`, `displayDomain()` of livewire/project/resource/index.blade.php.
+  function firstDomain(fqdn: string): string {
+    return String(fqdn).split(',')[0].trim();
+  }
+  function displayDomain(fqdn: string): string {
+    return firstDomain(fqdn).replace(/^https?:\/\//, '');
+  }
+
   const unported = $derived(resources && resources !== 'unavailable' ? resources.unported : 0);
   // Upstream's `$environment->isEmpty()`: the resource list when there is one, else the project's count.
   const isEmpty = $derived(
@@ -220,7 +228,7 @@
       const matchesTags = tagFilters.length === 0 || item.tags.some((t) => tagFilters.includes(t.name));
       const matchesServer = serverFilters.length === 0 || serverFilters.includes(item.server);
       const matchesStatus = statusFilters.length === 0 || statusFilters.includes(statusState(item));
-      const searchable = [item.name, item.description, item.typeLabel, item.status, item.server, ...item.tags.map((t) => t.name)]
+      const searchable = [item.name, item.description, item.application?.fqdn, item.typeLabel, item.status, item.server, ...item.tags.map((t) => t.name)]
         .filter(Boolean)
         .join(' ')
         .toLowerCase();
@@ -486,6 +494,9 @@
                     <p class="min-h-4 truncate text-[11px] text-neutral-500 dark:text-fg-faint">
                       {#if item.description}<span>{item.description}</span>{/if}
                     </p>
+                    {#if item.application?.fqdn}
+                      <a href={firstDomain(item.application.fqdn)} target="_blank" rel="noopener noreferrer" class="relative z-10 max-w-full self-start truncate text-[11px] text-neutral-500 hover:underline dark:text-fg-dim" title={displayDomain(item.application.fqdn)}>{displayDomain(item.application.fqdn)}</a>
+                    {/if}
                   </div>
                 </article>
               {/each}
@@ -540,7 +551,11 @@
                     {#if item.description?.trim()}
                       <p class="truncate text-[11px] text-neutral-500 dark:text-fg-faint">{item.description}</p>
                     {/if}
-                    <div class="mobile-resource-domain min-w-0"></div>
+                    <div class="mobile-resource-domain min-w-0">
+                      {#if item.application?.fqdn}
+                        <a href={firstDomain(item.application.fqdn)} target="_blank" rel="noopener noreferrer" class="relative z-10 block truncate text-[11px] text-neutral-500 hover:underline dark:text-fg-dim">{displayDomain(item.application.fqdn)}</a>
+                      {/if}
+                    </div>
                   </div>
                 </div>
 
@@ -551,7 +566,11 @@
                 </div>
 
                 <div class="resource-domain min-w-0">
-                  <span class="text-[12px] text-neutral-400 dark:text-fg-faint">-</span>
+                  {#if item.application?.fqdn}
+                    <a href={firstDomain(item.application.fqdn)} target="_blank" class="relative inline-block max-w-full truncate align-middle text-[12px] text-neutral-600 hover:underline dark:text-fg-dim">{displayDomain(item.application.fqdn)}</a>
+                  {:else}
+                    <span class="text-[12px] text-neutral-400 dark:text-fg-faint">-</span>
+                  {/if}
                 </div>
 
                 <div class="resource-server truncate text-[12px] text-neutral-600 dark:text-fg-dim">{item.server}</div>

@@ -113,7 +113,7 @@
 <ServerFrame {uuid} active="resources" title="Server Resources" onloaded={() => loadManaged()}>
   {#snippet children()}
     <div class="application-settings-form min-w-0 w-full">
-      <SettingsSection id="server-resources-section" title="Resources" description="Review Coolify-managed resources and other Docker containers running on this server." flush>
+      <SettingsSection id="server-resources-section" title="Resources" description="Review coolify-rs-managed resources and other Docker containers running on this server." flush>
         {#snippet actions()}
           <div class="inline-flex w-fit rounded-[10px] bg-neutral-100 p-1 dark:bg-white/[0.05]">
             <button type="button" class={tabClass(tab === 'managed')} disabled={loading !== null} onclick={loadManaged}>Managed</button>
@@ -173,7 +173,7 @@
                       <div class="text-[11px] text-neutral-600 dark:text-fg-dim">{headline(r.type)}</div>
                       <div>
                         {#if r.restart_limit}
-                          <span title="Container has crashed and Coolify stopped it after {r.restart_count} restart attempts."><StatusBadge label="Restart limit reached" type="warning" /></span>
+                          <span title="Container has crashed and coolify-rs stopped it after {r.restart_count} restart attempts."><StatusBadge label="Restart limit reached" type="warning" /></span>
                         {:else}
                           <StatusBadge label={headline(r.status ?? 'unknown')} type={statusType(r.status ?? 'unknown')} />
                         {/if}
@@ -216,7 +216,7 @@
               </div>
             {:else}
               <div class="p-6">
-                <Empty size="sm" title={q ? 'No matching containers' : 'No unmanaged containers'} description={q ? 'Try another name or clear the search.' : 'All detected Docker containers are managed by Coolify.'} iconName="servers" />
+                <Empty size="sm" title={q ? 'No matching containers' : 'No unmanaged containers'} description={q ? 'Try another name or clear the search.' : 'All detected Docker containers are managed by coolify-rs.'} iconName="servers" />
               </div>
             {/if}
             {#if total > 0}

@@ -107,7 +107,7 @@
     {#if file.is_too_large}
       <Callout type="warning" title="File too large">File on server exceeds 5 MB and cannot be edited from the UI. Edit it directly on the server.</Callout>
     {:else if file.is_host_file}
-      <Callout type="info" title="Host-managed file">This host file mount is bind-only. Coolify will not create, edit, load, chmod, or delete the source file.</Callout>
+      <Callout type="info" title="Host-managed file">This host file mount is bind-only. coolify-rs will not create, edit, load, chmod, or delete the source file.</Callout>
     {:else if file.is_read_only}
       <Callout type="info" title="Read-only mount">
         {#if file.is_directory}

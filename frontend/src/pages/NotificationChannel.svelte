@@ -47,7 +47,7 @@
       heading: 'Webhook',
       description: 'Send JSON event payloads to your own HTTP endpoint.',
       single: true,
-      fields: [{ column: 'webhook_url', label: 'Webhook URL', helper: 'Coolify sends POST requests to this HTTP or HTTPS endpoint.' }],
+      fields: [{ column: 'webhook_url', label: 'Webhook URL', helper: 'coolify-rs sends POST requests to this HTTP or HTTPS endpoint.' }],
     },
     telegram: {
       title: 'Telegram Notifications',
