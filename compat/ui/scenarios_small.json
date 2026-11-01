@@ -1,0 +1,32 @@
+[
+ {
+  "name": "small-server-phone",
+  "path": "/server/hml20fsj5eles0xfiqidq8j5",
+  "w": 390,
+  "h": 844,
+  "steps": []
+ },
+ {
+  "name": "small-images",
+  "path": "/server/hml20fsj5eles0xfiqidq8j5/images",
+  "steps": [
+   {
+    "wait": 2500
+   }
+  ]
+ },
+ {
+  "name": "small-proxy-phone",
+  "path": "/server/hml20fsj5eles0xfiqidq8j5/proxy",
+  "w": 390,
+  "h": 844,
+  "steps": []
+ },
+ {
+  "name": "small-app-phone",
+  "path": "/project/j8xm2emlllhfnyebjzgyzp7z/environment/uj3st9yvtvzxh7rul3c3opcz/application/jgcjpevnufmx9wavlokk3gox",
+  "w": 390,
+  "h": 844,
+  "steps": []
+ }
+]

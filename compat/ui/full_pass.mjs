@@ -24,7 +24,7 @@ const browser = await chromium.launch({ executablePath: '/Applications/Google Ch
 async function context(storageState) {
   const ctx = await browser.newContext({ viewport: { width, height }, colorScheme: light ? 'light' : 'dark', storageState });
   await ctx.route('**/*', (r) => (new URL(r.request().url()).hostname === '127.0.0.1' ? r.continue() : r.abort()));
-  await ctx.addInitScript((l) => { try { localStorage.setItem('theme', l ? 'light' : 'dark'); } catch {} }, light);
+  await ctx.addInitScript((l) => { try { localStorage.setItem('theme', l ? 'light' : 'dark'); localStorage.setItem('popupRealtime', 'disabled'); } catch {} }, light);
   return ctx;
 }
 
@@ -46,7 +46,8 @@ const collect = () => {
   const main = document.querySelector('main') ?? document.body;
   const outline = [...main.querySelectorAll('*')].filter(vis).filter((e) => !e.closest('svg') || e.tagName === 'svg').map((e) => `${e.tagName.toLowerCase()}.${(e.getAttribute('class') ?? '').trim().split(/\s+/).sort().join('.')}`);
   const controls = [...document.querySelectorAll('input,select,textarea,button,a[href]')].filter(vis).map((e) => `${e.tagName.toLowerCase()}|${e.getAttribute('type') ?? ''}|${e.getAttribute('placeholder') ?? ''}|${(e.innerText ?? '').trim().slice(0, 50)}`);
-  return { title: document.title, icon, text: document.body.innerText, outline, controls, htmlClass: document.documentElement.className };
+  const emptyActions = [...main.querySelectorAll('.application-settings-section > header > div.flex.max-w-full')].filter((e) => !e.children.length && !e.textContent.trim()).length;
+  return { emptyActions, title: document.title, icon, text: document.body.innerText, outline, controls, htmlClass: document.documentElement.className };
 };
 
 const side = {
@@ -95,5 +96,6 @@ await Promise.all(Array.from({ length: conc }, async () => {
     if (++done % 25 === 0) console.log(`${prefix} ${done}/${targets.length}`);
   }
 }));
-await browser.close();
+await Promise.race([browser.close(), new Promise((r) => setTimeout(r, 5000))]);
+process.exit(0);
 console.log(`${prefix} done ${done}/${targets.length}`);
