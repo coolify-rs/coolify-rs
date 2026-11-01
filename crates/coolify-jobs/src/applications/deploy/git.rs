@@ -631,6 +631,15 @@ pub(super) fn escape_env_variables(v: &str) -> String {
     crate::databases::env::escape_env_variables(v)
 }
 
+/// A variable's value for a build: remote secret values stay exactly as they are
+/// (`resolve_environment_variable_raw()`), others use `getResolvedValueWithServer()`.
+pub(super) fn var_value(v: &crate::databases::env::Var) -> Option<String> {
+    if v.remote {
+        return v.resolved.clone();
+    }
+    resolved_with_server(v.resolved.as_deref(), v.is_literal || v.is_multiline)
+}
+
 /// `EnvironmentVariable::getResolvedValueWithServer()` from the resolved value.
 pub(super) fn resolved_with_server(
     resolved: Option<&str>,

@@ -54,7 +54,8 @@
   /** The toast of the action, then a reload. */
   async function run(path: string) {
     try {
-      const r = await post<{ message?: string; warning?: string }>(`${url}/${path}`);
+      const r = await post<{ message?: string; warning?: string; warnings?: string[] }>(`${url}/${path}`);
+      for (const w of r.warnings ?? []) notify.warning(w);
       if (r.message) notify.success(r.message);
       if (r.warning) notify.warning(r.warning);
       await load();
@@ -70,13 +71,39 @@
       failure(e);
     }
   }
-  async function apiSetup() {
+  interface DnsConflict {
+    record_id: string;
+    current: string;
+    hostname: string;
+    token_id: number;
+  }
+  let dnsConflict = $state<DnsConflict | null>(null);
+  let confirmReplace = $state(false);
+  // `startApiSetup`: the logs of `ConfigureCloudflared`, or the conflict to confirm.
+  async function startApiSetup(body: Record<string, unknown>) {
     error = null;
+    dnsConflict = null;
     try {
-      await post(`${url}/api`, { cloudflare_integration_token_id: tokenId || null, api_ssh_domain: apiDomain });
+      const r = await post<{ activity_id?: number; dns_conflict?: DnsConflict }>(`${url}/api`, body);
+      if (r.dns_conflict) {
+        dnsConflict = r.dns_conflict;
+      } else if (r.activity_id) {
+        dialog = { title: 'Cloudflare Tunnel Configuration Logs', activity: r.activity_id };
+      }
     } catch (e) {
       error = failure(e);
     }
+  }
+  const apiSetup = () => startApiSetup({ cloudflare_integration_token_id: tokenId || null, api_ssh_domain: apiDomain });
+  async function replaceDnsAndConfigure() {
+    const c = dnsConflict;
+    confirmReplace = false;
+    if (!c) return;
+    await startApiSetup({
+      cloudflare_integration_token_id: c.token_id,
+      api_ssh_domain: c.hostname,
+      confirmed_conflict: { record_id: c.record_id, current: c.current },
+    });
   }
   async function automated() {
     try {
@@ -173,6 +200,16 @@
                 <div class="mt-4 flex justify-end">
                   <button type="submit" class="button" {...{ ishighlighted: '' }}>Set up tunnel</button>
                 </div>
+                {#if dnsConflict}
+                  <div class="mt-4">
+                    <Callout type="warning" title="A DNS record already exists">
+                      {dnsConflict.hostname} already points to {dnsConflict.current}. Replace it with the tunnel record to continue.
+                    </Callout>
+                    <div class="mt-4">
+                      <button type="button" class="button" onclick={() => (confirmReplace = true)}>Replace DNS record</button>
+                    </div>
+                  </div>
+                {/if}
               </form>
             {/if}
 
@@ -242,3 +279,14 @@
     {/if}
   {/snippet}
 </ServerFrame>
+
+{#if confirmReplace && dnsConflict}
+  <ConfirmModal
+    title="Replace DNS record?"
+    actions={[`The DNS record of ${dnsConflict.hostname} will point to the Cloudflare tunnel.`, 'Traffic that uses the current record value will stop.']}
+    confirmWithText={false}
+    confirmWithPassword={false}
+    onconfirm={replaceDnsAndConfigure}
+    onclose={() => (confirmReplace = false)}
+  />
+{/if}

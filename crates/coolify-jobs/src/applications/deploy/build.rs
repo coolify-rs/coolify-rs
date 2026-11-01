@@ -405,9 +405,9 @@ impl Run {
             .collect();
         let mut map = Ordered::default();
         for v in generic.iter().chain(railpack.iter()) {
-            let literal = v.is_literal || v.is_multiline;
+            let literal = (v.is_literal || v.is_multiline) && !v.remote;
             // `normalize_resolved_build_variable_value()`
-            let value = git::resolved_with_server(v.resolved.as_deref(), literal)
+            let value = git::var_value(v)
                 .filter(|r| !r.is_empty())
                 .map(|r| {
                     if literal {
@@ -754,9 +754,10 @@ impl Run {
             project_id: self.app.project.get("id").and_then(Value::as_i64),
             environment_id: self.app.environment.get("id").and_then(Value::as_i64),
         };
-        let vars = env::load_for(&self.jobs.0.db, enc, &owner, Some(self.server.id))
+        let mut vars = env::load_raw_for(&self.jobs.0.db, enc, &owner, Some(self.server.id))
             .await
             .map_err(Fail::new)?;
+        self.resolve_remote_secrets(&mut vars).await?;
         self.b.variables = Some(vars.clone());
         Ok(vars)
     }
@@ -1526,8 +1527,10 @@ impl Run {
                 continue;
             }
             let literal = v.is_literal || v.is_multiline;
-            let resolved = git::resolved_with_server(v.resolved.as_deref(), literal);
-            let escaped = if literal {
+            let resolved = git::var_value(&v);
+            let escaped = if v.remote {
+                git::bash_env_value(v.resolved.as_deref())
+            } else if literal {
                 let raw = resolved.unwrap_or_default();
                 git::bash_env_value(Some(raw.trim_matches('\'')))
             } else {
@@ -1703,9 +1706,7 @@ impl Run {
             {
                 continue;
             }
-            if let Some(value) =
-                git::resolved_with_server(v.resolved.as_deref(), v.is_literal || v.is_multiline)
-            {
+            if let Some(value) = git::var_value(&v) {
                 args.put(&v.key, Some(value));
             }
         }
@@ -2435,10 +2436,8 @@ impl Run {
             if !v.key.starts_with("NIXPACKS_") {
                 continue;
             }
-            let literal = v.is_literal || v.is_multiline;
-            if let Some(resolved) =
-                git::resolved_with_server(v.resolved.as_deref(), literal).filter(|r| !r.is_empty())
-            {
+            let literal = (v.is_literal || v.is_multiline) && !v.remote;
+            if let Some(resolved) = git::var_value(&v).filter(|r| !r.is_empty()) {
                 let value = if literal {
                     resolved.trim_matches('\'').to_owned()
                 } else {

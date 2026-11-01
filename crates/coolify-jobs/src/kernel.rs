@@ -6,8 +6,8 @@
 //! `versions:refresh-local` (Coolify Cloud only), `cleanup:redis --clear-locks` and
 //! `horizon:snapshot` (no Redis, no Horizon), `uploads:clear` (the import route appends to the
 //! final file, so there is no chunk directory), and the `isDev()` branch of the schedule.
-//! `dns:release-orphaned-records`, `ReconcileGithubRunnersJob` and `UpdateCoolifyJob` belong to
-//! their own areas (`docs/KNOWN_LIMITATIONS.md`).
+//! `dns:release-orphaned-records` and `UpdateCoolifyJob` belong to their own areas
+//! (`docs/KNOWN_LIMITATIONS.md`).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -51,6 +51,7 @@ pub enum KernelJob {
     CheckMissingDatabaseBackups,
     CheckMissingVolumeBackups,
     RevalidateUnusableS3Storages,
+    ReconcileGithubRunners,
     CleanupUnreachableServers,
     PullTemplatesFromCdn,
     PullChangelog,
@@ -177,6 +178,12 @@ pub fn schedule(
             KernelJob::RevalidateUnusableS3Storages,
         ),
         entry(
+            "ReconcileGithubRunnersJob",
+            "* * * * *",
+            300,
+            KernelJob::ReconcileGithubRunners,
+        ),
+        entry(
             "cleanup:unreachable-servers",
             "0 0 * * *",
             3600,
@@ -298,6 +305,10 @@ pub async fn run_job(jobs: &Jobs, job: KernelJob, now: DateTime<Utc>) -> Result<
         KernelJob::CheckMissingDatabaseBackups => check_missing_database_backups(jobs).await,
         KernelJob::CheckMissingVolumeBackups => check_missing_volume_backups(jobs).await,
         KernelJob::RevalidateUnusableS3Storages => revalidate_unusable_s3_storages(jobs).await,
+        KernelJob::ReconcileGithubRunners => {
+            jobs.reconcile_github_runners().await;
+            Ok(())
+        }
         KernelJob::CleanupUnreachableServers => queries::force_disable_abandoned_servers(db)
             .await
             .map(|_| ())
@@ -984,6 +995,7 @@ mod tests {
                 "CheckMissingDatabaseBackupsJob",
                 "CheckMissingVolumeBackupsJob",
                 "RevalidateUnusableS3StoragesJob",
+                "ReconcileGithubRunnersJob",
                 "PullTemplatesFromCDN",
                 "PullChangelog",
                 "CleanupInstanceStuffsJob",
@@ -993,13 +1005,24 @@ mod tests {
         );
         assert_eq!(
             due_names(at(3, 17)),
-            ["cleanup:stucked-resources", "ServerManagerJob"]
+            [
+                "cleanup:stucked-resources",
+                "ReconcileGithubRunnersJob",
+                "ServerManagerJob"
+            ]
         );
         assert_eq!(
             due_names(at(12, 2)),
-            ["CleanupInstanceStuffsJob", "ServerManagerJob"]
+            [
+                "ReconcileGithubRunnersJob",
+                "CleanupInstanceStuffsJob",
+                "ServerManagerJob"
+            ]
         );
-        assert_eq!(due_names(at(12, 3)), ["ServerManagerJob"]);
+        assert_eq!(
+            due_names(at(12, 3)),
+            ["ReconcileGithubRunnersJob", "ServerManagerJob"]
+        );
         for hour in [1, 13] {
             assert!(due_names(at(hour, 0)).contains(&"RegenerateSslCertJob"));
         }

@@ -9,7 +9,6 @@ use coolify_db::integration_tokens as db;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 use std::sync::LazyLock;
-use std::time::Duration;
 
 use crate::audit::Meta;
 use crate::auth::AuthCtx;
@@ -56,71 +55,15 @@ pub fn error_message(provider: &str) -> &'static str {
     }
 }
 
-fn timeout(meta: &Map<String, Value>, default: u64) -> Duration {
-    let t = meta
-        .get("timeout")
-        .and_then(|v| {
-            v.as_u64()
-                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-        })
-        .unwrap_or(default);
-    Duration::from_secs(t)
-}
-
-/// `IntegrationTokenValidator::validate` for the secret managers. `DopplerService`,
-/// `InfisicalService` and `VaultService` issue one authenticated request each.
-pub async fn verify(provider: &str, token: &str, meta: &Map<String, Value>) -> bool {
-    let client = reqwest::Client::new();
-    let text = |k: &str| {
-        meta.get(k)
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
-    };
-    let result = match provider {
-        "doppler" => {
-            client
-                .get("https://api.doppler.com/v3/me")
-                .bearer_auth(token)
-                .timeout(Duration::from_secs(30))
-                .send()
-                .await
-        }
-        "infisical" => {
-            let base = text("base_url");
-            let base = if base.is_empty() {
-                "https://app.infisical.com".to_string()
-            } else {
-                base
-            };
-            client
-                .post(format!(
-                    "{}/api/v1/auth/universal-auth/login",
-                    base.trim_end_matches('/')
-                ))
-                .header("accept", "application/json")
-                .json(&json!({"clientId": text("client_id"), "clientSecret": token}))
-                .timeout(timeout(meta, 30))
-                .send()
-                .await
-        }
-        "vault" => {
-            let mut r = client
-                .get(format!(
-                    "{}/v1/auth/token/lookup-self",
-                    text("base_url").trim_end_matches('/')
-                ))
-                .header("X-Vault-Token", token)
-                .timeout(timeout(meta, 30));
-            let ns = text("namespace");
-            if !ns.is_empty() {
-                r = r.header("X-Vault-Namespace", ns);
-            }
-            r.send().await
-        }
-        _ => return false,
-    };
-    result.is_ok_and(|r| r.status().is_success())
+/// `IntegrationTokenValidator::validate`: `Err` is the `ValidationException` of a base URL that
+/// `SafeExternalUrl` refuses.
+pub async fn verify(
+    db: &coolify_db::Db,
+    provider: &str,
+    token: &str,
+    meta: &Map<String, Value>,
+) -> Result<bool, String> {
+    coolify_jobs::integrations::secret_managers::validate(db, provider, token, meta, "").await
 }
 
 pub async fn store(
@@ -235,11 +178,19 @@ pub async fn store(
     let provider = provider.unwrap_or_default();
     let token = input.str("token").unwrap_or_default().to_string();
     let filtered: Map<String, Value> = metadata.into_iter().filter(|(_, v)| filled(v)).collect();
-    if !verify(&provider, &token, &filtered).await {
-        return Err(ApiError::Message(
-            StatusCode::BAD_REQUEST,
-            error_message(&provider),
-        ));
+    match verify(&state.db, &provider, &token, &filtered).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(ApiError::Message(
+                StatusCode::BAD_REQUEST,
+                error_message(&provider),
+            ));
+        }
+        Err(message) => {
+            let mut errors = Map::new();
+            errors.insert("base_url".into(), json!([message]));
+            return Err(ApiError::Validation(errors));
+        }
     }
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let uuid = coolify_domain::new_public_id();

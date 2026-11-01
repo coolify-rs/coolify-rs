@@ -190,6 +190,37 @@ pub async fn update_cloudflared(srv: &Srv) -> Result<i64, String> {
     Ok(activity)
 }
 
+impl Srv {
+    /// What `CloudflareTunnelService` reads of the server: team, id, uuid, name and SSH port.
+    pub fn tunnel_facts(&self) -> (i64, i64, String, String, i64) {
+        let record = &self.row.record;
+        (
+            self.info.team_id,
+            self.id(),
+            self.row.uuid.clone(),
+            record
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            record
+                .get("port")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(22),
+        )
+    }
+}
+
+/// `tearDown()`: stopping cloudflared in the SSH session would cut that session, so it runs detached.
+pub async fn stop_cloudflared_detached(srv: &Srv) {
+    let _ = srv
+        .run_quiet(
+            &["nohup setsid sh -c 'sleep 2; docker rm -f coolify-cloudflared' > /dev/null 2>&1 < /dev/null &".to_owned()],
+            "cloudflared.tear_down",
+        )
+        .await;
+}
+
 /// `remote_process(['docker rm -f coolify-cloudflared'], $server, false, 10)`: the arguments land in `$type` and
 /// `$type_uuid`, so `RunRemoteProcess` refuses the activity and upstream never runs the command. Same here.
 pub async fn remove_cloudflared(srv: &Srv) -> Result<(), String> {

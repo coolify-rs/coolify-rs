@@ -30,6 +30,7 @@ pub mod instance;
 pub mod instance_jobs;
 pub mod instance_settings;
 pub mod integration_tokens;
+pub mod managed_dns;
 pub mod notification_settings;
 pub mod private_keys;
 pub mod profile;

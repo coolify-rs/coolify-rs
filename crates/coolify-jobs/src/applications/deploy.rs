@@ -177,6 +177,8 @@ struct BuildState {
     /// `$this->build_secrets`.
     build_secrets: String,
     variables: Option<Vec<Var>>,
+    /// `$remote_secrets_cache`.
+    remote_secrets: Option<crate::integrations::secret_managers::Secrets>,
     env_args: build::Ordered,
     build_args: Vec<String>,
     /// `$this->useBuildtimeEnvironmentLauncher`.
@@ -878,7 +880,10 @@ impl Jobs {
         let Some(enc) = self.0.encrypter.clone() else {
             return (known, locked);
         };
-        let Ok(variables) = env::load_for(&self.0.db, &enc, owner, Some(server_id)).await else {
+        // A deployment registers its fetched secrets itself (`resolveRemoteSecrets: false`).
+        let Ok(variables) =
+            env::load_without_remote_for(&self.0.db, &enc, owner, Some(server_id)).await
+        else {
             return (known, locked);
         };
         for v in variables
@@ -1418,23 +1423,7 @@ impl Run {
 
     /// `save_runtime_environment_variables()`.
     async fn save_runtime_environment(&mut self) -> Step {
-        let enc = self
-            .jobs
-            .0
-            .encrypter
-            .as_ref()
-            .ok_or_else(|| Fail::new("No application encryption key has been specified."))?;
-        let owner = Owner {
-            morph: apps::MORPH,
-            id: self.app.id,
-            team_id: self.app.team_id,
-            project_id: self.app.project.get("id").and_then(Value::as_i64),
-            environment_id: self.app.environment.get("id").and_then(Value::as_i64),
-        };
-        let mut variables: Vec<Var> =
-            env::load_for(&self.jobs.0.db, enc, &owner, Some(self.server.id))
-                .await
-                .map_err(Fail::new)?;
+        let mut variables: Vec<Var> = self.variables().await?;
         if self.b.is_preview() {
             variables = self.deployed_variables().await?;
         }

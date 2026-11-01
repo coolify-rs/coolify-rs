@@ -1,4 +1,4 @@
-//! `Webhook\Github::normal()` and `manual()` (without the GitHub Actions runners), and
+//! `Webhook\Github::normal()` and `manual()` (with the GitHub Actions runners), and
 //! `ProcessGithubPullRequestWebhook`.
 
 use std::net::SocketAddr;
@@ -496,9 +496,8 @@ async fn normal_inner(
         return Ok(text_response("cool"));
     }
     if event == "workflow_job" {
-        // GitHub Actions runners are not ported.
         return Ok(text_response(
-            "Nothing to do. No runner configuration matches the job labels.",
+            handle_workflow_job(state, &source, &payload).await?,
         ));
     }
     let mut id = None;
@@ -634,4 +633,183 @@ async fn normal_inner(
         }
     }
     Ok(json_response(&Value::Array(out)))
+}
+
+/// `limitRunnerColumn`.
+fn limit_runner_column(v: Option<&Value>) -> Option<String> {
+    let text = match v? {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(true) => "1".to_owned(),
+        Value::Bool(false) => String::new(),
+        _ => return None,
+    };
+    Some(text.chars().take(255).collect())
+}
+
+/// `isPullRequestWorkflowJob`.
+async fn is_pull_request_workflow_job(
+    state: &AppState,
+    source: &coolify_db::records::Record,
+    payload: &Value,
+) -> bool {
+    let run_id = p::get(payload, "workflow_job.run_id")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let repository = p::get(payload, "repository.full_name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if run_id <= 0 || !repository.contains('/') {
+        return false;
+    }
+    let Some(enc) = state.encrypter.as_ref() else {
+        return false;
+    };
+    match coolify_jobs::server_ops::github_runner_jobs::workflow_run_event(
+        &state.db, enc, source, repository, run_id,
+    )
+    .await
+    {
+        Ok(event) => coolify_jobs::server_ops::github_runner_jobs::PULL_REQUEST_EVENTS
+            .contains(&event.as_str()),
+        Err(_) => false,
+    }
+}
+
+/// `handleWorkflowJob`: the response text.
+async fn handle_workflow_job(
+    state: &AppState,
+    source: &coolify_db::records::Record,
+    payload: &Value,
+) -> Result<&'static str, Failure> {
+    use coolify_db::github_runners as store;
+    use coolify_jobs::server_ops::github_runner_jobs::{is_active, matches_labels};
+
+    let action = p::get(payload, "action")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let job_id = p::get(payload, "workflow_job.id")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let runner_name = p::get(payload, "workflow_job.runner_name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if job_id <= 0 {
+        return Ok("Nothing to do. No workflow job found.");
+    }
+    let app_id = source.get("id").and_then(Value::as_i64).unwrap_or(0);
+    let own = source.get("installation_id").and_then(Value::as_i64);
+    let got = p::get(payload, "installation.id").and_then(|v| {
+        v.as_i64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    });
+    if own.is_none() || got.is_none() || own != got {
+        return Ok("Nothing to do. The job belongs to another installation of the GitHub App.");
+    }
+    let details = store::JobDetails {
+        workflow_job_id: job_id,
+        workflow_job_html_url: p::get(payload, "workflow_job.html_url")
+            .and_then(Value::as_str)
+            .filter(|u| !u.is_empty() && u.chars().count() <= 255)
+            .map(str::to_owned),
+        workflow_name: limit_runner_column(p::get(payload, "workflow_job.workflow_name"))
+            .filter(|s| !s.is_empty()),
+        job_name: limit_runner_column(p::get(payload, "workflow_job.name"))
+            .filter(|s| !s.is_empty()),
+        repository_full_name: limit_runner_column(p::get(payload, "repository.full_name"))
+            .filter(|s| !s.is_empty()),
+    };
+    let now = state.now();
+    let jobs = state.jobs.as_ref();
+    if action == "queued" {
+        let labels: Vec<String> = p::get(payload, "workflow_job.labels")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|l| l.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let matching: Vec<_> = store::enabled_configs(&state.db, app_id)
+            .await?
+            .into_iter()
+            .filter(|c| matches_labels(&c.labels, &labels))
+            .collect();
+        if matching.is_empty() {
+            return Ok("Nothing to do. No runner configuration matches the job labels.");
+        }
+        let is_pull_request = matching.iter().any(|c| !c.allow_pull_requests)
+            && is_pull_request_workflow_job(state, source, payload).await;
+        if is_pull_request && !matching.iter().any(|c| c.allow_pull_requests) {
+            return Ok("Nothing to do. The runner configuration does not allow pull request jobs.");
+        }
+        let (id, created) = store::create_or_first(
+            &state.db,
+            app_id,
+            job_id,
+            &details,
+            &labels,
+            is_pull_request,
+            now,
+        )
+        .await?;
+        if created && let Some(j) = jobs {
+            j.spawn_provision_runner(id, None);
+        }
+        return Ok("Runner queued.");
+    }
+    let execution = if runner_name.is_empty() {
+        None
+    } else {
+        store::by_runner_name(&state.db, app_id, runner_name).await?
+    };
+    if (action == "in_progress" || action == "completed")
+        && let Some(e) = &execution
+        && (e.status == "provisioning" || e.status == "idle")
+    {
+        if let Some(j) = jobs
+            && let Some(replacement) = j.assign_runner_job(e, job_id, &details).await
+        {
+            j.spawn_provision_runner(replacement, None);
+        }
+        if action == "in_progress" {
+            return Ok("Runner marked running.");
+        }
+    }
+    if action == "completed" {
+        if let Some(e) = &execution {
+            let conclusion = limit_runner_column(p::get(payload, "workflow_job.conclusion"));
+            store::set_conclusion(&state.db, e.id, &details, conclusion.as_deref(), now).await?;
+            let fresh = store::execution_by_id(&state.db, e.id).await?;
+            let status = fresh.map(|f| f.status).unwrap_or_default();
+            if is_active(&status) || status == "failed" {
+                store::finish_execution(&state.db, e.id, "completed", "", now).await?;
+                store::clear_error(&state.db, e.id).await?;
+                if let Some(j) = jobs {
+                    j.spawn_cleanup_runner(e.id);
+                }
+            }
+            return Ok("Runner cleanup queued.");
+        }
+        if let Some(q) = store::by_trigger(&state.db, app_id, job_id).await?
+            && q.status == "queued"
+        {
+            store::finish_execution(
+                &state.db,
+                q.id,
+                "cancelled",
+                "The job ended before a runner started.",
+                now,
+            )
+            .await?;
+        }
+        return Ok("Queued runner cancelled.");
+    }
+    Ok("Nothing to do.")
+}
+
+impl From<coolify_db::DbError> for Failure {
+    fn from(e: coolify_db::DbError) -> Self {
+        Self::Other(e.to_string())
+    }
 }

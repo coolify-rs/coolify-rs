@@ -20,8 +20,7 @@ NOT_SCHEDULED = {
     "php artisan cleanup:redis --clear-locks": "no Redis",
     "php artisan horizon:snapshot": "no Horizon",
     "php artisan uploads:clear": "no chunk directory",
-    "php artisan dns:release-orphaned-records": "integrations stream",
-    "App\\Jobs\\ReconcileGithubRunnersJob": "integrations stream",
+    "php artisan dns:release-orphaned-records": "not ported",
     "php artisan scheduled:dispatch": "Scheduler::tick",
 }
 # Reference name -> name in the table.

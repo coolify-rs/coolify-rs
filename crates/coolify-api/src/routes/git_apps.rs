@@ -403,8 +403,8 @@ pub async fn github_store(
     .bind(int_of(input.get("app_id")).map(|v| v as i32))
     .bind(int_of(input.get("installation_id")).map(|v| v as i32))
     .bind(input.str("client_id"))
-    .bind(enc.encrypt_serialized(input.str("client_secret").unwrap_or_default()))
-    .bind(enc.encrypt_serialized(input.str("webhook_secret").unwrap_or_default()))
+    .bind(enc.encrypt_string(input.str("client_secret").unwrap_or_default()))
+    .bind(enc.encrypt_string(input.str("webhook_secret").unwrap_or_default()))
     .bind(key)
     .bind(ctx.team_id)
     .bind(truthy_bool(input.get("is_system_wide")))
@@ -701,10 +701,7 @@ pub async fn github_update(
                 .and_then(Value::as_str)
                 .and_then(|c| enc.decrypt_maybe_serialized(c).ok());
             if plain.map(str::to_owned) != current {
-                values.push((
-                    k,
-                    ColumnValue::Text(plain.map(|p| enc.encrypt_serialized(p))),
-                ));
+                values.push((k, ColumnValue::Text(plain.map(|p| enc.encrypt_string(p)))));
             }
         }
     }
@@ -958,7 +955,7 @@ pub async fn gitlab_store(
     .bind(int_of(input.get("custom_port")).unwrap_or(22) as i32)
     .bind(input.str("group_name"))
     .bind(input.str("client_id"))
-    .bind(input.str("client_secret").map(|v| enc.encrypt_serialized(v)))
+    .bind(input.str("client_secret").map(|v| enc.encrypt_string(v)))
     .bind(enc.encrypt_string(&webhook))
     .bind(input.str("redirect_uri"))
     .bind(ctx.team_id)
@@ -1104,7 +1101,7 @@ pub async fn gitlab_update(
         if plain.map(str::to_owned) != current {
             values.push((
                 "client_secret",
-                ColumnValue::Text(plain.map(|p| enc.encrypt_serialized(p))),
+                ColumnValue::Text(plain.map(|p| enc.encrypt_string(p))),
             ));
         }
     }

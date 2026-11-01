@@ -203,21 +203,6 @@ pub fn cleanup_commands(execution_uuid: &str) -> Vec<String> {
     ]
 }
 
-/// `CleanupGithubRunnerJob`, without `GithubRunnerApi::deleteRunner` and the next provisioning.
-pub fn spawn_cleanup(srv: &Srv, execution_uuid: String) {
-    if srv.info.transferred {
-        return;
-    }
-    let (jobs, id) = (srv.jobs.clone(), srv.id());
-    tokio::spawn(async move {
-        let Ok(s) = Srv::load(&jobs, id).await else {
-            return;
-        };
-        s.run_quiet(&cleanup_commands(&execution_uuid), "github_runner.cleanup")
-            .await;
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

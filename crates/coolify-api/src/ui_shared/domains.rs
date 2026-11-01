@@ -1,6 +1,4 @@
-//! `Project\Application\Domains`. DNS checks (`CheckDomainDns`, `CheckDomainDnsJob`) and the
-//! Cloudflare automation are not ported: they contact external services. New domains stay
-//! "Not checked", as on the service page.
+//! `Project\Application\Domains`. The DNS checks and DNS providers are in `super::dns`.
 
 use std::collections::BTreeMap;
 
@@ -17,7 +15,7 @@ use coolify_jobs::compose_parser::domains::get_fqdn_without_port;
 use coolify_jobs::compose_parser::service::{first_docker_compose_service_port, is_database_image};
 use serde_json::{Map, Value, json};
 
-use super::find;
+use super::{dns, find};
 use crate::auth::AuthCtx;
 use crate::response::{ApiError, ApiResult, ok};
 use crate::state::AppState;
@@ -853,6 +851,15 @@ async fn update(
             noindex.push(replacement.clone());
         }
     }
+    let owner = dns::Owner {
+        morph: "App\\Models\\Application",
+        id: a.id,
+        uuid: &a.uuid,
+        name: a.str("name").unwrap_or_default(),
+        type_name: "application",
+        team_id: a.team_id,
+    };
+    let previous_hostnames = dns::hostnames_before(&state, &owner).await;
     let (answer, warnings) = save_list(
         &state,
         &a,
@@ -870,6 +877,8 @@ async fn update(
     if let Some(answer) = answer {
         return Ok(answer);
     }
+    let mut warnings: Vec<String> = warnings.iter().map(ToString::to_string).collect();
+    warnings.extend(dns::release_after_edit(&state, &owner, &previous_hostnames).await);
     Ok(ok(json!({"message": "Domain updated.", "warnings": warnings})).into_response())
 }
 
@@ -895,6 +904,14 @@ async fn remove(
         .into_iter()
         .filter(|u| u != url)
         .collect();
+    let owner = dns::Owner {
+        morph: "App\\Models\\Application",
+        id: a.id,
+        uuid: &a.uuid,
+        name: a.str("name").unwrap_or_default(),
+        type_name: "application",
+        team_id: a.team_id,
+    };
     let (answer, warnings) = save_list(
         &state,
         &a,
@@ -912,6 +929,12 @@ async fn remove(
     if let Some(answer) = answer {
         return Ok(answer);
     }
+    let mut warnings: Vec<String> = warnings.iter().map(ToString::to_string).collect();
+    let delete_record = body
+        .get("delete_managed_dns")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    warnings.extend(dns::release_after_remove(&state, &owner, url, delete_record).await);
     Ok(ok(json!({"message": "Domain removed.", "warnings": warnings})).into_response())
 }
 

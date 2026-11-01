@@ -14,6 +14,7 @@ pub mod git_http;
 pub mod gitea;
 pub mod github;
 pub mod gitlab;
+pub mod integrations;
 pub mod kernel;
 pub mod kernel_resources;
 pub mod notifications;

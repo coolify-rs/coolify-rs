@@ -1,12 +1,11 @@
 //! Runtime environment variables of a database as its start action uses them:
 //! the `EnvironmentVariable` value accessor (decrypt, trim), shared variable
 //! references (`get_real_environment_variables_internal`) and the formatting
-//! rules of `HasSecretManager` (exact or legacy escaping).
-//!
-//! Secret managers (`{{vault.KEY}}` references) are not ported: a variable that
-//! uses one stops the start with a "not available yet" message.
+//! rules of `HasSecretManager` (exact or legacy escaping, remote secret references).
 
 use std::sync::LazyLock;
+
+use crate::integrations::secret_managers;
 
 use coolify_db::databases::DatabaseRow;
 use coolify_db::environment_variables as vars;
@@ -17,9 +16,6 @@ use super::StartContext;
 use super::common::escape_dollar;
 use coolify_compat::Encrypter;
 use coolify_db::Db;
-
-pub const SECRET_MANAGER_NOT_PORTED: &str =
-    "Environment variables that read a secret manager are not available in coolify-rs yet.";
 
 /// One runtime variable, decrypted.
 #[derive(Clone)]
@@ -38,6 +34,8 @@ pub struct Var {
     pub is_buildtime: bool,
     pub is_preview: bool,
     pub uses_legacy_escaping: bool,
+    /// `environmentVariableUsesSecretManager`: `resolved` holds values of a secret manager.
+    pub remote: bool,
     /// `preserve_compose_null`.
     pub preserve_compose_null: bool,
     /// The stored ciphertext (upstream's configuration hash sorts by it).
@@ -74,9 +72,9 @@ impl Var {
         !self.uses_legacy_escaping
     }
 
-    /// `environmentVariableAllowsInterpolation` (no secret managers here).
+    /// `environmentVariableAllowsInterpolation`.
     pub fn allows_interpolation(&self, value: &str) -> bool {
-        !is_json_container(value, true) && !self.is_literal && !self.is_multiline
+        !is_json_container(value, true) && !self.is_literal && !self.is_multiline && !self.remote
     }
 
     /// `legacyFormatEnvironmentVariableValue`.
@@ -94,6 +92,9 @@ impl Var {
     /// `formatEnvironmentVariableValue` for a local value.
     pub fn format(&self, value: Option<&str>) -> Option<String> {
         let value = value?;
+        if self.remote {
+            return Some(secret_managers::compose_file(value));
+        }
         if !self.exact() {
             return Some(self.legacy(value));
         }
@@ -120,6 +121,9 @@ impl Var {
 
     /// `formatComposeFileValue`; `redis_like` for Redis, KeyDB and Dragonfly.
     pub fn compose_file_value(&self, value: &str, redis_like: bool) -> String {
+        if self.remote {
+            return secret_managers::compose_file(value);
+        }
         if self.key == "REDIS_PASSWORD" && self.exact() && redis_like {
             return escape_dollar(value);
         }
@@ -129,9 +133,6 @@ impl Var {
 
 static REFERENCE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{\{(.*?)\}\}").unwrap_or_else(|_| unreachable!()));
-static VAULT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\{\{\s*vault\.([A-Za-z0-9_]+)\s*\}\}").unwrap_or_else(|_| unreachable!())
-});
 const TYPES: &[&str] = &["team", "project", "environment", "server"];
 
 /// The resource that owns variables, with the ids shared references resolve against.
@@ -232,6 +233,7 @@ pub async fn load_stored_for(db: &Db, enc: &Encrypter, o: &Owner<'_>) -> Result<
             is_buildtime: flag("is_buildtime"),
             is_preview: r.is_preview,
             uses_legacy_escaping: r.uses_legacy_escaping,
+            remote: false,
             preserve_compose_null: flag("preserve_compose_null"),
             cipher: r.value_encrypted,
             key: r.key,
@@ -250,8 +252,9 @@ pub async fn load(
     load_for(db, enc, &Owner::database(d), server_id).await
 }
 
-/// A resource's variables, decrypted and with shared references resolved.
-pub async fn load_for(
+/// A resource's variables, decrypted, with shared references resolved and `{{vault.KEY}}`
+/// references left as they are.
+pub async fn load_raw_for(
     db: &Db,
     enc: &Encrypter,
     o: &Owner<'_>,
@@ -259,13 +262,92 @@ pub async fn load_for(
 ) -> Result<Vec<Var>, String> {
     let mut out = load_stored_for(db, enc, o).await?;
     for v in &mut out {
-        if v.value.as_deref().is_some_and(|x| VAULT.is_match(x)) {
-            return Err(SECRET_MANAGER_NOT_PORTED.into());
-        }
         v.resolved = match &v.value {
             Some(x) if !x.is_empty() => Some(resolve_references(db, enc, o, server_id, x).await?),
             other => other.clone(),
         };
+    }
+    Ok(out)
+}
+
+/// A resource's variables with shared and remote references resolved
+/// (`resolveSecretManagerEnvironmentVariableValue`, `ensureRemoteSecretsResolvable`): an unreachable
+/// secret manager or a missing key is an error. The source is read once.
+pub async fn load_for(
+    db: &Db,
+    enc: &Encrypter,
+    o: &Owner<'_>,
+    server_id: Option<i64>,
+) -> Result<Vec<Var>, String> {
+    let mut out = load_raw_for(db, enc, o, server_id).await?;
+    if !out
+        .iter()
+        .any(|v| secret_managers::contains_reference(v.resolved.as_deref()))
+    {
+        return Ok(out);
+    }
+    let link = secret_managers::link_of(db, o.morph, o.id).await?;
+    let mut fetched: Option<secret_managers::Secrets> = None;
+    for v in &mut out {
+        let Some(value) = v
+            .resolved
+            .clone()
+            .filter(|x| secret_managers::contains_reference(Some(x)))
+        else {
+            continue;
+        };
+        // Without a source, a literal keeps "{{vault.KEY}}" as text; other references fail closed.
+        if v.is_literal && link.is_none() {
+            continue;
+        }
+        let secrets = match &mut fetched {
+            Some(s) => &*s,
+            slot => {
+                let Some(link) = &link else {
+                    return Err("Environment variables reference remote secrets, but no secret manager source is configured.".to_owned());
+                };
+                let got = link
+                    .fetch(db, enc, o.team_id, "")
+                    .await
+                    .map_err(|e| format!("Could not fetch remote secrets: {e}"))?;
+                &*slot.insert(got)
+            }
+        };
+        let missing = secret_managers::missing_keys(&value, secrets);
+        if !missing.is_empty() {
+            return Err(format!(
+                "Missing secret keys: {} (referenced by {}).",
+                missing.join(", "),
+                v.key
+            ));
+        }
+        v.resolved = Some(secret_managers::substitute(&value, secrets));
+        v.remote = true;
+    }
+    Ok(out)
+}
+
+/// A resource's variables without contacting a secret manager: a value that needs one has no
+/// resolved value. For reads such as the connection URL and log redaction.
+pub async fn load_without_remote_for(
+    db: &Db,
+    enc: &Encrypter,
+    o: &Owner<'_>,
+    server_id: Option<i64>,
+) -> Result<Vec<Var>, String> {
+    let mut out = load_raw_for(db, enc, o, server_id).await?;
+    if out
+        .iter()
+        .any(|v| secret_managers::contains_reference(v.resolved.as_deref()))
+    {
+        let linked = secret_managers::link_of(db, o.morph, o.id).await?.is_some();
+        for v in &mut out {
+            if secret_managers::contains_reference(v.resolved.as_deref())
+                && (linked || !v.is_literal)
+            {
+                v.resolved = None;
+            }
+        }
     }
     Ok(out)
 }
@@ -356,6 +438,7 @@ mod tests {
             key: "K".into(),
             value: None,
             resolved: None,
+            remote: false,
             is_literal: literal,
             is_multiline: false,
             is_shared: false,

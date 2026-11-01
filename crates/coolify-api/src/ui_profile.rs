@@ -630,10 +630,59 @@ async fn cancel_email_change(
 
 // ---- Password ----
 
-/// `Password::defaults()` in production, without `uncompromised()`, which asks an external
-/// service about the password; and `confirmed`.
+/// `Password::defaults()` in production without `uncompromised()` ([`password_compromised`]), and
+/// `confirmed`.
+#[cfg(test)]
 fn password_errors(new: &str, confirmation: &str) -> Vec<String> {
     password_errors_for("new password", new, confirmation)
+}
+
+/// `NotPwnedVerifier::verify` (`uncompromised()`): only the first five characters of the SHA-1 go
+/// to the service; a service that does not answer counts as not compromised.
+pub(crate) async fn password_compromised(password: &str) -> bool {
+    use sha1::{Digest, Sha1};
+    let digest = Sha1::digest(password.as_bytes());
+    let hash: String = digest.iter().map(|b| format!("{b:02X}")).collect();
+    let (prefix, suffix) = hash.split_at(5);
+    let base =
+        coolify_jobs::integrations::provider_urls::hosted("hibp", "https://api.pwnedpasswords.com");
+    let Ok(client) = coolify_jobs::integrations::provider_urls::hosted_client(15) else {
+        return false;
+    };
+    let response = client
+        .get(format!("{base}/range/{prefix}"))
+        .header("Add-Padding", "true")
+        .send()
+        .await;
+    let Ok(response) = response else {
+        return false;
+    };
+    if !response.status().is_success() {
+        return false;
+    }
+    let body = response.text().await.unwrap_or_default();
+    body.lines().any(|line| {
+        let mut parts = line.trim().splitn(2, ':');
+        let hit = parts.next().unwrap_or_default();
+        let count: i64 = parts.next().unwrap_or("0").trim().parse().unwrap_or(0);
+        hit.eq_ignore_ascii_case(suffix) && count > 0
+    })
+}
+
+/// [`password_errors_for`] with `uncompromised()`, which `Password` runs when its other rules pass.
+pub(crate) async fn password_errors_with_leaks(
+    field: &str,
+    new: &str,
+    confirmation: &str,
+) -> Vec<String> {
+    let mut errors = password_errors_for(field, new, confirmation);
+    let rules_pass = password_errors_for(field, new, new).is_empty();
+    if rules_pass && password_compromised(new).await {
+        errors.push(format!(
+            "The given {field} has appeared in a data leak. Please choose a different {field}."
+        ));
+    }
+    errors
 }
 
 /// The same rules for the attribute `field`.
@@ -692,7 +741,12 @@ async fn reset_password(
             json!(["The current password field is required."]),
         );
     }
-    let new_errors = password_errors(new, str_of(&body, "new_password_confirmation"));
+    let new_errors = password_errors_with_leaks(
+        "new password",
+        new,
+        str_of(&body, "new_password_confirmation"),
+    )
+    .await;
     if !new_errors.is_empty() {
         fields.insert("new_password".to_string(), json!(new_errors));
     }
