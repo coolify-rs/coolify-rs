@@ -165,6 +165,7 @@ pub async fn create(
     }
     let (secrets, variables) = crate::routes::databases::generated_defaults(&state, kind, None)?;
     let new = NewDatabase {
+        destination_type: Some(dbs::destination_morph(&state.db, &s("destination_uuid")).await?),
         environment_id: env.id,
         destination_id,
         image: (kind == Kind::Postgresql).then_some(image),

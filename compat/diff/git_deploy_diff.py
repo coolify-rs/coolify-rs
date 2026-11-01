@@ -5,12 +5,18 @@ Same setup as applications_diff.py. Usage:
 
     git_deploy_diff.py --server <server uuid> --vm <orbstack machine name> [--case dockerfile,static,nixpacks,railpack]
 
-Per case it creates two identical applications from coollabsio/coolify-examples through
-the reference API, deploys one with the reference and one with coolify-rs, and compares
+Per case it creates two identical applications from a local mirror of
+coollabsio/coolify-examples through the reference API, deploys one with the reference and
+one with coolify-rs, and compares
 the deployment rows, the visible log entries, the commands of the hidden entries, the
 Docker Compose file, the container environment and the answer through the proxy. Then it
 deploys both again (the build is skipped) and compares those logs too. Everything it
 creates is deleted at the end. Exit status 1 when anything differs.
+
+Nothing clones from GitHub: --mirror (a bare repository on the VM, with the pull request refs) is
+served over HTTP by local_git_http.py. A created application is then pointed at a row of its own in
+`github_apps` that is public like upstream's id 0, with the mirror as html_url, so the deployment takes
+the same path as a public GitHub repository. Image pulls and package downloads still leave the VM.
 """
 import argparse
 import base64
@@ -18,14 +24,18 @@ import difflib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from databases_diff import call, record, results, sql  # noqa: E402
 
-REPO = "https://github.com/coollabsio/coolify-examples"
+REPO_SLUG = "coollabsio/coolify-examples"
+MIRROR_PORT = 18979
+GITHUB_APP = r"App\Models\GithubApp"
 INLINE_DOCKERFILE = base64.b64encode(b"FROM nginx:alpine\nARG DIFF_ARG=x\nRUN echo inline > /usr/share/nginx/html/index.html\nHEALTHCHECK --interval=5s CMD wget -q -O- http://127.0.0.1/ || exit 1\n").decode()
 INLINE_SECRET_DOCKERFILE = base64.b64encode(b"FROM nginx:alpine AS base\nRUN echo \"$DIFF_SECRET\" > /usr/share/nginx/html/index.html\nFROM base\nRUN env > /usr/share/nginx/html/env.html\nHEALTHCHECK --interval=5s CMD wget -q -O- http://127.0.0.1/ || exit 1\n").decode()
 # An older commit of the repository that still has dockerfile/single-stage.
@@ -74,8 +84,17 @@ CASES = {
     "inline-instant": dict(dockerfile=INLINE_DOCKERFILE, ports_exposes="80", instant_deploy=True),
     # Deploy 2 rolls back to the commit of deploy 1 (the image exists), deploy 3 to an older commit (ROLLBACK_COMMIT).
     "rollback": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
-    # A deploy key against a git-over-SSH mirror of the repository (--deploy-key, --ssh-repo).
+    # A deploy key against the mirror over SSH: the key is made for this run and removed after it.
     "deploykey": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
+    # Previews of a deploy key application and of one with no source (a URL other than github.com), per git type.
+    "deploykey-pr-github": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
+    "deploykey-pr-gitea": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
+    "deploykey-pr-gitlab": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
+    "deploykey-pr-bitbucket": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
+    "other": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
+    "other-pr-github": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
+    "other-pr-gitlab": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
+    "other-pr-bitbucket": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
     # Build secrets (PREPARE_SQL, ENVS): the helper holds the values, the Dockerfile mounts them.
     "secrets": dict(build_pack="dockerfile", base_directory="/dockerfile/single-stage", ports_exposes="80"),
     "secrets-inline": dict(dockerfile=INLINE_SECRET_DOCKERFILE, ports_exposes="80"),
@@ -166,7 +185,7 @@ OWN_CREATE = ("compose-files", "inline", "inline-instant", "preserve-compose")
 # Queued by the create request, so the first deployment needs no call.
 INSTANT = ("inline-instant",)
 # How many deployments a case runs, when it is not two.
-DEPLOYS = {"rollback": 3, "preview-dockerfile": 3}
+DEPLOYS = {"rollback": 3, "preview-dockerfile": 3, "deploykey-pr-github": 3, "deploykey-pr-gitlab": 3, "deploykey-pr-bitbucket": 3, "other-pr-gitlab": 3, "other-pr-bitbucket": 3}
 # Each side deletes the application through its own API, and the result is compared.
 OWN_DELETE = ("file-storage", "compose-files", "preserve", "preserve-compose")
 # SQL on the created row before the first deployment; {u} is its uuid.
@@ -187,8 +206,12 @@ ENVS = {"preview-dockerfile": SECRET_ENV, "preview-secrets": SECRET_ENV, "secret
 # Pull request deployed by deploy 2 of these cases, with the commit it deploys at the head of the repository.
 PREVIEW_PR = 74
 # The tree of that pull request is older: the application's base directory for the preview.
-PREVIEW_BASE = {"preview-dockerfile": "/dockerfile", "preview-secrets": "/dockerfile", "preview-static": "/static", "preview-nixpacks": "/nodejs"}
-PREVIEW_CASES = ("preview-dockerfile", "preview-static", "preview-secrets", "preview-nixpacks", "preview-image", "preview-compose", "preview-compose-db", "preview-compose-build")
+PREVIEW_BASE = {"preview-dockerfile": "/dockerfile", "preview-secrets": "/dockerfile", "preview-static": "/static", "preview-nixpacks": "/nodejs",
+                "deploykey-pr-github": "/dockerfile", "deploykey-pr-gitea": "/dockerfile", "deploykey-pr-gitlab": "/dockerfile", "other-pr-github": "/dockerfile", "other-pr-gitlab": "/dockerfile"}
+# The git type of the preview: upstream fetches refs/pull, refs/merge-requests, or (Bitbucket) checks out the commit given.
+PREVIEW_GIT_TYPE = {"deploykey-pr-gitea": "gitea", "deploykey-pr-gitlab": "gitlab", "deploykey-pr-bitbucket": "bitbucket", "other-pr-gitlab": "gitlab", "other-pr-bitbucket": "bitbucket"}
+PREVIEW_CASES = ("preview-dockerfile", "preview-static", "preview-secrets", "preview-nixpacks", "preview-image", "preview-compose", "preview-compose-db", "preview-compose-build",
+                 "deploykey-pr-github", "deploykey-pr-gitea", "deploykey-pr-gitlab", "deploykey-pr-bitbucket", "other-pr-github", "other-pr-gitlab", "other-pr-bitbucket")
 # Cases that also compare the hidden log: build.sh and the steps BuildKit prints, which show the rewritten Dockerfile.
 HIDDEN_CASES = {"secrets", "secrets-inline", "secrets-nixpacks", "secrets-compose", "custom-commands", "custom-flags", "custom-secrets"}
 # A file in the running image: what the build saw.
@@ -202,7 +225,7 @@ EXPECTED_STATUS = {("pre-fail", 2): "failed", ("pre-missing", 2): "failed", ("pr
 # Every deployment fails, so nothing runs and no file is written.
 NOTHING_RUNS = ("custom-build-fail", "custom-start-fail", "custom-unsafe", "custom-raw")
 # Cases that wait for the status pollers: the columns they compare do not depend on the other cases.
-STATUS_CASES = ("dockerfile", "static", "nixpacks", "railpack", "deploykey")
+STATUS_CASES = ("dockerfile", "static", "nixpacks", "railpack", "deploykey", "other")
 SECCOMP_PROFILE = '{"defaultAction":"SCMP_ACT_ALLOW"}'
 # What the Compose file and the Docker options change on the container.
 HOST_CONFIG = ("{{json .HostConfig.CapAdd}} {{json .HostConfig.CapDrop}} {{json .HostConfig.Init}} {{json .HostConfig.Ulimits}} "
@@ -215,10 +238,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--server", required=True)
     ap.add_argument("--vm", required=True)
-    ap.add_argument("--case", default=",".join(c for c in CASES if c != "deploykey"))
-    ap.add_argument("--deploy-key", help="private key file the --ssh-repo accepts")
-    ap.add_argument("--ssh-repo", help="e.g. git@192.168.139.220:examples.git")
+    ap.add_argument("--case", default=",".join(CASES))
     ap.add_argument("--track", help="file that receives each created uuid as it is created")
+    ap.add_argument("--mirror", default="/home/git/examples.git", help="bare repository on the VM; a copy of it is served")
     a = ap.parse_args()
 
     def vm(cmd):
@@ -247,13 +269,41 @@ def main():
         c, r = call(side, "POST", f"/api/v1/deploy?uuid={u}", {}, tok="acme_owner_root")
         return c, r
 
-    project = json.loads(call("ref", "POST", "/api/v1/projects", {"name": "git-deploy-diff"})[1])["uuid"]
-    base = {"server_uuid": a.server, "project_uuid": project, "environment_name": "production",
-            "git_repository": REPO, "git_branch": "main", "instant_deploy": False}
-    created = []
-    key_uuid = None
     run_id = f"{os.getpid()}-{int(time.time())}"
     seccomp = f"/tmp/git-deploy-diff-{run_id}.json"
+    server_py = f"/tmp/git-deploy-diff-{run_id}.py"
+    mirror_log = f"/tmp/git-deploy-diff-{run_id}.log"
+    address = vm("ip -4 -o addr show eth0").split()[3].split("/")[0]
+    mirror_html = f"http://{address}:{MIRROR_PORT}"
+    repo = f"{mirror_html}/{REPO_SLUG}"
+    # The copy adds what GitLab has and GitHub has not, and is what the deploy key cases clone over SSH.
+    copy_name = f"git-deploy-diff-{run_id}.git"
+    copy_path = f"/home/git/{copy_name}"
+    vm(f"cp -a {a.mirror} {copy_path} && cd {copy_path} && export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*' "
+       f"&& git config uploadpack.allowAnySHA1InWant true && for n in {PREVIEW_PR} 75; do git update-ref refs/merge-requests/$n/head refs/pull/$n/head; done && chown -R git:git {copy_path}")
+    key_dir = tempfile.mkdtemp(prefix="git-deploy-diff-")
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"git-deploy-diff-{run_id}", "-f", f"{key_dir}/key"], check=True)
+    key_public = open(f"{key_dir}/key.pub").read().strip()
+    vm(f"echo '{key_public}' >> /home/git/.ssh/authorized_keys")
+    ssh_repo = f"git@{address}:{copy_name}"
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "local_git_http.py")) as f:
+        subprocess.run(["orb", "-m", a.vm, "-u", "root", "bash", "-c", f"cat > {server_py}"], stdin=f, check=True)
+    subprocess.Popen(["orb", "-m", a.vm, "-u", "root", "bash", "-c", f"nohup python3 {server_py} {copy_path} {MIRROR_PORT} {mirror_log} >/dev/null 2>&1 &"],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(2)
+    source_uuid = f"gitdeploydiff{run_id.replace('-', '')}"[:24]
+    source_id = sql(f"""INSERT INTO github_apps (uuid, name, api_url, html_url, custom_user, custom_port, is_public, team_id, created_at, updated_at)
+                       VALUES ('{source_uuid}', 'git-deploy-diff mirror', 'http://127.0.0.1:9', '{mirror_html}', 'git', 22, true, 0, now(), now()) RETURNING id""").splitlines()[0]
+
+    def use_mirror(u):
+        """The row upstream's create wrote for a github.com URL, with the mirror as the public source."""
+        sql(f"UPDATE applications SET source_type = '{GITHUB_APP}', source_id = {source_id}, git_repository = '{REPO_SLUG}' WHERE uuid = '{u}'")
+
+    project = json.loads(call("ref", "POST", "/api/v1/projects", {"name": "git-deploy-diff"})[1])["uuid"]
+    base = {"server_uuid": a.server, "project_uuid": project, "environment_name": "production",
+            "git_repository": repo, "git_branch": "main", "instant_deploy": False}
+    created = []
+    key_uuid = None
 
     def release(uuids):
         """Deletes a finished case's applications and their networks: a whole run would use up Docker's address pools."""
@@ -271,9 +321,9 @@ def main():
         uuids.clear()
 
     try:
-        if "deploykey" in a.case.split(","):
+        if any(c.startswith("deploykey") for c in a.case.split(",")):
             c, r = call("ref", "POST", "/api/v1/security/keys",
-                        {"name": "git-deploy-diff", "private_key": open(a.deploy_key).read()}, tok="acme_owner_root")
+                        {"name": "git-deploy-diff", "private_key": open(f"{key_dir}/key").read()}, tok="acme_owner_root")
             key_uuid = json.loads(r)["uuid"]
         for case in a.case.split(","):
             release(created)
@@ -298,8 +348,8 @@ def main():
                     body = dict(server_uuid=a.server, project_uuid=project, environment_name="production", name=f"{case}-{side}",
                                 **{"instant_deploy": False, **spec})
                     c, r = call(side, "POST", "/api/v1/applications/dockerfile", body, tok="acme_owner_root")
-                elif case == "deploykey":
-                    body = dict(base, name=f"{case}-{side}", git_repository=a.ssh_repo, private_key_uuid=key_uuid, **spec)
+                elif case.startswith("deploykey"):
+                    body = dict(base, name=f"{case}-{side}", git_repository=ssh_repo, private_key_uuid=key_uuid, **spec)
                     c, r = call("ref", "POST", "/api/v1/applications/private-deploy-key", body, tok="acme_owner_root")
                 else:
                     creator = side if case in OWN_CREATE else "ref"
@@ -322,10 +372,13 @@ def main():
                     if all(sql(f"SELECT docker_compose_raw IS NOT NULL FROM applications WHERE uuid='{u}'") == "t" for u in (ur, us)):
                         break
                     time.sleep(2)
+            if "git_repository" in base and "dockerfile" not in spec and "docker_registry_image_name" not in spec and not case.startswith(("deploykey", "other")):
+                for u in (ur, us):
+                    use_mirror(u)
             if case in PREPARE_SQL:
                 for u in (ur, us):
                     sql(PREPARE_SQL[case].replace("{u}", u))
-            if (case in ENVS or case in PREPARE_SQL) and spec.get("build_pack") == "dockercompose":
+            if spec.get("build_pack") == "dockercompose":
                 # The job that stored the file still creates the SERVICE_* and storage rows; their order is compared.
                 time.sleep(15)
             for body in ENVS.get(case, []):
@@ -361,7 +414,11 @@ def main():
                     elif case == "preview-image" and n == 2:
                         c, r = call(side, "POST", f"/api/v1/deploy?uuid={u}&pr={preview_pr}&docker_tag=1.27-alpine", {}, tok="acme_owner_root")
                     elif case in PREVIEW_CASES and n == 2:
-                        c, r = call(side, "POST", f"/api/v1/applications/{u}/previews", {"pull_request_id": preview_pr, "pull_request_html_url": f"{REPO}/pull/{preview_pr}", "git_type": "github", "instant_deploy": True}, tok="acme_owner_root")
+                        git_type = PREVIEW_GIT_TYPE.get(case, "github")
+                        pr_body = {"pull_request_id": preview_pr, "pull_request_html_url": f"{repo}/pull/{preview_pr}", "git_type": git_type, "instant_deploy": True}
+                        if git_type == "bitbucket":
+                            pr_body["commit"] = ROLLBACK_COMMIT
+                        c, r = call(side, "POST", f"/api/v1/applications/{u}/previews", pr_body, tok="acme_owner_root")
                         c = 200 if c == 201 else c
                     elif case in PREVIEW_CASES and n == 3:
                         c, r = call(side, "POST", f"/api/v1/deploy?uuid={u}&pr={preview_pr}", {}, tok="acme_owner_root")
@@ -373,7 +430,7 @@ def main():
                 label = f"[{case}] deploy {n}"
                 expected = EXPECTED_STATUS.get((case, n), "finished")
                 record(f"{label}: both {expected}", qr and qs and qr["status"] == qs["status"] == expected,
-                       f"{qr and qr['status']} / {qs and qs['status']}")
+                       f"{qr and qr['status']} / {qs and qs['status']}: " + " | ".join(e["output"][:500] for e in json.loads((qr or {}).get("logs") or "[]") if e["type"] == "stderr")[-1200:])
                 if not (qr and qs):
                     continue
                 skip = {"id", "application_id", "deployment_uuid", "created_at", "updated_at", "finished_at", "deployment_url",
@@ -528,6 +585,16 @@ def main():
                 for u in (ur, us):
                     rows.append(sql(f"SELECT coalesce(json_agg(json_build_object('fs', replace(fs_path, '{u}', 'U'), 'mount', mount_path, 'dir', is_directory, 'host', is_host_file, 'git', is_based_on_git, 'chmod', chmod, 'chown', chown, 'content', content IS NOT NULL AND NOT is_based_on_git) ORDER BY mount_path)::text, '') FROM local_file_volumes WHERE resource_type = 'App\\Models\\Application' AND resource_id = (SELECT id FROM applications WHERE uuid='{u}')"))
                 record(f"[{case}] local_file_volumes rows alike", rows[0] == rows[1], rows)
+                # `ServerFilesFromServerJob` after a parse reads the files based on the repository into `content`.
+                if case.startswith("preserve"):
+                    time.sleep(20)
+                    decrypted = []
+                    for u in (ur, us):
+                        code = (f'$a = App\\Models\\Application::where("uuid", "{u}")->first();'
+                                'echo "@@".json_encode($a->fileStorages()->orderBy("mount_path")->get()->map(fn ($f) => [$f->mount_path, $f->is_based_on_git, $f->is_directory, $f->content])->values())."@@";')
+                        out = subprocess.run(["docker", "exec", "coolify-rs-reference-coolify-1", "php", "/var/www/html/artisan", "tinker", "--execute", code], capture_output=True, text=True).stdout
+                        decrypted.append(out.split("@@")[1] if "@@" in out else out[-300:])
+                    record(f"[{case}] file storage content alike", decrypted[0] == decrypted[1], [x[:1500] for x in decrypted])
             if case in STORAGES:
                 inside = []
                 for u in (ur, us):
@@ -566,14 +633,23 @@ def main():
             for u in (ur, us):
                 fqdn = json.loads(sql(f"SELECT to_json(fqdn)::text FROM applications WHERE uuid='{u}'") or "null") or ""
                 host = fqdn.split("://", 1)[-1].split("/")[0]
-                codes.append(vm(f"curl -s -o /dev/null -w '%{{http_code}}' -H 'Host: {host}' http://127.0.0.1/"))
+                # A container without the rolling update (--ip) is still starting when its deployment ends.
+                for _ in range(15):
+                    code = vm(f"curl -s -o /dev/null -w '%{{http_code}}' -H 'Host: {host}' http://127.0.0.1/")
+                    if code != "503":
+                        break
+                    time.sleep(2)
+                codes.append(code)
                 if spec.get("is_http_basic_auth_enabled"):
                     authed.append(vm(f"curl -s -o /dev/null -w '%{{http_code}}' -u {spec['http_basic_auth_username']}:{spec['http_basic_auth_password']} -H 'Host: {host}' http://127.0.0.1/"))
             if authed:
                 record(f"[{case}] the proxy asks for the password", codes[0] == codes[1] == "401", codes)
                 record(f"[{case}] the proxy accepts the password", authed[0] == authed[1] == "200", authed)
             else:
-                record(f"[{case}] both answer through the proxy", codes[0] == codes[1] == "200", codes)
+                record(f"[{case}] both answer through the proxy", codes[0] == codes[1] == "200",
+                       [codes, vm(f"docker ps -a --filter label=coolify.applicationUuid={ur} --format '{{{{.Names}}}} {{{{.Status}}}} {{{{.Networks}}}}'"),
+                        vm(f"docker inspect --format '{{{{json .NetworkSettings.Networks}}}}' $(docker ps -q --filter label=coolify.applicationUuid={ur})")[:700],
+                        vm(f"docker network inspect coolify --format '{{{{json .IPAM.Config}}}}'")])
             if case not in STATUS_CASES:
                 own_delete()
                 continue
@@ -588,6 +664,10 @@ def main():
         release(created)
         call("ref", "DELETE", f"/api/v1/projects/{project}", tok="acme_owner_root")
         vm(f"rm -f {seccomp}")
+        vm(f"pkill -f '^python3 {server_py}'; rm -f {server_py}; rm -rf {copy_path}; sed -i '\\|git-deploy-diff-{run_id}$|d' /home/git/.ssh/authorized_keys")
+        shutil.rmtree(key_dir, ignore_errors=True)
+        print(f"mirror requests: {vm(f'wc -l < {mirror_log}; rm -f {mirror_log}').strip()}")
+        sql(f"DELETE FROM github_apps WHERE id = {source_id} AND uuid = '{source_uuid}'")
         if key_uuid:
             time.sleep(10)
             call("ref", "DELETE", f"/api/v1/security/keys/{key_uuid}", tok="acme_owner_root")

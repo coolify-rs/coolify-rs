@@ -698,7 +698,11 @@ pub async fn create(
     let id = apps::create(
         &state.db,
         NewApplication {
-            destination_type: coolify_db::databases::STANDALONE_DOCKER_MORPH,
+            destination_type: coolify_db::databases::destination_morph(
+                &state.db,
+                &s(&m, "destination_uuid"),
+            )
+            .await?,
             uuid: uuid.clone(),
             environment_id: env.id,
             destination_id,

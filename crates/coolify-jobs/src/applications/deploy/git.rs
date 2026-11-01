@@ -485,8 +485,14 @@ pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImp
             let mut commands = Vec::new();
             let (clone, branch) = pull_request_clone(i, clone, &prefix, &ssh, &mut commands);
             commands.push(hidden(in_docker(i.dep, &clone)));
+            // `gitCommandsAsShellCommand($commands)`: one command joined with `&&`.
+            let joined = commands
+                .iter()
+                .map(|c| c.command.as_str())
+                .collect::<Vec<_>>()
+                .join(" && ");
             Ok(GitImport {
-                commands,
+                commands: vec![hidden(joined)],
                 branch,
                 full_repo_url: i.repository.to_owned(),
             })

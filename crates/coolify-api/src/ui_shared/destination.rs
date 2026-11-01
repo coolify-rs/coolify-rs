@@ -70,7 +70,7 @@ async fn show(
     let Some((dest_id, _, _, network, server_id, server_uuid, server_name)) =
         ops::destination_info(&state.db, res.table, res.id).await?
     else {
-        return Err(ApiError::NotPorted);
+        return Err(ApiError::Internal);
     };
     let is_app = res.class == Class::Application;
     let additional = if is_app {
@@ -256,7 +256,7 @@ async fn promote(
         return Err(ApiError::Unauthorized);
     }
     let Some(primary) = ops::destination_info(&state.db, res.table, res.id).await? else {
-        return Err(ApiError::NotPorted);
+        return Err(ApiError::Internal);
     };
     ops::promote_network(
         &state.db,

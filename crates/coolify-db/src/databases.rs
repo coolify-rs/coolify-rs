@@ -12,6 +12,7 @@ use crate::servers::{ColumnValue, bind_all, set_clause};
 use crate::{Db, DbError, DbResult};
 
 pub const STANDALONE_DOCKER_MORPH: &str = r"App\Models\StandaloneDocker";
+pub const SWARM_DOCKER_MORPH: &str = r"App\Models\SwarmDocker";
 
 /// `STANDALONE_DATABASE_MODELS`, in upstream's order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -336,8 +337,9 @@ type Joined = (String, String, String, String, Option<String>);
 fn select(kind: Kind, filter: &str) -> String {
     format!(
         "SELECT row_to_json(d)::text, row_to_json(e)::text, row_to_json(p)::text, row_to_json(t)::text, \
-         (SELECT row_to_json(sd)::text FROM standalone_dockers sd WHERE d.destination_type = '{STANDALONE_DOCKER_MORPH}' \
-          AND sd.id = d.destination_id) \
+         COALESCE((SELECT row_to_json(sd)::text FROM standalone_dockers sd WHERE d.destination_type = '{STANDALONE_DOCKER_MORPH}' \
+          AND sd.id = d.destination_id), (SELECT row_to_json(sd)::text FROM swarm_dockers sd \
+          WHERE d.destination_type = '{SWARM_DOCKER_MORPH}' AND sd.id = d.destination_id)) \
          FROM {table} d JOIN environments e ON e.id = d.environment_id JOIN projects p ON p.id = e.project_id \
          JOIN teams t ON t.id = p.team_id WHERE d.deleted_at IS NULL AND {filter}",
         table = kind.table()
@@ -453,15 +455,17 @@ pub async fn list_for_environment(db: &Db, environment_id: i64) -> DbResult<Vec<
     Ok(out)
 }
 
-/// `Server::databases()`: databases on the server's standalone Docker destinations.
+/// `Server::databases()`: databases on the server's destinations.
 pub async fn list_for_server(db: &Db, server_id: i64) -> DbResult<Vec<DatabaseRow>> {
     let mut out = Vec::new();
     for kind in Kind::ALL {
         let rows: Vec<Joined> = sqlx::query_as(&select(
             kind,
             &format!(
-                "d.destination_type = '{STANDALONE_DOCKER_MORPH}' AND d.destination_id IN \
-                 (SELECT id FROM standalone_dockers WHERE server_id = $1)"
+                "((d.destination_type = '{STANDALONE_DOCKER_MORPH}' AND d.destination_id IN \
+                 (SELECT id FROM standalone_dockers WHERE server_id = $1)) \
+                 OR (d.destination_type = '{SWARM_DOCKER_MORPH}' AND d.destination_id IN \
+                 (SELECT id FROM swarm_dockers WHERE server_id = $1)))"
             ),
         ))
         .bind(server_id)
@@ -494,6 +498,29 @@ pub async fn destinations(db: &Db, server_id: i64) -> DbResult<Vec<(i64, String)
     )
 }
 
+/// `$server->destinations()`: `(id, uuid, morph class)`, the standalone ones first.
+pub async fn all_destinations(
+    db: &Db,
+    server_id: i64,
+) -> DbResult<Vec<(i64, String, &'static str)>> {
+    let mut out: Vec<(i64, String, &'static str)> = destinations(db, server_id)
+        .await?
+        .into_iter()
+        .map(|(id, uuid)| (id, uuid, STANDALONE_DOCKER_MORPH))
+        .collect();
+    let swarm: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, uuid FROM swarm_dockers WHERE server_id = $1 ORDER BY id")
+            .bind(server_id)
+            .fetch_all(db.pool())
+            .await?;
+    out.extend(
+        swarm
+            .into_iter()
+            .map(|(id, uuid)| (id, uuid, SWARM_DOCKER_MORPH)),
+    );
+    Ok(out)
+}
+
 /// `(uuid, name, network)` of the server's standalone Docker destinations.
 pub async fn destination_records(
     db: &Db,
@@ -515,12 +542,28 @@ pub async fn team_destination(
 ) -> DbResult<Option<(i64, i64)>> {
     Ok(sqlx::query_as(
         "SELECT sd.id, s.id FROM standalone_dockers sd JOIN servers s ON s.id = sd.server_id \
+         WHERE sd.uuid = $1 AND s.team_id = $2 AND s.deleted_at IS NULL \
+         UNION ALL SELECT sd.id, s.id FROM swarm_dockers sd JOIN servers s ON s.id = sd.server_id \
          WHERE sd.uuid = $1 AND s.team_id = $2 AND s.deleted_at IS NULL LIMIT 1",
     )
     .bind(uuid)
     .bind(team_id)
     .fetch_optional(db.pool())
     .await?)
+}
+
+/// The morph class of the destination with this uuid: `StandaloneDocker::whereUuid()` first, then `SwarmDocker`.
+pub async fn destination_morph(db: &Db, uuid: &str) -> DbResult<&'static str> {
+    let standalone: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM standalone_dockers WHERE uuid = $1)")
+            .bind(uuid)
+            .fetch_one(db.pool())
+            .await?;
+    Ok(if standalone {
+        STANDALONE_DOCKER_MORPH
+    } else {
+        SWARM_DOCKER_MORPH
+    })
 }
 
 /// Services of an environment (not ported yet).
@@ -533,7 +576,7 @@ pub async fn count_other_resources(db: &Db, environment_id: i64) -> DbResult<i64
     .await?)
 }
 
-/// Whether the server has Swarm destinations (not ported).
+/// Whether the server has Swarm destinations.
 pub async fn has_swarm_destinations(db: &Db, server_id: i64) -> DbResult<bool> {
     Ok(
         sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM swarm_dockers WHERE server_id = $1)")
@@ -548,6 +591,8 @@ pub async fn has_swarm_destinations(db: &Db, server_id: i64) -> DbResult<bool> {
 pub struct NewDatabase {
     pub environment_id: i64,
     pub destination_id: i64,
+    /// `$destination->getMorphClass()`; `None` is a standalone Docker destination.
+    pub destination_type: Option<&'static str>,
     /// The image when the caller chooses it (PostgreSQL in the UI); otherwise the column default.
     pub image: Option<String>,
     /// Generated or given passwords, already encrypted with `APP_KEY` (`encrypted` casts).
@@ -675,7 +720,7 @@ pub async fn create(
     let mut q = sqlx::query_as::<_, (i64, String)>(&sql)
         .bind(n.environment_id)
         .bind(n.destination_id)
-        .bind(STANDALONE_DOCKER_MORPH)
+        .bind(n.destination_type.unwrap_or(STANDALONE_DOCKER_MORPH))
         .bind(now);
     for (_, v) in &cols {
         q = match v {
@@ -963,14 +1008,16 @@ pub async fn activity_by_id(db: &Db, id: i64) -> DbResult<Option<(serde_json::Va
     Ok(r.map(|(p, d)| (serde_json::from_str(&p).unwrap_or_default(), d)))
 }
 
-/// Servers with at least one ported database on a standalone Docker destination.
+/// Servers with at least one ported database.
 pub async fn servers_with_databases(db: &Db) -> DbResult<Vec<i64>> {
     let parts: Vec<String> = Kind::ported_kinds()
         .map(|k| {
             format!(
-                "SELECT sd.server_id FROM {} d JOIN standalone_dockers sd ON sd.id = d.destination_id \
-                 WHERE d.destination_type = '{STANDALONE_DOCKER_MORPH}' AND d.deleted_at IS NULL",
-                k.table()
+                "SELECT sd.server_id FROM {t} d JOIN standalone_dockers sd ON sd.id = d.destination_id \
+                 WHERE d.destination_type = '{STANDALONE_DOCKER_MORPH}' AND d.deleted_at IS NULL \
+                 UNION SELECT sd.server_id FROM {t} d JOIN swarm_dockers sd ON sd.id = d.destination_id \
+                 WHERE d.destination_type = '{SWARM_DOCKER_MORPH}' AND d.deleted_at IS NULL",
+                t = k.table()
             )
         })
         .collect();

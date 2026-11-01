@@ -1334,14 +1334,18 @@ pub async fn team_standalone_destination(
     .await?)
 }
 
-/// `SwarmDocker::ownedByCurrentTeamAPI($teamId)->where('uuid', ...)` exists.
-pub async fn team_swarm_destination_exists(db: &Db, team_id: TeamId, uuid: &str) -> DbResult<bool> {
-    Ok(sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM swarm_dockers sd JOIN servers s ON s.id = sd.server_id WHERE sd.uuid = $1 AND s.team_id = $2)",
+/// `SwarmDocker::ownedByCurrentTeamAPI($teamId)->where('uuid', ...)`: `(id, server id)`.
+pub async fn team_swarm_destination(
+    db: &Db,
+    team_id: TeamId,
+    uuid: &str,
+) -> DbResult<Option<(i64, i64)>> {
+    Ok(sqlx::query_as(
+        "SELECT sd.id, s.id FROM swarm_dockers sd JOIN servers s ON s.id = sd.server_id WHERE sd.uuid = $1 AND s.team_id = $2 LIMIT 1",
     )
     .bind(uuid)
     .bind(team_id)
-    .fetch_one(db.pool())
+    .fetch_optional(db.pool())
     .await?)
 }
 

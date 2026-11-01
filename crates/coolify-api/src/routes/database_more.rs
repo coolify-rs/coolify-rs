@@ -844,14 +844,14 @@ pub async fn clone_database(
     }
     let wanted = input.str("destination_uuid").unwrap_or_default();
     let not_found = ApiError::Message(StatusCode::NOT_FOUND, "Destination not found.");
-    let Some((destination_id, server_id)) =
-        parts::team_standalone_destination(&state.db, ctx.team_id, wanted).await?
-    else {
-        if parts::team_swarm_destination_exists(&state.db, ctx.team_id, wanted).await? {
-            return Err(ApiError::NotPorted);
-        }
-        return Err(not_found);
-    };
+    let (destination_id, server_id, destination_type) =
+        match parts::team_standalone_destination(&state.db, ctx.team_id, wanted).await? {
+            Some((id, server)) => (id, server, STANDALONE_DOCKER_MORPH),
+            None => match parts::team_swarm_destination(&state.db, ctx.team_id, wanted).await? {
+                Some((id, server)) => (id, server, dbs::SWARM_DOCKER_MORPH),
+                None => return Err(not_found),
+            },
+        };
     let server = servers::find_by_id(&state.db, server_id)
         .await?
         .ok_or(ApiError::Message(
@@ -876,7 +876,7 @@ pub async fn clone_database(
         &new_uuid,
         &strip_tags(Some(&name)),
         destination_id,
-        STANDALONE_DOCKER_MORPH,
+        destination_type,
         now,
     )
     .await?;

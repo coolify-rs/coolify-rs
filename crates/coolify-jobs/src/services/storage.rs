@@ -681,6 +681,9 @@ pub async fn files_from_server(
             .is_some_and(|c| !c.is_empty() && c != "0");
         if is_file {
             set_is_directory(jobs, f.id, false).await?;
+            if f.is_based_on_git {
+                load_into_row(jobs, r, f.id, &dir, s.server_id()).await;
+            }
         } else if is_dir && !f.is_directory && has_content {
             if !outside {
                 let states = remote_file_states(jobs, t, std::slice::from_ref(&location)).await;
@@ -712,6 +715,120 @@ pub async fn files_from_server(
             set_file_content(jobs, f.id, None, true).await?;
             if !outside {
                 run(jobs, t, &format!("mkdir -p -- {escaped}")).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `$fileVolume->loadStorageOnServer()` inside `getFilesystemVolumesFromServer`.
+async fn load_into_row(
+    jobs: &Jobs,
+    r: &serde_json::Map<String, Value>,
+    id: i64,
+    dir: &str,
+    server_id: Option<i64>,
+) {
+    let Some(server_id) = server_id else {
+        return;
+    };
+    let Ok(Some(row)) = coolify_db::servers::find_by_id(&jobs.0.db, server_id).await else {
+        return;
+    };
+    let server = crate::server::ServerInfo::from_row(&row);
+    if let Ok(Some(content)) = jobs.load_file_storage_in(r, dir, &server).await {
+        let _ = set_file_content(jobs, id, Some(&content), false).await;
+    }
+}
+
+/// `getFilesystemVolumesFromServer($application, isInit: true)`: the job `applicationParser()`
+/// dispatches for each volume. It runs beside the deployment that parsed, as upstream's queue does.
+pub async fn application_files_from_server(jobs: &Jobs, app_id: i64) -> Result<(), String> {
+    let db = &jobs.0.db;
+    let a = coolify_db::applications::find_by_id(db, app_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("application not found")?;
+    let server_id = a.server_id().ok_or("application has no server")?;
+    let row = coolify_db::servers::find_by_id(db, server_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("server not found")?;
+    let server = crate::server::ServerInfo::from_row(&row);
+    let t = server.target(jobs).await?;
+    let owner = crate::storages::StorageOwner::for_application(db, &a)
+        .await
+        .map_err(|e| e.to_string())?;
+    let dir = owner.workdir.clone();
+    run(
+        jobs,
+        &t,
+        &format!("mkdir -p -- {} > /dev/null 2>&1 || true", quote(&dir)),
+    )
+    .await?;
+    let rows = coolify_db::storages::list(
+        db,
+        coolify_db::storages::StorageKind::File,
+        coolify_db::applications::MORPH,
+        app_id,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    for r in &rows {
+        let f = file_row(jobs, r);
+        let trimmed = f.fs_path.trim();
+        let location = if trimmed.starts_with('$') {
+            trimmed.to_owned()
+        } else {
+            resolved_fs_path(&f.fs_path, &dir)
+        };
+        let escaped = shell_argument(&location)?;
+        let is_file = test_path(jobs, &t, "-f", &escaped).await?;
+        let is_dir = test_path(jobs, &t, "-d", &escaped).await?;
+        let outside = is_outside_resource_directory(&f.fs_path, &dir);
+        let has_content = f
+            .content
+            .as_deref()
+            .is_some_and(|c| !c.is_empty() && c != "0");
+        if is_file {
+            set_is_directory(jobs, f.id, false).await?;
+            if f.is_based_on_git {
+                load_into_row(jobs, r, f.id, &dir, Some(server_id)).await;
+            }
+        } else if is_dir && !f.is_directory && has_content {
+            if !outside {
+                let states = remote_file_states(jobs, &t, std::slice::from_ref(&location)).await;
+                if states.first().map(String::as_str) == Some("empty-directory")
+                    && let Some(enc) = jobs.0.encrypter.as_ref()
+                    && let Ok(file) = crate::storages::FileStorage::from_record(r, enc)
+                {
+                    let _ = jobs.save_storage_on_server(&owner, &file).await;
+                }
+            }
+        } else if is_dir {
+            set_file_content(jobs, f.id, None, true).await?;
+        } else if !f.is_directory && has_content {
+            if outside {
+                continue;
+            }
+            set_is_directory(jobs, f.id, false).await?;
+            let encoded = base64::engine::general_purpose::STANDARD
+                .encode(f.content.as_deref().unwrap_or_default());
+            let mkdir = format!("mkdir -p -- \"$(dirname -- {escaped})\"");
+            let write = format!("echo '{encoded}' | base64 -d | tee -- {escaped}");
+            jobs.remote()
+                .run(
+                    &t,
+                    &[mkdir.as_str(), write.as_str()],
+                    RunOptions::op("application.storage"),
+                )
+                .await
+                .map_err(|e| e.message)?;
+        } else {
+            // Missing: a directory, also a file flag without content.
+            set_file_content(jobs, f.id, None, true).await?;
+            if !outside {
+                run(jobs, &t, &format!("mkdir -p -- {escaped}")).await?;
             }
         }
     }

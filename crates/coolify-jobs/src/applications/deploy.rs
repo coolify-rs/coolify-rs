@@ -419,136 +419,180 @@ impl Run {
                 )
                 .await;
             }
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(Stream, String)>();
-            let db = self.jobs.0.db.clone();
-            let queue_id = self.queue_id;
-            let command_for_log =
-                (!cmd.skip_command_log && !cmd.command_hidden).then(|| self.redact(&cmd.command));
-            // `$message.' '.$command`: the command of the entry, which these two do not have.
-            let raw_command = if cmd.skip_command_log || cmd.command_hidden {
-                String::new()
-            } else {
-                cmd.command.clone()
-            };
-            let hint_added = self.hint_added.clone();
-            let known = self.known.clone();
-            let locked = self.locked.clone();
-            let (hidden, kind) = (cmd.hidden, cmd.kind);
-            let skip = cmd.skip_command_log;
-            let writer = tokio::spawn(async move {
-                let mut chunks: Vec<String> = Vec::new();
-                let mut stdout = String::new();
-                while let Some((stream, chunk)) = rx.recv().await {
-                    chunks.push(chunk.clone());
-                    if stream == Stream::Out {
-                        stdout.push_str(&chunk);
-                    }
-                    let k: Vec<&str> = known.iter().map(String::as_str).collect();
-                    let l: Vec<&str> = locked.iter().map(String::as_str).collect();
-                    let hint = !hint_added.load(std::sync::atomic::Ordering::SeqCst)
-                        && contains_known_secret(
-                            &format!("{} {raw_command}", chunk.trim()),
-                            &known,
-                            &locked,
-                        );
-                    let mut text = chunk.trim().to_owned();
-                    if skip {
-                        text = redact_base64_payloads(&text);
-                    }
-                    // `takeCompleteOutput()`: a non-empty chunk is logged even when it trims to nothing.
-                    if chunk.is_empty() {
-                        continue;
-                    }
-                    let mut output = coolify_compat::redact::redact_text(&text, &k, &l);
-                    if output.starts_with('╔') {
-                        output = format!("\n{output}");
-                    }
-                    let entry = LogEntry {
-                        command: command_for_log.clone(),
-                        output,
-                        kind: kind.unwrap_or(if stream == Stream::Err {
-                            "stderr"
-                        } else {
-                            "stdout"
-                        }),
-                        timestamp: timestamp(),
-                        hidden,
-                        batch,
-                    };
-                    let _ = apps::append_log(&db, queue_id, &[entry], now()).await;
-                    if hint && !hint_added.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                        let hint_entry = LogEntry {
-                            command: None,
-                            output: HIDDEN_ENV_VALUES_HINT.into(),
-                            kind: "stdout",
+            // `$maxRetries` of `execute_remote_command`: a dropped SSH connection runs the command again.
+            let mut attempt = 0u32;
+            loop {
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(Stream, String)>();
+                let db = self.jobs.0.db.clone();
+                let queue_id = self.queue_id;
+                let command_for_log = (!cmd.skip_command_log && !cmd.command_hidden)
+                    .then(|| self.redact(&cmd.command));
+                // `$message.' '.$command`: the command of the entry, which these two do not have.
+                let raw_command = if cmd.skip_command_log || cmd.command_hidden {
+                    String::new()
+                } else {
+                    cmd.command.clone()
+                };
+                let hint_added = self.hint_added.clone();
+                let known = self.known.clone();
+                let locked = self.locked.clone();
+                let (hidden, kind) = (cmd.hidden, cmd.kind);
+                let skip = cmd.skip_command_log;
+                let writer = tokio::spawn(async move {
+                    let mut chunks: Vec<String> = Vec::new();
+                    let mut stdout = String::new();
+                    while let Some((stream, chunk)) = rx.recv().await {
+                        chunks.push(chunk.clone());
+                        if stream == Stream::Out {
+                            stdout.push_str(&chunk);
+                        }
+                        let k: Vec<&str> = known.iter().map(String::as_str).collect();
+                        let l: Vec<&str> = locked.iter().map(String::as_str).collect();
+                        let hint = !hint_added.load(std::sync::atomic::Ordering::SeqCst)
+                            && contains_known_secret(
+                                &format!("{} {raw_command}", chunk.trim()),
+                                &known,
+                                &locked,
+                            );
+                        let mut text = chunk.trim().to_owned();
+                        if skip {
+                            text = redact_base64_payloads(&text);
+                        }
+                        // `takeCompleteOutput()`: a non-empty chunk is logged even when it trims to nothing.
+                        if chunk.is_empty() {
+                            continue;
+                        }
+                        let mut output = coolify_compat::redact::redact_text(&text, &k, &l);
+                        if output.starts_with('╔') {
+                            output = format!("\n{output}");
+                        }
+                        let entry = LogEntry {
+                            command: command_for_log.clone(),
+                            output,
+                            kind: kind.unwrap_or(if stream == Stream::Err {
+                                "stderr"
+                            } else {
+                                "stdout"
+                            }),
                             timestamp: timestamp(),
-                            hidden: false,
+                            hidden,
                             batch,
                         };
-                        let _ = apps::append_log(&db, queue_id, &[hint_entry], now()).await;
+                        let _ = apps::append_log(&db, queue_id, &[entry], now()).await;
+                        if hint && !hint_added.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                            let hint_entry = LogEntry {
+                                command: None,
+                                output: HIDDEN_ENV_VALUES_HINT.into(),
+                                kind: "stdout",
+                                timestamp: timestamp(),
+                                hidden: false,
+                                batch,
+                            };
+                            let _ = apps::append_log(&db, queue_id, &[hint_entry], now()).await;
+                        }
                     }
-                }
-                (chunks, stdout)
-            });
-            let result = self
-                .jobs
-                .remote()
-                .run_streaming(
-                    &self.target,
-                    &[script],
-                    RunOptions::op("deployment.command").timeout(COMMAND_TIMEOUT),
-                    tx,
+                    (chunks, stdout)
+                });
+                let result = self
+                    .jobs
+                    .remote()
+                    .run_streaming(
+                        &self.target,
+                        std::slice::from_ref(&script),
+                        RunOptions::op("deployment.command").timeout(COMMAND_TIMEOUT),
+                        tx,
+                    )
+                    .await;
+                let (chunks, stdout) = writer.await.unwrap_or_default();
+                if let Err(e) = &result
+                    && !cmd.ignore_errors
+                    && attempt + 1 < coolify_remote::retry::DEFAULT_MAX_ATTEMPTS
+                    && coolify_remote::retry::is_retryable_failure(e.code, &e.message)
+                {
+                    // `addRetryLogEntry` and the cancellation check while waiting.
+                    let (message, _) = self.command_failure(&cmd, e, &stdout);
+                    let delay = coolify_remote::retry::retry_delay(attempt);
+                    attempt += 1;
+                    self.log(
+                    &format!(
+                        "SSH connection failed. Retrying... (Attempt {attempt}/{}, waiting {}s)\nError: {message}",
+                        coolify_remote::retry::DEFAULT_MAX_ATTEMPTS,
+                        delay.as_secs()
+                    ),
+                    "stdout",
+                    false,
                 )
                 .await;
-            let (chunks, stdout) = writer.await.unwrap_or_default();
-            if let Some(key) = &cmd.save {
-                let value = if cmd.append {
-                    chunks.concat()
-                } else {
-                    chunks
-                        .last()
-                        .map(|c| c.trim().to_owned())
-                        .unwrap_or_default()
-                };
-                if cmd.append {
-                    self.saved.entry(key.clone()).or_default().push_str(&value);
-                } else {
-                    self.saved.insert(key.clone(), value);
-                }
-            }
-            if let Err(e) = result
-                && !cmd.ignore_errors
-            {
-                if self.status().await == "cancelled-by-user" {
-                    return Err(Fail::Cancelled);
-                }
-                let code = e.code.unwrap_or(1);
-                let error = if e.message.starts_with("SSH command failed with exit code") {
-                    let out = stdout.trim();
-                    if out.is_empty() {
-                        "Command failed with no error output".to_owned()
-                    } else {
-                        out.to_owned()
+                    if self.status().await == "cancelled-by-user" {
+                        return Err(Fail::Cancelled);
                     }
-                } else {
-                    e.message.clone()
-                };
-                let shown = if cmd.skip_command_log {
-                    "[command hidden because it contains sensitive data]".to_owned()
-                } else {
-                    self.redact(&cmd.command)
-                };
-                return Err(Fail::Error {
-                    message: format!(
-                        "Command execution failed (exit code {code}): {shown}\nError: {}",
-                        self.redact(&error)
-                    ),
-                    code: code.into(),
-                    logged: false,
-                });
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                if let Some(key) = &cmd.save {
+                    let value = if cmd.append {
+                        chunks.concat()
+                    } else {
+                        chunks
+                            .last()
+                            .map(|c| c.trim().to_owned())
+                            .unwrap_or_default()
+                    };
+                    if cmd.append {
+                        self.saved.entry(key.clone()).or_default().push_str(&value);
+                    } else {
+                        self.saved.insert(key.clone(), value);
+                    }
+                }
+                if let Err(e) = result
+                    && !cmd.ignore_errors
+                {
+                    if self.status().await == "cancelled-by-user" {
+                        return Err(Fail::Cancelled);
+                    }
+                    let (message, code) = self.command_failure(&cmd, &e, &stdout);
+                    return Err(Fail::Error {
+                        message,
+                        code: code.into(),
+                        logged: false,
+                    });
+                }
+                break;
             }
         }
         Ok(())
+    }
+
+    /// The `DeploymentException` of a failed command: its message and exit code.
+    fn command_failure(
+        &self,
+        cmd: &Cmd,
+        e: &coolify_remote::RemoteError,
+        stdout: &str,
+    ) -> (String, i32) {
+        let code = e.code.unwrap_or(1);
+        let error = if e.message.starts_with("SSH command failed with exit code") {
+            let out = stdout.trim();
+            if out.is_empty() {
+                "Command failed with no error output".to_owned()
+            } else {
+                out.to_owned()
+            }
+        } else {
+            e.message.clone()
+        };
+        let shown = if cmd.skip_command_log {
+            "[command hidden because it contains sensitive data]".to_owned()
+        } else {
+            self.redact(&cmd.command)
+        };
+        (
+            format!(
+                "Command execution failed (exit code {code}): {shown}\nError: {}",
+                self.redact(&error)
+            ),
+            code,
+        )
     }
 
     /// `dockerStopCommand($timeout, escapeshellarg($name), $server)`.
