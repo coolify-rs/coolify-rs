@@ -6,17 +6,9 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 
 - Upstream API operations that are not ported answer `501 {"message":"This endpoint is not implemented in coolify-rs
   yet."}`; `scripts/parity.py --missing` lists them.
-- Not every upstream API operation is implemented (`scripts/parity.py`). Others answer `501 {"message":"This endpoint is not
-  implemented in coolify-rs yet."}`.
-- The web UI covers the dashboard, projects, environments, private keys, API, cloud and integration tokens, cloud-init scripts,
-  notifications, tags, shared variables, S3 storage, teams, members, invitations, profile, 2FA enrollment, passkey
-  management and appearance, every sign-in screen (registration and the root setup window, password reset, forced
-  password change, email verification, the two-factor challenge and requirement, passkey sign-in, OAuth/SSO and
-  `/settings/oauth`), instance settings, onboarding, servers, destinations, registries and sources.
-  Not available yet: the sections of applications, databases and services that have no page (they open a "not
-  available in coolify-rs yet" page).
-- Within the ported pages: no canvas views, global search, project icons or custom color themes;
-  applications and services in an environment are counted, not listed; the dashboard's server status does not include
+- A path upstream does not have goes home, as `Route::any('/{any}')` does. A section of an application, database or service
+  that has no page yet opens a "not available in coolify-rs yet" page; `scripts/parity.py --missing` lists what is left.
+- Within the ported pages: no custom color themes; the dashboard's server status does not include
   the Traefik-outdated and Sentinel checks; table/grid choices are remembered per browser, not per user.
 - Browser sessions live in memory: a restart signs everyone out. Session limits: 10,000 sessions, 7-day idle
   (`SESSION_LIFETIME`), 30-day absolute.
@@ -38,10 +30,10 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   `!override`) in a proxy configuration are ignored when reading it, but traffic analytics does not rewrite a stored
   configuration.
 - Server and destination pages: ported are destinations (index, new, show, resources, danger), Advanced, Private Key, CA
-  Certificate, Swarm, server Destinations, Resources (no canvas toggle), Proxy (configuration, dynamic configurations, TLS
+  Certificate, Swarm, server Destinations, Resources, Proxy (configuration, dynamic configurations, TLS
   list, logs, start/stop/restart), Sentinel (configuration, logs), Docker Cleanup with executions, Images, Log Drains,
   Registries (server and `/registries`), Terminal Access, Security Patches, Cloudflare Tunnel, GitHub Runners and the settings of Traffic Analytics. Not ported yet (the page
-  says "not available"): Transfer, the Terminal page. Cloudflare Tunnel: the setup and tear down through the Cloudflare API
+  says "not available"): the Terminal page. Cloudflare Tunnel: the setup and tear down through the Cloudflare API
   (`CloudflareTunnelService`) and the integration token form answer with an error toast or link to the unported token page; manual mode and the
   tunnel token path are ported. GitHub Runners: the page, settings, Sysbox install and cancel are ported; a GitHub App that is ready for runners
   answers with an error toast, because `GithubRunnerApi`, provisioning, reconciling and the `workflow_job` webhook are not ported. Security
@@ -218,8 +210,6 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - A failing SMTP send in the test email: only "connection refused" uses Symfony's message. Other transport errors (DNS, TLS,
   authentication) show lettre's text.
 - S3 connection failures do not send `emails.s3-connection-error`, and `unusable_email_sent` is only reset, not set.
-- `Canvas` links (tags, shared variables) lead to the not-available page, as the canvas pages are not ported. Their toggles
-  are shown, and `prefersCanvasView` is not honoured.
 - Upstream glitches reproduced on purpose: the Issued tokens list hides tokens created since the page load (Alpine list), and
   the new-tag modal shows no validation error (`wire:ignore`). Not reproduced: the variable count of the shared variables table
   lags one request behind after an add, and rows of the S3 resources table without `wire:key` show stale data after a move.
@@ -249,7 +239,6 @@ change, password, two-factor enrollment and recovery codes, passkey management, 
   pages (server, application and database deletion) still ask for the password within upstream's three hours.
 - What's New reads `{COOLIFY_RS_DATA_DIR}/changelogs/*.json`. `PullChangelog` is not ported, because it fetches them
   from upstream's CDN, so a new install shows no updates. Unread counts are not cached.
-- A new user is sent to `/onboarding` as upstream does, but the wizard is not ported: the page offers "Skip setup".
 - `Password::defaults()` in coolify-rs has no `uncompromised()` rule: it would send a hash prefix of the password to
   Have I Been Pwned. Upstream in production refuses a password found there; coolify-rs accepts it.
 - Sign-in state before login (the two-factor challenge's `login.id`, OAuth state, passkey challenge, flash messages)
@@ -277,7 +266,7 @@ change, password, two-factor enrollment and recovery codes, passkey management, 
 | Client IP for the API allowlist | `TrustProxies('*')`: `X-Forwarded-For` trusted from anyone, so the leftmost (client-controlled) entry is used | peer address unless `COOLIFY_RS_TRUSTED_PROXIES` is set; then rightmost untrusted hop | security fix: the allowlist is spoofable upstream when the app is reachable without a proxy |
 | `CF-Connecting-IP` on Coolify Cloud | honoured for any peer when `isCloud()` | not applicable | coolify-rs has no cloud mode; the self-hosted rule (Cloudflare peers only) is implemented |
 | Rate limiting | `throttle:api` 200/min, `X-RateLimit-*` headers | none | not implemented yet |
-| Audit events | `audit_events` rows for environment changes, auth failures, server validation | not written (remote commands and validations are logged to the `audit` tracing target) | not implemented yet |
+| Audit events | `audit_events` rows for environment changes, auth failures, server validation | written, except server validations and remote commands, which go to the `audit` tracing target | not implemented yet |
 | SSH host keys | not verified (`StrictHostKeyChecking=no`, `UserKnownHostsFile=/dev/null`) | pinned per server on first use; a changed key fails with `Host key verification failed: the server's SSH host key changed ...` (new fingerprint and how to accept it); the pin is dropped when the IP or port changes or the server is deleted | security fix (ADR 0009); `COOLIFY_RS_SSH_HOST_KEYS=ignore` restores upstream's behaviour |
 | SSH key files | written once to `storage/app/ssh/keys/ssh_key@<uuid>` and kept | written 0600 for the length of a command, then removed; errors still name the key `ssh_key@<uuid>` | key material stays off disk |
 | SSH options | upstream's options with the operator's environment | adds `-F /dev/null`, `BatchMode`, `IdentitiesOnly`, no agent, no forwarding; environment cleared | a hostile server or operator config cannot change behaviour |
@@ -319,13 +308,11 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 
 | Upstream | coolify-rs | Why |
 | --- | --- | --- |
-| Pages `Project/Service/{Analytics,ImportBackup,DatabaseBackups,BackupExecutions,VolumeBackup/*}` | the page says it is not available | later task |
 | Page `Project/Service/Analytics` | the page says it is not available | later task |
 | `Project/Shared/*` sections on service pages (variables, tags, danger, logs, volumes and others) | placeholder named after the section | connected when the shared components merge |
 | DNS checks and Cloudflare automation on the service Domains page (`CheckDomainDnsJob`, `checkDomainDns`, `cloudflare-autoconfigure`) | rows stay "Not checked", `domain_dns_statuses` is not written, the buttons say it is not available | they contact external services |
 | `addSuggestedDomain` and `ManagedDnsRecordCleanup` on the Domains page | not ported | they need the DNS checks |
 | Configuration warning on service pages, with the diff of changes | the warning without the diff | no configuration diff yet |
-| Livewire pages `Project/Service/*`, `one-click-service-*` in `Project/Resource/Create` | not available | later task |
 | `POST /services/{uuid}/clone` with `clone_volumes: true` | `501` | `VolumeCloneJob` is not ported |
 | `PATCH /services/{uuid}/databases/{database_uuid}` that changes `is_public` | `501` | `StartDatabaseProxy` / `StopDatabaseProxy` are not ported |
 | `POST /services/{uuid}/migrate` in a dev instance | `404`, as upstream outside dev | `MigrateResourceToDestination` only runs in dev upstream |
@@ -372,7 +359,7 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
 | A failing `setupDynamicProxyConfiguration` with a missing private key | `ModelNotFoundException` becomes a 404 dialog over the page | a toast with the same message | only seen with this test setup's localhost |
 | Global search cache | 300 seconds, cleared by `ClearsGlobalSearchCache` | no cache: read on each opening | same visible results |
 | "new storage" and "new private key" in the palette | open the create modal in place | go to the page and open its modal | the modals live on those pages |
-| "new github" and "new canvas" in the palette | modal, deploy canvas | go to `/sources` and `/deploy-canvas`, which are not ported | |
+| "new github" in the palette | modal | goes to `/sources` | |
 | Real-time warning popup | shown when Echo cannot connect | never: coolify-rs has no Echo connection to fail | |
 | Onboarding cloud provider cards | modals of `Server\New\By*` | links to `/servers/new` | those components are not ported |
 | Onboarding validation | `validate-and-install`, which installs prerequisites and Docker when missing | checks through the existing validation dialog, then the proxy start. A server without Docker stops with upstream's message | the dialog has no install progress |
@@ -389,8 +376,8 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
 - The import does not take over DNS records at Cloudflare (`adoptRecord`, `reclaimRecord`): an owned record of a bundle is stored as not
   owned, with the warning upstream gives when the provider refuses. The finish list steps `dns_record`, `github_app_webhook` (GitHub API),
   `s3_storage` (`testConnection`) and webhook receipts (`recordWebhook`) make no provider call and stay on "Needs action" until marked done.
-- Project icons do not travel: `ProjectIconStorageService` is not ported, so a project with an icon gets upstream's "cannot be read" warning
-  on export, and an icon in a bundle is not stored on import.
+- Project icons do not travel: a project with an icon gets upstream's "cannot be read" warning on export, and an icon in a bundle is not
+  stored on import.
 - `clearLocalSshArtifacts` and `remove_iip` have no equivalent: this build keeps no SSH mux or key cache to clear, and messages are not
   stripped of instance addresses.
 - A database error during import answers with a shorter message than Laravel's, without SQL and bindings.
@@ -410,9 +397,30 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
   ported, as they contact external services. Rows stay "Not checked" and the toast after adding is "Domain added.". The www
   redirect is set from the domain dialog; suggested www rows are not offered.
 - Deploying to one additional server (`only_this_server`) answers 501: the deploy job has no multi-server path. Adding, removing,
-  promoting and stopping work. A Swarm application shows "Server unavailable" in its heading, because `ApplicationRow` only loads
-  standalone destinations; deploying to Swarm is not ported.
+  promoting and stopping work. Deploying to Swarm is not ported.
 - File browser: downloads through an S3 file storage (`FileDownloadStorageService`) are not ported, so files always stream from
   the server. The helper container path for images without a shell is ported but was not run on the VM.
 - Maintenance mode: the Caddy configuration is ported but ran only against Traefik on the VM.
 - Flush all data on the Danger page of Redis, KeyDB and Dragonfly is not ported.
+
+## Canvas, Admin and Subscription
+
+- Canvases are upstream's Svelte code, copied unmodified to `frontend/src/upstream/js`. Live status needs `window.Echo`, which coolify-rs does
+  not have, so a canvas shows a status change after its Refresh button or, on the dashboard canvas, its five second poll. `logo.src` has no
+  `?v=` of the file's modification time.
+- The remembered view is a cookie the browser reads, not one the server reads before rendering, so a list page shows for an instant before it
+  opens the canvas. A `/project/{uuid}/icon` that does not exist answers a JSON 404 where upstream answers its HTML error page.
+- Project icons: uploads go to the local disk. `avatar_storage_type = s3` is not used for writing, and a row with an S3 icon answers 404.
+  An icon stored by upstream's container is not on this disk either. Deleting a project does not remove its icon file.
+- `Admin\Index`, `/subscription` and `/subscription/new` behave as upstream for a self-hosted instance (403 and redirects, compared with the
+  reference). The Coolify Cloud path (`SELF_HOSTED=false`) was only run against a local fake of Stripe (`compat/diff/stripe_fake.py`) and read
+  against the PHP, because the reference runs self-hosted and has no root password in its fixtures. The Admin page's root path is tested in
+  `crates/coolify-api/tests/ui_admin.rs`, which needs `APP_ENV=local`.
+- Not ported on Cloud: `ServerLimitCheckJob`, `VerifyStripeSubscriptionStatusJob`, `SubscriptionInvoiceFailedJob`, `SyncStripeSubscriptions`,
+  `send_internal_notification` (a log line here), and account deletion cancelling the user's other Stripe subscriptions.
+  `isSubscriptionOnGracePeriod` and the subscription gates of `DecideWhatToDoWithUser` are not applied. An early fraud warning looks for
+  subscriptions by customer, not by email across customers.
+- `/__error/{code}` and `/__exception` work with `APP_ENV=local` or `testing` and go home otherwise, as in production upstream. `/__exception` shows
+  the 500 page, not Laravel's debug renderer. `/__livewire-request-failure` previews Livewire's failure dialog, which has no counterpart here.
+  A `/files/download/{token}` with an unknown token answers JSON where upstream answers its HTML 404 page.
+- `/realtime` answers "Look at your other tab." for the root team without sending `TestEvent`.

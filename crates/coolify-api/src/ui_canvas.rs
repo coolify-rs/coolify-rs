@@ -1171,10 +1171,10 @@ async fn remove_project_icon(
     if !ctx.is_team_admin() {
         return Ok(crate::ui_notifications::unauthorized());
     }
-    if let Some(path) = project.get("icon_path").and_then(Value::as_str) {
-        if !path.contains("..") {
-            let _ = tokio::fs::remove_file(crate::ui_teams::images_dir().join(path)).await;
-        }
+    if let Some(path) = project.get("icon_path").and_then(Value::as_str)
+        && !path.contains("..")
+    {
+        let _ = tokio::fs::remove_file(crate::ui_teams::images_dir().join(path)).await;
     }
     db::set_project_icon(&state.db, int(&project, "id"), None, state.now()).await?;
     Ok(ok(json!({"message": "Project icon removed."})).into_response())

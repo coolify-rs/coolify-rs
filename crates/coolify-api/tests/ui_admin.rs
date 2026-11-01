@@ -23,7 +23,12 @@ async fn admin_search_switch_and_back() {
     let h = Harness::with_extra_sql(ROOT_USER).await;
 
     let (alice, _) = h.ui_login("alice@example.test").await;
-    assert_eq!(h.request("GET", "/ui/admin", &[("cookie", &alice)], None).await.status, 403);
+    assert_eq!(
+        h.request("GET", "/ui/admin", &[("cookie", &alice)], None)
+            .await
+            .status,
+        403
+    );
 
     let (root, csrf) = h.ui_login("root@example.test").await;
     let headers = [("cookie", root.as_str()), ("x-csrf-token", csrf.as_str())];
@@ -32,7 +37,12 @@ async fn admin_search_switch_and_back() {
     assert_eq!(page.json()["impersonating"], false);
 
     let found = h
-        .request("POST", "/ui/admin/search", &headers, Some(json!({"search": "alice@"})))
+        .request(
+            "POST",
+            "/ui/admin/search",
+            &headers,
+            Some(json!({"search": "alice@"})),
+        )
         .await
         .json();
     let user = &found["users"][0];
@@ -40,7 +50,12 @@ async fn admin_search_switch_and_back() {
     assert_eq!(user["active"], false);
 
     let switched = h
-        .request("POST", "/ui/admin/switch", &headers, Some(json!({"user_id": user["id"]})))
+        .request(
+            "POST",
+            "/ui/admin/switch",
+            &headers,
+            Some(json!({"user_id": user["id"]})),
+        )
         .await;
     assert_eq!(switched.status, 200, "{}", switched.body);
     let session = h.request("GET", "/ui/session", &headers, None).await.json();
@@ -51,18 +66,30 @@ async fn admin_search_switch_and_back() {
     let page = h.request("GET", "/ui/admin", &headers, None).await.json();
     assert_eq!(page["impersonating"], true);
     let denied = h
-        .request("POST", "/ui/admin/switch", &headers, Some(json!({"user_id": 0})))
+        .request(
+            "POST",
+            "/ui/admin/switch",
+            &headers,
+            Some(json!({"user_id": 0})),
+        )
         .await;
     assert_eq!(denied.status, 403);
 
-    let back = h.request("POST", "/ui/admin/back", &headers, Some(json!({}))).await;
+    let back = h
+        .request("POST", "/ui/admin/back", &headers, Some(json!({})))
+        .await;
     assert_eq!(back.status, 200, "{}", back.body);
     let session = h.request("GET", "/ui/session", &headers, None).await.json();
     assert_eq!(session["user"]["email"], "root@example.test");
     assert_eq!(session["features"]["impersonating"], false);
 
     let missing = h
-        .request("POST", "/ui/admin/switch", &headers, Some(json!({"user_id": 987654})))
+        .request(
+            "POST",
+            "/ui/admin/switch",
+            &headers,
+            Some(json!({"user_id": 987654})),
+        )
         .await;
     assert_eq!(missing.status, 404);
     h.finish().await;

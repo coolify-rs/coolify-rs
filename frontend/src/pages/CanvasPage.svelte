@@ -1,6 +1,6 @@
 <script lang="ts">
   // Port of the canvas page components: Dashboard\Canvas, Server\Canvas, Project\ProjectCanvas,
-  // ProjectsCanvas, EnvironmentCanvas, Tags\Canvas and SharedVariables\Canvas with their Blade views.
+  // Project\ProjectsCanvas, Project\EnvironmentCanvas, Tags\Canvas and SharedVariables\Canvas with their Blade views.
   // The page is a shell; upstream's Svelte canvas renders it from /canvas/api.
   import CanvasHost from '../components/CanvasHost.svelte';
   import CanvasViewLink from '../components/CanvasViewLink.svelte';
@@ -176,7 +176,7 @@
   let name = $state('');
   let error = $state<ApiError | null>(null);
 
-  /** `Concerns\\CreatesEnvironments::submit`. */
+  /** `Concerns\CreatesEnvironments::submit`. */
   async function createEnvironment(ev: SubmitEvent) {
     ev.preventDefault();
     try {

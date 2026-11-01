@@ -627,8 +627,17 @@ async fn servers_data(
 ) -> ApiResult {
     let rows = coolify_db::servers::list_by_name(&state.db, ctx.team_id).await?;
     let mut items = Vec::with_capacity(rows.len());
+    // `$server->team->usesSwarm()`, for the Swarm entry of the server menu.
+    let uses_swarm = crate::ui_server_general::team_uses_swarm(&state, ctx.team_id).await?;
     for s in &rows {
         let mut v = server_facts(s);
+        v["team_uses_swarm"] = json!(uses_swarm);
+        v["is_cloudflare_tunnel"] = json!(
+            s.settings
+                .as_ref()
+                .and_then(|m| m.get("is_cloudflare_tunnel"))
+                .is_some_and(crate::serialize::php_truthy)
+        );
         v["resources"] = json!(coolify_db::servers::resource_count(&state.db, s.id).await?);
         items.push(v);
     }

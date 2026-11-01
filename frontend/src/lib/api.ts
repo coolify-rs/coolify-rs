@@ -245,6 +245,8 @@ export interface ServerFacts {
   is_build: boolean;
   is_swarm: boolean;
   is_swarm_worker: boolean;
+  team_uses_swarm?: boolean;
+  is_cloudflare_tunnel?: boolean;
   proxy_set: boolean;
   proxy_status: string | null;
   proxy_pending: boolean;

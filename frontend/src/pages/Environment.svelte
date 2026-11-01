@@ -1,8 +1,5 @@
 <script lang="ts">
-  // Port of upstream livewire/project/resource/index.blade.php. coolify-rs
-  // lists the environment's databases it can show (`dbUi.resources`); the
-  // other resources (applications, services, unported database kinds) are
-  // counted in a note instead of listed.
+  // Port of upstream livewire/project/resource/index.blade.php.
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
   import Dropdown from '../components/Dropdown.svelte';

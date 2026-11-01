@@ -139,6 +139,9 @@ fn plain_value(state: &AppState, row: &Record) -> Option<String> {
         .ok()
 }
 
+/// One link while `links` collects it: id, source, target, key, the resource's keys, removable, missing.
+type LinkRow = (String, String, String, String, Vec<String>, bool, bool);
+
 /// `SharedVariableCanvas::links`.
 async fn links(
     state: &AppState,
@@ -156,7 +159,7 @@ async fn links(
     let rows = db::resource_variables(&state.db, &ends, false).await?;
     let pattern = reference_regex(scope)?;
     // One link per (shared variable, resource) pair, in the order they are first seen.
-    let mut out: Vec<(String, String, String, String, Vec<String>, bool, bool)> = Vec::new();
+    let mut out: Vec<LinkRow> = Vec::new();
     for row in &rows {
         let Some(resource) =
             by_morph.get(&(text(row, "resourceable_type"), int(row, "resourceable_id")))

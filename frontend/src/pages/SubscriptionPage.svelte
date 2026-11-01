@@ -1,5 +1,6 @@
 <script lang="ts">
-  // Port of upstream livewire/subscription/{index,show,pricing-plans,actions}.blade.php. Outside
+  // Port of upstream Subscription\Index, Subscription\Show, Subscription\PricingPlans and
+  // Subscription\Actions with their Blade views. Outside
   // Coolify Cloud both pages redirect to the dashboard, as their `mount` does.
   import Callout from '../components/Callout.svelte';
   import ConfirmModal from '../components/ConfirmModal.svelte';
