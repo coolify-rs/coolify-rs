@@ -27,9 +27,8 @@
   import Destination from '../components/shared/Destination.svelte';
   import FileBrowser from '../components/shared/FileBrowser.svelte';
   import ExecuteContainerCommand from '../components/shared/ExecuteContainerCommand.svelte';
-  import Unported from './Unported.svelte';
   import { dbUi, uiApi, ApiError, type DatabaseRecord, type DatabaseState } from '../lib/api';
-  import { backupNavContext, databaseNavContext, databaseSection, teleport } from '../lib/databaseMenu';
+  import { backupNavContext, databaseNavContext, databaseSection, DATABASE_SECTIONS, teleport } from '../lib/databaseMenu';
   import { backupsUi, type BackupEdit } from '../lib/databaseApi';
   import { router } from '../lib/router.svelte';
   import { setProjectCrumbs } from '../lib/crumbs';
@@ -53,6 +52,10 @@
   let backupEdit = $state<BackupEdit | null>(null);
 
   const active = $derived(databaseSection(section));
+  $effect(() => {
+    const r = router.current;
+    if (r?.name === 'database-section' && !DATABASE_SECTIONS.includes(r.params.section)) router.go('/', true);
+  });
   const currentBackupSection = $derived(backupSection === 'executions' || backupSection === 'danger' ? backupSection : 'general');
   const base = $derived(`/project/${uuid}/environment/${env}/database/${db}`);
   const canUpdate = $derived(dbState?.can_update ?? false);
@@ -186,9 +189,7 @@
           {:else if active === 'healthcheck'}
             <DatabaseHealth {record} {canUpdate} onsaved={() => refresh().catch(() => {})} />
           {:else if active === 'general'}
-            {#if kind === ''}
-              <Unported description="The settings of this database type are not ported to coolify-rs yet." />
-            {:else if kind === 'sqlite'}
+            {#if kind === 'sqlite'}
               <DatabaseSqliteGeneral {record} {canUpdate} onsaved={() => refresh().catch(() => {})} />
             {:else if dbState}
               <DatabaseGeneral
@@ -226,8 +227,6 @@
             <div class="runtime-logs-column min-w-0"><RuntimeLogs kind="database" uuid={db} /></div>
           {:else if active === 'terminal'}
             <ExecuteContainerCommand kind="database" uuid={db} />
-          {:else}
-            <Unported />
           {/if}
         </div>
       </div>

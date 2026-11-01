@@ -1144,18 +1144,38 @@ pub async fn delete(
         ));
     }
     if from_provider {
-        let linked = [
-            "hetzner_server_id",
-            "vultr_instance_id",
-            "digitalocean_droplet_id",
+        let team_id = s
+            .record
+            .get("team_id")
+            .and_then(Value::as_i64)
+            .unwrap_or(ctx.team_id);
+        let linked: Vec<&str> = [
+            ("hetzner_server_id", "hetzner"),
+            ("vultr_instance_id", "vultr"),
+            ("digitalocean_droplet_id", "digitalocean"),
         ]
         .iter()
-        .any(|k| s.record.get(*k).is_some_and(php_truthy));
-        if !linked {
+        .filter(|(k, _)| s.record.get(*k).is_some_and(php_truthy))
+        .map(|(_, p)| *p)
+        .collect();
+        if linked.is_empty() {
             return Err(ApiError::Message(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "Server is not linked to a cloud provider.",
             ));
+        }
+        for provider in linked {
+            if coolify_db::cloud::first_token_of_provider(&state.db, team_id, provider)
+                .await?
+                .is_none()
+            {
+                return Err(ApiError::Status(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    json!({"message": format!(
+                        "No {provider} token found for this team. Add one before deleting the server from the cloud provider."
+                    )}),
+                ));
+            }
         }
     }
     if force || from_provider {
@@ -1164,18 +1184,47 @@ pub async fn delete(
             "Missing required permissions: deploy. Deleting the resources or the cloud server needs a token with the deploy permission.",
         )?;
     }
-    // Deleting resources, queued deployments' logs and GitHub runners needs
-    // code that is not ported yet.
-    if resources > 0 || servers::has_unported_delete_side_effects(&state.db, s.id).await? {
-        return Err(ApiError::NotPorted);
-    }
-    if let (true, Some(jobs)) = (from_provider, state.jobs.as_ref()) {
-        coolify_jobs::cloud::delete_from_provider(jobs, &s).await;
-    }
-    servers::delete(&state.db, s.id, state.now()).await?;
-    if let Some(jobs) = &state.jobs {
-        jobs.remote().forget_host_key(&s.uuid);
-    }
+    let name = s.record.get("name").cloned();
+    let ip = s.record.get("ip").cloned();
+    let uuid = s.uuid.clone();
+    crate::server_delete::delete(
+        &state,
+        s,
+        force,
+        coolify_jobs::cloud::DeleteFrom {
+            hetzner: from_provider,
+            vultr: from_provider,
+            digitalocean: from_provider,
+            hostinger: false,
+        },
+    )
+    .await?;
+    // The `Auditable` row of the model, then the controller's own.
+    crate::audit::log(
+        &state,
+        &ctx,
+        &meta,
+        "api.server.deleted",
+        json!({"team_id": ctx.team_id, "server_uuid": uuid, "server_name": name, "changed_fields": []}),
+        "info",
+    )
+    .await;
+    crate::audit::log(
+        &state,
+        &ctx,
+        &meta,
+        "api.server.deleted",
+        json!({
+            "team_id": ctx.team_id.to_string(),
+            "server_uuid": uuid,
+            "server_name": name,
+            "ip": ip,
+            "force": force,
+            "delete_from_provider": from_provider,
+        }),
+        "info",
+    )
+    .await;
     Ok(ok(json!({"message": "Server deleted."})).into_response())
 }
 

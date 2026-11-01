@@ -46,6 +46,23 @@ pub async fn find_token_by_id(db: &Db, id: i64) -> DbResult<Option<Record>> {
     row.as_deref().map(decode).transpose()
 }
 
+/// `CloudProviderToken::where('team_id', $teamId)->where('provider', $provider)->first()`.
+pub async fn first_token_of_provider(
+    db: &Db,
+    team_id: i64,
+    provider: &str,
+) -> DbResult<Option<Record>> {
+    let row: Option<String> = sqlx::query_scalar(
+        "SELECT row_to_json(t)::text FROM cloud_provider_tokens t \
+         WHERE t.team_id = $1 AND t.provider = $2 ORDER BY t.id LIMIT 1",
+    )
+    .bind(team_id)
+    .bind(provider)
+    .fetch_optional(db.pool())
+    .await?;
+    row.as_deref().map(decode).transpose()
+}
+
 pub async fn create_token(
     db: &Db,
     team_id: TeamId,

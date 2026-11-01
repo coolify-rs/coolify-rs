@@ -614,6 +614,10 @@ fn server_facts(s: &coolify_db::servers::ServerRow) -> Value {
     .iter()
     .any(|k| s.record.get(*k).is_some_and(crate::serialize::php_truthy));
     json!({
+        "hetzner_server_id": s.record.get("hetzner_server_id"),
+        "vultr_instance_id": s.record.get("vultr_instance_id"),
+        "digitalocean_droplet_id": s.record.get("digitalocean_droplet_id"),
+        "hostinger_virtual_machine_id": s.record.get("hostinger_virtual_machine_id"),
         "uuid": s.uuid,
         "name": s.record.get("name"),
         "description": s.record.get("description"),
@@ -919,20 +923,8 @@ async fn start_validation(
             "This server was transferred to another Coolify instance. Manage it from the target instance instead.",
         ));
     }
-    // Refreshing a cloud provider's state first is not ported.
-    let linked = [
-        "vultr_instance_id",
-        "digitalocean_droplet_id",
-        "hostinger_virtual_machine_id",
-    ]
-    .iter()
-    .any(|k| {
-        server
-            .record
-            .get(*k)
-            .is_some_and(crate::serialize::php_truthy)
-    });
-    let Some(jobs) = state.jobs.as_ref().filter(|_| !linked) else {
+    // `spawn_validation` refreshes a cloud provider's state first (`cloud::validation_block`).
+    let Some(jobs) = state.jobs.as_ref() else {
         return Err(ApiError::NotPorted);
     };
     let started = jobs.spawn_validation(
@@ -970,6 +962,7 @@ async fn validation_state(
 async fn delete_server_form(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
+    meta: crate::audit::Meta,
     Path(uuid): Path<String>,
     body: axum::body::Bytes,
 ) -> ApiResult {
@@ -1018,23 +1011,27 @@ async fn delete_server_form(
             "Server has defined resources. Please delete them first or select \"Delete all resources\".",
         ));
     }
-    let from_provider = actions.iter().any(|a| a.starts_with("delete_from_"));
-    if transferred && !from_provider {
-        // `ServerTransferClaimer::deleteArchive`: records only.
+    if transferred {
+        // `ServerTransferClaimer::deleteArchive`: records only, whatever was selected.
         crate::server_transfer::delete_archive_now(&state, server.id)
             .await
             .map_err(|_| ApiError::Internal)?;
         return Ok(ok(json!({"message": "Server deleted."})).into_response());
     }
-    // Deleting resources, cloud servers, queued deployments' logs and GitHub runners are not ported.
-    if transferred
-        || resources > 0
-        || from_provider
-        || coolify_db::servers::has_unported_delete_side_effects(&state.db, server.id).await?
-    {
-        return Err(ApiError::NotPorted);
-    }
-    coolify_db::servers::delete(&state.db, server.id, state.now()).await?;
+    let from = coolify_jobs::cloud::DeleteFrom {
+        hetzner: actions.contains(&"delete_from_hetzner"),
+        vultr: actions.contains(&"delete_from_vultr"),
+        digitalocean: actions.contains(&"delete_from_digitalocean"),
+        hostinger: actions.contains(&"delete_from_hostinger"),
+    };
+    let audit = json!({
+        "team_id": ctx.team_id,
+        "server_uuid": server.uuid,
+        "server_name": server.record.get("name"),
+        "changed_fields": [],
+    });
+    crate::server_delete::delete(&state, server, force, from).await?;
+    crate::audit::log(&state, &ctx, &meta, "ui.server.deleted", audit, "info").await;
     Ok(ok(json!({"message": "Server deleted."})).into_response())
 }
 

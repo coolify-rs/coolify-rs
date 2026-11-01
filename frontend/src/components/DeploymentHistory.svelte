@@ -42,8 +42,11 @@
     return Number.isFinite(n) && n > 0 && n <= 2147483647 ? Math.trunc(n) : null;
   }
   let pullRequestId = $state<number | null>(pullRequestFromUrl());
+  // Livewire writes the query string only when the property changes, not on opening the page.
+  let urlOnOpen = pullRequestId;
   $effect(() => {
-    if (embedded) return;
+    if (embedded || pullRequestId === urlOnOpen) return;
+    urlOnOpen = -1;
     const q = new URLSearchParams(location.search);
     if (pullRequestId) q.set('pull_request_id', String(pullRequestId));
     else q.delete('pull_request_id');

@@ -421,7 +421,7 @@ async fn delete_stuck(jobs: &Jobs, stuck: Stuck) {
     let db = &jobs.0.db;
     match stuck {
         Stuck::Application(id) => match apps::find_with_trashed(db, id).await {
-            Ok(Some(a)) => jobs.spawn_application_delete(a, true, true, true),
+            Ok(Some(a)) => drop(jobs.spawn_application_delete(a, true, true, true)),
             // Without an environment there is no team or server to clean up on.
             Ok(None) => {
                 let _ = apps::force_delete(db, id, Jobs::now()).await;
@@ -430,7 +430,7 @@ async fn delete_stuck(jobs: &Jobs, stuck: Stuck) {
         },
         Stuck::Preview(id) => jobs.delete_stuck_preview(id).await,
         Stuck::Database(kind, id) => match dbs::find_with_trashed(db, kind, id).await {
-            Ok(Some(d)) => jobs.spawn_database_delete(d, true, true, true),
+            Ok(Some(d)) => drop(jobs.spawn_database_delete(d, true, true, true)),
             Ok(None) => {
                 let sql = format!("DELETE FROM {} WHERE id = $1", kind.table());
                 let _ = queries::delete_by_id(db, &sql, id).await;
@@ -438,7 +438,7 @@ async fn delete_stuck(jobs: &Jobs, stuck: Stuck) {
             Err(e) => tracing::warn!(id, error = %e, "cleanup:stucked-resources"),
         },
         Stuck::Service(id) => match svc::find_trashed(db, id).await {
-            Ok(Some(s)) => jobs.spawn_service_delete(s, true, true, true),
+            Ok(Some(s)) => drop(jobs.spawn_service_delete(s, true, true, true)),
             Ok(None) => {
                 let _ = svc::force_delete(db, id).await;
             }

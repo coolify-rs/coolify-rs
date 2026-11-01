@@ -100,6 +100,25 @@ export function backupNavContext(base: string, backup: string, section: string, 
 }
 
 /** Menu key for a URL section (`/database/{uuid}/{section}`); backups pages share one entry. */
+/** The sections `routes/web.php` has under `/database/{uuid}`; any other path is `Route::any('/{any}')`. */
+export const DATABASE_SECTIONS = [
+  'environment-variables',
+  'servers',
+  'import-backup',
+  'persistent-storage',
+  'healthcheck',
+  'webhooks',
+  'resource-limits',
+  'resource-operations',
+  'metrics',
+  'tags',
+  'danger',
+  'logs',
+  'terminal',
+  'files',
+  'backups',
+];
+
 export function databaseSection(section: string | undefined): string {
   if (!section || section === 'general') return 'general';
   if (section.startsWith('backups')) return 'backups';

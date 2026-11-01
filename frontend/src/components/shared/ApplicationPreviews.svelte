@@ -162,7 +162,10 @@
         {#snippet actions()}
           {#if canUpdate}
             {#if data?.is_github_app_source}
-              <button type="button" class="button" onclick={() => (prsOpen = true)}>Load pull requests</button>
+              <button type="button" class="button" onclick={() => {
+                  prsOpen = true;
+                  loadPrs();
+                }}>Load pull requests</button>
             {/if}
             {#if data?.enabled}
               <button type="button" class="button" onclick={() => run(() => previewsUi.settings(uuid, { enabled: false }))}>Disable preview deployments</button>

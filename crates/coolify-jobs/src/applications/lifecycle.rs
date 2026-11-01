@@ -275,7 +275,7 @@ impl Jobs {
         delete_volumes: bool,
         delete_configurations: bool,
         delete_networks: bool,
-    ) {
+    ) -> tokio::task::JoinHandle<()> {
         let jobs = self.clone();
         tokio::spawn(async move {
             let db = jobs.0.db.clone();
@@ -360,7 +360,7 @@ impl Jobs {
             {
                 tracing::warn!(application = %a.uuid, error = %e, "Maintenance page cleanup failed while deleting resource.");
             }
-        });
+        })
     }
 }
 

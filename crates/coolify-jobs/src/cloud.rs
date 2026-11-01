@@ -638,6 +638,18 @@ impl Client {
         .map(|_| ())
     }
 
+    /// `HostingerService::disableAutoRenewal`.
+    pub async fn hostinger_disable_auto_renewal(
+        &self,
+        subscription_id: &str,
+    ) -> Result<(), CloudError> {
+        self.delete(&format!(
+            "/api/billing/v1/subscriptions/{subscription_id}/auto-renewal/disable"
+        ))
+        .await
+        .map(|_| ())
+    }
+
     pub async fn hostinger_get_vm(&self, id: i64) -> Result<Value, CloudError> {
         self.get(&format!("/api/vps/v1/virtual-machines/{id}"), None)
             .await
@@ -1053,67 +1065,158 @@ pub async fn validation_block(jobs: &Jobs, row: &ServerRow) -> Result<Option<Str
     Ok(None)
 }
 
-/// `DeleteServer`'s deletion at the provider; failures are logged, the server is removed anyway.
-pub async fn delete_from_provider(jobs: &Jobs, row: &ServerRow) {
-    let r = &row.record;
-    let token = match server_token(jobs, row).await {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::warn!(error = %e, "cloud token unavailable");
-            None
-        }
+/// Which providers `DeleteServer` deletes from.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DeleteFrom {
+    pub hetzner: bool,
+    pub vultr: bool,
+    pub digitalocean: bool,
+    pub hostinger: bool,
+}
+
+impl DeleteFrom {
+    pub fn any(self) -> bool {
+        self.hetzner || self.vultr || self.digitalocean || self.hostinger
+    }
+}
+
+/// The server's own token when it belongs to this provider and team, else the team's first one.
+async fn delete_token(
+    jobs: &Jobs,
+    row: &ServerRow,
+    provider: &str,
+) -> Result<Option<String>, String> {
+    let team_id = row
+        .record
+        .get("team_id")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let own = match row
+        .record
+        .get("cloud_provider_token_id")
+        .and_then(Value::as_i64)
+    {
+        Some(id) => db::find_token_by_id(&jobs.0.db, id)
+            .await
+            .map_err(|e| e.to_string())?
+            .filter(|t| {
+                t.get("team_id").and_then(Value::as_i64) == Some(team_id)
+                    && str_of(t, "provider").as_deref() == Some(provider)
+            }),
+        None => None,
     };
-    let Some((provider, t)) = token else {
-        return;
+    let token = match own {
+        Some(t) => Some(t),
+        None => db::first_token_of_provider(&jobs.0.db, team_id, provider)
+            .await
+            .map_err(|e| e.to_string())?,
     };
-    let result = match Provider::from_name(&provider) {
-        Some(Provider::Hetzner) => match r.get("hetzner_server_id").and_then(Value::as_i64) {
-            Some(id) => {
-                Client::new(Provider::Hetzner, &t)
-                    .hetzner_delete_server(id)
-                    .await
-            }
-            None => Ok(()),
-        },
-        Some(Provider::Vultr) => match r.get("vultr_instance_id").and_then(Value::as_str) {
-            Some(id) => {
-                Client::new(Provider::Vultr, &t)
-                    .vultr_delete_instance(id)
-                    .await
-            }
-            None => Ok(()),
-        },
-        Some(Provider::DigitalOcean) => {
-            match r.get("digitalocean_droplet_id").and_then(Value::as_i64) {
-                Some(id) => {
-                    Client::new(Provider::DigitalOcean, &t)
-                        .do_delete_droplet(id)
-                        .await
-                }
-                None => Ok(()),
-            }
+    let Some(token) = token else {
+        return Ok(None);
+    };
+    let enc = jobs
+        .0
+        .encrypter
+        .as_ref()
+        .ok_or("No application encryption key has been specified.")?;
+    let plain = str_of(&token, "token").ok_or("token missing")?;
+    enc.decrypt_string(&plain)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+/// `DeleteServer::deleteFromHetznerById`: failures are logged and notified, the server still goes.
+async fn delete_from_hetzner(jobs: &Jobs, row: &ServerRow, id: i64) {
+    let team_id = row.record.get("team_id").and_then(Value::as_i64);
+    let result = match delete_token(jobs, row, "hetzner").await {
+        Ok(Some(t)) => Client::new(Provider::Hetzner, &t)
+            .hetzner_delete_server(id)
+            .await
+            .map_err(|e| e.to_string()),
+        // `No Hetzner token found`: logged, nothing else.
+        Ok(None) => {
+            tracing::error!(server_uuid = %row.uuid, "no hetzner token found for the server team");
+            return;
         }
-        _ => Ok(()),
+        Err(e) => Err(e),
     };
     if let Err(e) = result {
-        tracing::error!(server_uuid = %row.uuid, error = %e, "failed to delete the server at its provider");
-        // `DeleteServer::deleteFromHetzner`: the other providers only log.
-        if provider == "hetzner"
-            && let (Some(id), Some(team_id)) = (
-                r.get("hetzner_server_id").and_then(Value::as_i64),
-                r.get("team_id").and_then(Value::as_i64),
-            )
-        {
+        tracing::error!(server_uuid = %row.uuid, error = %e, "failed to delete the server from hetzner");
+        if let Some(team_id) = team_id {
             crate::notifications::notify(
                 &jobs.0.db,
                 jobs.0.encrypter.as_ref(),
                 team_id,
                 crate::notifications::Notification::HetznerDeletionFailed {
                     hetzner_server_id: id,
-                    error: coolify_compat::redact::redact_text(&e.to_string(), &[], &[]),
+                    error: coolify_compat::redact::redact_text(&e, &[], &[]),
                 },
             )
             .await;
         }
     }
+}
+
+/// `DeleteServer::handle`, up to its `forceDelete()`. An error from Vultr, DigitalOcean or Hostinger is
+/// rethrown upstream, which ends the job and leaves the server soft deleted.
+pub async fn delete_from_providers(
+    jobs: &Jobs,
+    row: &ServerRow,
+    from: DeleteFrom,
+) -> Result<(), String> {
+    let r = &row.record;
+    if from.hetzner
+        && let Some(id) = r.get("hetzner_server_id").and_then(Value::as_i64)
+    {
+        delete_from_hetzner(jobs, row, id).await;
+    }
+    if from.vultr
+        && let Some(id) = r.get("vultr_instance_id").and_then(Value::as_str)
+    {
+        let t = delete_token(jobs, row, "vultr")
+            .await?
+            .ok_or("No Vultr token found for the server team.")?;
+        Client::new(Provider::Vultr, &t)
+            .vultr_delete_instance(id)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    if from.digitalocean
+        && let Some(id) = r.get("digitalocean_droplet_id").and_then(Value::as_i64)
+    {
+        let t = delete_token(jobs, row, "digitalocean")
+            .await?
+            .ok_or("No DigitalOcean token found for the server team.")?;
+        Client::new(Provider::DigitalOcean, &t)
+            .do_delete_droplet(id)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    if from.hostinger
+        && let Some(id) = r
+            .get("hostinger_virtual_machine_id")
+            .and_then(Value::as_i64)
+    {
+        let t = delete_token(jobs, row, "hostinger")
+            .await?
+            .ok_or("No Hostinger token found for the server team.")?;
+        let client = Client::new(Provider::Hostinger, &t);
+        let vm = client
+            .hostinger_get_vm(id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let subscription = vm
+            .get("subscription_id")
+            .and_then(|v| match v {
+                Value::String(s) if !s.is_empty() => Some(s.clone()),
+                Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            })
+            .ok_or("The Hostinger VPS has no subscription.")?;
+        client
+            .hostinger_disable_auto_renewal(&subscription)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }

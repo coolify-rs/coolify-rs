@@ -28,17 +28,36 @@
     });
   });
 
-  const checkboxes = $derived(
-    facts && facts.resources > 0 && !facts.transferred
-      ? [
-          {
-            id: 'force_delete_resources',
-            label: `Delete all resources (${facts.resources} total)`,
-            defaultWarning: 'Server cannot be deleted while it has resources.',
-          },
-        ]
-      : [],
-  );
+  // `Server\Delete::render`.
+  const checkboxes = $derived.by(() => {
+    if (!facts || facts.transferred) return [];
+    const list: { id: string; label: string; defaultWarning: string }[] = [];
+    const f = facts as ServerFacts & Record<string, unknown>;
+    if (f.resources > 0) {
+      list.push({
+        id: 'force_delete_resources',
+        label: `Delete all resources (${f.resources} total)`,
+        defaultWarning: 'Server cannot be deleted while it has resources.',
+      });
+    }
+    if (f.hetzner_server_id) {
+      list.push({ id: 'delete_from_hetzner', label: 'Also delete server from Hetzner Cloud', defaultWarning: 'The actual server on Hetzner Cloud will NOT be deleted.' });
+    }
+    if (f.vultr_instance_id) {
+      list.push({ id: 'delete_from_vultr', label: 'Also delete server from Vultr', defaultWarning: 'The actual server on Vultr will NOT be deleted.' });
+    }
+    if (f.digitalocean_droplet_id) {
+      list.push({ id: 'delete_from_digitalocean', label: 'Also delete droplet from DigitalOcean', defaultWarning: 'The actual droplet on DigitalOcean will NOT be deleted.' });
+    }
+    if (f.hostinger_virtual_machine_id) {
+      list.push({
+        id: 'delete_from_hostinger',
+        label: 'Also delete VPS from Hostinger (at the end of the paid period)',
+        defaultWarning: 'The VPS on Hostinger will NOT be deleted, and Hostinger will keep billing for it.',
+      });
+    }
+    return list;
+  });
 
   async function remove(password: string, selected: string[]): Promise<string | void> {
     try {
