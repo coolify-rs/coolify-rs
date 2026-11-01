@@ -160,33 +160,25 @@ if (set === 'fake' || set === 'real') {
     await screen(pages, 'm-fleet-7d', '/metrics?range=7d', '/metrics?range=7d', { wait: 3500 });
     // The Projects section belongs to the canvas stream (its Canvas column and modal are not here yet).
     const servers = ['Servers', 'Traffic analytics'];
-    await screen(pages, 'm-dashboard', '/', '/', { wait: 3500, sections: servers, hiddenCharts: true });
-    const grid = async (page, side) => {
+    const view = (mode, title) => async (page, side) => {
       if (side === 'ref') {
-        // Upstream's toggle is Alpine state on the section; one click on the dashboard reached only part of it.
+        // Upstream's toggle is Alpine state that a click did not reliably reach on the dashboard; the view is saved per user.
         await page.waitForFunction(() => window.Alpine, null, { timeout: 15000 });
-        await page.evaluate(() => {
-          for (const section of document.querySelectorAll('section')) window.Alpine.$data(section).setViewMode?.('grid');
-          for (const el of document.querySelectorAll('[x-data]')) window.Alpine.$data(el).setViewMode?.('grid');
-        });
+        await page.evaluate((m) => {
+          for (const el of document.querySelectorAll('[x-data]')) window.Alpine.$data(el).setViewMode?.(m);
+        }, mode);
         await sleep(1500);
         return;
       }
       for (let i = 0; i < 2; i++) {
-        const button = page.locator('button[title="Grid view"]:visible').first();
+        const button = page.locator(`button[title="${title}"]:visible`).first();
         if (await button.count()) await button.click();
         await sleep(600);
       }
     };
-    const table = async (page) => {
-      for (let i = 0; i < 2; i++) {
-        const button = page.locator('button[title="Table view"]:visible').first();
-        if (await button.count()) await button.click();
-        await sleep(1500);
-      }
-      await page.reload();
-      await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
-    };
+    const grid = view('grid', 'Grid view');
+    const table = view('table', 'Table view');
+    await screen(pages, 'm-dashboard', '/', '/', { wait: 3500, before: table, sections: servers, hiddenCharts: true });
     await screen(pages, 'm-dashboard-grid', '/', '/', { wait: 3500, before: grid, sections: servers });
     await screen(pages, 'm-servers-grid', '/servers', '/servers', { wait: 3500, before: grid });
     await screen(pages, 'm-servers', '/servers', '/servers', { wait: 3500, before: table, hiddenCharts: true });
@@ -202,10 +194,10 @@ if (set === 'fake' || set === 'real') {
     // The stand-in has no traffic routes: every read fails.
     await screen(pages, 'm-app-analytics-nodata', `${P}/application/${APP}/analytics`, `${P}/application/${APP}/analytics`, { wait: 4000 });
     // The widget's lazy placeholder has no box, so it stays empty on both sides, also with a visible activity column.
-    await screen(pages, 'm-dashboard-traffic-idle', '/', '/', { wait: 8000, sections: ['Servers', 'Traffic analytics'], hiddenCharts: true });
+    await screen(pages, 'm-dashboard-traffic-idle', '/', '/', { wait: 8000, before: table, sections: ['Servers', 'Traffic analytics'], hiddenCharts: true });
     diff('--deployment-on');
     try {
-      await screen(pages, 'm-dashboard-traffic-active', '/', '/', { wait: 12000, sections: ['Servers', 'Traffic analytics'], hiddenCharts: true });
+      await screen(pages, 'm-dashboard-traffic-active', '/', '/', { wait: 12000, before: table, sections: ['Servers', 'Traffic analytics'], hiddenCharts: true });
     } finally {
       diff('--deployment-off');
     }
