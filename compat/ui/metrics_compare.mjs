@@ -110,21 +110,34 @@ function firstDifference(a, b) {
   return '';
 }
 
-async function screen(pages, name, ref, rsPath = ref, { wait = 2500, before, sections, hiddenCharts = false } = {}) {
+async function screen(pages, name, ref, rsPath = ref, { wait = 2500, before: before_, sections, hiddenCharts = false } = {}) {
   if (only && !name.includes(only)) return;
-  // Read inside one minute: the stand-in's data moves on the full minute.
-  if (new Date().getSeconds() > 30) await sleep((61 - new Date().getSeconds()) * 1000);
-  const shots = {};
-  for (const side of ['ref', 'rs']) {
-    // The reference's scheduler can move these rows' status at any moment.
-    diff('--touch');
-    const page = pages[side];
-    await page.goto(BASE[side] + (side === 'ref' ? ref : rsPath));
-    await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
-    if (before) await before(page, side);
-    await settle(page, wait);
-    shots[side] = await capture(page);
-    await page.screenshot({ path: `${out}${name}-${side}.png`, fullPage: true });
+  let shots;
+  for (let attempt = 1; ; attempt++) {
+    // Read inside one minute: the stand-in's data moves on the full minute.
+    if (new Date().getSeconds() > 30) await sleep((61 - new Date().getSeconds()) * 1000);
+    shots = {};
+    let held = true;
+    for (const side of ['ref', 'rs']) {
+      // The reference's scheduler can move these rows' status at any moment. A read during which the
+      // rows moved says nothing about the page, so both sides are read again; the comparison stays strict.
+      diff('--touch');
+      const before = rowsStamp();
+      const page = pages[side];
+      await page.goto(BASE[side] + (side === 'ref' ? ref : rsPath));
+      await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+      if (before_) await before_(page, side);
+      await settle(page, wait);
+      shots[side] = await capture(page);
+      await page.screenshot({ path: `${out}${name}-${side}.png`, fullPage: true });
+      if (rowsStamp() !== before) held = false;
+    }
+    if (held) break;
+    console.log(`     ${name}: the scheduler moved the rows during the read, again (${attempt})`);
+    if (attempt === 6) {
+      verdict(`${name}: rows held still for a read`, false, 'six reads in a row');
+      return;
+    }
   }
   const { ref: a, rs: b } = shots;
   if (sections) {
@@ -141,6 +154,16 @@ async function screen(pages, name, ref, rsPath = ref, { wait = 2500, before, sec
     // Upstream keeps the hidden grid in the page while the table shows, with its charts.
     if (!hiddenCharts) verdict(`${name} [${x.title}]: charts`, x.charts === y.charts, `ref ${x.charts} rs ${y.charts}`);
   });
+}
+
+/** The status and timestamp of every row `--touch` sets. */
+function rowsStamp() {
+  const ids = Object.values(state.server_ids ?? {}).join(',');
+  const query = `select md5(string_agg(x, ',' order by x)) from (
+    select uuid || status || updated_at as x from applications where uuid like 'metricsapp%'
+    union all select uuid || status || updated_at from standalone_postgresqls where uuid like 'metricsdb%'
+    union all select server_id || is_reachable::text || is_usable::text from server_settings where server_id in (${ids || 0})) t`;
+  return execFileSync('docker', ['exec', 'coolify-rs-reference-postgres-1', 'psql', '-U', 'coolify', '-d', 'coolify', '-tAc', query], { encoding: 'utf8' }).trim();
 }
 
 const P = `/project/${state.project}/environment/${state.environment}`;

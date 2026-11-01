@@ -4,10 +4,15 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 
 ## Scope
 
+- `GET /projects/{uuid}/{environment}` lists resources with the same keys and values, in `id` order; upstream's query has no `ORDER BY`,
+  so its order follows the table's physical order and can differ.
+- `Load pull requests` could only be compared up to `SafeWebhookUrl`: both sides refuse every local address with the same toast, and
+  allowing one needs `instance_settings`, which test runs leave alone. The list of pull requests was not run against a fake.
 - Upstream API operations that are not ported answer `501 {"message":"This endpoint is not implemented in coolify-rs
   yet."}`; `scripts/parity.py --missing` lists them.
-- A path upstream does not have goes home, as `Route::any('/{any}')` does. A section of an application, database or service
-  that has no page yet opens a "not available in coolify-rs yet" page; `scripts/parity.py --missing` lists what is left.
+- A path upstream does not have goes home, as `Route::any('/{any}')` does, also a section of an application, database or
+  server that upstream does not have. `compat/ui/fallback_urls.mjs` compares those URLs. A section upstream renders only
+  under a condition (`source` without git, `swarm` without Swarm) is empty on both sides.
 - Within the ported pages: no custom color themes; the dashboard's server status does not include
   the Traefik-outdated and Sentinel checks; table/grid choices are remembered per browser, not per user.
 - Browser sessions live in memory: a restart signs everyone out. Session limits: 10,000 sessions, 7-day idle
@@ -16,11 +21,14 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Servers (API): sub-routes, destinations, proxy, Sentinel, Docker cleanup, log drains, registries, shared variables,
   install, cloud providers and cloud-init scripts are ported (backend; of the UI, the provider forms and the server's Cloud
   Token page are, the Security pages for tokens and scripts are not, and UI validation still ends with the "install them
-  manually" messages). Not ported: `POST /servers/import`, `GET /servers/import/check`,
-  `POST /servers/{uuid}/migrate`, `POST /servers/{uuid}/transfer/complete` (the 7,000 line transfer services; also deleting
-  a transferred server), `DELETE ?force=true` on a server with resources, `/servers/{uuid}/cloudflare-tunnel` account
-  features outside the API, `delete_from_provider` for Hostinger
-  (upstream only disables auto renewal there). Throttling of validations exists only on Cloud upstream.
+  manually" messages). `DELETE /servers/{uuid}`, with `?force=true` and `delete_from_provider`, and `Server\Delete` in the UI are
+  ported (`compat/diff/server_delete_diff.py`, `compat/diff/server_delete_providers.py`, `compat/ui/flow_server_delete.mjs`). As on the
+  reference, the resource jobs run after the server is soft deleted, so they remove rows and leave containers, volumes and
+  files on the server. `DeleteServer` was only run against a local fake on this side, because the reference's provider hosts are
+  fixed. `POST /servers/import`, `GET /servers/import/check`, `POST /servers/{uuid}/migrate` and `POST /servers/{uuid}/transfer/complete`
+  are ported (`compat/diff/transfer_diff.py`); see "Server transfer". Not ported: `/servers/{uuid}/cloudflare-tunnel` account
+  features outside the API. Hostinger VPSes are not a linked provider for `delete_from_provider` on the API; in the UI their auto renewal is disabled
+  (upstream does the same). Throttling of validations exists only on Cloud upstream.
 - Server jobs differ from upstream as follows: `remote_process` activities have no `callEventOnFinish` queue, the proxy
   file upload goes through the shell instead of scp, maintenance pages are written for "no resource in maintenance"
   only, the CA certificate's subject key identifier is SHA-256 based, marks upstream keeps in Redis are per process.
@@ -33,15 +41,13 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Server and destination pages: ported are destinations (index, new, show, resources, danger), Advanced, Private Key, CA
   Certificate, Swarm, server Destinations, Resources, Proxy (configuration, dynamic configurations, TLS
   list, logs, start/stop/restart), Sentinel (configuration, logs), Docker Cleanup with executions, Images, Log Drains,
-  Registries (server and `/registries`), Terminal Access, Security Patches, Cloudflare Tunnel, GitHub Runners and the settings of Traffic Analytics. Not ported yet (the page
-  says "not available"): nothing. Log drains: the secret fields stay empty for a
+  Registries (server and `/registries`), Terminal Access, Security Patches, Cloudflare Tunnel, GitHub Runners and the settings of Traffic Analytics. Log drains: the secret fields stay empty for a
   member, where upstream's Livewire snapshot carries them. Proxy status toasts come from real-time events upstream
   (`ProxyStatusChangedUI`); the UI here polls, and neither side shows them when the real-time service is down.
   Traffic analytics: the charts of the server page, of `/analytics`, the dashboard widget and the application and service analytics pages are ported (Traefik verified, the Caddy proxy not run). The dashboard widget stays empty in Chrome on both sides: upstream's lazy placeholder has no box, so it never enters the viewport; its data is compared directly. After a filter change, rows of a list with equal values can
   stand in another order than on the reference, which keeps the previous DOM order for ties; a fresh load has the same order.
 - Validation jobs run inside the coolify-rs process: a restart drops a running validation (upstream's queue keeps it).
-- Databases (all 9 engines; API, proxy, SSL, backups, imports and the `Project/Database/*` pages): sections that only
-  render `Project/Shared/*` are placeholders until the shared branch is merged. Starting a ClickHouse database with an
+- Databases (all 9 engines; API, proxy, SSL, backups, imports and the `Project/Database/*` pages). Starting a ClickHouse database with an
   unnamed data volume is not blocked (the page warns as upstream does).
 - Service database backups and imports run the standalone code through a `ServiceDatabase` row (`dbs::service_database_row`).
   A database whose image or custom type names no known engine has no such row, so its pages answer 404 and its schedule
@@ -96,25 +102,10 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Applications in the UI: Docker image applications and git applications from a public repository (new-resource
   "Docker Image" and "Public Git Repository" forms with Smart Scan and env file import, General page for the Docker
   image, Dockerfile, Static, Nixpacks and Railpack build packs, Git Source page, Deployment Logs list and log viewer,
-  Danger zone, heading actions). Not ported in the UI: the other new-resource types (private repositories through a
-  GitHub App or a deploy key), the Docker Compose sections of the General page (a Compose application shows the "not
-  available" page; it can be created but not deployed), HTTP Basic Authentication, custom Docker run options,
-  pre/post-deployment commands, building on a build server (selecting it says so), a Dockerfile stored on the
-  application (no repository), "Force start" of a queued
-  deployment and the other application pages (Domains, Environment Variables, Storage, Advanced, Healthcheck,
-  application (no repository), switching the Git source to a GitLab or Gitea App and the other application pages (Domains, Environment Variables, Storage, Advanced, Healthcheck,
-  Runtime Logs, …). The General page's instant saves (site type, labels) store only the setting they
+  Danger zone, heading actions, Compose, private repositories and the other application pages). The General page's instant saves (site type, labels) store only the setting they
   change, while upstream's `syncData()` also persists unsaved form edits when it regenerates the Nginx
   configuration. Log export does not apply upstream's secret redaction beyond what the deployment already wrote
   redacted.
-- Creating git applications (`POST /applications/public`, `/private-deploy-key`, `/private-github-app`): the row is
-  written as upstream writes it, but for `build_pack = dockercompose` without `instant_deploy` upstream's queued
-  `LoadComposeFile` job (clone the repository, read and parse the compose file, store `docker_compose_raw`,
-  `docker_compose`, variables and volumes) is not ported, so the compose columns stay empty until a deployment.
-  `docker_compose_domains`, `watch_paths`, `custom_nginx_configuration`, `use_build_server`,
-  `connect_to_docker_network`, HTTP basic auth, custom labels, Docker run options, pre/post-deployment commands,
-  manual webhook secrets, GPU and container-name settings and tags answer 501 when sent with a value. The GitHub App
-  path is not yet verified against a real GitHub App.
 - Docker Compose applications deploy (build, pull, `docker compose up`, build fingerprint reuse, raw mode). Not ported:
   custom Compose start/build commands, "preserve repository", preview deployments, configuration files with content
   (file storages Coolify writes), build secrets. The startup cleanup scopes interrupted deployments by host name, so
@@ -182,7 +173,6 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   keeps its deployments. Queued deployments are left queued.
 - `sentinel_custom_url` for a new server falls back to the request's scheme and host; `X-Forwarded-*` count only
   from trusted proxies (upstream trusts every proxy).
-- Deployments: only the Docker image build pack. Git build packs (Dockerfile, static, Railpack, Nixpacks, Compose), previews, additional servers, build servers, registry pushes, basic auth, pre/post-deployment commands and custom Docker options are not ported (501). `current_process_id` stays empty, and commands that upstream feeds on stdin carry their input inside the script. Jobs run in the coolify-rs process: a restart drops a running deployment.
 - No backups, notifications or webhooks yet. SSH runs without
 - No proxy management, scheduler, notifications or webhooks yet. SSH runs without
 - The new-server page offers only "IP address or domain" (no cloud provisioning).
@@ -237,7 +227,6 @@ change, password, two-factor enrollment and recovery codes, passkey management, 
 - A password confirmation is remembered per session and skips the password step only on the pages listed above. Older
   pages (server, application and database deletion) still ask for the password within upstream's three hours.
 - What's New reads `{COOLIFY_RS_DATA_DIR}/changelogs/*.json`, which `PullChangelog` writes. Unread counts are not cached.
-- A new user is sent to `/onboarding` as upstream does, but the wizard is not ported: the page offers "Skip setup".
 - Sign-in state before login (the two-factor challenge's `login.id`, OAuth state, passkey challenge, flash messages)
   lives in memory under its own cookie, like the sessions: a restart ends a challenge in progress. Rate limits are also
   per process.
@@ -269,7 +258,6 @@ change, password, two-factor enrollment and recovery codes, passkey management, 
 | SSH options | upstream's options with the operator's environment | adds `-F /dev/null`, `BatchMode`, `IdentitiesOnly`, no agent, no forwarding; environment cleared | a hostile server or operator config cannot change behaviour |
 | Remote output size | unbounded | stdout capped at 16 MiB, stderr at 1 MiB | memory safety against a hostile server |
 | Validation throttle on Coolify Cloud | per-IP and per-team limits | none | coolify-rs is self-hosted only (upstream applies none there either) |
-| Environment details with resources | applications/databases/services serialized with sensitive-field rules | `501` | refusing is safer than partial or unfiltered data |
 | `abort()` responses for clients that do not ask for JSON | Laravel's HTML error page | the JSON body upstream sends to JSON clients (pretty-printed, as upstream) | API clients |
 | Database start/stop/restart/delete jobs | Redis queue (Horizon), activity rows | tokio tasks in the coolify-rs process; same activity rows | a restart of coolify-rs drops a running job |
 | Validation of non-string values for string fields | Laravel continues evaluating min/max/regex | only "must be a string" is reported | rare; documented |
@@ -305,7 +293,6 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 
 | Upstream | coolify-rs | Why |
 | --- | --- | --- |
-| `Project/Shared/*` sections on service pages (variables, tags, danger, logs, volumes and others) | placeholder named after the section | connected when the shared components merge |
 | `addSuggestedDomain` on the Domains page | not ported | suggestions are not offered |
 | Configuration warning on service pages, with the diff of changes | the warning without the diff | no configuration diff yet |
 | `PATCH /services/{uuid}/databases/{database_uuid}` that changes `is_public` | `501` | `StartDatabaseProxy` / `StopDatabaseProxy` are not ported |
@@ -374,13 +361,12 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
 | "new storage" and "new private key" in the palette | open the create modal in place | go to the page and open its modal | the modals live on those pages |
 | "new github" in the palette | modal | goes to `/sources` | |
 | Real-time warning popup | shown when Echo cannot connect | never: coolify-rs has no Echo connection to fail | |
-| Onboarding cloud provider cards | modals of `Server\New\By*` | links to `/servers/new` | those components are not ported |
 | Onboarding validation | `validate-and-install`, which installs prerequisites and Docker when missing | checks through the existing validation dialog, then the proxy start. A server without Docker stops with upstream's message | the dialog has no install progress |
 | `api.auth.unauthenticated` deduplication | per source, reason, server and email through the cache | per source, in memory | only API requests reach it, with one reason |
 | Audit events of the wizard | `Auditable` on every model | written for the key, server, shared variables, project, environment and team; only one `ui.server.updated` (`proxy`) of upstream's three, and the `changes` hold the name only | |
 | Terminal websocket | a separate Node server on port 6002, `TERMINAL_PROTOCOL`, `TERMINAL_HOST`, `TERMINAL_PORT` | `/terminal/ws` on the port of the UI; those settings do not apply. A page of another origin is refused (close 4401) where upstream relies on `SameSite`. Multiplexed ssh does not apply: upstream drops it for terminals too | one server; the extra check does not change what a browser on this instance sees |
 | Terminal for a non-root ssh user | `sudo docker exec`, `sudo docker attach` | the same commands, checked as strings against `containerCommand()` on the reference and in tests, not run on a server | the test VM only has root |
-| Shared resource sections | `Project\Shared\*`, `Project\Service\{Storage, FileStorage}` and `Project\Application\{Advanced, Rollback}` for every resource | environment variables, persistent storage, runtime logs, resource limits, healthcheck, tags, webhooks and Advanced are ported and mounted on application pages as `frontend/src/components/shared/*` with `/ui/resources/{kind}/{uuid}/...` | Not ported: Resource operations (clone, move, migrate), Servers (`Destination`), Swarm, Maintenance, Files (`FileBrowser`), resource Metrics charts (only the states before charts), starting a rollback, Refresh GPUs, linking a secret manager source (it contacts a third party; only the empty state), volume backup modals, external Compose volumes, stale Compose volume actions |
+| Shared resource sections | `Project\Shared\*`, `Project\Service\{Storage, FileStorage}` and `Project\Application\{Advanced, Rollback}` for every resource | environment variables, persistent storage, runtime logs, resource limits, healthcheck, tags, webhooks and Advanced are ported and mounted on application pages as `frontend/src/components/shared/*` with `/ui/resources/{kind}/{uuid}/...` | Not ported: external Compose volumes, stale Compose volume actions |
 
 ## Server transfer
 

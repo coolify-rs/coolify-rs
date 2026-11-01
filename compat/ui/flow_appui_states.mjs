@@ -187,10 +187,6 @@ try {
       // Compose load success, from the repository on the VM. The page loads it on opening.
       psql(`update applications set docker_compose_raw=null, docker_compose=null where uuid='${S.apps.compose}'`);
       await h.go(`${base}/application/${S.apps.compose}`);
-      await h.page.waitForTimeout(500);
-      const loadCompose = h.page.locator('button:visible', { hasText: /^\s*Load compose\s*$/i }).first();
-      r.composeButton = await loadCompose.count();
-      if (user === 'alice') await loadCompose.click();
       for (let i = 0; i < 25; i++) {
         if (psql(`select docker_compose_raw is not null from applications where uuid='${S.apps.compose}'`) === 't') break;
         await h.page.waitForTimeout(1000);

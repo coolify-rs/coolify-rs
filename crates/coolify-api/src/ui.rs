@@ -923,20 +923,8 @@ async fn start_validation(
             "This server was transferred to another Coolify instance. Manage it from the target instance instead.",
         ));
     }
-    // Refreshing a cloud provider's state first is not ported.
-    let linked = [
-        "vultr_instance_id",
-        "digitalocean_droplet_id",
-        "hostinger_virtual_machine_id",
-    ]
-    .iter()
-    .any(|k| {
-        server
-            .record
-            .get(*k)
-            .is_some_and(crate::serialize::php_truthy)
-    });
-    let Some(jobs) = state.jobs.as_ref().filter(|_| !linked) else {
+    // `spawn_validation` refreshes a cloud provider's state first (`cloud::validation_block`).
+    let Some(jobs) = state.jobs.as_ref() else {
         return Err(ApiError::NotPorted);
     };
     let started = jobs.spawn_validation(
