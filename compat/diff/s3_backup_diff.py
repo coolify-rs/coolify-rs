@@ -30,8 +30,8 @@ KEY, SECRET, BUCKET = "s3diffkey", "s3diffsecret123", "s3diff"
 NET = "coolify-rs-reference_default"
 HELPER = "coollabsio/coolify-helper:1.0.19"
 SERVICE_DBS = {
-    "mysql": ("mysql:8.4", "MYSQL_ROOT_PASSWORD=s3diffpw", "/var/lib/mysql"),
-    "mariadb": ("mariadb:11", "MARIADB_ROOT_PASSWORD=s3diffpw", "/var/lib/mysql"),
+    "mysql": ("mysql:8.4", "MYSQL_ROOT_PASSWORD=s3diffpw\n      - MYSQL_DATABASE=appdb", "/var/lib/mysql"),
+    "mariadb": ("mariadb:11", "MARIADB_ROOT_PASSWORD=s3diffpw\n      - MARIADB_DATABASE=appdb", "/var/lib/mysql"),
     "mongo": ("mongo:7", "MONGO_INITDB_ROOT_USERNAME=root", "/data/db"),
 }
 
@@ -147,7 +147,7 @@ def shape(ex, subs):
     for old, new in subs:
         name = name.replace(old, new)
     return {"status": ex["status"], "s3_uploaded": ex.get("s3_uploaded"), "local_storage_deleted": ex.get("local_storage_deleted"),
-            "s3_storage_deleted": ex.get("s3_storage_deleted"), "message": ex.get("message"), "filename": re.sub(r"\d{9,}", "T", name)}
+            "s3_storage_deleted": ex.get("s3_storage_deleted"), "message": ex.get("message"), "finished": bool(ex.get("finished_at")), "filename": re.sub(r"\d{9,}", "T", name)}
 
 
 def case_standalone(e):
@@ -235,7 +235,7 @@ def case_service(e):
             time.sleep(25)
             sql(f"UPDATE service_databases SET status='running:healthy' WHERE uuid='{dbuuid}'")
             if side == "ref":
-                out = tinker(f'$d=App\\Models\\ServiceDatabase::where("uuid","{dbuuid}")->first();$b=new App\\Models\\ScheduledDatabaseBackup;$b->forceFill(["uuid"=>"sb{dbuuid}","frequency"=>"daily","database_id"=>$d->id,"database_type"=>$d->getMorphClass(),"team_id"=>4,"enabled"=>false]);$b->save();App\\Jobs\\DatabaseBackupJob::dispatchSync($b);echo "done";')
+                out = tinker(f'$d=App\\Models\\ServiceDatabase::where("uuid","{dbuuid}")->first();$b=new App\\Models\\ScheduledDatabaseBackup;$b->forceFill(["uuid"=>"sb{dbuuid}","frequency"=>"daily","database_id"=>$d->id,"database_type"=>$d->getMorphClass(),"team_id"=>4,"enabled"=>false,"save_s3"=>false]);$b->save();App\\Jobs\\DatabaseBackupJob::dispatchSync($b);echo "done";')
                 backup = f"sb{dbuuid}"
                 record(f"[service {kind}] ref ran", "done" in out, out[-300:])
             else:
@@ -247,22 +247,77 @@ def case_service(e):
                 record(f"[service {kind}] rs backup accepted", code == 200, b[:300])
             ex = execution(backup)
             seen[side] = shape(ex, [(dbuuid, "DB"), (u, "SVC"), (f"s3svc-{kind}-{side}", "NAME"), (ex["uuid"] if ex else "-", "EXEC")])
-            record(f"[service {kind}] {side} dump", bool(ex) and ex["status"] == "success" and (ex.get("size") or 0) > 0, ex)
+            record(f"[service {kind}] {side} dump", bool(ex) and ex["status"] == "success" and int(ex.get("size") or 0) > 0, ex)
             sql(f"DELETE FROM scheduled_database_backup_executions WHERE scheduled_database_backup_id=(SELECT id FROM scheduled_database_backups WHERE uuid='{backup}')")
             sql(f"DELETE FROM scheduled_database_backups WHERE uuid='{backup}'")
         record(f"[service {kind}] executions alike", seen.get("ref") == seen.get("rs"), (seen.get("ref"), seen.get("rs")))
 
 
+def case_stop(e):
+    """stop_during_backup on a service volume, then Retry recovery of a stopped container."""
+    rs = Rs()
+    seen = {}
+    compose = "services:\n  web:\n    image: nginx:alpine\n    volumes:\n      - webdata:/data\n"
+    for side in ("ref", "rs"):
+        c, r = call("ref", "POST", "/services", {"name": f"s3stop-{side}", "project_uuid": e.project, "environment_name": "production", "server_uuid": SERVER,
+                                                 "docker_compose_raw": base64.b64encode(compose.encode()).decode(), "instant_deploy": False})
+        record(f"[stop] {side} created", c == 201, r)
+        u = r["uuid"]
+        e.services.append(u)
+        call(side, "POST", f"/services/{u}/start")
+        for _ in range(40):
+            if vm(f"docker ps -q --filter name=web-{u}").strip():
+                break
+            time.sleep(3)
+        time.sleep(10)
+        st = sql(f"SELECT v.uuid FROM local_persistent_volumes v JOIN service_applications a ON a.id=v.resource_id AND v.resource_type LIKE '%ServiceApplication' JOIN services s ON s.id=a.service_id WHERE s.uuid='{u}' LIMIT 1")
+        path = f"/services/{u}/storages/{st}/backups"
+        c, b = call(side, "PUT", path, {"frequency": "daily", "stop_during_backup": True})
+        record(f"[stop] {side} schedule accepted", c in (200, 201), b)
+        c, b = call(side, "POST", path + "/run")
+        record(f"[stop] {side} run accepted", c in (200, 201, 202), b)
+        query = ("SELECT row_to_json(r) FROM (SELECT e.*, b.uuid AS schedule_uuid FROM scheduled_volume_backup_executions e JOIN scheduled_volume_backups b ON b.id=e.scheduled_volume_backup_id "
+                 f"JOIN local_persistent_volumes v ON v.id=b.backupable_id AND b.backupable_type LIKE '%LocalPersistentVolume' WHERE v.uuid='{st}' ORDER BY e.id DESC LIMIT 1) r")
+        ex = wait_row(query)
+        record(f"[stop] {side} backup finished", bool(ex) and ex["status"] == "success", ex)
+        time.sleep(5)
+        name = vm(f"docker ps --format '{{{{.Names}}}}' --filter name=web-{u}").strip()
+        record(f"[stop] {side} container running after the backup", bool(name), name)
+        seen[side] = {"status": ex and ex["status"], "pending": ex and ex["stop_recovery_pending"], "ids": ex and ex["stop_container_ids"], "attention": ex and ex["recovery_needs_attention"]}
+        # Retry recovery: the state a crash during the archive leaves.
+        # stateFile(): the container ids a crashed backup leaves on the server; recovery restarts those.
+        container = vm(f"docker inspect --format '{{{{.Id}}}}' {name}").strip()
+        vm(f"docker stop {name} >/dev/null; echo {container} > /tmp/coolify-volume-backup-{ex['uuid']}.stopped")
+        sql(f"UPDATE scheduled_volume_backup_executions SET stop_recovery_pending=true WHERE uuid='{ex['uuid']}'")
+        if side == "rs":
+            code, b = rs.post(f"/ui/volume-backups/service/{u}/{ex['schedule_uuid']}/executions/{ex['uuid']}/retry-recovery", {})
+            record("[stop] rs retry accepted", code == 200, b[:300])
+        else:
+            out = tinker(f'App\\Jobs\\VolumeBackupRecoveryJob::recoverWithBounds(App\\Models\\ScheduledVolumeBackupExecution::where("uuid","{ex["uuid"]}")->first());echo "done";')
+            record("[stop] ref retry ran", "done" in out, out[-300:])
+        for _ in range(30):
+            if vm(f"docker ps -q --filter name=web-{u}").strip():
+                break
+            time.sleep(2)
+        record(f"[stop] {side} retry started the container", bool(vm(f"docker ps -q --filter name=web-{u}").strip()))
+        record(f"[stop] {side} retry removed the state file", vm(f"test -e /tmp/coolify-volume-backup-{ex['uuid']}.stopped && echo left").strip() == "")
+        vm(f"rm -f /tmp/coolify-volume-backup-{ex['uuid']}.stopped /tmp/coolify-volume-backup-{ex['uuid']}.stopped.remaining")
+        after = wait_row(query)
+        seen[f"{side}.after"] = {"pending": after["stop_recovery_pending"], "ids": after["stop_container_ids"], "attention": after["recovery_needs_attention"], "error": after["recovery_error"]}
+    record("[stop] executions alike", seen.get("ref") == seen.get("rs"), (seen.get("ref"), seen.get("rs")))
+    record("[stop] after retry alike", seen.get("ref.after") == seen.get("rs.after"), (seen.get("ref.after"), seen.get("rs.after")))
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--case", default="standalone,volume,service")
+    ap.add_argument("--case", default="standalone,volume,service,stop")
     a = ap.parse_args()
     e = Env()
     try:
         e.prepare()
         for case in a.case.split(","):
             try:
-                {"standalone": case_standalone, "volume": case_volume, "service": case_service}[case](e)
+                {"standalone": case_standalone, "volume": case_volume, "service": case_service, "stop": case_stop}[case](e)
             except Exception as ex:  # noqa: BLE001
                 record(f"[{case}] ran to the end", False, repr(ex))
     finally:

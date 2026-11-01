@@ -260,7 +260,7 @@ impl Run {
 
     /// `deploy_simple_dockerfile()`.
     async fn deploy_simple_dockerfile(&mut self) -> Step {
-        self.move_to_build_server();
+        self.move_switch_to_build_server();
         let dockerfile = B64.encode(self.app.str("dockerfile").unwrap_or_default());
         self.info(&format!(
             "Starting deployment of {} to {}.",
@@ -302,7 +302,7 @@ impl Run {
 
     /// `deploy_dockerfile_buildpack()`.
     async fn deploy_dockerfile(&mut self) -> Step {
-        self.move_to_build_server();
+        self.move_switch_to_build_server();
         self.info(&self.starting_line()).await;
         if let Some(loc) = self
             .app
@@ -335,7 +335,7 @@ impl Run {
 
     /// `deploy_static_buildpack()`.
     async fn deploy_static(&mut self) -> Step {
-        self.move_to_build_server();
+        self.move_switch_to_build_server();
         self.info(&self.starting_line()).await;
         self.prepare_builder_image().await?;
         self.check_git_if_build_needed().await?;
@@ -359,7 +359,7 @@ impl Run {
 
     /// `deploy_nixpacks_buildpack()`.
     async fn deploy_nixpacks(&mut self) -> Step {
-        self.move_to_build_server();
+        self.move_switch_to_build_server();
         self.info(&self.starting_line()).await;
         self.prepare_builder_image().await?;
         self.check_git_if_build_needed().await?;
@@ -385,7 +385,7 @@ impl Run {
 
     /// `deploy_railpack_buildpack()`.
     async fn deploy_railpack(&mut self) -> Step {
-        self.move_to_build_server();
+        self.move_switch_to_build_server();
         self.info(&self.starting_line()).await;
         self.prepare_builder_image().await?;
         self.check_git_if_build_needed().await?;
@@ -1277,9 +1277,9 @@ impl Run {
         // create_workdir()
         if self.use_build_server {
             let cfg = format!("mkdir -p {}", self.cfg);
-            self.to_main_server();
+            self.switch_to_main_server();
             self.exec(vec![Cmd::new(cfg)]).await?;
-            self.to_build_server();
+            self.switch_to_build_server();
         }
         let mkdir = in_docker(&self.dep, &format!("mkdir -p {}", self.workdir));
         let cfg = format!("mkdir -p {}", self.cfg);

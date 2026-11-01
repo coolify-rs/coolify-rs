@@ -1043,11 +1043,11 @@ impl Run {
         // `$serverToCheck`: the helper has not moved to the build server yet.
         let restore = self.use_build_server && !self.on_build_server();
         if restore {
-            self.to_build_server();
+            self.switch_to_build_server();
         }
         self.detect_buildkit_here().await;
         if restore {
-            self.to_main_server();
+            self.switch_to_main_server();
         }
     }
 
@@ -1575,7 +1575,7 @@ impl Run {
         let c = self.cfg.clone();
         let build = self.on_build_server();
         if build {
-            self.to_main_server();
+            self.switch_to_main_server();
         }
         let written = self
             .exec(vec![
@@ -1587,7 +1587,7 @@ impl Run {
             ])
             .await;
         if build {
-            self.to_build_server();
+            self.switch_to_build_server();
         }
         written
     }
@@ -1625,7 +1625,7 @@ impl Run {
             }
             if self.use_build_server {
                 self.write_deployment_configurations().await?;
-                self.to_main_server();
+                self.switch_to_main_server();
             }
             let options = self
                 .app
@@ -2221,7 +2221,7 @@ impl Run {
         let finished = now();
         if self.app.setting_bool("is_preserve_repository_enabled") {
             if self.use_build_server {
-                self.to_main_server();
+                self.switch_to_main_server();
             }
             let (c, dep, w) = (self.cfg.clone(), self.dep.clone(), self.workdir.clone());
             self.exec(vec![
@@ -2240,12 +2240,12 @@ impl Run {
                     .map_err(Fail::new)?;
             }
             if self.use_build_server {
-                self.to_build_server();
+                self.switch_to_build_server();
             }
         }
         if let Some(yaml) = self.generated_compose.clone() {
             if self.use_build_server {
-                self.to_main_server();
+                self.switch_to_main_server();
             }
             let name = sanitize_string(self.app.str("name").unwrap_or_default());
             let readme = format!(
@@ -2271,7 +2271,7 @@ impl Run {
             ])
             .await?;
             if self.use_build_server {
-                self.to_build_server();
+                self.switch_to_build_server();
             }
         }
         Ok(())
@@ -2318,7 +2318,7 @@ impl Run {
         .await;
         // Log but don't fail: configuration writing errors shouldn't prevent status updates.
         let written = if self.use_build_server {
-            self.to_build_server();
+            self.switch_to_build_server();
             Ok(())
         } else {
             self.write_deployment_configurations().await

@@ -219,7 +219,7 @@ impl Run {
     /// `deploy_pull_request()`.
     pub(super) async fn deploy_pull_request(&mut self) -> Step {
         if self.build_pack() != "dockercompose" {
-            self.move_to_build_server();
+            self.move_switch_to_build_server();
         }
         if self.build_pack() == "dockercompose" {
             return self.deploy_docker_compose().await;

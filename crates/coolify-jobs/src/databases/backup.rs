@@ -273,7 +273,7 @@ impl Jobs {
             let names = names
                 .filter(|n| !n.trim().is_empty())
                 .map(|n| n.chars().take(250).collect::<String>());
-            parts::create_execution(
+            let id = parts::create_execution(
                 db,
                 backup_id,
                 &new_public_id(),
@@ -287,6 +287,11 @@ impl Jobs {
             )
             .await
             .map_err(|e| e.to_string())?;
+            // The `finally` of `handle()` closes every execution it recorded.
+            let done = now();
+            parts::update_execution(db, id, &[("finished_at", ColumnValue::Time(done))], done)
+                .await
+                .map_err(|e| e.to_string())?;
             return Ok(());
         }
 
@@ -1396,7 +1401,7 @@ impl Jobs {
         } else {
             parts::str_of(backup, "databases_to_backup").map(str::to_owned)
         };
-        parts::create_execution(
+        let id = parts::create_execution(
             &self.0.db,
             parts::id_of(backup),
             &new_public_id(),
@@ -1408,6 +1413,16 @@ impl Jobs {
             Some("failed"),
             Some(&message),
             now(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        // The `finally` of `handle()` closes every execution it recorded.
+        let done = now();
+        parts::update_execution(
+            &self.0.db,
+            id,
+            &[("finished_at", ColumnValue::Time(done))],
+            done,
         )
         .await
         .map_err(|e| e.to_string())?;

@@ -31,14 +31,14 @@ pub(super) fn multi_server_mark_queued(parent: &str) {
 
 impl Run {
     /// `$this->server = $this->mainServer`.
-    pub(super) fn to_main_server(&mut self) {
+    pub(super) fn switch_to_main_server(&mut self) {
         self.server = self.main_server.clone();
         self.server_name = self.main_name.clone();
         self.target = std::sync::Arc::clone(&self.main_target);
     }
 
     /// `$this->server = $this->build_server`.
-    pub(super) fn to_build_server(&mut self) {
+    pub(super) fn switch_to_build_server(&mut self) {
         if let Some((server, name, target)) = &self.build_server {
             self.server = server.clone();
             self.server_name = name.clone();
@@ -51,9 +51,9 @@ impl Run {
     }
 
     /// `if ($this->use_build_server) { $this->server = $this->build_server; }`.
-    pub(super) fn move_to_build_server(&mut self) {
+    pub(super) fn move_switch_to_build_server(&mut self) {
         if self.use_build_server {
-            self.to_build_server();
+            self.switch_to_build_server();
         }
     }
 
@@ -66,9 +66,9 @@ impl Run {
     pub(super) async fn create_workdir(&mut self) -> Step {
         let cfg = format!("mkdir -p {}", self.cfg);
         if self.use_build_server {
-            self.to_main_server();
+            self.switch_to_main_server();
             self.exec(vec![Cmd::new(cfg.clone())]).await?;
-            self.to_build_server();
+            self.switch_to_build_server();
         }
         let mkdir = in_docker(&self.dep, &format!("mkdir -p {}", self.workdir));
         self.exec(vec![Cmd::new(mkdir), Cmd::new(cfg)]).await
@@ -159,10 +159,10 @@ impl Run {
             return Ok(());
         }
         if self.build_pack() != "dockercompose"
-            && !self
+            && self
                 .app
                 .str("docker_registry_image_name")
-                .is_some_and(|n| !n.is_empty())
+                .is_none_or(str::is_empty)
         {
             return Err(Fail::new(
                 "Before deploying to multiple servers, you must set a Docker image in the General tab. More information: https://coolify.io/docs/knowledge-base/server/multiple-servers",
@@ -223,10 +223,10 @@ impl Run {
     /// `pull_image_for_additional_server()`.
     pub(super) async fn pull_image_for_additional_server(&mut self) -> Result<bool, Fail> {
         if !self.is_additional
-            || !self
+            || self
                 .app
                 .str("docker_registry_image_name")
-                .is_some_and(|n| !n.is_empty())
+                .is_none_or(str::is_empty)
         {
             return Ok(false);
         }

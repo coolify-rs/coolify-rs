@@ -239,16 +239,15 @@ async fn resources_block_deletion_unless_soft_deleted() {
         400,
         r#"{"message":"Environment has resources, so it cannot be deleted."}"#,
     );
-    // Environment details with resources are not ported yet: explicit 501, not partial data.
-    assert_eq!(
-        h.get(
+    // `environment_details` lists the resources (compat/diff/environment_details_diff.py).
+    let details = h
+        .get(
             &format!("/api/v1/projects/{uuid}/production"),
-            "acme_owner_read"
+            "acme_owner_read",
         )
-        .await
-        .status,
-        501
-    );
+        .await;
+    assert_eq!(details.status, 200);
+    assert_eq!(details.json()["services"][0]["uuid"], "svc");
 
     sqlx::query("UPDATE services SET deleted_at = now()")
         .execute(&pool)
