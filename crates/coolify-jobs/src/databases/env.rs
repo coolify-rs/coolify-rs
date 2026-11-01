@@ -279,12 +279,24 @@ pub async fn load_for(
     o: &Owner<'_>,
     server_id: Option<i64>,
 ) -> Result<Vec<Var>, String> {
+    load_for_with_fetched(db, enc, o, server_id)
+        .await
+        .map(|(out, _)| out)
+}
+
+/// `load_for` and every value the source returned (`resolvedSecretManagerValuesForRedaction()`).
+pub async fn load_for_with_fetched(
+    db: &Db,
+    enc: &Encrypter,
+    o: &Owner<'_>,
+    server_id: Option<i64>,
+) -> Result<(Vec<Var>, Vec<String>), String> {
     let mut out = load_raw_for(db, enc, o, server_id).await?;
     if !out
         .iter()
         .any(|v| secret_managers::contains_reference(v.resolved.as_deref()))
     {
-        return Ok(out);
+        return Ok((out, Vec::new()));
     }
     let link = secret_managers::link_of(db, o.morph, o.id).await?;
     let mut fetched: Option<secret_managers::Secrets> = None;
@@ -324,7 +336,10 @@ pub async fn load_for(
         v.resolved = Some(secret_managers::substitute(&value, secrets));
         v.remote = true;
     }
-    Ok(out)
+    let values = fetched
+        .map(|s| s.into_values().filter(|v| !v.is_empty()).collect())
+        .unwrap_or_default();
+    Ok((out, values))
 }
 
 /// A resource's variables without contacting a secret manager: a value that needs one has no

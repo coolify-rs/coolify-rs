@@ -1385,26 +1385,10 @@ fn remove_ansi(text: &str) -> String {
 
 /// `sanitizeLogsForExport($logs, EnvironmentVariable::logRedactionSecretsFor($service))`.
 async fn sanitize_logs(state: &AppState, s: &ServiceRow, logs: &str) -> Result<String, ApiError> {
-    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-    let rows = svc::env_rows(&state.db, s.id).await?;
-    let redact_all = s.raw.get("redact_all_env_values_in_logs") != Some(&Value::Bool(false));
-    let (mut known, mut locked): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
-    for r in &rows {
-        let Some(value) = env_value(enc, r) else {
-            continue;
-        };
-        if value.is_empty() {
-            continue;
-        }
-        if r.get("is_shown_once")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            locked.push(value);
-        } else if redact_all {
-            known.push(value);
-        }
-    }
+    let jobs = state.jobs.as_ref().ok_or(ApiError::Internal)?;
+    let (known, locked) = jobs
+        .service_log_redaction_secrets(s.id, s.team_id, s.server_id().unwrap_or_default())
+        .await;
     let known: Vec<&str> = known.iter().map(String::as_str).collect();
     let locked: Vec<&str> = locked.iter().map(String::as_str).collect();
     Ok(coolify_compat::redact::redact_text(logs, &known, &locked))

@@ -367,9 +367,81 @@ pub fn redact_text(text: &str, known: &[&str], locked: &[&str]) -> String {
     chunks(&text).into_iter().map(redact_chunk).collect()
 }
 
+/// The output of a stream up to its last complete line, as `DatabaseStartCommandExecutor` buffers
+/// it, so a secret split across two output chunks is redacted as a whole.
+pub fn take_complete_lines(pending: &mut String) -> String {
+    let Some(end) = pending.rfind(['\n', '\r']) else {
+        return String::new();
+    };
+    let rest = pending.split_off(end + 1);
+    std::mem::replace(pending, rest)
+}
+
+/// `RunRemoteProcess::takeCompleteOutput()`: complete lines, with a private key block buffered until
+/// its END line. With `last`, all buffered output, and an unfinished private key block is hidden.
+pub fn take_complete_output(pending: &mut String, last: bool) -> String {
+    static UNFINISHED_PRIVATE_KEY: std::sync::LazyLock<Option<fancy_regex::Regex>> =
+        std::sync::LazyLock::new(|| {
+            fancy_regex::Regex::new(
+                r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?![\s\S]*-----END [A-Z ]*PRIVATE KEY-----)[\s\S]*",
+            )
+            .ok()
+        });
+    let unfinished = |text: &str| -> Result<Option<usize>, ()> {
+        match UNFINISHED_PRIVATE_KEY
+            .as_ref()
+            .map(|re| re.find(text).map(|m| m.map(|m| m.start())))
+        {
+            Some(Ok(found)) => Ok(found),
+            _ => Err(()),
+        }
+    };
+    if last {
+        let text = std::mem::take(pending);
+        return match unfinished(&text) {
+            Ok(Some(start)) => format!("{}{REDACTED}", &text[..start]),
+            Ok(None) => text,
+            Err(()) => REDACTED.to_owned(),
+        };
+    }
+    let Some(end) = pending.rfind(['\n', '\r']) else {
+        return String::new();
+    };
+    let mut take = end + 1;
+    if let Ok(Some(start)) = unfinished(&pending[..take]) {
+        take = start;
+    }
+    let rest = pending.split_off(take);
+    std::mem::replace(pending, rest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn complete_lines_keep_a_split_secret_together() {
+        let mut pending = "one\ntopse".to_owned();
+        assert_eq!(take_complete_lines(&mut pending), "one\n");
+        pending.push_str("cret\n");
+        assert_eq!(take_complete_lines(&mut pending), "topsecret\n");
+        assert_eq!(pending, "");
+    }
+
+    #[test]
+    fn complete_output_buffers_a_private_key_block() {
+        let begin = concat!("-----BEGIN RSA ", "PRIVATE KEY-----");
+        let finish = concat!("-----END RSA ", "PRIVATE KEY-----");
+        let mut pending = format!("first\n{begin}\nabc\n");
+        assert_eq!(take_complete_output(&mut pending, false), "first\n");
+        pending.push_str(&format!("{finish}\n"));
+        assert_eq!(
+            take_complete_output(&mut pending, false),
+            format!("{begin}\nabc\n{finish}\n")
+        );
+        let mut open = format!("x\n{begin}\nabc");
+        assert_eq!(take_complete_output(&mut open, true), format!("x\n{REDACTED}"));
+    }
 
     fn r(t: &str) -> String {
         redact_text(t, &[], &[])
