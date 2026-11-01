@@ -1026,14 +1026,18 @@ async fn delete_server_form(
             .map_err(|_| ApiError::Internal)?;
         return Ok(ok(json!({"message": "Server deleted."})).into_response());
     }
-    let Some(jobs) = state.jobs.as_ref() else {
-        return Err(ApiError::NotPorted);
-    };
-    if from_provider {
-        coolify_jobs::cloud::delete_from_provider(jobs, &server).await;
+    match state.jobs.as_ref() {
+        Some(jobs) => {
+            if from_provider {
+                coolify_jobs::cloud::delete_from_provider(jobs, &server).await;
+            }
+            jobs.delete_server(server.id, force).await?;
+            jobs.remote().forget_host_key(&server.uuid);
+        }
+        // Without jobs (a test instance) nothing can clean up the resources or the cloud server.
+        None if resources > 0 || from_provider => return Err(ApiError::NotPorted),
+        None => coolify_db::servers::delete(&state.db, server.id, state.now()).await?,
     }
-    jobs.delete_server(server.id, force).await?;
-    jobs.remote().forget_host_key(&server.uuid);
     Ok(ok(json!({"message": "Server deleted."})).into_response())
 }
 
