@@ -408,10 +408,14 @@
 </script>
 
 {#snippet composeEditor(title: string, content: string)}
-          <div class="mb-1.5 flex h-4 w-full items-center gap-1.5">
-            <span class="flex items-center gap-1.5 text-sm font-medium leading-4">{title}<Helper helper="You need to modify the docker compose file in the git repository." /></span>
+          <div class="flex-1 form-control">
+            <div class="mb-1.5 flex h-4 w-full items-center gap-1.5">
+              <!-- svelte-ignore a11y_label_has_associated_control -->
+              <label class="mb-0! flex items-center gap-1 text-sm font-medium leading-4">{title}</label>
+              <Helper helper="You need to modify the docker compose file in the git repository." />
+            </div>
+            {#key content}<div class="font-mono"><MonacoEditor value={content} language="yaml" readonly rows={10} /></div>{/key}
           </div>
-          {#key content}<div class="font-mono"><MonacoEditor value={content} language="yaml" readonly rows={10} /></div>{/key}
         {/snippet}
 
 <div>
@@ -426,6 +430,7 @@
     <div class="application-settings-grid flex flex-col gap-6">
       <SettingsSection
         id="application-details-section"
+        class="application-details-card"
         title="Application details"
         description="Name the application and choose the build strategy Coolify should use to deploy it."
       >
@@ -907,9 +912,11 @@
         {/if}
         {#if hasDockerfile}
           <div class="mt-6">
-            <div class="w-full">
-              <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="flex items-center gap-1 mb-1 text-sm font-medium">Dockerfile</label>
+            <div class="flex-1 form-control">
+              <div class="mb-1.5 flex h-4 w-full items-center gap-1.5">
+                <!-- svelte-ignore a11y_label_has_associated_control -->
+                <label class="mb-0! flex items-center gap-1 text-sm font-medium leading-4">Dockerfile</label>
+              </div>
               <MonacoEditor language="dockerfile" rows={6} readonly={!canUpdate} bind:value={form.dockerfile} />
             </div>
           </div>

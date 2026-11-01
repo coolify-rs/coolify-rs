@@ -51,6 +51,10 @@ pub async fn resources(
             if let Value::Object(m) = &mut v {
                 m.entry("database_type")
                     .or_insert_with(|| Value::String(d.kind.type_name().into()));
+                m.insert(
+                    "tags".into(),
+                    resource_tags(&state, d.kind.morph(), d.id).await?,
+                );
             }
             databases.push(v);
         } else {
@@ -62,7 +66,14 @@ pub async fn resources(
     let mut rows = coolify_db::applications::list_for_environment(&state.db, e.id).await?;
     rows.sort_by(|a, b| a.str("name").cmp(&b.str("name")));
     for a in &rows {
-        applications.push(crate::routes::applications::present(&state, &ctx, a, false).await?);
+        let mut v = crate::routes::applications::present(&state, &ctx, a, false).await?;
+        if let (Value::Object(m), Some(id)) = (&mut v, a.int("id")) {
+            m.insert(
+                "tags".into(),
+                resource_tags(&state, "App\\Models\\Application", id).await?,
+            );
+        }
+        applications.push(v);
     }
     Ok(ok(json!({
         "applications": applications,
@@ -71,6 +82,16 @@ pub async fn resources(
         "unported": unported,
     }))
     .into_response())
+}
+
+/// `Resource\Index::formatResource()`: `$item->tags->map(...)`.
+async fn resource_tags(state: &AppState, morph: &str, id: i64) -> Result<Value, ApiError> {
+    let rows = coolify_db::database_parts::tags_of(&state.db, morph, id).await?;
+    Ok(Value::Array(
+        rows.iter()
+            .map(|t| json!({"id": t.get("id"), "name": t.get("name")}))
+            .collect(),
+    ))
 }
 
 /// `Project\New\Select`: servers that can host resources, with their destinations.

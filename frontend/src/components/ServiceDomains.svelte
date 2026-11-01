@@ -157,7 +157,7 @@
 
   async function generate() {
     try {
-      newParts = (await servicesApi.generateDomain(serviceUuid)).parts;
+      newParts = (await servicesApi.generateDomain(serviceUuid, newApp)).parts;
     } catch (e) {
       notify.error(message(e));
     }

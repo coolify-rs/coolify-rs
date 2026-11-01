@@ -36,6 +36,8 @@ export interface NavContextItem {
   warning?: boolean;
   /** The red dot of a menu entry (`hasWarning`). */
   warningDot?: boolean;
+  /** Wrapped in its own `<div>` with its sections (components/application/configuration-sidebar.blade.php), so no grid gap above them. */
+  grouped?: boolean;
 }
 
 /** A resource menu the main sidebar shows instead of the main menu

@@ -309,9 +309,9 @@
       </div>
     </div>
   {:else if !containerRunning}
-    <Empty title="Container is not running" description="Start the container to browse its files." iconName="folder" />
+    <Empty title="Container is not running" description="Start the container to browse its files." iconName="folder" iconClass="size-8" />
   {:else if shellUnavailable}
-    <Empty title="File browser is not available" description="Coolify cannot open the files of this container. {helperError ?? ''}" iconName="folder" />
+    <Empty title="File browser is not available" description="Coolify cannot open the files of this container. {helperError ?? ''}" iconName="folder" iconClass="size-8" />
   {:else}
     <div class="relative">
       {#if busy}
@@ -357,7 +357,7 @@
           class="transition-[box-shadow] duration-150 ease-out motion-reduce:transition-none {dragging ? 'ring-2 ring-coollabs/40 dark:ring-white/30' : ''}"
         >
           {#if entries.length === 0}
-            <Empty size="sm" title="This folder is empty" description="Upload a file to get started." iconName="folder" />
+            <Empty size="sm" title="This folder is empty" description="Upload a file to get started." iconName="folder" iconClass="size-8" />
           {:else}
             <div class="data-table w-full">
               <div class="data-table-header file-table-grid">

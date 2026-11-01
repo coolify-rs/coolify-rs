@@ -18,13 +18,17 @@
   $effect(() => {
     const expected = context ?? '';
     void router.path;
-    tick().then(() =>
-      requestAnimationFrame(() => {
-        const heading = document.querySelector<HTMLElement>('.app-main h1');
-        const title = heading && heading.offsetHeight > 0 && heading.getBoundingClientRect().top < 140 ? heading.textContent?.trim() : '';
-        titleRepeats = expected !== '' && title === expected;
-      }),
-    );
+    // Upstream renders the heading with the page; here it can arrive after the page's data.
+    const main = document.querySelector('.app-main');
+    const observer = new MutationObserver(() => sync());
+    if (main) observer.observe(main, { childList: true, subtree: true });
+    function sync() {
+      const heading = document.querySelector<HTMLElement>('.app-main h1');
+      const title = heading && heading.offsetHeight > 0 && heading.getBoundingClientRect().top < 140 ? heading.textContent?.trim() : '';
+      titleRepeats = expected !== '' && title === expected;
+    }
+    tick().then(() => requestAnimationFrame(sync));
+    return () => observer.disconnect();
   });
 
   let openIndex = $state(-1);

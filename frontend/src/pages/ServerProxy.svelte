@@ -328,9 +328,13 @@
                     </div>
                   {:else if form.proxySettings}
                     <div class="relative mt-4" aria-live="polite">
-                      <!-- svelte-ignore a11y_label_has_associated_control -->
-                      <label class="flex gap-1 items-center mb-1 text-sm font-medium text-black dark:text-white">Configuration file · {data.configuration_path}</label>
-                      <MonacoEditor bind:value={form.proxySettings} language="yaml" rows={30} readonly={!canEdit} />
+                      <div class="flex-1 form-control">
+                        <div class="mb-1.5 flex h-4 w-full items-center gap-1.5">
+                          <!-- svelte-ignore a11y_label_has_associated_control -->
+                          <label class="mb-0! flex items-center gap-1 text-sm font-medium leading-4">Configuration file · {data.configuration_path}</label>
+                        </div>
+                        <MonacoEditor bind:value={form.proxySettings} language="yaml" rows={30} readonly={!canEdit} />
+                      </div>
                     </div>
                   {/if}
                 </SettingsSection>

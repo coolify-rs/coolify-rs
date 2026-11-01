@@ -3,3 +3,9 @@
 
 /* Scan coolify-rs components for the utility classes they use. */
 @source "./";
+
+/* Upstream's highlighted button is `button[isHighlighted]:not(:disabled)`, so a disabled one looks like any other
+   disabled button. The class used here applies in both states. */
+.button.button-highlighted:disabled {
+  @apply bg-none border-neutral-200 text-neutral-300! hover:text-neutral-300! dark:border-white/[0.06] dark:text-fg-faint! dark:hover:text-fg-faint!;
+}

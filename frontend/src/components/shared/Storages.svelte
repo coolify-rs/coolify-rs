@@ -280,7 +280,9 @@
               <div class="volumes-col-actions volumes-cell-actions flex flex-nowrap items-center justify-end gap-1.5">
                 <button type="submit" class="button !px-2.5 !text-xs">Update</button>
                 {#if !v.is_shared}
-                  <button type="button" class="button !px-2.5 !text-xs" onclick={() => openBackup(v.id)}>Backup</button>
+                  {#if data.show_backup_action}
+                    <button type="button" class="button !px-2.5 !text-xs" onclick={() => openBackup(v.id)}>Backup</button>
+                  {/if}
                   <button type="button" class="button button-error" onclick={() => (deleting = v)}>Delete</button>
                 {/if}
               </div>

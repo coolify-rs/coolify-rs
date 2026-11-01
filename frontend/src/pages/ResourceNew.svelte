@@ -268,6 +268,7 @@
   // `filteredServices`: the templates of `Select::loadServices`, by search and category.
   let services = $state<ServiceTemplate[]>([]);
   let categories = $state<string[]>([]);
+  let servicesLastUpdated = $state<string | null>(null);
   let category = $state('');
   $effect(() => {
     servicesApi
@@ -275,6 +276,7 @@
       .then((r) => {
         services = r.services;
         categories = r.categories;
+        servicesLastUpdated = r.last_updated;
       })
       .catch(() => {});
   });
@@ -679,6 +681,13 @@
                   <div class="flex items-center gap-2">
                     <Reicon name="layers" class="size-4 text-neutral-400 dark:text-fg-faint" />
                     <h2>Services</h2>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    {#if servicesLastUpdated}
+                      <div class="text-[11px] text-neutral-500 dark:text-fg-faint">
+                        Updated <span>{servicesLastUpdated}</span>
+                      </div>
+                    {/if}
                   </div>
                 </div>
                 <div class="application-settings-section-body">

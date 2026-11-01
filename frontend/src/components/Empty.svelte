@@ -8,12 +8,15 @@
     description,
     size = 'base',
     iconName,
+    iconClass,
     contents,
   }: {
     title: string;
     description?: string;
     size?: 'sm' | 'base' | 'lg';
     iconName?: string;
+    /** The class of the `x-reicon` in `<x-slot:icon>`, when it is not the default size. */
+    iconClass?: string;
     contents?: Snippet;
   } = $props();
 
@@ -29,7 +32,7 @@
       <div
         class="{iconBox} flex items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-400 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.035] dark:text-fg-faint"
       >
-        <Reicon name={iconName} class={iconSize} />
+        <Reicon name={iconName} class={iconClass ?? iconSize} />
       </div>
     {/if}
     <h2 class="empty-state-title">{title}</h2>
