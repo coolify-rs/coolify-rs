@@ -129,6 +129,14 @@ def real_up():
     print(state["real_server"])
 
 
+def real_ready():
+    """The reference schedules over the same rows and cannot reach 127.0.0.1:2224, so it marks this row unreachable."""
+    state = json.load(open(FILE))
+    where = f"server_id = (select id from servers where uuid = '{state['real_server']}')"
+    print(sql(f"select is_reachable, is_usable, is_terminal_enabled from server_settings where {where}"))
+    sql(f"update server_settings set is_reachable = true, is_usable = true, is_terminal_enabled = true where {where}")
+
+
 def real_down():
     state = json.load(open(FILE))
     if "real_server" in state:
@@ -157,4 +165,4 @@ def down():
 
 
 if __name__ == "__main__":
-    {"up": up, "down": down, "real-up": real_up, "real-down": real_down}[sys.argv[1]]()
+    {"up": up, "down": down, "real-up": real_up, "real-ready": real_ready, "real-down": real_down}[sys.argv[1]]()

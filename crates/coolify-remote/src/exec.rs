@@ -577,11 +577,15 @@ impl Remote {
             program: self.cfg.ssh_binary.clone(),
             args,
             // `getTerminalProcessEnv()`, with the HOME every ssh process here gets.
-            envs: ["PATH", "TUNNEL_SERVICE_TOKEN_ID", "TUNNEL_SERVICE_TOKEN_SECRET"]
-                .into_iter()
-                .filter_map(|name| std::env::var_os(name).map(|v| (OsString::from(name), v)))
-                .chain([(OsString::from("HOME"), self.ssh_dir().join("home").into())])
-                .collect(),
+            envs: [
+                "PATH",
+                "TUNNEL_SERVICE_TOKEN_ID",
+                "TUNNEL_SERVICE_TOKEN_SECRET",
+            ]
+            .into_iter()
+            .filter_map(|name| std::env::var_os(name).map(|v| (OsString::from(name), v)))
+            .chain([(OsString::from("HOME"), self.ssh_dir().join("home").into())])
+            .collect(),
             key: Box::new(key),
         })
     }

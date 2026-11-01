@@ -105,7 +105,9 @@ async fn fixture() -> Fixture {
     let addr = listener.local_addr().unwrap();
     let app = h.app.clone();
     tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service()).await.unwrap();
+        axum::serve(listener, app.into_make_service())
+            .await
+            .unwrap();
     });
     let alice = h.ui_login("alice@example.test").await;
     Fixture {
@@ -143,6 +145,7 @@ async fn next(ws: &mut Socket) -> String {
             .expect("a frame in time");
         match frame {
             Some(Ok(Message::Text(t))) => return t.to_string(),
+            Some(Ok(Message::Binary(b))) => return format!("binary:{}", b.len()),
             Some(Ok(Message::Close(Some(c)))) => {
                 return format!("close:{}:{}", u16::from(c.code), c.reason);
             }
@@ -171,9 +174,8 @@ async fn until(ws: &mut Socket, needle: &str) -> String {
 }
 
 async fn token(f: &Fixture, session: &(String, String), container: Option<&str>) -> Value {
-    let r = f
-        .h
-        .request(
+    let r =
+        f.h.request(
             "POST",
             "/ui/terminal/session",
             &[("cookie", &session.0), ("x-csrf-token", &session.1)],
@@ -198,7 +200,12 @@ async fn sockets_without_a_session_are_refused() {
         next(&mut ws).await,
         "close:4401:Unauthorized: Missing required tokens"
     );
-    let mut ws = open(&f, Some("coolify_rs_session=forged"), None).await;
+    let forged = format!(
+        "{}={}",
+        f.alice.0.split('=').next().unwrap(),
+        "a".repeat(64)
+    );
+    let mut ws = open(&f, Some(&forged), None).await;
     assert_eq!(
         next(&mut ws).await,
         "close:4401:Unauthorized: Invalid credentials"
@@ -247,7 +254,7 @@ async fn a_session_runs_the_command_of_the_server() {
     send(&mut ws, json!({"ping": true})).await;
     assert_eq!(next(&mut ws).await, "pong");
     send(&mut ws, json!({"checkActive": "check"})).await;
-    assert_eq!(next(&mut ws).await, "false");
+    assert_eq!(next(&mut ws).await, "binary:0");
 
     let answer = token(&f, &f.alice, None).await;
     assert_eq!(answer["ok"], true, "{answer}");
@@ -258,7 +265,7 @@ async fn a_session_runs_the_command_of_the_server() {
     until(&mut ws, "READY").await;
 
     send(&mut ws, json!({"checkActive": "check"})).await;
-    until(&mut ws, "true").await;
+    assert_eq!(next(&mut ws).await, "binary:0");
     send(&mut ws, json!({"message": "hello\r"})).await;
     until(&mut ws, "GOT:hello").await;
     send(&mut ws, json!({"resize": {"cols": 101, "rows": 37}})).await;
@@ -277,8 +284,8 @@ async fn a_session_runs_the_command_of_the_server() {
     until(&mut ws, "GOT:later").await;
     send(&mut ws, json!({"message": "exit\r"})).await;
     until(&mut ws, "pty-exited").await;
-    send(&mut ws, json!({"checkActive": "check"})).await;
-    assert_eq!(next(&mut ws).await, "false");
+    send(&mut ws, json!({"checkActive": "force"})).await;
+    assert_eq!(next(&mut ws).await, "binary:0");
 
     // The process got exactly what the service builds, in a TTY.
     let args = std::fs::read_to_string(f.log.join("tty-args")).unwrap();
@@ -288,13 +295,18 @@ async fn a_session_runs_the_command_of_the_server() {
     assert!(lines.contains(&"203.0.113.30"), "{args}");
     assert!(!args.contains("owned"), "{args}");
     assert_eq!(
-        std::fs::read_to_string(f.log.join("tty-env")).unwrap().trim(),
+        std::fs::read_to_string(f.log.join("tty-env"))
+            .unwrap()
+            .trim(),
         "term=xterm-color"
     );
 
     // Single use.
     send(&mut ws, json!({"terminalToken": t})).await;
-    assert_eq!(next(&mut ws).await, "Unauthorized: Terminal token was rejected");
+    assert_eq!(
+        next(&mut ws).await,
+        "Unauthorized: Terminal token was rejected"
+    );
     assert_eq!(
         next(&mut ws).await,
         "close:4403:Unauthorized: Terminal token was rejected"
@@ -390,13 +402,14 @@ async fn tokens_are_issued_as_upstream_decides() {
     let path = format!("/ui/resources/server/{}/terminal", f.server);
     let r = f.h.request("GET", &path, &[("cookie", &bob.0)], None).await;
     assert_eq!(r.status, 403, "{}", r.body);
-    let r = f.h.request("GET", &path, &[("cookie", &carol.0)], None).await;
+    let r =
+        f.h.request("GET", &path, &[("cookie", &carol.0)], None)
+            .await;
     assert_eq!(r.status, 404, "{}", r.body);
     let connect = format!("/ui/resources/server/{}/terminal/connect", f.server);
     for who in [&bob, &carol] {
-        let r = f
-            .h
-            .request(
+        let r =
+            f.h.request(
                 "POST",
                 &connect,
                 &[("cookie", &who.0), ("x-csrf-token", &who.1)],
@@ -406,9 +419,8 @@ async fn tokens_are_issued_as_upstream_decides() {
         assert_eq!(r.json(), json!({"ok": false, "message": NOT_ALLOWED}));
     }
     // CSRF on the request that issues a token.
-    let r = f
-        .h
-        .request(
+    let r =
+        f.h.request(
             "POST",
             "/ui/terminal/session",
             &[("cookie", &f.alice.0)],
@@ -417,9 +429,13 @@ async fn tokens_are_issued_as_upstream_decides() {
         .await;
     assert_eq!(r.status, 419, "{}", r.body);
     // No session.
-    let r = f
-        .h
-        .request("POST", "/ui/terminal/session", &[], Some(json!({"server_uuid": f.server})))
+    let r =
+        f.h.request(
+            "POST",
+            "/ui/terminal/session",
+            &[],
+            Some(json!({"server_uuid": f.server})),
+        )
         .await;
     assert_eq!(r.status, 401, "{}", r.body);
 
@@ -465,13 +481,14 @@ async fn tokens_are_issued_as_upstream_decides() {
     let args = std::fs::read_to_string(f.log.join("tty-args")).unwrap();
     assert_eq!(
         args.lines().last(),
-        Some(r#"docker logs --tail 200 'console-box' 2>&1; exec docker attach --detach-keys="ctrl-p,ctrl-q" --sig-proxy=false 'console-box'"#),
+        Some(
+            r#"docker logs --tail 200 'console-box' 2>&1; exec docker attach --detach-keys="ctrl-p,ctrl-q" --sig-proxy=false 'console-box'"#
+        ),
     );
 
     // Disabled, or force disabled.
-    let r = f
-        .h
-        .request(
+    let r =
+        f.h.request(
             "POST",
             &connect,
             &[("cookie", &f.alice.0), ("x-csrf-token", &f.alice.1)],
@@ -493,15 +510,17 @@ async fn tokens_are_issued_as_upstream_decides() {
         .execute(f.h.tdb.db.pool())
         .await
         .unwrap();
-    let r = f
-        .h
-        .request(
+    let r =
+        f.h.request(
             "POST",
             &connect,
             &[("cookie", &f.alice.0), ("x-csrf-token", &f.alice.1)],
             Some(json!({})),
         )
         .await;
-    assert_eq!(r.json(), json!({"ok": false, "message": "Server is disabled."}));
+    assert_eq!(
+        r.json(),
+        json!({"ok": false, "message": "Server is disabled."})
+    );
     f.h.finish().await;
 }

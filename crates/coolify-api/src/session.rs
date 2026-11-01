@@ -640,6 +640,11 @@ fn web_ctx(live: &Live, path: &str) -> Result<AuthCtx, ApiError> {
     })
 }
 
+/// Whether the request carries a session cookie at all, valid or not.
+pub(crate) fn has_session_cookie(headers: &HeaderMap) -> bool {
+    session_cookie(headers).is_some()
+}
+
 /// What [`ui_guard`] gives the requests of the terminal server to Coolify (`/terminal/auth`,
 /// `/terminal/session`), for a websocket that has no such requests of its own.
 pub(crate) async fn terminal_ctx(

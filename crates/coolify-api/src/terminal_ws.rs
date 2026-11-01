@@ -72,7 +72,7 @@ fn same_origin(headers: &HeaderMap) -> bool {
 
 /// `authenticateTerminalUpgrade`, with `/terminal/auth` and `can.access.terminal`.
 async fn authenticate(state: &AppState, headers: &HeaderMap) -> Auth {
-    if !headers.contains_key(header::COOKIE) {
+    if !crate::session::has_session_cookie(headers) {
         return Auth::Rejected(AUTH_REJECTED, "Unauthorized: Missing required tokens");
     }
     if !same_origin(headers) {
@@ -419,8 +419,9 @@ async fn handle_message(
                 Some(c) if value == "force" => {
                     tokio::spawn(c.stopper().stop());
                 }
-                active => socket
-                    .send(text(if active.is_some() { "true" } else { "false" }))
+                // `session.ws.send(session.isActive)`: ws turns a boolean into an empty binary frame.
+                _ => socket
+                    .send(Message::Binary(Vec::new().into()))
                     .await
                     .map_err(|_| ())?,
             },
@@ -457,7 +458,9 @@ async fn handle_message(
                                 .filter(|v| *v > 0.0)
                                 .map_or(default, |v| v.min(f64::from(u16::MAX)) as u16)
                         };
-                        let _ = c.input.send(Input::Resize(size("cols", 80), size("rows", 30)));
+                        let _ = c
+                            .input
+                            .send(Input::Resize(size("cols", 80), size("rows", 30)));
                     }
                     "pause" => {
                         let _ = c.paused.send(true);
@@ -502,7 +505,9 @@ async fn handle_event(
         Event::Replaced(false, _) => {
             socket.send(text("unprocessable")).await.map_err(|_| ())?;
         }
-        Event::Replaced(true, session) => return open(socket, state, events, current, session).await,
+        Event::Replaced(true, session) => {
+            return open(socket, state, events, current, session).await;
+        }
     }
     Ok(())
 }
@@ -552,6 +557,7 @@ async fn open(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::panic)]
     use super::*;
     use axum::http::HeaderValue;
 
@@ -564,6 +570,78 @@ mod tests {
         assert_eq!(decode(&mut pending, &bytes[3..]), "€");
         assert!(pending.is_empty());
         assert_eq!(decode(&mut pending, b"a\xffb"), "a\u{fffd}b");
+    }
+
+    fn sh(script: &str) -> TtyInvocation {
+        TtyInvocation {
+            program: "sh".into(),
+            args: vec!["-c".into(), script.into()],
+            envs: Vec::new(),
+            key: Box::new(()),
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_ends_a_shell() {
+        let (events, mut rx) = mpsc::channel(OUTPUT_QUEUE);
+        let running = spawn(sh("exec sh"), false, events).unwrap();
+        let id = running.id;
+        assert!(running.stopper().stop().await);
+        loop {
+            match rx.recv().await {
+                Some(Event::Exited(exited)) => {
+                    assert_eq!(exited, id);
+                    break;
+                }
+                Some(_) => {}
+                None => panic!("no exit"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_gives_up_on_keys_and_kills_the_client() {
+        let (events, mut rx) = mpsc::channel(OUTPUT_QUEUE);
+        let script = "trap '' INT TERM HUP; printf ready; while :; do sleep 1; done";
+        let running = spawn(sh(script), false, events).unwrap();
+        let exited = running.exited.clone();
+        let mut seen = String::new();
+        while !seen.contains("ready") {
+            if let Some(Event::Output(_, data)) = rx.recv().await {
+                seen.push_str(&data);
+            }
+        }
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        // Upstream reports this as not stopped, and the next session gets `unprocessable`.
+        assert!(!running.stopper().stop().await);
+        let mut exited = exited;
+        tokio::time::timeout(Duration::from_secs(5), exited.wait_for(|e| *e))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_attach_session_gets_the_detach_keys() {
+        let (events, mut rx) = mpsc::channel(OUTPUT_QUEUE);
+        // Stands in for `docker attach --detach-keys`: leaves on Ctrl-P, Ctrl-Q.
+        let script = "stty raw -echo; printf ready; dd bs=2 count=1 2>/dev/null | od -c | head -1";
+        let running = spawn(sh(script), true, events).unwrap();
+        let mut seen = String::new();
+        while !seen.contains("ready") {
+            if let Some(Event::Output(_, data)) = rx.recv().await {
+                seen.push_str(&data);
+            }
+        }
+        assert!(running.stopper().stop().await);
+        while let Some(event) = rx.recv().await {
+            match event {
+                Event::Output(_, data) => seen.push_str(&data),
+                Event::Exited(_) => break,
+                _ => {}
+            }
+        }
+        assert!(seen.contains("020") && seen.contains("021"), "{seen}");
     }
 
     #[test]
@@ -579,7 +657,10 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert(header::HOST, HeaderValue::from_static("coolify.test:8000"));
         assert!(same_origin(&h));
-        h.insert(header::ORIGIN, HeaderValue::from_static("https://evil.test"));
+        h.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://evil.test"),
+        );
         assert!(!same_origin(&h));
         h.insert(
             header::ORIGIN,

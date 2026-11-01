@@ -570,7 +570,8 @@ async fn send_terminal_command(
     if !terminal_enabled(&row) || force_disabled(&row) {
         return Ok(failed("Terminal access is disabled on this server."));
     }
-    let mut answer = json!({"ok": true, "has_shell": true, "attach_available": false, "mode": "shell"});
+    let mut answer =
+        json!({"ok": true, "has_shell": true, "attach_available": false, "mode": "shell"});
     let mut attach = false;
     if is_container {
         if !is_valid_container_name(identifier) {
@@ -649,11 +650,12 @@ pub(crate) async fn redeem(state: &AppState, ctx: &AuthCtx, token: &str) -> Resu
         return Err(());
     }
     let key_id = row.record.get("private_key_id").and_then(Value::as_i64);
-    let key_team: Option<i64> = sqlx::query_scalar("SELECT team_id FROM private_keys WHERE id = $1")
-        .bind(key_id)
-        .fetch_optional(state.db.pool())
-        .await
-        .map_err(|_| ())?;
+    let key_team: Option<i64> =
+        sqlx::query_scalar("SELECT team_id FROM private_keys WHERE id = $1")
+            .bind(key_id)
+            .fetch_optional(state.db.pool())
+            .await
+            .map_err(|_| ())?;
     if key_team != Some(ctx.team_id) {
         return Err(());
     }

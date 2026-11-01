@@ -91,8 +91,8 @@ Upstream references are relative to the upstream repository root.
 | Scheduled tasks, scheduler, Horizon queues | `app/Console/Kernel.php`, 72 jobs | |
 | Cloud providers (Hetzner, DigitalOcean, Vultr, Hostinger), cloud-init | controllers + jobs, `Server\New\By*`, `Server\CloudProviderToken\Show` | API and jobs verified against a fake (`servers_diff.py cloud`); UI forms and Cloud Token page compared with upstream's Livewire components under `Http::fake` (`compat/ui/cloud_ui.mjs`: validation messages, provider requests, server rows); Security pages for tokens and scripts not ported |
 | Sending notifications (email, Discord, Slack, Telegram, Pushover, webhook), delivery failure tracking, transactional mail | `app/Notifications/*`, `TracksDeliveryFailures` | verified: `compat/diff/notifications_diff.py` (subject, mail HTML, request bodies), `compat/diff/notifications_e2e.py` (delivery to mailpit and a local endpoint), `crates/coolify-jobs/tests/notifications_delivery.rs`; triggers not wired are in KNOWN_LIMITATIONS |
-| Terminal page | `Terminal\Index`, `can.access.terminal` | target list, filter and gate compared on both sides (`compat/ui/flow_terminal.mjs`); the shell is not ported (KNOWN_LIMITATIONS) |
-| File browser, terminal shell | `docker/coolify-terminal`, `ContainerFilesystemService` | high-risk; security review required |
+| Terminal page | `Terminal\Index`, `can.access.terminal` | target list, filter and gate compared on both sides (`compat/ui/flow_terminal.mjs`); the shell is ported, see Terminal shell |
+| Terminal shell | `docker/coolify-terminal`, `Project\Shared\Terminal`, `Project\Shared\ExecuteContainerCommand`, `TerminalSessionService`, `can.access.terminal` | websocket `/terminal/ws` in this server (`terminal_ws.rs`), upstream's `terminal.js` vendored; real shells in a browser on server, application, database, service and `/terminal` (`compat/ui/terminal_ui.mjs`), screens and socket messages against the reference (`compat/ui/terminal_states.mjs`), refusals in `crates/coolify-api/tests/terminal.rs` |
 | Instance settings | `Settings\Index`, `Advanced`, `Updates`, `SettingsEmail`, `SettingsBackup` | rows, toasts and audit events compared on both sides (`compat/ui/flow_settings.mjs`, `flow_mail.mjs`); see KNOWN_LIMITATIONS |
 | Layout | `GlobalSearch`, `DeploymentsIndicator`, `Dashboard\ActiveDeployments`, `LayoutPopups`, `Upgrade` | results of the same queries and the screens compared (`compat/ui/flow_layout.mjs`) |
 | Onboarding | `Boarding\Index` | remote path through the SSH test host compared on both sides (`compat/ui/flow_onboarding.mjs`) |
@@ -107,7 +107,6 @@ Upstream references are relative to the upstream repository root.
 | Database backups to S3, restore | `DatabaseBackupJob` | |
 | Scheduled tasks, scheduler, Horizon queues | `app/Console/Kernel.php`, 72 jobs | application tasks API and `ScheduledTaskJob` ported; scheduler with a source interface (`coolify_jobs::scheduler`), tasks registered; backups, cleanups and other jobs not |
 | Notifications (email, Discord, Slack, Telegram, Pushover, webhook) | `app/Notifications/*` | SSRF protections must be ported with them |
-| Terminal and file browser | `docker/coolify-terminal`, `ContainerFilesystemService` | high-risk; security review required |
 | Cloud providers (Hetzner, DigitalOcean, Vultr, Hostinger), cloud-init | controllers + jobs | |
 | MCP server, Sentinel metrics, traffic analytics | `routes/ai.php`, `SentinelController` | |
 | Traffic analytics charts (server page and `/analytics`) | `Livewire\Analytics`, `SentinelTrafficClient`, `TrafficAnalyticsAggregator`, `TrafficResource` | `crates/coolify-api/src/ui_server_analytics.rs`, `frontend/src/components/analytics/`, compared by `compat/ui/analytics_compare.mjs` |

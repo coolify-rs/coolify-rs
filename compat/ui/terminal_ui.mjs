@@ -54,7 +54,7 @@ async function shell(label, opts = {}) {
   await page.keyboard.type('echo MARK_$((6*7)); tty; stty size\n');
   check(`${label}: command output`, await until(async () => output().includes('MARK_42')), await screen());
   check(`${label}: has a TTY`, await until(async () => /\/dev\/(pts\/\d+|tty)/.test(output())), output().slice(-300));
-  check(`${label}: screen shows it`, (await screen()).includes('MARK_42'), await screen());
+  check(`${label}: screen shows it`, (await screen()).includes('MARK_42'), JSON.stringify(frames.slice(-12)) + (await screen()));
   const size = /(\d+) (\d+)/.exec(output().split('tty').pop() ?? '');
   await page.screenshot({ path: `${shots}terminal-${label}-${side}.png` });
   const before = frames.filter((f) => f[1].includes('"resize"')).length;
@@ -94,25 +94,39 @@ if (args.includes('--real-ssh')) {
   // Over real ssh: a server with its shell, a container in Shell mode, a container in Console mode.
   await open(`/server/${fx.real_server}/terminal`);
   await shell('real-ssh-server');
-  const pick = async (name) => {
-    await open('/terminal');
-    const item = page.locator('.command-palette-item', { hasText: 'terminal-real-ssh' }).filter({ hasText: name });
-    await until(async () => (await item.count()) > 0);
-    await item.click();
-  };
-  await pick(fx.database);
-  await shell('real-ssh-container');
-  await pick('sidecar-');
-  check('real-ssh console: pty-ready', await until(() => frames.some((f) => f[1] === 'pty-ready')));
-  check('real-ssh console: mode', await until(async () => (await page.getByRole('button', { name: 'Choose terminal mode' }).innerText()).includes('Console')));
-  check('real-ssh console: history', await until(async () => /Ready to accept connections/.test(output())), output().slice(-200));
-  await page.locator('input[aria-label="Console command"]').fill('ping');
-  await page.keyboard.press('Enter');
-  frames.length = 0;
-  await open('/terminal');
+  // /terminal lists containers of every server, and the VM's own row has no route here, so the
+  // containers are opened the way that page opens them: token, then the socket.
+  const session = (identifier, keys, want) => page.evaluate(async ({ server, identifier, keys, want }) => {
+    const { csrf_token } = await (await fetch('/ui/session')).json();
+    const r = await fetch('/ui/terminal/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf_token },
+      body: JSON.stringify({ is_container: true, identifier, server_uuid: server }),
+    });
+    const answer = await r.json();
+    if (!answer.ok) return { answer, seen: '' };
+    return new Promise((resolve) => {
+      let seen = '';
+      const ws = new WebSocket(`ws://${location.host}/terminal/ws`);
+      const finish = () => { ws.close(1000); resolve({ answer: { ...answer, token: undefined }, seen }); };
+      setTimeout(finish, 15000);
+      ws.onopen = () => ws.send(JSON.stringify({ terminalToken: answer.token }));
+      ws.onmessage = (e) => {
+        seen += e.data;
+        if (e.data === 'pty-ready' && keys) setTimeout(() => ws.send(JSON.stringify({ message: keys })), 800);
+        if (seen.includes(want)) finish();
+      };
+    });
+  }, { server: fx.real_server, identifier, keys, want });
+  const shellDb = await session(fx.database, 'echo MARK_$((6*7)); tty; exit\r', 'MARK_42');
+  check('real-ssh container shell', shellDb.seen.includes('MARK_42') && shellDb.answer.mode === 'shell', JSON.stringify(shellDb).slice(0, 400));
+  const consoleBox = await session(`sidecar-${fx.service}`, null, 'Ready to accept connections');
+  check('real-ssh container console', consoleBox.answer.mode === 'attach' && consoleBox.seen.includes('Ready to accept connections'), JSON.stringify(consoleBox).slice(0, 400));
   await page.waitForTimeout(2500);
-  const running = await page.evaluate(() => true);
-  check('real-ssh console: page left', running);
+  const alive = await new Promise((resolve) => {
+    import('node:child_process').then(({ execFile }) => execFile('orb', ['-m', 'coolify-rs-e2e', '-u', 'root', 'docker', 'inspect', '--format', '{{.State.Status}}', `sidecar-${fx.service}`], (e, out) => resolve(String(out).trim())));
+  });
+  check('real-ssh console: closing the socket detaches, the container keeps running', alive === 'running', alive);
   check('no page errors', errors.length === 0, errors.join(' | '));
   console.log(`${pass}/${pass + fail} passed`);
   await browser.close();
