@@ -242,11 +242,13 @@ async fn enable_management(
             if let Ok(Some(record)) = coolify_db::managed_dns::record_by_id(&state.db, id).await
                 && dns.reclaim_record(&record).await
             {
-                let _ = sqlx::query("UPDATE managed_dns_records SET owned = true, updated_at = $2 WHERE id = $1")
-                    .bind(id)
-                    .bind(state.now())
-                    .execute(state.db.pool())
-                    .await;
+                let _ = sqlx::query(
+                    "UPDATE managed_dns_records SET owned = true, updated_at = $2 WHERE id = $1",
+                )
+                .bind(id)
+                .bind(state.now())
+                .execute(state.db.pool())
+                .await;
             }
         }
     }

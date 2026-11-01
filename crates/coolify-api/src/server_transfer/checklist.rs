@@ -547,15 +547,30 @@ async fn run_check(
                     .await
                     .unwrap_or(None);
             match owned {
-                None => done("unchecked", "This instance does not track this record anymore.".into(), None),
+                None => done(
+                    "unchecked",
+                    "This instance does not track this record anymore.".into(),
+                    None,
+                ),
                 Some((true,)) => {
                     if reclaim_record(state, &subject).await {
-                        done("ok", "This instance manages the record at Cloudflare.".into(), None)
+                        done(
+                            "ok",
+                            "This instance manages the record at Cloudflare.".into(),
+                            None,
+                        )
                     } else {
                         done("action", "Cloudflare does not confirm the record.".into(), Some("The record changed at Cloudflare, or Cloudflare cannot be reached with the token.".into()))
                     }
                 }
-                Some((false,)) => done("action", "This instance does not own the record yet.".into(), Some("Until it owns the record, this instance does not change or delete it.".into())),
+                Some((false,)) => done(
+                    "action",
+                    "This instance does not own the record yet.".into(),
+                    Some(
+                        "Until it owns the record, this instance does not change or delete it."
+                            .into(),
+                    ),
+                ),
             }
         }
         "domain" => check_domain(state, server_id, &subject).await,

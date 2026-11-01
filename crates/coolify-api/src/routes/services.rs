@@ -1218,7 +1218,12 @@ pub async fn update(
     let mut previous_dns_hostnames = Vec::new();
     if input.has("urls") {
         for sub in svc::subs(&state.db, SubKind::Application, s.id).await? {
-            let previous = crate::ui_shared::dns::previous_hostnames(&state, "App\\Models\\ServiceApplication", sub.id).await;
+            let previous = crate::ui_shared::dns::previous_hostnames(
+                &state,
+                "App\\Models\\ServiceApplication",
+                sub.id,
+            )
+            .await;
             previous_dns_hostnames.push((sub.id, previous));
         }
     }
@@ -1235,7 +1240,13 @@ pub async fn update(
         return failure.response();
     }
     for (id, previous) in previous_dns_hostnames {
-        crate::ui_shared::dns::queue_release_of_removed_hostnames(&state, "App\\Models\\ServiceApplication", id, previous, ctx.team_id);
+        crate::ui_shared::dns::queue_release_of_removed_hostnames(
+            &state,
+            "App\\Models\\ServiceApplication",
+            id,
+            previous,
+            ctx.team_id,
+        );
     }
     if input_bool(&input, "instant_deploy") {
         jobs_of(&state)?.spawn_service_start(s.id, false, false);
@@ -3067,9 +3078,20 @@ pub async fn update_application(
         values.push(("max_restart_count", ColumnValue::Int(n)));
         values.push(("restart_limit_reached", ColumnValue::Bool(false)));
     }
-    let previous_dns_hostnames = crate::ui_shared::dns::previous_hostnames(&state, "App\\Models\\ServiceApplication", app.id).await;
+    let previous_dns_hostnames = crate::ui_shared::dns::previous_hostnames(
+        &state,
+        "App\\Models\\ServiceApplication",
+        app.id,
+    )
+    .await;
     svc::sub_update(&state.db, SubKind::Application, app.id, &values, now).await?;
-    crate::ui_shared::dns::queue_release_of_removed_hostnames(&state, "App\\Models\\ServiceApplication", app.id, previous_dns_hostnames, ctx.team_id);
+    crate::ui_shared::dns::queue_release_of_removed_hostnames(
+        &state,
+        "App\\Models\\ServiceApplication",
+        app.id,
+        previous_dns_hostnames,
+        ctx.team_id,
+    );
     if input.has("noindex_domains") {
         let list = app_domains::domain_list(fqdn.as_deref());
         let normalize = |d: &str| app_domains::without_port(&app_domains::normalize_url(d));

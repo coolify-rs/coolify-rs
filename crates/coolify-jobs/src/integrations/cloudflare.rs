@@ -1233,7 +1233,10 @@ pub async fn release_removed_hostnames_job(
         };
         let mut retry = false;
         for hostname in hostnames {
-            match dns.release_hostname(resource, hostname, team_id, true).await {
+            match dns
+                .release_hostname(resource, hostname, team_id, true)
+                .await
+            {
                 Ok(Some(r)) if r.should_retry() => retry = true,
                 Ok(_) => {}
                 Err(e) => {

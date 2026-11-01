@@ -1104,7 +1104,17 @@ fn email_settings_json(settings: &Settings) -> String {
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    for hidden in ["smtp_from_address", "smtp_from_name", "smtp_recipients", "smtp_host", "smtp_port", "smtp_encryption", "smtp_username", "smtp_timeout", "smtp_ehlo_domain"] {
+    for hidden in [
+        "smtp_from_address",
+        "smtp_from_name",
+        "smtp_recipients",
+        "smtp_host",
+        "smtp_port",
+        "smtp_encryption",
+        "smtp_username",
+        "smtp_timeout",
+        "smtp_ehlo_domain",
+    ] {
         row.remove(hidden);
     }
     for secret in ["smtp_password", "resend_api_key"] {

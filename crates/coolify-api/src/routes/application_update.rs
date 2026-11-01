@@ -750,7 +750,7 @@ async fn apply(
 
     let now = state.now();
     let previous_dns_hostnames =
-        crate::ui_shared::dns::previous_hostnames(&state, apps::MORPH, original.id).await;
+        crate::ui_shared::dns::previous_hostnames(state, apps::MORPH, original.id).await;
     apps::update_settings(&state.db, original.id, &settings, now)
         .await
         .map_err(fields::save_error)?;
@@ -758,7 +758,7 @@ async fn apply(
         .await
         .map_err(fields::save_error)?;
     crate::ui_shared::dns::queue_release_of_removed_hostnames(
-        &state,
+        state,
         apps::MORPH,
         original.id,
         previous_dns_hostnames,

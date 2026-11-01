@@ -480,10 +480,9 @@ async fn configure_after_add(
     if list.is_empty() {
         return Ok(None);
     }
-    if !f
-        .configured
+    if f.configured
         .as_deref()
-        .is_some_and(|c| c.parse::<std::net::IpAddr>().is_ok())
+        .is_none_or(|c| c.parse::<std::net::IpAddr>().is_err())
     {
         return Ok(None);
     }
@@ -503,8 +502,12 @@ async fn configure_after_add(
             automatic = false;
             break;
         };
-        let zone = store::zone_in_team(&state.db, res.team_id, only["zone_id"].as_i64().unwrap_or(-1))
-            .await?;
+        let zone = store::zone_in_team(
+            &state.db,
+            res.team_id,
+            only["zone_id"].as_i64().unwrap_or(-1),
+        )
+        .await?;
         // `automaticDnsEnabled()`
         let enabled = zone.is_some_and(|z| {
             z.metadata
@@ -546,8 +549,9 @@ async fn configure_after_add(
 
 /// `DnsRecordConfigurationFinished` for the page that waits: there is no broadcast here, so the page
 /// asks for the end of the jobs its request started.
-static FINISHED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, (i64, Value)>>> =
-    std::sync::LazyLock::new(Default::default);
+static FINISHED: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, (i64, Value)>>,
+> = std::sync::LazyLock::new(Default::default);
 
 /// `ConfigureDnsRecordJob`, and what the page's `dnsRecordConfigurationFinished` does.
 #[allow(clippy::too_many_arguments)]
@@ -625,7 +629,12 @@ async fn finished(
     let res = find(&state, &ctx, &kind, &uuid).await?;
     let mut out = Vec::new();
     if let Ok(mut map) = FINISHED.lock() {
-        for id in query.get("jobs").map(String::as_str).unwrap_or_default().split(',') {
+        for id in query
+            .get("jobs")
+            .map(String::as_str)
+            .unwrap_or_default()
+            .split(',')
+        {
             if map.get(id).is_some_and(|(team, _)| *team == res.team_id)
                 && let Some((_, value)) = map.remove(id)
             {

@@ -709,10 +709,7 @@ async fn add(
     if let Some(answer) = answer {
         return Ok(answer);
     }
-    dns::after_domain_add(
-        &state, &ctx, &kind, &uuid, &added, service, None, warnings,
-    )
-    .await
+    dns::after_domain_add(&state, &ctx, &kind, &uuid, &added, service, None, warnings).await
 }
 
 /// `updateDomain()`.

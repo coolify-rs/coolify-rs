@@ -307,7 +307,9 @@ pub async fn run_job(jobs: &Jobs, job: KernelJob, now: DateTime<Utc>) -> Result<
             cleanup_database_import_uploads(&data_dir());
             Ok(())
         }
-        KernelJob::ReleaseOrphanedDnsRecords => release_orphaned_dns_records(jobs).await.map(|_| ()),
+        KernelJob::ReleaseOrphanedDnsRecords => {
+            release_orphaned_dns_records(jobs).await.map(|_| ())
+        }
         KernelJob::ApiTokenExpirationWarning => api_token_expiration_warning(jobs).await,
         KernelJob::CheckMissingDatabaseBackups => check_missing_database_backups(jobs).await,
         KernelJob::CheckMissingVolumeBackups => check_missing_volume_backups(jobs).await,
@@ -457,7 +459,9 @@ pub async fn release_orphaned_dns_records(jobs: &Jobs) -> Result<String, String>
         .collect::<Vec<_>>()
         .join(", ");
     tracing::info!(?counts, "Orphaned managed DNS records processed.");
-    Ok(format!("Orphaned managed DNS records processed ({summary})."))
+    Ok(format!(
+        "Orphaned managed DNS records processed ({summary})."
+    ))
 }
 
 /// `CleanupDatabaseImportUploads::handle`. `Cache::lock(StartDatabaseImport::lockKey(...))` is held

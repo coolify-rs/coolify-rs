@@ -492,7 +492,10 @@ async fn normal_inner(
     }
     crate::server_transfer::checklist::record_webhook(
         "github_app",
-        source.get("uuid").and_then(Value::as_str).unwrap_or_default(),
+        source
+            .get("uuid")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
     );
     if event == "installation" || event == "installation_repositories" {
         if p::get(&payload, "action").and_then(Value::as_str) == Some("new_permissions_accepted") {

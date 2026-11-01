@@ -3,8 +3,8 @@
 
 pub mod compose;
 mod deploy;
-pub(crate) use deploy::remote_redaction_values;
 pub use deploy::compose_pack::{inject_build_args, inject_compose_flags};
+pub(crate) use deploy::remote_redaction_values;
 pub mod detect;
 pub mod docker_run;
 pub mod domains;

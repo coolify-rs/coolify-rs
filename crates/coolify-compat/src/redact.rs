@@ -387,28 +387,24 @@ pub fn take_complete_output(pending: &mut String, last: bool) -> String {
             )
             .ok()
         });
-    let unfinished = |text: &str| -> Result<Option<usize>, ()> {
-        match UNFINISHED_PRIVATE_KEY
-            .as_ref()
-            .map(|re| re.find(text).map(|m| m.map(|m| m.start())))
-        {
-            Some(Ok(found)) => Ok(found),
-            _ => Err(()),
-        }
+    // `None` when the pattern could not run on this text.
+    let unfinished = |text: &str| -> Option<Option<usize>> {
+        let found = UNFINISHED_PRIVATE_KEY.as_ref()?.find(text).ok()?;
+        Some(found.map(|m| m.start()))
     };
     if last {
         let text = std::mem::take(pending);
         return match unfinished(&text) {
-            Ok(Some(start)) => format!("{}{REDACTED}", &text[..start]),
-            Ok(None) => text,
-            Err(()) => REDACTED.to_owned(),
+            Some(Some(start)) => format!("{}{REDACTED}", &text[..start]),
+            Some(None) => text,
+            None => REDACTED.to_owned(),
         };
     }
     let Some(end) = pending.rfind(['\n', '\r']) else {
         return String::new();
     };
     let mut take = end + 1;
-    if let Ok(Some(start)) = unfinished(&pending[..take]) {
+    if let Some(Some(start)) = unfinished(&pending[..take]) {
         take = start;
     }
     let rest = pending.split_off(take);
@@ -440,7 +436,10 @@ mod tests {
             format!("{begin}\nabc\n{finish}\n")
         );
         let mut open = format!("x\n{begin}\nabc");
-        assert_eq!(take_complete_output(&mut open, true), format!("x\n{REDACTED}"));
+        assert_eq!(
+            take_complete_output(&mut open, true),
+            format!("x\n{REDACTED}")
+        );
     }
 
     fn r(t: &str) -> String {

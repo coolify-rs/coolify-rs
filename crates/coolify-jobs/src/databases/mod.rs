@@ -1144,6 +1144,30 @@ pub fn normalize_status(v: &str) -> String {
     format!("{status}:{health}")
 }
 
+/// `DatabaseStartCommandExecutor::appendOutput()` with the redacted text.
+async fn append_start_output(
+    db: &coolify_db::Db,
+    activity: i64,
+    entries: &mut Vec<Value>,
+    stream: Stream,
+    text: &str,
+    locked: &[&str],
+) {
+    let output = coolify_compat::redact::redact_text(text, &[], locked);
+    if output.is_empty() {
+        return;
+    }
+    entries.push(json!({"type": stream.as_str(), "output": output, "timestamp": hrtime(), "batch": 1, "order": entries.len() + 1}));
+    let _ = dbs::update_activity(
+        db,
+        activity,
+        &json!({}),
+        Some(&serde_json::to_string(entries).unwrap_or_default()),
+        now(),
+    )
+    .await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1179,28 +1203,4 @@ mod tests {
             "docker stop --time=30 x"
         );
     }
-}
-
-/// `DatabaseStartCommandExecutor::appendOutput()` with the redacted text.
-async fn append_start_output(
-    db: &coolify_db::Db,
-    activity: i64,
-    entries: &mut Vec<Value>,
-    stream: Stream,
-    text: &str,
-    locked: &[&str],
-) {
-    let output = coolify_compat::redact::redact_text(text, &[], locked);
-    if output.is_empty() {
-        return;
-    }
-    entries.push(json!({"type": stream.as_str(), "output": output, "timestamp": hrtime(), "batch": 1, "order": entries.len() + 1}));
-    let _ = dbs::update_activity(
-        db,
-        activity,
-        &json!({}),
-        Some(&serde_json::to_string(entries).unwrap_or_default()),
-        now(),
-    )
-    .await;
 }
