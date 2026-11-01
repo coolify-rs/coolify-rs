@@ -17,7 +17,7 @@
   import { link, router } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
 
-  let { children }: { children: Snippet } = $props();
+  let { children, fullBleed = false }: { children: Snippet; fullBleed?: boolean } = $props();
 
   const version = $derived(session.info?.version ?? '');
   const collapsed = $derived(layout.collapsed);
@@ -44,7 +44,7 @@
 
 <LayoutPopups />
 <GlobalSearch />
-<div class="app-shell dark:text-inherit text-black" style="--sidebar-w: {collapsed ? 'var(--sidebar-collapsed-w)' : '14rem'}">
+<div class="app-shell dark:text-inherit text-black {fullBleed ? 'app-shell-canvas flex h-dvh flex-col' : ''}" style="--sidebar-w: {collapsed ? 'var(--sidebar-collapsed-w)' : '14rem'}">
   <!-- Desktop top bar -->
   <header class="app-topbar hidden lg:flex fixed top-0 inset-x-0 z-50 h-12 items-center bg-white/95 dark:bg-panel/95 backdrop-blur">
     <div
@@ -79,6 +79,7 @@
         </div>
       </div>
       <!-- Resource pages teleport into these (layouts/app.blade.php). -->
+      <div id="page-toolbar-slot" class="flex shrink-0 items-center empty:hidden"></div>
       <div id="configuration-warning-hud-slot" class="relative shrink-0"></div>
       <DeploymentsIndicator variant="topbar" />
       <div id="resource-action-hud-slot" class="hidden shrink-0 items-center xl:flex"></div>
@@ -178,6 +179,18 @@
     </div>
   </div>
 
+  {#if fullBleed}
+    <!-- Full-bleed pages (canvases) fill the space between the top bar and the sidebar. -->
+    <main
+      class="app-main app-main-full relative min-h-0 flex-1 bg-neutral-50 dark:bg-app lg:pt-12 {collapsed ? 'lg:ml-(--sidebar-collapsed-w)' : 'lg:ml-56'} {sidebarReady
+        ? 'transition-[margin] duration-200'
+        : ''}"
+    >
+      <div class="relative h-full">
+        {@render children()}
+      </div>
+    </main>
+  {:else}
   <main
     class="app-main min-h-screen bg-neutral-50 dark:bg-app px-5 py-6 sm:px-8 lg:px-10 lg:pt-[calc(3rem+1.75rem)] lg:pb-10 {collapsed
       ? 'lg:ml-(--sidebar-collapsed-w)'
@@ -192,4 +205,5 @@
       {@render children()}
     </div>
   </main>
+  {/if}
 </div>

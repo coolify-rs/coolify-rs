@@ -1,6 +1,5 @@
 <script lang="ts">
   // Port of upstream livewire/tags/show.blade.php with livewire/tags/partials/new-tag-form.blade.php.
-  // The canvas pages are not ported, so "Connect in canvas" leads to the not-available page.
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
   import Modal from '../components/Modal.svelte';
@@ -344,7 +343,7 @@
               Connect to resources
             </button>
             <a
-              href="/canvas/tags?select=tag-{details!.tag.id}"
+              href="/canvas/tags?select=tag%3A{details!.tag.uuid}"
               class="button hidden whitespace-nowrap md:inline-flex"
               title="Add this tag to resources on the canvas, and see which resources have it"
             >

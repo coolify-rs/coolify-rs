@@ -61,7 +61,26 @@ const ENCRYPTED: &[&str] = &[
 ];
 
 /// The `status` getter of a single-server application.
-fn status_getter(v: Option<&str>) -> String {
+/// `$application->destination->server` of a Swarm destination, which `ApplicationRow` does not load.
+async fn swarm_server(
+    state: &AppState,
+    a: &ApplicationRow,
+) -> Result<Option<coolify_db::servers::ServerRow>, ApiError> {
+    if a.str("destination_type") != Some("App\\Models\\SwarmDocker") {
+        return Ok(None);
+    }
+    let destination = a
+        .raw
+        .get("destination_id")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    match coolify_db::canvas::swarm_server_id(&state.db, destination).await? {
+        Some(id) => Ok(servers::find_by_id(&state.db, id).await?),
+        None => Ok(None),
+    }
+}
+
+pub(crate) fn status_getter(v: Option<&str>) -> String {
     coolify_jobs::applications::status::normalize_status(v.unwrap_or_default())
 }
 
@@ -74,7 +93,7 @@ pub(crate) async fn present(
 ) -> Result<Value, ApiError> {
     let server = match a.server_id() {
         Some(id) => servers::find_by_id(&state.db, id).await?,
-        None => None,
+        None => swarm_server(state, a).await?,
     };
     let mut r = APPLICATION.present(a.raw.clone());
     for h in HIDDEN {
@@ -2087,7 +2106,7 @@ pub(crate) async fn model_array(
 ) -> Result<Value, ApiError> {
     let server = match a.server_id() {
         Some(id) => servers::find_by_id(&state.db, id).await?,
-        None => None,
+        None => swarm_server(state, a).await?,
     };
     let mut r = APPLICATION.present(a.raw.clone());
     for h in HIDDEN {

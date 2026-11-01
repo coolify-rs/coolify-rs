@@ -201,11 +201,13 @@ async fn dashboard_data(
     let servers = dashboard::servers(&state.db, ctx.team_id).await?;
     let rows = coolify_db::servers::list(&state.db, ctx.team_id).await?;
     let private_keys = dashboard::private_key_count(&state.db, ctx.team_id).await?;
+    let icons = coolify_db::canvas::project_icon_urls(&state.db, ctx.team_id).await?;
     let projects: Vec<Value> = projects
         .iter()
         .map(|p| {
             json!({
                 "uuid": p.uuid,
+                "icon_url": icons.get(&p.uuid),
                 "name": p.name,
                 "description": p.description,
                 "created_at": p.created_at,
@@ -251,8 +253,9 @@ async fn project_data(
         ))?;
     let environments = dashboard::environments(&state.db, project.id).await?;
     let projects = dashboard::project_names(&state.db, ctx.team_id).await?;
+    let icons = coolify_db::canvas::project_icon_urls(&state.db, ctx.team_id).await?;
     Ok(ok(json!({
-        "project": {"uuid": project.uuid, "name": project.name, "description": project.description},
+        "project": {"uuid": project.uuid, "name": project.name, "description": project.description, "icon_url": icons.get(&project.uuid)},
         "environments": environments.iter().map(|e| json!({
             "uuid": e.uuid,
             "name": e.name,
@@ -624,8 +627,17 @@ async fn servers_data(
 ) -> ApiResult {
     let rows = coolify_db::servers::list_by_name(&state.db, ctx.team_id).await?;
     let mut items = Vec::with_capacity(rows.len());
+    // `$server->team->usesSwarm()`, for the Swarm entry of the server menu.
+    let uses_swarm = crate::ui_server_general::team_uses_swarm(&state, ctx.team_id).await?;
     for s in &rows {
         let mut v = server_facts(s);
+        v["team_uses_swarm"] = json!(uses_swarm);
+        v["is_cloudflare_tunnel"] = json!(
+            s.settings
+                .as_ref()
+                .and_then(|m| m.get("is_cloudflare_tunnel"))
+                .is_some_and(crate::serialize::php_truthy)
+        );
         v["resources"] = json!(coolify_db::servers::resource_count(&state.db, s.id).await?);
         items.push(v);
     }

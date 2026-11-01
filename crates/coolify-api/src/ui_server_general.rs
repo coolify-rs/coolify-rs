@@ -224,7 +224,7 @@ async fn save_advanced(
 // ── Swarm ───────────────────────────────────────────────────────────────
 
 /// `$team->usesSwarm()`.
-async fn team_uses_swarm(state: &AppState, team_id: i64) -> Result<bool, ApiError> {
+pub(crate) async fn team_uses_swarm(state: &AppState, team_id: i64) -> Result<bool, ApiError> {
     for s in coolify_db::servers::list(&state.db, team_id).await? {
         let flag = |k: &str| setting(&s, k).as_bool().unwrap_or(false);
         if flag("is_swarm_manager")

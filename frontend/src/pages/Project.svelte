@@ -81,6 +81,7 @@
   const iconLink =
     'flex items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-black dark:text-fg-faint dark:hover:bg-white/[0.06] dark:hover:text-fg';
 
+  /** `Concerns\CreatesEnvironments::submit`. */
   async function createEnvironment(e: SubmitEvent) {
     e.preventDefault();
     busy = true;
@@ -196,7 +197,7 @@
                 {/each}
               {/snippet}
             </Dropdown>
-            <ViewToggle bind:mode={() => view.mode, (m) => ((view.mode = m), (page = 1))} />
+            <ViewToggle canvasUrl="/project/{uuid}/canvas" bind:mode={() => view.mode, (m) => ((view.mode = m), (page = 1))} />
           </div>
         </div>
 

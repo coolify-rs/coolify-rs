@@ -3,7 +3,7 @@
   // picker livewire/project/new/select.blade.php (Project\New\Select).
   // Only PostgreSQL can be created by coolify-rs; every other resource is
   // listed as upstream lists it and says it is not available yet. Service
-  // templates are not loaded, and the deploy canvas is left out (ADR 0008).
+  // templates are not loaded (ADR 0008).
   import NewDockerImage from '../components/NewDockerImage.svelte';
   import NewPublicRepository from '../components/NewPublicRepository.svelte';
   import NewPrivateRepository from '../components/NewPrivateRepository.svelte';
@@ -11,6 +11,7 @@
   import NewSimpleDockerfile from '../components/NewSimpleDockerfile.svelte';
   import NewDockerCompose from '../components/NewDockerCompose.svelte';
   import Reicon from '../components/Reicon.svelte';
+  import BetaBadge from '../components/BetaBadge.svelte';
   import Empty from '../components/Empty.svelte';
   import Callout from '../components/Callout.svelte';
   import { servicesApi, type ServiceTemplate } from '../lib/servicesApi';
@@ -587,6 +588,30 @@
               </div>
             </div>
           </SettingsSection>
+          <!-- A full page load: the canvas uses the minimal layout. -->
+          {#if search === ''}
+            <a
+              href="/canvas?project={uuid}&environment={env}"
+              class="mt-6 flex items-center gap-4 rounded-lg border border-neutral-200 bg-white p-4 shadow-[0_1px_2px_rgb(0_0_0/0.05)] transition-colors hover:border-neutral-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent dark:border-white/[0.08] dark:bg-white/[0.05] dark:shadow-none dark:hover:border-white/[0.14]"
+            >
+              <div class="flex size-11 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-600 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-fg-dim">
+                <Reicon name="deploy-canvas" class="size-5" />
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <h2 class="text-[14px]! leading-5! font-semibold! text-black! dark:text-fg!">Deploy canvas</h2>
+                  <BetaBadge />
+                </div>
+                <p class="mt-0.5 text-[12px] leading-5 text-neutral-600 dark:text-fg-dim">
+                  Connect a server, a source, and its settings step by step, then deploy every resource at once.
+                </p>
+              </div>
+              <span class="button button-highlighted shrink-0 max-sm:hidden">
+                Try it
+                <Reicon name="arrow-right" class="size-3.5" />
+              </span>
+            </a>
+          {/if}
 
           <div class="mt-6 flex flex-col gap-6">
             {#if showApplications}

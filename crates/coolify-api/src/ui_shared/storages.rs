@@ -234,6 +234,7 @@ async fn audit(
         state,
         ctx,
         meta,
+        // `Concerns\AuditsStorageChanges::auditStorageChange`.
         &format!("ui.{prefix}.storage_{action}"),
         context,
         "info",

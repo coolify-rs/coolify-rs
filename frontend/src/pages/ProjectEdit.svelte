@@ -1,13 +1,13 @@
 <script lang="ts">
   // Port of upstream livewire/project/edit.blade.php with
   // livewire/project/delete-project.blade.php. coolify-rs has no project
-  // icon upload, so the icon block only shows the default glyph.
   import Reicon from '../components/Reicon.svelte';
+  import { compressAvatar, uploadImage } from '../lib/teamsApi';
   import Empty from '../components/Empty.svelte';
   import FormInput from '../components/FormInput.svelte';
   import UnsavedBar from '../components/UnsavedBar.svelte';
   import ConfirmModal from '../components/ConfirmModal.svelte';
-  import { api, uiApi, ApiError, type ProjectPageData } from '../lib/api';
+  import { api, csrf, request, uiApi, ApiError, type ProjectPageData } from '../lib/api';
   import { router } from '../lib/router.svelte';
   import { setProjectCrumbs } from '../lib/crumbs';
   import { notify } from '../lib/toast.svelte';
@@ -23,11 +23,53 @@
   let error = $state<ApiError | null>(null);
   let deleting = $state(false);
 
+  // Icon: `Project\Edit::uploadIcon`, compressed in the browser like upstream's `prepareIcon`.
+  let iconUrl = $state<string | null>(null);
+  let iconPreview = $state<string | null>(null);
+  let iconBusy = $state(false);
+  let iconError = $state<string | null>(null);
+  let iconInput = $state<HTMLInputElement | undefined>();
+
+  async function prepareIcon(e: Event) {
+    const file = (e.currentTarget as HTMLInputElement).files?.[0];
+    if (!file) return;
+    iconBusy = true;
+    iconError = null;
+    let jpeg: Blob;
+    try {
+      jpeg = await compressAvatar(file);
+    } catch {
+      iconBusy = false;
+      iconError = 'The image could not be processed in this browser.';
+      return;
+    }
+    iconPreview = URL.createObjectURL(jpeg);
+    try {
+      const r = await uploadImage(`/ui/projects/${encodeURIComponent(uuid)}/icon`, jpeg, csrf());
+      notify.success(r.message);
+      await load();
+    } catch {
+      iconError = 'The image could not be uploaded.';
+    } finally {
+      if (iconPreview) URL.revokeObjectURL(iconPreview);
+      iconPreview = null;
+      iconBusy = false;
+      if (iconInput) iconInput.value = '';
+    }
+  }
+
+  async function removeIcon() {
+    const r = await request<{ message: string }>('DELETE', `/ui/projects/${encodeURIComponent(uuid)}/icon`);
+    notify.success(r.message);
+    await load();
+  }
+
   async function load() {
     try {
       const d = await uiApi.project(uuid);
       data = d;
       setProjectCrumbs(d);
+      iconUrl = (d.project as { icon_url?: string | null }).icon_url ?? null;
       saved = { name: d.project.name, description: d.project.description ?? '' };
       name = saved.name;
       description = saved.description;
@@ -96,13 +138,25 @@
               <div class="sm:col-span-2">
                 <div class="mb-2 text-sm font-medium leading-4">Icon</div>
                 <div class="flex items-center gap-4">
-                  <div
-                    class="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-neutral-200 text-neutral-700 dark:bg-white/[0.1] dark:text-fg"
-                  >
-                    <Reicon name="projects" class="size-6" />
+                  <div class="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-neutral-200 text-neutral-700 dark:bg-white/[0.1] dark:text-fg">
+                    {#if iconPreview}
+                      <img src={iconPreview} alt="Project icon preview" class="h-full w-full object-cover" />
+                    {:else if iconUrl}
+                      <img src={iconUrl} alt="{name} icon" class="h-full w-full object-cover" />
+                    {:else}
+                      <Reicon name="projects" class="size-6" />
+                    {/if}
                   </div>
                   <div class="flex min-w-0 flex-1 flex-col gap-2">
-                    <p class="text-xs text-neutral-500 dark:text-fg-dim">Project icons are not available in coolify-rs yet.</p>
+                    <div class="flex flex-wrap gap-2">
+                      <input bind:this={iconInput} type="file" onchange={prepareIcon} accept="image/jpeg,image/png,image/webp" class="hidden" />
+                      <button type="button" class="button" disabled={iconBusy} onclick={() => iconInput?.click()}>{iconBusy ? 'Uploading…' : 'Browse…'}</button>
+                      {#if iconUrl}
+                        <button type="button" class="button button-error" disabled={iconBusy} onclick={removeIcon}>Remove</button>
+                      {/if}
+                    </div>
+                    <p class="text-xs text-neutral-500 dark:text-fg-dim">JPG, PNG, or WebP. Shown in the projects list, on the dashboard, and in resource headers.</p>
+                    {#if iconError}<p class="text-xs text-red-500">{iconError}</p>{/if}
                   </div>
                 </div>
               </div>

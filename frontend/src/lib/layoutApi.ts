@@ -141,7 +141,7 @@ export function creatableItems(isAdmin: boolean, services: CreatableItem[]): Cre
     items.push(quick('S3 Storage', 'Add S3 storage for backups and file uploads', 'storage', 'storage', { component: 'storage.create' }));
     items.push(quick('Private Key', 'Add an SSH private key for server access', 'private key', 'private-key', { component: 'security.private-key.create' }));
     items.push(quick('GitHub App', 'Connect a GitHub app for source control', 'github', 'source', { component: 'source.github.create' }));
-    items.push(quick('Canvas', 'Deploy resources visually on the deploy canvas', 'canvas', 'canvas', { route: 'deploy-canvas' }));
+    items.push(quick('Canvas', 'Deploy resources visually on the deploy canvas', 'canvas', 'canvas', { route: 'canvas' }));
     items.push(
       application('Public Git Repository', 'Deploy from any public Git repository', 'public', 'public'),
       application('Private Repository (GitHub App)', 'Deploy private repositories through GitHub Apps', 'private github', 'private-gh-app'),

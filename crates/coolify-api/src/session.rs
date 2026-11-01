@@ -58,6 +58,8 @@ struct Session {
     flash: Option<Flash>,
     /// `passkey.registration_options`: the challenge and handle of a passkey registration.
     passkey_challenge: Option<String>,
+    /// `session('impersonator_id')`.
+    impersonator: Option<i64>,
 }
 
 /// What upstream's session holds before `Auth::login`.
@@ -185,10 +187,45 @@ impl SessionStore {
                     password_confirmed: None,
                     flash: None,
                     passkey_challenge: None,
+                    impersonator: None,
                 },
             );
         }
         (id, csrf)
+    }
+
+    /// `session('impersonator_id')`.
+    pub(crate) fn impersonator(&self, id: &str) -> Option<i64> {
+        let m = self.sessions.lock().ok()?;
+        m.get(&digest(id)).and_then(|s| s.impersonator)
+    }
+
+    /// `session('impersonating')` of the session with this CSRF token.
+    fn impersonating_with_csrf(&self, csrf: &str) -> bool {
+        self.sessions.lock().is_ok_and(|m| {
+            m.values()
+                .any(|s| s.csrf == csrf && s.impersonator.is_some())
+        })
+    }
+
+    /// `Auth::login($user)` in the same session, with `refreshSession($team)`.
+    fn login_as(
+        &self,
+        id: &str,
+        user_id: i64,
+        team_id: TeamId,
+        password_hash: &str,
+        impersonator: Option<i64>,
+    ) {
+        if let Ok(mut m) = self.sessions.lock()
+            && let Some(s) = m.get_mut(&digest(id))
+        {
+            s.user_id = user_id;
+            s.team_id = team_id;
+            s.password_fp = digest(password_hash);
+            s.password_confirmed = None;
+            s.impersonator = impersonator;
+        }
     }
 
     /// `session()->passwordConfirmed()`.
@@ -661,6 +698,80 @@ pub async fn ui_guard(State(state): State<AppState>, mut req: Request, next: Nex
     }
 }
 
+/// `UseSessionTeamApiToken` and `api.token.team` for `/canvas/api`: the session user with an
+/// in-memory token for the team of the canvas page (`X-Canvas-Team`), not the session team.
+pub async fn canvas_guard(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
+    let headers = req.headers().clone();
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let result = async {
+        let live = live_session(&state, &headers).await?;
+        if needs_csrf(&method) && !csrf_ok(&headers, &live.csrf) {
+            return Err(ApiError::Message(
+                StatusCode::from_u16(419).unwrap_or(StatusCode::FORBIDDEN),
+                "CSRF token mismatch.",
+            ));
+        }
+        web_gates(&live, &path)?;
+        let team = headers
+            .get("x-canvas-team")
+            .and_then(|v| v.to_str().ok())
+            .filter(|t| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|t| t.parse::<i64>().ok())
+            .ok_or(ApiError::Message(
+                StatusCode::BAD_REQUEST,
+                "Missing canvas team.",
+            ))?;
+        let m = live
+            .memberships
+            .iter()
+            .find(|m| m.team_id == team)
+            .ok_or(ApiError::InvalidToken)?;
+        Ok(AuthCtx {
+            token_id: 0,
+            user_id: live.user.id,
+            team_id: m.team_id,
+            team_id_raw: m.team_id.to_string(),
+            role: m.role,
+            can_read_sensitive: m.role.is_admin(),
+            abilities: abilities_for(m.role),
+        })
+    }
+    .await;
+    match result {
+        Ok(ctx) => {
+            req.extensions_mut().insert(ctx);
+            next.run(req).await
+        }
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `Admin\\Index::switchUser` and `back`: the session continues as another user.
+pub(crate) async fn impersonate(
+    state: &AppState,
+    headers: &HeaderMap,
+    user_id: i64,
+    impersonator: Option<i64>,
+) -> Result<TeamId, ApiError> {
+    let id = session_cookie(headers).ok_or(ApiError::Unauthenticated)?;
+    let user = users::get(&state.db, user_id)
+        .await?
+        .ok_or(ApiError::Message(StatusCode::NOT_FOUND, "Not Found"))?;
+    let memberships = users::memberships(&state.db, user.id).await?;
+    let team = resolve_stored_team(&user, &memberships)
+        .or_else(|| memberships.first().map(|m| m.team_id))
+        .unwrap_or(NO_TEAM);
+    state.sessions.login_as(
+        &id,
+        user.id,
+        team,
+        user.password.as_deref().unwrap_or_default(),
+        impersonator,
+    );
+    Ok(team)
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/ui/session", get(current).post(login).delete(logout))
@@ -676,6 +787,7 @@ fn session_json(
     csrf: &str,
 ) -> Value {
     let current = memberships.iter().find(|m| m.team_id == team_id);
+    let impersonating = state.sessions.impersonating_with_csrf(csrf);
     json!({
         "user": {
             "id": user.id,
@@ -702,6 +814,10 @@ fn session_json(
         "features": {
             "private_keys": state.encrypter.is_some(),
             "read_only": state.db.schema().read_only_reason.is_some(),
+            // `isDev()`-style previews (`app()->environment(['local', 'testing'])`) and `isCloud()`.
+            "dev": std::env::var("APP_ENV").is_ok_and(|e| e == "local" || e == "testing"),
+            "cloud": crate::ui_subscription::is_cloud(),
+            "impersonating": impersonating,
         },
     })
 }
@@ -711,17 +827,19 @@ pub async fn current(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let live = live_session(&state, &headers).await?;
-    Ok(PhpJson(
-        StatusCode::OK,
-        session_json(
-            &state,
-            &live.user,
-            &live.memberships,
-            live.team_id,
-            &live.csrf,
-        ),
-    )
-    .into_response())
+    let mut body = session_json(
+        &state,
+        &live.user,
+        &live.memberships,
+        live.team_id,
+        &live.csrf,
+    );
+    // `shouldSkipPasswordConfirmation()`, for the label of the confirmation modal.
+    let (_, password) = crate::ui_teams::confirm_steps(&state, &headers, live.user.id).await?;
+    if let Some(user) = body.get_mut("user").and_then(Value::as_object_mut) {
+        user.insert("skip_password_confirmation".into(), Value::Bool(!password));
+    }
+    Ok(PhpJson(StatusCode::OK, body).into_response())
 }
 
 fn failed_login() -> ApiError {

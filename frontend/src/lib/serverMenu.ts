@@ -36,6 +36,7 @@ export function serverNavContext(s: ServerFacts, active: string, isAdmin: boolea
     { label: 'Resources', icon: 'projects', href: `${base}/resources`, active: active === 'resources', group: 'Platform', disabled: off },
     { label: 'Terminal', icon: 'browser-terminal', href: `${base}/terminal`, active: active === 'terminal', group: 'Operations', visible: isAdmin, disabled: off },
     { label: 'Destinations', icon: 'destinations', href: `${base}/destinations`, active: active === 'destinations', group: 'Networking', disabled: off },
+    { label: 'Swarm', icon: 'layers', href: `${base}/swarm`, active: active === 'swarm', group: 'Networking', visible: !!s.team_uses_swarm && !s.is_build && !s.is_cloudflare_tunnel },
     { label: 'Images', icon: 'layers', href: `${base}/images`, active: active === 'images', group: 'Operations', disabled: off },
     { label: 'Docker Cleanup', icon: 'broom', href: `${base}/docker-cleanup`, active: active === 'docker-cleanup', group: 'Operations', disabled: off },
     { label: 'GitHub Runners', icon: 'play-circle', href: `${base}/github-runners`, active: active === 'github-runners', group: 'Operations', visible: !s.is_localhost, beta: true, disabled: off },

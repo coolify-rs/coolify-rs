@@ -75,7 +75,51 @@ fn is_protected(key: &str) -> bool {
 }
 
 /// `isSharedReference`.
-fn is_shared_reference(value: Option<&str>) -> bool {
+/// The audit event of `$environmentVariable->delete()`.
+pub(crate) async fn audit_deleted(
+    state: &AppState,
+    ctx: &AuthCtx,
+    meta: &Meta,
+    res: &Res,
+    r: &Record,
+) {
+    let key = text(r, "key").unwrap_or_default();
+    let mut changes = Map::new();
+    for (k, v) in [
+        ("key", r.get("key").cloned()),
+        ("is_preview", r.get("is_preview").cloned()),
+        ("is_shown_once", r.get("is_shown_once").cloned()),
+        ("is_multiline", r.get("is_multiline").cloned()),
+        ("version", r.get("version").cloned()),
+        ("is_literal", r.get("is_literal").cloned()),
+        ("is_required", r.get("is_required").cloned()),
+        ("is_shared", r.get("is_shared").cloned()),
+        ("resourceable_type", r.get("resourceable_type").cloned()),
+        ("is_runtime", r.get("is_runtime").cloned()),
+        ("is_buildtime", r.get("is_buildtime").cloned()),
+        ("comment", r.get("comment").cloned()),
+        (
+            "preserve_compose_null",
+            r.get("preserve_compose_null").cloned(),
+        ),
+    ] {
+        changes.insert(k.to_owned(), json!({"old": v, "new": null}));
+    }
+    audit_env(
+        state,
+        ctx,
+        meta,
+        res,
+        "deleted",
+        text(r, "uuid").unwrap_or_default(),
+        key,
+        vec![],
+        Value::Object(changes),
+    )
+    .await;
+}
+
+pub(crate) fn is_shared_reference(value: Option<&str>) -> bool {
     value.is_some_and(|v| SHARED_REFERENCE.is_match(v.trim()))
 }
 
@@ -321,17 +365,20 @@ fn compose_info(assignments: &[Assignment], key: &str) -> Option<Value> {
 
 /// `isEnvironmentVariableUsedInDockerCompose`.
 fn used_in_compose(assignments_source: Option<&str>, key: &str) -> bool {
-    let Some(compose) = assignments_source.filter(|c| !c.is_empty()) else {
-        return false;
-    };
+    compose_use(assignments_source, key).is_some()
+}
+
+/// The reason of `isEnvironmentVariableUsedInDockerCompose`, when the file uses the key.
+pub(crate) fn compose_use(assignments_source: Option<&str>, key: &str) -> Option<String> {
+    let compose = assignments_source.filter(|c| !c.is_empty())?;
     let Ok(PhpValue::Array(top)) = validate::parse_docker_compose_yaml(compose) else {
-        return false;
+        return None;
     };
     let Some((_, PhpValue::Array(services))) = top
         .iter()
         .find(|(k, _)| matches!(k, Key::Str(s) if s == "services"))
     else {
-        return false;
+        return None;
     };
     let reference = format!("${key}");
     for (_, service) in services {
@@ -346,18 +393,22 @@ fn used_in_compose(assignments_source: Option<&str>, key: &str) -> bool {
         };
         for (k, _) in envs {
             if matches!(k, Key::Str(s) if s == key) {
-                return true;
+                return Some(format!(
+                    "Environment variable '{key}' is used directly in the Docker Compose file."
+                ));
             }
         }
         for (_, v) in envs {
             if let PhpValue::Str(s) = v
                 && s.contains(&reference)
             {
-                return true;
+                return Some(format!(
+                    "Environment variable '{key}' is referenced in the Docker Compose file."
+                ));
             }
         }
     }
-    false
+    None
 }
 
 fn show_preview(res: &Res) -> bool {
@@ -663,7 +714,7 @@ fn env_changes_for_create(n: &NewEnv<'_>) -> Value {
 
 /// What the `version` update of the `created` hook reports as changed: the model still has no
 /// original attributes then, so every attribute set on it counts, in the order it was set.
-const ADDED_FIELDS: &[&str] = &[
+pub(crate) const ADDED_FIELDS: &[&str] = &[
     "key",
     "value",
     "is_multiline",
@@ -788,7 +839,7 @@ async fn audit_env(
 
 /// `new EnvironmentVariable`, `save()` and the model's `created` hook: the preview copy of an
 /// application's variable and the `version` update of both.
-async fn create_model(
+pub(crate) async fn create_model(
     state: &AppState,
     ctx: &AuthCtx,
     meta: &Meta,
@@ -1850,38 +1901,6 @@ async fn destroy(
         ));
     }
     re::delete_ids(&state.db, &[id]).await?;
-    let mut changes = Map::new();
-    for (k, v) in [
-        ("key", r.get("key").cloned()),
-        ("is_preview", r.get("is_preview").cloned()),
-        ("is_shown_once", r.get("is_shown_once").cloned()),
-        ("is_multiline", r.get("is_multiline").cloned()),
-        ("version", r.get("version").cloned()),
-        ("is_literal", r.get("is_literal").cloned()),
-        ("is_required", r.get("is_required").cloned()),
-        ("is_shared", r.get("is_shared").cloned()),
-        ("resourceable_type", r.get("resourceable_type").cloned()),
-        ("is_runtime", r.get("is_runtime").cloned()),
-        ("is_buildtime", r.get("is_buildtime").cloned()),
-        ("comment", r.get("comment").cloned()),
-        (
-            "preserve_compose_null",
-            r.get("preserve_compose_null").cloned(),
-        ),
-    ] {
-        changes.insert(k.to_owned(), json!({"old": v, "new": null}));
-    }
-    audit_env(
-        &state,
-        &ctx,
-        &meta,
-        &res,
-        "deleted",
-        text(&r, "uuid").unwrap_or_default(),
-        key,
-        vec![],
-        Value::Object(changes),
-    )
-    .await;
+    audit_deleted(&state, &ctx, &meta, &res, &r).await;
     Ok(ok(json!({"message": "Environment variable deleted successfully."})).into_response())
 }

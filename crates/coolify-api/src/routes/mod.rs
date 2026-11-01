@@ -3594,6 +3594,13 @@ pub fn router(state: AppState) -> Router {
             let bridged = with_abilities(mr.clone())
                 .route_layer(from_fn_with_state(state.clone(), crate::session::ui_guard));
             add(format!("{UI_PREFIX}{uri}"), bridged);
+            if let Some(path) = crate::ui_canvas::bridge_path(method, uri) {
+                let canvas = with_abilities(mr.clone()).route_layer(from_fn_with_state(
+                    state.clone(),
+                    crate::session::canvas_guard,
+                ));
+                add(path, canvas);
+            }
         }
         let mr = with_abilities(mr);
         let mr = match s.group {
@@ -3620,6 +3627,9 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::ui_notifications::routes(state.clone()))
         .merge(crate::ui_services::routes(state.clone()))
         .merge(crate::ui_tags::routes(state.clone()))
+        .merge(crate::ui_canvas::routes(state.clone()))
+        .merge(crate::ui_subscription::routes(state.clone()))
+        .merge(crate::ui_subscription::admin_routes(state.clone()))
         .merge(crate::ui_teams::routes(state.clone()))
         .merge(crate::ui_profile::routes(state.clone()))
         .merge(crate::ui_changelog::routes(state.clone()))

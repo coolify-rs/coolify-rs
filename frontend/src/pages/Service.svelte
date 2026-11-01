@@ -1,4 +1,5 @@
 <script lang="ts">
+  // Also the pages of Project\Service\DatabaseBackups, Project\Service\VolumeBackup\Create and Project\Service\VolumeBackup\Show.
   // Port of upstream livewire/project/service/configuration.blade.php (+
   // Project\Service\Configuration). `Index::mount` redirects `/{stack_service_uuid}`
   // to this page: a compose resource is edited in the modal of its card.

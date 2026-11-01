@@ -1,4 +1,5 @@
 <script lang="ts">
+  // Also the page of Project\Application\Backup\Show.
   // Port of upstream livewire/project/application/configuration.blade.php (+
   // Project\Application\Configuration), deployment/index.blade.php and
   // deployment/show.blade.php: the heading, the application menu (shown by the

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Port of upstream livewire/server/index.blade.php (no canvas view; patch
+  // Port of upstream livewire/server/index.blade.php (patch
   // status and Sentinel checks are not part of coolify-rs yet).
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
@@ -64,7 +64,7 @@
           {/if}
         </div>
         <div class="flex flex-wrap items-center gap-3 sm:justify-end">
-          <ViewToggle bind:mode={view.mode} />
+          <ViewToggle canvasUrl="/servers/canvas" bind:mode={view.mode} />
         </div>
       </div>
 

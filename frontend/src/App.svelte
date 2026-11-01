@@ -46,6 +46,11 @@
   import SourceGithub from './pages/SourceGithub.svelte';
   import SourceOauth from './pages/SourceOauth.svelte';
   import Database from './pages/Database.svelte';
+  import { canvasRedirect } from './lib/canvasView';
+  import Admin from './pages/Admin.svelte';
+  import SubscriptionPage from './pages/SubscriptionPage.svelte';
+  import CanvasPage from './pages/CanvasPage.svelte';
+  import DeployCanvasPage from './pages/DeployCanvasPage.svelte';
   import Service from './pages/Service.svelte';
   import Application from './pages/Application.svelte';
   import NotificationEmail from './pages/NotificationEmail.svelte';
@@ -169,6 +174,32 @@
   });
 
   const params = $derived(router.current.params);
+  const canvasKinds: Record<string, string> = {
+    'canvas-tags': 'tags',
+    'canvas-dashboard': 'dashboard',
+    'canvas-projects': 'projects',
+    'canvas-project': 'project',
+    'canvas-environment': 'environment',
+    'canvas-servers': 'servers',
+    'canvas-server': 'server',
+    'canvas-team-variables': 'team_variables',
+    'canvas-project-variables': 'project_variables',
+    'canvas-environment-variables': 'environment_variables',
+    'canvas-server-variables': 'server_variables',
+  };
+  const fullBleed = $derived(router.current.name.startsWith('canvas-'));
+  // `RemembersCanvasView`: a list page opens the canvas when the user left it there.
+  $effect.pre(() => {
+    if (!session.info) return;
+    // `Route::any('/{any}')`: every other path goes home.
+    const devOnly = (router.current.name === 'dev-error' || router.current.name === 'dev-exception') && !session.info.features.dev;
+    if (router.current.name === 'unported' || devOnly || (router.current.name === 'realtime' && session.info.current_team?.id !== 0)) {
+      router.go('/', true);
+      return;
+    }
+    const to = canvasRedirect(router.current.name, router.current.params);
+    if (to) router.go(to, true);
+  });
 </script>
 
 {#if !session.loaded}
@@ -195,6 +226,13 @@
   <VerifyEmail />
 {:else if router.current.name === 'email-verify'}
   <EmailVerifyLink />
+{:else if router.current.name === 'realtime' && session.info.current_team?.id === 0}
+  <!-- `Controller::realtime_test`: `TestEvent` has no listener here, since the UI has no websocket. -->
+  Look at your other tab.
+{:else if router.current.name === 'dev-error' && session.info.features.dev}
+  <ErrorPage code={Number(params.code) as never} />
+{:else if router.current.name === 'dev-exception' && session.info.features.dev}
+  <ErrorPage code={500} description="Testing Laravel exception page" />
 {:else if router.current.name === 'select-team'}
   <SelectTeam />
 {:else if router.current.name === 'onboarding'}
@@ -205,11 +243,22 @@
   <ConfirmPassword />
 {:else if router.current.name === 'profile-passkey-confirm'}
   <PasskeyConfirm />
+{:else if router.current.name === 'admin' && !((session.info.features.cloud || session.info.features.dev) && (session.info.user.id === 0 || session.info.features.impersonating))}
+  <!-- `Admin\\Index::mount`: abort(403). -->
+  <ErrorPage code={403} />
 {:else if (router.current.name === 'team-danger' && !session.isOwner) || ((router.current.name === 'team-audit' || router.current.name === 'terminal') && !session.isAdmin)}
   <ErrorPage code={403} />
 {:else}
-  <Shell>
-    {#if router.current.name === 'profile'}
+  <Shell {fullBleed}>
+    {#if router.current.name === 'admin'}
+      <Admin />
+    {:else if router.current.name === 'subscription' || router.current.name === 'subscription-new'}
+      {#key router.path}<SubscriptionPage page={router.current.name === 'subscription' ? 'show' : 'index'} />{/key}
+    {:else if router.current.name === 'canvas-deploy'}
+      {#key router.path}<DeployCanvasPage />{/key}
+    {:else if canvasKinds[router.current.name]}
+      {#key router.path}<CanvasPage kind={canvasKinds[router.current.name] as never} uuid={params.uuid} environment={params['env']} />{/key}
+    {:else if router.current.name === 'profile'}
       <Profile />
     {:else if router.current.name === 'dashboard'}
       <Dashboard />
@@ -323,8 +372,6 @@
       {#key params.uuid}<ServerDanger uuid={params.uuid} />{/key}
     {:else if router.current.name === 'server-section'}
       {#key router.path}<ServerSection uuid={params.uuid} section={params.section} sub={params.sub} />{/key}
-    {:else}
-      <Unported />
     {/if}
   </Shell>
 {/if}

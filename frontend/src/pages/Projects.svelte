@@ -139,7 +139,7 @@
             {/snippet}
           </Dropdown>
 
-          <ViewToggle bind:mode={() => view.mode, (m) => ((view.mode = m), (page = 1))} />
+          <ViewToggle canvasUrl="/projects/canvas" bind:mode={() => view.mode, (m) => ((view.mode = m), (page = 1))} />
         </div>
       </div>
 
@@ -152,7 +152,7 @@
               >
                 <a href={href(p)} use:link class="absolute inset-0 rounded-xl" aria-label="Open {p.name}"></a>
                 <div class="flex items-start gap-3">
-                  <div class={glyph}><Reicon name="projects" class="size-4" /></div>
+                  <div class={glyph}>{#if p.icon_url}<img src={p.icon_url} alt="{p.name} icon" class="h-full w-full rounded-lg object-cover" />{:else}<Reicon name="projects" class="size-4" />{/if}</div>
                   <div class="min-w-0 flex-1 self-center">
                     <h2 class="truncate text-[13px]! leading-4! font-semibold! text-black dark:text-fg">{p.name}</h2>
                     {#if p.description?.trim()}
@@ -223,7 +223,7 @@
               class="projects-table-grid group min-h-14 items-center border-b border-neutral-200 px-4 py-2.5 transition-colors last:border-b-0 hover:bg-neutral-50 dark:border-white/[0.07] dark:hover:bg-white/[0.025]"
             >
               <div class="flex min-w-0 items-center gap-3">
-                <div class={glyph}><Reicon name="projects" class="size-4" /></div>
+                <div class={glyph}>{#if p.icon_url}<img src={p.icon_url} alt="{p.name} icon" class="h-full w-full rounded-lg object-cover" />{:else}<Reicon name="projects" class="size-4" />{/if}</div>
                 <a href={href(p)} use:link class="truncate text-[13px] font-semibold text-black hover:underline dark:text-fg">{p.name}</a>
               </div>
               <div class="flex items-center gap-3 text-[12px] font-medium text-neutral-600 dark:text-fg-dim">

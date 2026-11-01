@@ -19,7 +19,7 @@ Upstream references are relative to the upstream repository root.
 | `servers` | 44 | 40 | Everything but import, import check, migrate and transfer complete (transfer services not ported), verified by `compat/diff/servers_diff.py`: settings sub-routes, destinations, registries, proxy, shared variables on throwaway servers (`api`), provider routes against a fake with the requests compared (`cloud`), install, proxy, Sentinel, cleanup, log drains on throwaway VMs (`jobs`). `?force` with resources answers 501 |
 | `databases` | 47 | 44 | all but the three volume backup routes; service databases are counted under services. Verified by `compat/diff/database_resources_diff.py` and `database_server_diff.py` |
 | `servers` | 44 | 7 | list, show, create, update, delete, validate (`POST` + `GET` → 405) verified (194/194 differential; validation job 8/8 in `validate_diff.py`); `install=true`, `instant_validate`, proxy changes, `?force` with resources and cloud-provider deletes answer 501; resources, domains and the rest not started |
-| `projects` | 18 | 10 | verified for project/environment CRUD; canvas links and project-level shared variables not started |
+| `projects` | 18 | 10 | verified for project/environment CRUD and canvas links (`compat/diff/canvas_diff.mjs`) |
 | `teams` / `team` | 12 | 8 | verified for reads and `PATCH /team`; team invitations not started |
 | `notifications` | 12 | 0 | not started |
 | `cloud-tokens`, `hetzner`, `digitalocean`, `vultr`, `hostinger`, `cloud-init-scripts` | 30 | 0 | not started |
@@ -114,7 +114,10 @@ Upstream references are relative to the upstream repository root.
 | MCP server, Sentinel metrics, traffic analytics | `routes/ai.php`, `SentinelController` | |
 | Traffic analytics charts (server page and `/analytics`) | `Livewire\Analytics`, `SentinelTrafficClient`, `TrafficAnalyticsAggregator`, `TrafficResource` | `crates/coolify-api/src/ui_server_analytics.rs`, `frontend/src/components/analytics/`, compared by `compat/ui/analytics_compare.mjs` |
 | Install / upgrade scripts, self-update | `scripts/install.sh`, `upgrade.sh`, `UpdateCoolifyJob` | planned, Milestone 7 of IMPLEMENTATION_ROADMAP.md |
-| Billing (Stripe, cloud only) | `app/Http/Controllers/Webhook/Stripe.php` | out of scope (self-hosted focus) |
+| Canvases | `Livewire/{DeployCanvas, Dashboard/Canvas, Project/*Canvas, Server/Canvas, SharedVariables/Canvas, Tags/Canvas}`, `Concerns/RemembersCanvasView`, `Api/*CanvasController`, `Services/*Canvas` | verified on both sides (`compat/diff/canvas_diff.mjs`, `compat/ui/canvas_flow.mjs`, screenshots) |
+| Project icons | `ProjectIconController`, `ProjectIconStorageService`, `Project/Edit` | verified in `compat/diff/canvas_diff.mjs`; local disk only |
+| Admin (cloud or dev) | `Livewire/Admin/Index` | self-hosted 403 compared; root path in `tests/ui_admin.rs` |
+| Billing (Stripe, cloud only) | `Livewire/Subscription/*`, `Actions/Stripe/*`, `Webhook/Stripe`, `StripeProcessJob` | self-hosted redirects compared; Cloud path against a local fake only (`compat/diff/subscription_fake.mjs`) |
 
 ## 4. Migration engine features
 
