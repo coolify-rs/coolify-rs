@@ -830,7 +830,7 @@ async fn page(
         // `containerMeta`: a Sentinel id never discloses another team's resource.
         let Some(meta) = metas
             .iter()
-            .find(|m| m.uuid == container.id && m.team_id == Some(ctx.team_id.into()))
+            .find(|m| m.uuid == container.id && m.team_id == Some(ctx.team_id))
         else {
             continue;
         };

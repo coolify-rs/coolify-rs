@@ -3,6 +3,7 @@
 //   python3 compat/diff/metrics_diff.py --keep --sentinel=fake     then
 //   cd compat/ui && node metrics_compare.mjs --rs=18087 --set=fake
 // Sets: fake (charts, frozen data), real (traffic analytics), enable (the empty fleet page and its button).
+import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -21,6 +22,9 @@ fs.mkdirSync(out, { recursive: true });
 const BASE = { ref: 'http://127.0.0.1:18000', rs: `http://127.0.0.1:${rsPort}` };
 const browser = await chromium.launch({ executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const DIFF = new URL('../diff/metrics_diff.py', import.meta.url).pathname;
+const VM = new URL('../diff/metrics_vm.sh', import.meta.url).pathname;
+const diff = (flag) => execFileSync('python3', [DIFF, flag], { encoding: 'utf8' });
 
 async function session(base, user) {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: scheme, timezoneId: 'UTC', locale: 'en-US' });
@@ -68,7 +72,14 @@ const capture = (page) =>
     };
     const sections = [...document.querySelectorAll('section')].filter(visible).map((section) => ({
       title: section.dataset.settingsSectionTitle ?? section.querySelector('h2,h3')?.innerText.trim() ?? section.id,
-      text: section.innerText.replace(/[ \t]+/g, ' ').trim(),
+      // A chart's axis ticks follow the second of the read; its points are compared by metrics_diff.py.
+      text: (() => {
+        const hidden = [...section.querySelectorAll('.apexcharts-canvas')];
+        hidden.forEach((chart) => (chart.style.display = 'none'));
+        const text = section.innerText.replace(/[ \t]+/g, ' ').trim();
+        hidden.forEach((chart) => (chart.style.display = ''));
+        return text;
+      })(),
       sig: signature(section),
       charts: section.querySelectorAll('.apexcharts-canvas').length,
     }));
@@ -102,12 +113,14 @@ function firstDifference(a, b) {
 async function screen(pages, name, ref, rsPath = ref, { wait = 2500, before, sections, hiddenCharts = false } = {}) {
   if (only && !name.includes(only)) return;
   // Read inside one minute: the stand-in's data moves on the full minute.
-  if (new Date().getSeconds() > 15) await sleep((61 - new Date().getSeconds()) * 1000);
+  if (new Date().getSeconds() > 30) await sleep((61 - new Date().getSeconds()) * 1000);
   const shots = {};
   for (const side of ['ref', 'rs']) {
+    // The reference's scheduler can move these rows' status at any moment.
+    diff('--touch');
     const page = pages[side];
     await page.goto(BASE[side] + (side === 'ref' ? ref : rsPath));
-    await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+    await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
     if (before) await before(page, side);
     await settle(page, wait);
     shots[side] = await capture(page);
@@ -148,19 +161,31 @@ if (set === 'fake' || set === 'real') {
     // The Projects section belongs to the canvas stream (its Canvas column and modal are not here yet).
     const servers = ['Servers', 'Traffic analytics'];
     await screen(pages, 'm-dashboard', '/', '/', { wait: 3500, sections: servers, hiddenCharts: true });
-    const grid = async (page) => {
+    const grid = async (page, side) => {
+      if (side === 'ref') {
+        // Upstream's toggle is Alpine state on the section; one click on the dashboard reached only part of it.
+        await page.waitForFunction(() => window.Alpine, null, { timeout: 15000 });
+        await page.evaluate(() => {
+          for (const section of document.querySelectorAll('section')) window.Alpine.$data(section).setViewMode?.('grid');
+          for (const el of document.querySelectorAll('[x-data]')) window.Alpine.$data(el).setViewMode?.('grid');
+        });
+        await sleep(1500);
+        return;
+      }
       for (let i = 0; i < 2; i++) {
         const button = page.locator('button[title="Grid view"]:visible').first();
         if (await button.count()) await button.click();
-        await sleep(400);
+        await sleep(600);
       }
     };
     const table = async (page) => {
       for (let i = 0; i < 2; i++) {
         const button = page.locator('button[title="Table view"]:visible').first();
         if (await button.count()) await button.click();
-        await sleep(400);
+        await sleep(1500);
       }
+      await page.reload();
+      await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
     };
     await screen(pages, 'm-dashboard-grid', '/', '/', { wait: 3500, before: grid, sections: servers });
     await screen(pages, 'm-servers-grid', '/servers', '/servers', { wait: 3500, before: grid });
@@ -176,16 +201,41 @@ if (set === 'fake' || set === 'real') {
     await screen(pages, 'm-svc-analytics-off', `${P}/service/metricssvcoff000000000000/analytics`);
     // The stand-in has no traffic routes: every read fails.
     await screen(pages, 'm-app-analytics-nodata', `${P}/application/${APP}/analytics`, `${P}/application/${APP}/analytics`, { wait: 4000 });
+    // The widget's lazy placeholder has no box, so it stays empty on both sides, also with a visible activity column.
+    await screen(pages, 'm-dashboard-traffic-idle', '/', '/', { wait: 8000, sections: ['Servers', 'Traffic analytics'], hiddenCharts: true });
+    diff('--deployment-on');
+    try {
+      await screen(pages, 'm-dashboard-traffic-active', '/', '/', { wait: 12000, sections: ['Servers', 'Traffic analytics'], hiddenCharts: true });
+    } finally {
+      diff('--deployment-off');
+    }
   } else {
     await screen(pages, 'm-app-analytics', `${P}/application/${APP}/analytics`, `${P}/application/${APP}/analytics`, { wait: 4000 });
     await screen(pages, 'm-svc-analytics', `${P}/service/${SVC}/analytics`, `${P}/service/${SVC}/analytics`, { wait: 4000 });
-    await screen(pages, 'm-dashboard-traffic', '/', '/', { wait: 3500, sections: ['Servers', 'Traffic analytics'], hiddenCharts: true });
   }
 }
 
 if (set === 'enable') {
   const pages = { ref: await session(BASE.ref, 'metricsbot2'), rs: await session(BASE.rs, 'metricsbot2') };
   await screen(pages, 'm-fleet-enable', '/metrics');
+  // `enableMetrics` on each side: the toast, the page after it, the Sentinel it started and the audit row.
+  const inspect = () => execFileSync(VM, ['run'], { input: "docker inspect coolify-sentinel --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E '^(COLLECTOR_ENABLED|PUSH_ENDPOINT|COLLECTOR_REFRESH|COLLECTOR_RETENTION|TRAFFIC_ENABLED)' | sort", encoding: 'utf8' });
+  const results = {};
+  for (const side of ['ref', 'rs']) {
+    const page = pages[side];
+    await page.goto(`${BASE[side]}/metrics`);
+    await settle(page, 2000);
+    await page.locator('button:has-text("Enable metrics on")').click();
+    const toast = await page.getByText('Metrics enabled on 1 server. Sentinel is starting, data shows in about one minute.').first().waitFor({ timeout: 60000 }).then(() => true, () => false);
+    await sleep(20000);
+    await page.goto(`${BASE[side]}/metrics`);
+    await settle(page, 3000);
+    results[side] = { toast, overview: await page.locator('#metrics-overview-section').count(), env: inspect(), audit: JSON.parse(diff('--audit').trim() || 'null') };
+    diff('--metrics-off');
+  }
+  const clean = (r) => JSON.stringify(r);
+  verdict('enable metrics: toast, page, Sentinel env, audit row', clean(results.ref) === clean(results.rs), `ref ${clean(results.ref)}\n     rs  ${clean(results.rs)}`);
+  console.log(results.rs.env);
 }
 
 await browser.close();

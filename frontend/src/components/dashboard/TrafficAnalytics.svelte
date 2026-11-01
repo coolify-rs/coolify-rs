@@ -1,6 +1,9 @@
 <script lang="ts">
   // Port of upstream livewire/dashboard/traffic-analytics.blade.php with Dashboard\TrafficAnalytics.
-  // Rendered only when a server of the team has traffic analytics on; the placeholder is empty.
+  // Rendered only when a server of the team has traffic analytics on. `#[Lazy]` loads it when its
+  // placeholder `<div class="contents">` enters the viewport. That element has no box, so upstream's
+  // `x-intersect` does not fire in Chrome and the widget stays empty there; this observes the same element.
+  import { onMount } from 'svelte';
   import Reicon from '../Reicon.svelte';
   import Sparkline from '../analytics/Sparkline.svelte';
   import { compactNumber, formatBytes, numberFormat } from '../../lib/analyticsApi';
@@ -39,10 +42,21 @@
       loading = null;
     }
   }
-  void load('24h');
+
+  let placeholder: HTMLDivElement;
+  onMount(() => {
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        observer.disconnect();
+        void load('24h');
+      }
+    });
+    observer.observe(placeholder);
+    return () => observer.disconnect();
+  });
 </script>
 
-<div class="contents">
+<div bind:this={placeholder} class="contents">
   {#if data?.overview}
     {@const overview = data.overview}
     <section class="mb-0! min-w-0">

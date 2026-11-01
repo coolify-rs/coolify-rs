@@ -135,6 +135,16 @@ def in_one_minute(read):
     raise RuntimeError("could not read within one minute")
 
 
+def touch(state):
+    ids = state["server_ids"]
+    php(
+        "touch",
+        ids=list(ids.values()),
+        running=[UUIDS["app1"], UUIDS["app2"], UUIDS["db"], "metricsappcompose00000000", "metricsappmetricsoff00000"],
+        reachable=[v for k, v in ids.items() if k != "offline"],
+    )
+
+
 def seed():
     state = php("seed", vm=VM_HOST, tokens=TOKENS, uuids=UUIDS)
     with open(STATE, "w") as f:
@@ -148,6 +158,8 @@ def seed():
 def cleanup():
     if os.path.exists(STATE):
         state = json.load(open(STATE))
+        if state.get("deployment"):
+            php("deployment_off", id=state["deployment"])
         php("cleanup", ids=state["ids"])
         os.remove(STATE)
         print("cleaned up seeded rows")
@@ -161,7 +173,7 @@ def real_phase(state, rs):
     subprocess.run([VM, "up", TOKENS["busy"]], check=True, capture_output=True, env=env)
     subprocess.run([VM, "run"], input=b"sleep 15", check=True)
     subprocess.run([VM, "traffic"], check=True)
-    php("touch", ids=list(state["server_ids"].values()))
+    touch(state)
     # Sentinel flushes the access log in batches.
     time.sleep(75)
     if rs is None:
@@ -229,7 +241,7 @@ def start_fake(state):
 def fake_phase(state, rs, rs2):
     start_fake(state)
     who = {"user": state["user"], "team": state["team"]}
-    php("touch", ids=list(state["server_ids"].values()))
+    touch(state)
     servers = state["servers"]
     # `/summary` stays in both caches for a minute after the real Sentinel left.
     time.sleep(62)
@@ -327,6 +339,27 @@ def main():
         if "--down" in sys.argv:
             subprocess.run([VM, "down"], check=False)
         return
+    if "--touch" in sys.argv:
+        touch(json.load(open(STATE)))
+        return
+    if "--metrics-off" in sys.argv:
+        state = json.load(open(STATE))
+        php("metrics_off", server=state["server_ids"]["second"])
+        return
+    if "--deployment-on" in sys.argv:
+        state = json.load(open(STATE))
+        state["deployment"] = php("deployment_on", uuid=UUIDS["app1"])
+        json.dump(state, open(STATE, "w"))
+        return
+    if "--deployment-off" in sys.argv:
+        state = json.load(open(STATE))
+        php("deployment_off", id=state.pop("deployment"))
+        json.dump(state, open(STATE, "w"))
+        return
+    if "--audit" in sys.argv:
+        state = json.load(open(STATE))
+        print(json.dumps(php("audit_of", team=state["team2"])))
+        return
     switch = next((a.split("=")[1] for a in sys.argv if a.startswith("--sentinel=")), None)
     if switch:
         state = json.load(open(STATE))
@@ -334,7 +367,7 @@ def main():
             real_phase(state, None)
         else:
             start_fake(state)
-            php("touch", ids=list(state["server_ids"].values()))
+            touch(state)
         return
     cleanup()
     state = seed()

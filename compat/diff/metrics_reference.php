@@ -183,7 +183,38 @@ switch (getenv('MODE')) {
     case 'touch':
         // Keeps the scheduler from taking the Sentinel of these rows for a stalled one.
         DB::table('servers')->whereIn('id', $args['ids'])->update(['sentinel_updated_at' => now()]);
+        // The reference's scheduler sets these rows' status from Docker; the screens need them running.
+        DB::table('applications')->whereIn('uuid', $args['running'] ?? [])->update(['status' => 'running:healthy']);
+        DB::table('standalone_redis')->whereIn('uuid', $args['running'] ?? [])->update(['status' => 'running:healthy']);
+        DB::table('server_settings')->whereIn('server_id', $args['reachable'] ?? [])->update(['is_reachable' => true, 'is_usable' => true]);
         out(['ok' => true]);
+        break;
+
+    case 'deployment_on':
+        // A running deployment of the application seed made: it opens the dashboard's activity column.
+        $app = Application::where('uuid', $args['uuid'])->first();
+        out(DB::table('application_deployment_queues')->insertGetId([
+            'application_id' => (string) $app->id, 'application_name' => $app->name, 'deployment_uuid' => 'metricsdeploy'.bin2hex(random_bytes(6)),
+            'status' => 'in_progress', 'server_id' => $app->destination->server_id, 'server_name' => 'metrics-busy',
+            'destination_id' => (string) $app->destination_id, 'force_rebuild' => false, 'commit' => 'HEAD', 'pull_request_id' => 0,
+            'created_at' => now(), 'updated_at' => now(),
+        ]));
+        break;
+
+    case 'deployment_off':
+        DB::table('application_deployment_queues')->where('id', $args['id'])->delete();
+        out(['ok' => true]);
+        break;
+
+    case 'metrics_off':
+        // Back to the empty fleet page, on the row seed made for it.
+        DB::table('server_settings')->where('server_id', $args['server'])->update(['is_metrics_enabled' => false]);
+        out(['ok' => true]);
+        break;
+
+    case 'audit_of':
+        // Read only: the newest Sentinel audit row of the team seed made.
+        out(DB::table('audit_events')->where('team_id', $args['team'])->where('event', 'ui.server.sentinel.updated')->orderByDesc('id')->limit(1)->first(['event', 'source', 'action', 'actor_type', 'actor_email', 'resource_type', 'resource_uuid', 'resource_name', 'description', 'metadata', 'changes', 'level']));
         break;
 
     case 'fleet':
