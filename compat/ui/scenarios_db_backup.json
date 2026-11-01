@@ -1,0 +1,5 @@
+[
+ {"name":"dbbk-modal","path":"/project/j8xm2emlllhfnyebjzgyzp7z/environment/uj3st9yvtvzxh7rul3c3opcz/database/gv54x3ioi2yiq6whdmjonbc2/persistent-storage","steps":[{"click":"button:text-is(\"Backup\")"}]},
+ {"name":"dbbk-invalid","path":"/project/j8xm2emlllhfnyebjzgyzp7z/environment/uj3st9yvtvzxh7rul3c3opcz/database/gv54x3ioi2yiq6whdmjonbc2/persistent-storage","steps":[{"click":"button:text-is(\"Backup\")"},{"fill":"input[placeholder=\"0 0 * * * or daily\"]","value":"not a cron"},{"click":"button:has-text(\"Add schedule\")"},{"wait":800}]},
+ {"name":"dbbk-redis-none","path":"/project/j8xm2emlllhfnyebjzgyzp7z/environment/uj3st9yvtvzxh7rul3c3opcz/database/1ddpxrtxbflasetvljiqis8v/persistent-storage","steps":[]}
+]

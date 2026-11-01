@@ -76,4 +76,6 @@ for (const sc of scenarios) {
   }));
   console.log(sc.name, log.ref.fails.length || log.rs.fails.length ? JSON.stringify({ ref: log.ref.fails.length, rs: log.rs.fails.length, first: log.ref.fails[0] ?? log.rs.fails[0] }).slice(0, 170) : 'steps ok');
 }
-await browser.close();
+// Chrome sometimes never answers the close; every screenshot is on disk by now.
+await Promise.race([browser.close(), new Promise((r) => setTimeout(r, 5000))]);
+process.exit(0);
