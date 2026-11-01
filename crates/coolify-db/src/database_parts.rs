@@ -1335,7 +1335,11 @@ pub async fn team_standalone_destination(
 }
 
 /// `SwarmDocker::ownedByCurrentTeamAPI($teamId)->where('uuid', ...)`: `(id, server id)`.
-pub async fn team_swarm_destination(db: &Db, team_id: TeamId, uuid: &str) -> DbResult<Option<(i64, i64)>> {
+pub async fn team_swarm_destination(
+    db: &Db,
+    team_id: TeamId,
+    uuid: &str,
+) -> DbResult<Option<(i64, i64)>> {
     Ok(sqlx::query_as(
         "SELECT sd.id, s.id FROM swarm_dockers sd JOIN servers s ON s.id = sd.server_id WHERE sd.uuid = $1 AND s.team_id = $2 LIMIT 1",
     )

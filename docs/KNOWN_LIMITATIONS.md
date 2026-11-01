@@ -407,7 +407,6 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
 - A Compose preview that generates domains without a service does not use `generateWithoutApplicationDomain`.
 - "Execute now" and running task executions were not compared: the fixtures were not running applications.
 - Saving Compose domains on General does not run `validateDNSEntry` or `checkDomainUsage`; the domains are edited on the Domains page.
-- "Building on a build server" on General still answers 501: build servers belong to the deploy job.
 
 ## Resource operations and application sections
 
@@ -430,23 +429,28 @@ Compared with `compat/diff/multi_server_diff.py`, `compat/diff/environment_detai
 `compat/diff/s3_backup_diff.py`. The S3 script needs `scripts/dev-server-container.sh`: the trusted host `coolify-minio`
 only resolves on the reference's Docker network.
 
-- `git_deploy_diff.py` was not rerun after the deploy job gained build servers and additional servers. Its last result
-  (652/662) predates that change, so the single-server paths have no fresh comparison.
-- Not run: the `deploykey` case, Bitbucket, GitLab and deploy-key previews, Force start screens. The `content` difference on
-  `is_based_on_git` file storages is still unexplained.
-- Swarm covers applications created through the API. Databases and services on a Swarm destination still answer 501
-  (`routes/databases.rs`, `routes/database_more.rs`), and the UI create forms write standalone destinations only.
-- No screen of this area was compared by screenshot: Flush all data, the Swarm heading and the additional server rows.
-- Flush all data ran on Redis only, not on KeyDB or Dragonfly.
+- `git_deploy_diff.py`, `force_start_diff.py` and `git_source_deploy_diff.py` clone from local git servers on the test VM
+  (`local_git_http.py`, `fake_git_provider.py`), not from GitHub, so a public repository is a row in `github_apps` with the
+  mirror as `html_url`. Bitbucket exists upstream only as the `git_type` of a preview (`deploykey-pr-bitbucket`,
+  `other-pr-bitbucket`); there is no Bitbucket source.
+- `ServerFilesFromServerJob` runs beside the deployment that parsed, as upstream's queue does, so when `content` of a file
+  storage based on the repository fills depends on timing on both sides.
+- Databases on a Swarm destination can be created and cloned through the API and the UI routes. A start of one creates no
+  container, on the reference and here alike. The destination picker of the create forms was not compared with a Swarm server.
+- Deleting a server with `force=true` removes the rows of its resources and leaves their containers on the host, as upstream
+  does: the jobs start after the soft delete, when `destination.server` is empty. Compared on the API; the UI uses the same job.
+  Deregistering GitHub runners on that path was not run.
+- A row whose destination is gone answers 500 on start, stop and restart like upstream. The response of the application UI
+  actions and of the Destination section in that state was read from the PHP and not compared.
 - Service clone with volumes: on the reference, the same-server chain can die in its `StopService` step with `Nesting level
   too deep` (`Closure (services.php:783)`), leaving nothing copied and the source stopped. coolify-rs completes it, so
   `multi_server_diff.py` reports those two reference checks as failed. That is an upstream bug, deliberately not copied.
 - `PreparesBackupDownloads` and S3 file downloads have still never run: they need `file_download_s3_storage_id` in
-  `instance_settings`. A restore of a volume backup from S3 was not run either.
+  `instance_settings`.
 - The combined multi-server notification remembers "queued" and "notified" in memory, not in a cache, so a restart between
   the deployments of one group sends none. Its delivery was not compared.
-- Custom-type service databases still answer 404 on their pages, and the `ip_previous` gap of the v1 create routes was not
-  looked at.
+- Custom-type service databases still answer 404 on their pages. `ip_previous` is empty after a create on both sides
+  (`server-delete` in `multi_server_diff.py`).
 - `MigrateResourceToDestination` is development-only upstream (`isDev()`), so it answers 404 on both sides and was not run.
 
 ## Canvas, Admin and Subscription

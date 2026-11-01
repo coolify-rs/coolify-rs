@@ -22,7 +22,8 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from databases_diff import BASES, call, record, results, sql  # noqa: E402
 
-REPO = "https://github.com/coollabsio/coolify-examples"
+# A local mirror (local_git_http.py), so nothing clones from GitHub.
+REPO = os.environ["GIT_MIRROR_URL"]
 SECRETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "reference", "secrets", "ui-login.txt")
 
 

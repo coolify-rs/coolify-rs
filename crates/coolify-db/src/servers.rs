@@ -341,11 +341,12 @@ pub async fn defined_resources(db: &Db, server_id: i64) -> DbResult<DefinedResou
     .bind(server_id)
     .fetch_all(db.pool())
     .await?;
-    let services =
-        sqlx::query_scalar("SELECT id FROM services WHERE server_id = $1 AND deleted_at IS NULL ORDER BY id")
-            .bind(server_id)
-            .fetch_all(db.pool())
-            .await?;
+    let services = sqlx::query_scalar(
+        "SELECT id FROM services WHERE server_id = $1 AND deleted_at IS NULL ORDER BY id",
+    )
+    .bind(server_id)
+    .fetch_all(db.pool())
+    .await?;
     let mut databases = Vec::new();
     for kind in crate::databases::Kind::ALL {
         let ids: Vec<i64> = sqlx::query_scalar(&format!(

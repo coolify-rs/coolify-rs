@@ -2146,9 +2146,7 @@ pub async fn delete(
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
-    if a.destination.is_none() {
-        return Err(ApiError::Internal);
-    }
+    // `DeleteResourceJob` removes the rows also when the destination is gone.
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let input = lenient_json(&headers, &uri, &body);
     let volumes = query_bool(&uri, &input, "delete_volumes", true);

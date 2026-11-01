@@ -496,7 +496,7 @@ impl Run {
                     .remote()
                     .run_streaming(
                         &self.target,
-                        &[script.clone()],
+                        std::slice::from_ref(&script),
                         RunOptions::op("deployment.command").timeout(COMMAND_TIMEOUT),
                         tx,
                     )

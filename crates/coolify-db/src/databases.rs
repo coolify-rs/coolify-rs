@@ -499,7 +499,10 @@ pub async fn destinations(db: &Db, server_id: i64) -> DbResult<Vec<(i64, String)
 }
 
 /// `$server->destinations()`: `(id, uuid, morph class)`, the standalone ones first.
-pub async fn all_destinations(db: &Db, server_id: i64) -> DbResult<Vec<(i64, String, &'static str)>> {
+pub async fn all_destinations(
+    db: &Db,
+    server_id: i64,
+) -> DbResult<Vec<(i64, String, &'static str)>> {
     let mut out: Vec<(i64, String, &'static str)> = destinations(db, server_id)
         .await?
         .into_iter()
@@ -510,7 +513,11 @@ pub async fn all_destinations(db: &Db, server_id: i64) -> DbResult<Vec<(i64, Str
             .bind(server_id)
             .fetch_all(db.pool())
             .await?;
-    out.extend(swarm.into_iter().map(|(id, uuid)| (id, uuid, SWARM_DOCKER_MORPH)));
+    out.extend(
+        swarm
+            .into_iter()
+            .map(|(id, uuid)| (id, uuid, SWARM_DOCKER_MORPH)),
+    );
     Ok(out)
 }
 

@@ -90,6 +90,12 @@ def wait(u, count, timeout=500):
         # A deployment refused before it starts has no finished_at and no helper.
         if len(q) >= count and all(x["status"] == "failed" and "Before deploying to multiple servers" in (x["logs"] or "")
                                    or x["status"] in END and x["finished_at"] and "Gracefully shutting down build container" in (x["logs"] or "") for x in q[:count]):
+            # The entry of the helper's `docker stop` is written when it ends.
+            for _ in range(25):
+                q = rows(u)
+                if all("Before deploying to multiple servers" in (x["logs"] or "") or "docker stop --timeout" in (x["logs"] or "") for x in q[:count]):
+                    break
+                time.sleep(2)
             return q
         time.sleep(2)
     return rows(u)
@@ -643,9 +649,9 @@ def case_missing_destination(e):
         c, r = call(side, "DELETE", f"/databases/{dbs[side]}?delete_volumes=true")
         record(f"[nodest] {side} deletes the database", c == 200, r)
     apps_gone = wait_sql("SELECT count(*) FROM applications WHERE uuid IN ('{}','{}')".format(uuids["ref"], uuids["rs"]), "0")
-    record("[nodest] both application rows gone", apps_gone)
+    record("[nodest] both application rows gone", apps_gone == "0", apps_gone)
     dbs_gone = wait_sql("SELECT count(*) FROM standalone_redis WHERE uuid IN ('{}','{}')".format(dbs["ref"], dbs["rs"]), "0")
-    record("[nodest] both database rows gone", dbs_gone)
+    record("[nodest] both database rows gone", dbs_gone == "0", dbs_gone)
 
 
 def case_server_delete(e):
@@ -684,7 +690,8 @@ def case_server_delete(e):
         time.sleep(5)
         q = sql(f"SELECT status FROM application_deployment_queues WHERE deployment_uuid='sdelq{os.getpid()}{side}'")
         log = sql(f"SELECT logs FROM application_deployment_queues WHERE deployment_uuid='sdelq{os.getpid()}{side}'")
-        result[side] = {"no_force": no_force, "forced": forced, "server_gone": gone, "database_gone": db_gone, "queued": q,
+        record(f"[server-delete] {side} rows gone", gone == "0" and db_gone == "0", (gone, db_gone))
+        result[side] = {"no_force": no_force, "forced": forced, "queued": q,
                         "log": [(x["output"], x["type"], x["hidden"]) for x in json.loads(log or "[]")],
                         "settings": sql(f"SELECT count(*) FROM server_settings WHERE server_id={sid}"), "dest": sql(f"SELECT count(*) FROM standalone_dockers WHERE server_id={sid}"),
                         "container_left": bool(vm(e.vm2, f"docker ps -aq --filter name=^{db['uuid']}$").strip()),
@@ -727,8 +734,12 @@ def case_swarm_database(e):
         starts[side] = call(side, "GET", f"/databases/{made[side]}/start")
         e.cleanups.append((e.vm2, f"docker rm -f {made[side]} >/dev/null 2>&1; docker volume rm -f redis-data-{made[side]} >/dev/null 2>&1; rm -rf /data/coolify/databases/{made[side]}"))
     record("[swarm-db] start answers alike", starts["ref"] == starts["rs"], starts)
-    time.sleep(25)
+    for _ in range(40):
+        if all(vm(e.vm2, f"docker ps -q --filter name=^{made[side]}$").strip() for side in made):
+            break
+        time.sleep(3)
     for side in ("ref", "rs"):
+        print(f"[swarm-db] {side} logs:", vm(e.vm2, f"ls /data/coolify/databases/{made[side]} 2>&1").strip()[:120], sql(f"SELECT status FROM standalone_redis WHERE uuid='{made[side]}'"))
         print(f"[swarm-db] {side} container:", vm(e.vm2, f"docker ps -a --filter name={made[side]} --format '{{{{.Names}}}} {{{{.Status}}}} {{{{.Networks}}}}'").strip()[:160])
     state = {side: vm(e.vm2, f"docker ps -a --filter name=^{made[side]}$ --format '{{{{.Networks}}}}' ").strip() for side in made}
     record("[swarm-db] container networks alike", state["ref"] == state["rs"], state)
