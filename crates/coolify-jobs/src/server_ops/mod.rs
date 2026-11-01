@@ -6,6 +6,7 @@ pub mod acme;
 pub mod certificate;
 pub mod checks;
 pub mod cleanup;
+pub mod delete_server;
 pub mod github_runner_jobs;
 pub mod github_runners;
 pub mod install;

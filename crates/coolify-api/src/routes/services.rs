@@ -903,7 +903,7 @@ pub async fn create(
         );
         return Err(ApiError::Validation(m));
     }
-    let destinations = coolify_db::databases::destinations(&state.db, server.id).await?;
+    let destinations = coolify_db::databases::all_destinations(&state.db, server.id).await?;
     if destinations.is_empty() {
         return Err(ApiError::Message(
             StatusCode::BAD_REQUEST,
@@ -916,10 +916,10 @@ pub async fn create(
             "Server has multiple destinations and you do not set destination_uuid.",
         ));
     }
-    let destination = if destinations.len() > 1 {
+    let (destination, destination_type) = if destinations.len() > 1 {
         let wanted = input.str("destination_uuid").unwrap_or_default();
-        match destinations.iter().find(|(_, u)| u == wanted) {
-            Some(d) => d.0,
+        match destinations.iter().find(|(_, u, _)| u == wanted) {
+            Some(d) => (d.0, d.2),
             None => {
                 return Err(errors_with(
                     "destination_uuid",
@@ -928,10 +928,10 @@ pub async fn create(
             }
         }
     } else {
-        destinations[0].0
+        (destinations[0].0, destinations[0].2)
     };
     let now = state.now();
-    let destination_type = coolify_db::databases::STANDALONE_DOCKER_MORPH.to_owned();
+    let destination_type = destination_type.to_owned();
     let flag = |k: &str| input.has(k).then(|| input_bool(&input, k));
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let keys = templates::service_keys();

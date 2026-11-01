@@ -258,7 +258,11 @@ pub async fn create_docker_image(
     let id = apps::create(
         &state.db,
         NewApplication {
-            destination_type: coolify_db::databases::STANDALONE_DOCKER_MORPH,
+            destination_type: coolify_db::databases::destination_morph(
+                &state.db,
+                &s(&m, "destination_uuid"),
+            )
+            .await?,
             uuid: uuid.clone(),
             environment_id: env.id,
             destination_id,
@@ -498,12 +502,8 @@ async fn queue(
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
-    let built = matches!(
-        a.str("build_pack"),
-        Some("dockerimage" | "dockerfile" | "static" | "nixpacks" | "railpack" | "dockercompose")
-    );
-    if !built {
-        return Err(ApiError::NotPorted);
+    if a.destination.is_none() {
+        return Err(ApiError::Internal);
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let deployment_uuid = coolify_domain::new_public_id();
@@ -1575,9 +1575,7 @@ pub async fn delete(
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
-    if a.destination.is_none() {
-        return Err(ApiError::NotPorted);
-    }
+    // `DeleteResourceJob` removes the rows also when the destination is gone.
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let flag = |k: &str| m.get(k).and_then(Value::as_bool).unwrap_or(true);
     apps::soft_delete(&state.db, a.id, state.now()).await?;

@@ -1019,22 +1019,21 @@ async fn delete_server_form(
         ));
     }
     let from_provider = actions.iter().any(|a| a.starts_with("delete_from_"));
-    if transferred && !from_provider {
-        // `ServerTransferClaimer::deleteArchive`: records only.
+    if transferred {
+        // `$isArchive`: no provider call, and `ServerTransferClaimer::deleteArchive` touches records only.
         crate::server_transfer::delete_archive_now(&state, server.id)
             .await
             .map_err(|_| ApiError::Internal)?;
         return Ok(ok(json!({"message": "Server deleted."})).into_response());
     }
-    // Deleting resources, cloud servers, queued deployments' logs and GitHub runners are not ported.
-    if transferred
-        || resources > 0
-        || from_provider
-        || coolify_db::servers::has_unported_delete_side_effects(&state.db, server.id).await?
-    {
+    let Some(jobs) = state.jobs.as_ref() else {
         return Err(ApiError::NotPorted);
+    };
+    if from_provider {
+        coolify_jobs::cloud::delete_from_provider(jobs, &server).await;
     }
-    coolify_db::servers::delete(&state.db, server.id, state.now()).await?;
+    jobs.delete_server(server.id, force).await?;
+    jobs.remote().forget_host_key(&server.uuid);
     Ok(ok(json!({"message": "Server deleted."})).into_response())
 }
 

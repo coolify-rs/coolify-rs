@@ -581,10 +581,146 @@ def case_resources(e, rs):
                 e.cleanups.append((e.vm2, f"docker volume rm -f {v} >/dev/null 2>&1"))
 
 
+def case_missing_destination(e):
+    """A row whose destination is gone: the 500s of `$resource->destination->server`, and the delete that still works."""
+    uuids = e.create_pair("nodest", image=False)
+    dbs = {}
+    for side in ("ref", "rs"):
+        c, r = call(side, "POST", "/databases/redis", {"server_uuid": SERVER1, "project_uuid": e.project, "environment_name": "production", "name": f"nodest-{side}", "instant_deploy": False})
+        record(f"[nodest] {side} redis created", c == 201, r)
+        dbs[side] = r["uuid"]
+        e.databases.append(r["uuid"])
+    for side in ("ref", "rs"):
+        sql(f"UPDATE applications SET destination_id = 999999 WHERE uuid = '{uuids[side]}'")
+        sql(f"UPDATE standalone_redis SET destination_id = 999999 WHERE uuid = '{dbs[side]}'")
+
+    def both(label, app):
+        out = {}
+        for side in ("ref", "rs"):
+            kind, u = ("applications", uuids[side]) if app else ("databases", dbs[side])
+            c, r = call(side, *label(kind, u))
+            out[side] = (c, r if isinstance(r, dict) and "exception" not in r else (r.get("message") if isinstance(r, dict) else str(r)[:80]))
+        record(f"[nodest] {'application' if app else 'database'} {label('x', 'y')[1].split('/')[-1]}", out["ref"] == out["rs"], out)
+
+    for app in (True, False):
+        for action in ("start", "restart", "stop"):
+            both(lambda k, u, a=action: ("GET", f"/{k}/{u}/{a}"), app)
+    for side in ("ref", "rs"):
+        c, r = call(side, "DELETE", f"/applications/{uuids[side]}?delete_volumes=true")
+        record(f"[nodest] {side} deletes the application", c == 200, r)
+        c, r = call(side, "DELETE", f"/databases/{dbs[side]}?delete_volumes=true")
+        record(f"[nodest] {side} deletes the database", c == 200, r)
+    apps_gone = wait_sql("SELECT count(*) FROM applications WHERE uuid IN ('{}','{}')".format(uuids["ref"], uuids["rs"]), "0")
+    record("[nodest] both application rows gone", apps_gone)
+    dbs_gone = wait_sql("SELECT count(*) FROM standalone_redis WHERE uuid IN ('{}','{}')".format(dbs["ref"], dbs["rs"]), "0")
+    record("[nodest] both database rows gone", dbs_gone)
+
+
+def case_server_delete(e):
+    """DELETE /servers/{uuid}?force=true on a server with a running database and a queued deployment."""
+    ip = vm(e.vm2, "hostname -I | cut -d' ' -f1").strip()
+    key = sql(f"SELECT uuid FROM private_keys WHERE id={KEY_ID}")
+    result = {}
+    for side in ("ref", "rs"):
+        c, srv = call("ref", "POST", "/servers", {"name": f"sdel-{side}", "ip": ip, "port": 22, "user": "root", "private_key_uuid": key,
+                                                  "instant_validate": False, "proxy_type": "none"})
+        record(f"[server-delete] {side} server created", c == 201, srv)
+        u = srv["uuid"]
+        sid = sql(f"SELECT id FROM servers WHERE uuid='{u}'")
+        sql(f"UPDATE server_settings SET is_reachable=true, is_usable=true WHERE server_id={sid}")
+        if not sql(f"SELECT id FROM standalone_dockers WHERE server_id={sid}"):
+            sql(f"INSERT INTO standalone_dockers (name, uuid, network, server_id, created_at, updated_at) VALUES ('sdel', 'sdel{os.getpid()}{side}', 'coolify', {sid}, now(), now())")
+        dest = int(sql(f"SELECT id FROM standalone_dockers WHERE server_id={sid} LIMIT 1"))
+        c, db = call(side, "POST", "/databases/redis", {"server_uuid": u, "project_uuid": e.project, "environment_name": "production", "name": f"sdel-{side}", "instant_deploy": True})
+        record(f"[server-delete] {side} redis created", c == 201, db)
+        e.cleanups.append((e.vm2, f"docker rm -f {db['uuid']} >/dev/null 2>&1; docker volume rm -f redis-data-{db['uuid']} >/dev/null 2>&1; rm -rf /data/coolify/databases/{db['uuid']}"))
+        for _ in range(60):
+            if vm(e.vm2, f"docker ps -q --filter name=^{db['uuid']}$").strip():
+                break
+            time.sleep(2)
+        record(f"[server-delete] {side} redis running", bool(vm(e.vm2, f"docker ps -q --filter name=^{db['uuid']}$").strip()))
+        # A deployment still queued for this server; the application row is the test server's own pair.
+        app = e.create_pair(f"sdel-{side}", image=False)[side]
+        app_id = sql(f"SELECT id FROM applications WHERE uuid='{app}'")
+        sql(f"INSERT INTO application_deployment_queues (application_id, deployment_uuid, pull_request_id, force_rebuild, restart_only, status, server_id, destination_id, server_name, application_name, created_at, updated_at) "
+            f"VALUES ('{app_id}', 'sdelq{os.getpid()}{side}', 0, false, false, 'queued', {sid}, {dest}, 'sdel-{side}', 'sdel-{side}', now(), now())")
+        no_force = call(side, "DELETE", f"/servers/{u}")
+        forced = call(side, "DELETE", f"/servers/{u}?force=true")
+        gone = wait_sql(f"SELECT count(*) FROM servers WHERE uuid='{u}'", "0")
+        db_gone = wait_sql(f"SELECT count(*) FROM standalone_redis WHERE uuid='{db['uuid']}'", "0")
+        time.sleep(5)
+        q = sql(f"SELECT status FROM application_deployment_queues WHERE deployment_uuid='sdelq{os.getpid()}{side}'")
+        log = sql(f"SELECT logs FROM application_deployment_queues WHERE deployment_uuid='sdelq{os.getpid()}{side}'")
+        result[side] = {"no_force": no_force, "forced": forced, "server_gone": gone, "database_gone": db_gone, "queued": q,
+                        "log": [(x["output"], x["type"], x["hidden"]) for x in json.loads(log or "[]")],
+                        "settings": sql(f"SELECT count(*) FROM server_settings WHERE server_id={sid}"), "dest": sql(f"SELECT count(*) FROM standalone_dockers WHERE server_id={sid}"),
+                        "container_left": bool(vm(e.vm2, f"docker ps -aq --filter name=^{db['uuid']}$").strip()),
+                        "config_left": vm(e.vm2, f"test -d /data/coolify/databases/{db['uuid']} && echo y").strip()}
+        sql(f"DELETE FROM application_deployment_queues WHERE deployment_uuid='sdelq{os.getpid()}{side}'")
+        print(f"[server-delete] {side}: {result[side]}")
+    for key_ in result["ref"]:
+        record(f"[server-delete] {key_}", result["ref"][key_] == result["rs"][key_], (result["ref"][key_], result["rs"][key_]))
+
+
+def case_swarm_database(e):
+    """Create and clone of a database, and a service, on a Swarm destination, through each side's API."""
+    vm(e.vm2, "docker info --format '{{.Swarm.LocalNodeState}}' | grep -q active || docker swarm init >/dev/null 2>&1")
+    sql(f"UPDATE server_settings SET is_swarm_manager=true WHERE server_id={e.server2_id}")
+    if not e.swarm_dest:
+        e.swarm_dest = f"msds{os.getpid()}"
+        sql(f"INSERT INTO swarm_dockers (name, uuid, network, server_id, created_at, updated_at) VALUES ('multi-diff-swarm', '{e.swarm_dest}', 'coolify-overlay', {e.server2_id}, now(), now())")
+    made = {}
+    for side in ("ref", "rs"):
+        base = {"server_uuid": e.server2, "project_uuid": e.project, "environment_name": "production", "name": f"swdb-{side}", "instant_deploy": False}
+        c, r = call(side, "POST", "/databases/redis", base)
+        record("[swarm-db] two destinations and no uuid answers alike", c == 400, r)
+        c, r = call(side, "POST", "/databases/redis", dict(base, destination_uuid=e.swarm_dest))
+        record(f"[swarm-db] {side} created", c == 201, r)
+        made[side] = r["uuid"]
+        e.databases.append(r["uuid"])
+    q = "SELECT destination_type, destination_id FROM standalone_redis WHERE uuid='{}'"
+    record("[swarm-db] rows alike", sql(q.format(made["ref"])) == sql(q.format(made["rs"])) and "SwarmDocker" in sql(q.format(made["rs"])), (sql(q.format(made["ref"])), sql(q.format(made["rs"]))))
+    clones = {}
+    for side in ("ref", "rs"):
+        c, r = call(side, "POST", f"/databases/{made[side]}/clone", {"destination_uuid": e.swarm_dest, "name": f"swdb-clone-{side}"})
+        clones[side] = (c, list(r) if isinstance(r, dict) else r)
+        if c in (200, 201):
+            e.databases.append(r["uuid"])
+            record(f"[swarm-db] {side} clone row", "SwarmDocker" in sql(q.format(r["uuid"])), sql(q.format(r["uuid"])))
+    record("[swarm-db] clone answers alike", clones["ref"] == clones["rs"], clones)
+    vm(e.vm2, "docker pull redis:7.2 >/dev/null 2>&1")
+    starts = {}
+    for side in ("ref", "rs"):
+        starts[side] = call(side, "GET", f"/databases/{made[side]}/start")
+        e.cleanups.append((e.vm2, f"docker rm -f {made[side]} >/dev/null 2>&1; docker volume rm -f redis-data-{made[side]} >/dev/null 2>&1; rm -rf /data/coolify/databases/{made[side]}"))
+    record("[swarm-db] start answers alike", starts["ref"] == starts["rs"], starts)
+    time.sleep(25)
+    for side in ("ref", "rs"):
+        print(f"[swarm-db] {side} container:", vm(e.vm2, f"docker ps -a --filter name={made[side]} --format '{{{{.Names}}}} {{{{.Status}}}} {{{{.Networks}}}}'").strip()[:160])
+    state = {side: vm(e.vm2, f"docker ps -a --filter name=^{made[side]}$ --format '{{{{.Networks}}}}' ").strip() for side in made}
+    record("[swarm-db] container networks alike", state["ref"] == state["rs"], state)
+    for side in ("ref", "rs"):
+        call(side, "GET", f"/databases/{made[side]}/stop")
+    time.sleep(10)
+    # The services create takes the same destination rows.
+    svc = {}
+    for side in ("ref", "rs"):
+        c, r = call(side, "POST", "/services", {"type": "whoami", "server_uuid": e.server2, "project_uuid": e.project, "environment_name": "production", "name": f"swsvc-{side}",
+                                                "destination_uuid": e.swarm_dest, "instant_deploy": False})
+        svc[side] = (c, sorted(r) if isinstance(r, dict) else r)
+        if c == 201:
+            e.services.append(r["uuid"])
+    record("[swarm-db] service create answers alike", svc["ref"] == svc["rs"], svc)
+    q = "SELECT destination_type FROM services WHERE uuid='{}'"
+    types = [sql(q.format(u)) for u in e.services[-2:]]
+    record("[swarm-db] service rows alike", len(types) == 2 and types[0] == types[1], types)
+    sql(f"UPDATE server_settings SET is_swarm_manager=false WHERE server_id={e.server2_id}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--vm2", default="coolify-rs-agent-deploy")
-    ap.add_argument("--case", default="registry,missing-image,multi,build-noconfig,build,resources,swarm")
+    ap.add_argument("--case", default="registry,missing-image,multi,build-noconfig,build,resources,swarm,swarm-db,missing-destination,server-delete")
     ap.add_argument("--keep-server", action="store_true")
     a = ap.parse_args()
     e = Env(a)
@@ -607,6 +743,12 @@ def main():
                     case_swarm(e)
                 elif case == "resources":
                     case_resources(e, rs)
+                elif case == "missing-destination":
+                    case_missing_destination(e)
+                elif case == "server-delete":
+                    case_server_delete(e)
+                elif case == "swarm-db":
+                    case_swarm_database(e)
             except Exception as ex:  # noqa: BLE001
                 record(f"[{case}] ran to the end", False, repr(ex))
     finally:

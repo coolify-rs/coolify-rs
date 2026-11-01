@@ -1164,17 +1164,17 @@ pub async fn delete(
             "Missing required permissions: deploy. Deleting the resources or the cloud server needs a token with the deploy permission.",
         )?;
     }
-    // Deleting resources, queued deployments' logs and GitHub runners needs
-    // code that is not ported yet.
-    if resources > 0 || servers::has_unported_delete_side_effects(&state.db, s.id).await? {
-        return Err(ApiError::NotPorted);
-    }
-    if let (true, Some(jobs)) = (from_provider, state.jobs.as_ref()) {
-        coolify_jobs::cloud::delete_from_provider(jobs, &s).await;
-    }
-    servers::delete(&state.db, s.id, state.now()).await?;
-    if let Some(jobs) = &state.jobs {
-        jobs.remote().forget_host_key(&s.uuid);
+    match state.jobs.as_ref() {
+        Some(jobs) => {
+            if from_provider {
+                coolify_jobs::cloud::delete_from_provider(jobs, &s).await;
+            }
+            jobs.delete_server(s.id, force).await?;
+            jobs.remote().forget_host_key(&s.uuid);
+        }
+        // Without jobs (a test instance) nothing can clean up the resources.
+        None if resources > 0 => return Err(ApiError::NotPorted),
+        None => servers::delete(&state.db, s.id, state.now()).await?,
     }
     Ok(ok(json!({"message": "Server deleted."})).into_response())
 }

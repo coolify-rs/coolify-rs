@@ -700,10 +700,7 @@ async fn create_database(
         );
         return Err(ApiError::Validation(m));
     }
-    if dbs::has_swarm_destinations(&state.db, server.id).await? {
-        return Err(ApiError::NotPorted);
-    }
-    let destinations = dbs::destinations(&state.db, server.id).await?;
+    let destinations = dbs::all_destinations(&state.db, server.id).await?;
     if destinations.is_empty() {
         return Err(ApiError::Message(
             StatusCode::BAD_REQUEST,
@@ -716,13 +713,13 @@ async fn create_database(
             "Server has multiple destinations and you do not set destination_uuid.",
         ));
     }
-    let mut destination = destinations[0].0;
+    let (mut destination, mut destination_type) = (destinations[0].0, destinations[0].2);
     if destinations.len() > 1 {
         let wanted = input.str("destination_uuid").unwrap_or_default();
-        destination = destinations
+        (destination, destination_type) = destinations
             .iter()
-            .find(|(_, u)| u == wanted)
-            .map(|(id, _)| *id)
+            .find(|(_, u, _)| u == wanted)
+            .map(|(id, _, morph)| (*id, *morph))
             .ok_or_else(|| {
                 errors_with(
                     "destination_uuid",
@@ -990,6 +987,7 @@ async fn create_database(
     let new = NewDatabase {
         environment_id: env.id,
         destination_id: destination,
+        destination_type: Some(destination_type),
         image: (kind == Kind::Postgresql).then(|| "postgres:16-alpine".to_owned()),
         secrets,
         fields,
@@ -1035,11 +1033,11 @@ async fn create_database(
     Ok(created(Value::Object(serialize_record(payload))).into_response())
 }
 
-/// What a start would need that coolify-rs cannot do yet.
+/// `$database->destination->server` of a row whose destination is gone: upstream's error page.
 pub(crate) async fn startable(state: &AppState, d: &DatabaseRow) -> Result<(), ApiError> {
     let _ = state;
     if d.destination.is_none() {
-        Err(ApiError::NotPorted)
+        Err(ApiError::Internal)
     } else {
         Ok(())
     }

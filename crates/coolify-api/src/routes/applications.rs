@@ -2014,15 +2014,10 @@ pub(super) fn random_str(n: usize) -> String {
         .collect()
 }
 
-/// What a start, restart, stop or delete of this application needs that coolify-rs lacks.
+/// `$application->destination->server` of a row whose destination is gone: upstream's error page.
 pub(super) async fn deployable(_state: &AppState, a: &ApplicationRow) -> Result<(), ApiError> {
-    // Every build pack of the deploy job.
-    let unsupported = !matches!(
-        a.str("build_pack"),
-        Some("dockerimage" | "dockerfile" | "static" | "nixpacks" | "railpack" | "dockercompose")
-    ) || a.destination.is_none();
-    if unsupported {
-        Err(ApiError::NotPorted)
+    if a.destination.is_none() {
+        Err(ApiError::Internal)
     } else {
         Ok(())
     }
@@ -2128,7 +2123,7 @@ pub async fn stop(
         return Err(ApiError::Unauthorized);
     }
     if a.destination.is_none() {
-        return Err(ApiError::NotPorted);
+        return Err(ApiError::Internal);
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     jobs.spawn_application_stop(a.clone());
@@ -2152,7 +2147,7 @@ pub async fn delete(
         return Err(ApiError::Unauthorized);
     }
     if a.destination.is_none() {
-        return Err(ApiError::NotPorted);
+        return Err(ApiError::Internal);
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let input = lenient_json(&headers, &uri, &body);

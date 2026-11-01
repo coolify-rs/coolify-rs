@@ -324,17 +324,89 @@ pub async fn resource_count(db: &Db, server_id: i64) -> DbResult<i64> {
         .await?)
 }
 
-/// Rows that deleting the server would touch through code coolify-rs has not
-/// ported: queued deployments (log entries) and GitHub runner executions
-/// (deregistration at GitHub).
-pub async fn has_unported_delete_side_effects(db: &Db, server_id: i64) -> DbResult<bool> {
-    Ok(sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM application_deployment_queues WHERE server_id = $1 AND status = 'queued') \
-             OR EXISTS (SELECT 1 FROM github_runner_executions WHERE server_id = $1)",
+/// `$server->definedResources()`, by id.
+#[derive(Debug, Default)]
+pub struct DefinedResources {
+    pub applications: Vec<i64>,
+    pub databases: Vec<(crate::databases::Kind, i64)>,
+    pub services: Vec<i64>,
+}
+
+pub async fn defined_resources(db: &Db, server_id: i64) -> DbResult<DefinedResources> {
+    let applications = sqlx::query_scalar(&format!(
+        "SELECT id FROM applications WHERE deleted_at IS NULL AND {DESTINATION_MATCH} \
+         UNION SELECT a.id FROM additional_destinations ad JOIN applications a ON a.id = ad.application_id \
+         WHERE ad.server_id = $1 AND a.deleted_at IS NULL ORDER BY 1"
+    ))
+    .bind(server_id)
+    .fetch_all(db.pool())
+    .await?;
+    let services =
+        sqlx::query_scalar("SELECT id FROM services WHERE server_id = $1 AND deleted_at IS NULL ORDER BY id")
+            .bind(server_id)
+            .fetch_all(db.pool())
+            .await?;
+    let mut databases = Vec::new();
+    for kind in crate::databases::Kind::ALL {
+        let ids: Vec<i64> = sqlx::query_scalar(&format!(
+            "SELECT id FROM {} WHERE deleted_at IS NULL AND {DESTINATION_MATCH} ORDER BY id",
+            kind.table()
+        ))
+        .bind(server_id)
+        .fetch_all(db.pool())
+        .await?;
+        databases.extend(ids.into_iter().map(|id| (kind, id)));
+    }
+    Ok(DefinedResources {
+        applications,
+        databases,
+        services,
+    })
+}
+
+/// `$server->delete()`.
+pub async fn soft_delete(db: &Db, server_id: i64, now: chrono::NaiveDateTime) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query("UPDATE servers SET deleted_at = $2, updated_at = $2 WHERE id = $1")
+        .bind(server_id)
+        .bind(now)
+        .execute(db.pool())
+        .await?;
+    Ok(())
+}
+
+/// `Server::failQueuedDeployments()`.
+pub async fn fail_queued_deployments(
+    db: &Db,
+    server_id: i64,
+    now: chrono::NaiveDateTime,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    let ids: Vec<i64> = sqlx::query_scalar(
+        "UPDATE application_deployment_queues SET status = 'failed', updated_at = $2 \
+         WHERE server_id = $1 AND status = 'queued' RETURNING id",
     )
     .bind(server_id)
-    .fetch_one(db.pool())
-    .await?)
+    .bind(now)
+    .fetch_all(db.pool())
+    .await?;
+    for id in ids {
+        let entry = crate::applications::LogEntry {
+            command: None,
+            output: "The server was deleted.".to_string(),
+            kind: "stderr",
+            timestamp: now.format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string(),
+            hidden: false,
+            batch: 1,
+        };
+        crate::applications::append_log(db, id, &[entry], now).await?;
+    }
+    Ok(())
+}
+
+/// The runners `GithubRunnerExecution::deleteAndDeregister` deregisters: `(github_app_id, runner_id)`.
+pub async fn occupying_runners(db: &Db, server_id: i64) -> DbResult<Vec<(i64, i64)>> {
+    crate::github_runners::registered_on_server(db, server_id).await
 }
 
 /// `$server->delete()` (soft) followed by what the queued `DeleteServer` job
@@ -351,6 +423,7 @@ pub async fn delete(db: &Db, server_id: i64, now: chrono::NaiveDateTime) -> DbRe
     for sql in [
         "DELETE FROM standalone_dockers WHERE server_id = $1",
         "DELETE FROM swarm_dockers WHERE server_id = $1",
+        "DELETE FROM github_runner_executions WHERE server_id = $1",
         "DELETE FROM github_runner_configs WHERE server_id = $1",
         "DELETE FROM server_settings WHERE server_id = $1",
         "DELETE FROM ssl_certificates WHERE server_id = $1",

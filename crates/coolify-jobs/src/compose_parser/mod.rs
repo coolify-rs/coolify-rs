@@ -106,7 +106,17 @@ pub async fn application_parser_at(
             "Compose parsing versions before 3 (parseDockerComposeFile) are not ported.".into(),
         );
     }
-    application::application_parser(&mut run, pull_request_id, commit).await
+    let parsed = application::application_parser(&mut run, pull_request_id, commit).await;
+    // `dispatch(new ServerFilesFromServerJob($originalResource))` for a named volume.
+    if run.named_volume {
+        let jobs = jobs.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::services::storage::application_files_from_server(&jobs, app_id).await {
+                tracing::warn!(application = app_id, error = %e, "ServerFilesFromServerJob failed");
+            }
+        });
+    }
+    parsed
 }
 
 /// `Application::loadComposeFile($isInit)`: reads the compose file from the branch tip on the

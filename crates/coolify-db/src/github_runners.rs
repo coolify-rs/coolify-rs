@@ -539,6 +539,17 @@ pub async fn occupying_without_server(db: &Db) -> DbResult<Vec<(i64, Option<i64>
     .await?)
 }
 
+/// Occupying executions of a server that have a runner id: `(github_app_id, runner_id)`.
+pub async fn registered_on_server(db: &Db, server_id: i64) -> DbResult<Vec<(i64, i64)>> {
+    Ok(sqlx::query_as(&format!(
+        "SELECT github_app_id, runner_id FROM github_runner_executions \
+         WHERE server_id = $1 AND runner_id IS NOT NULL AND status IN {OCCUPYING}"
+    ))
+    .bind(server_id)
+    .fetch_all(db.pool())
+    .await?)
+}
+
 pub async fn delete_occupying_without_server(db: &Db) -> DbResult<()> {
     db.ensure_writable()?;
     sqlx::query(&format!(
