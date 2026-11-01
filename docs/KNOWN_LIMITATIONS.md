@@ -327,8 +327,6 @@ origin and nothing else. `scripts/dev-server.sh` points it at a closed local por
 - The hostname lock is per process: upstream's lock is in Redis, shared by its workers.
 - The ownership comment reads `APP_ID` from the environment, as upstream's `config('app.id')`. Without it the comment says
   `default`, so a record created under another id counts as changed outside Coolify.
-- Log redaction of database and service starts does not add fetched secret values (`DatabaseStartCommandExecutor`,
-  `redact`). Deployment logs do. Values in a failing start's output can show.
 - Rows written by earlier coolify-rs builds hold source secrets in serialized form. coolify-rs reads them, but upstream's
   models read `s:3:"abc";` until the secret is saved again.
 

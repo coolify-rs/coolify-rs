@@ -22,7 +22,7 @@ ZONES = [
     {"id": "zone-sub", "name": "sub.example.com", "account": {"id": "acct-1", "name": "Acme"}},
     {"id": "zone-other", "name": "other.test", "account": {"id": "acct-2", "name": "Other"}},
 ]
-DOPPLER = {"DB_PASSWORD": "pa$$word's", "API_KEY": "abc#123", "db-dash": "skip", "COMPLEX": {"a": 1}, "NUM": 5}
+DOPPLER = {"DB_PASSWORD": "pa$$word's", "API_KEY": "abc#123", "db-dash": "skip", "COMPLEX": {"a": 1}, "NUM": 5, "IMG_SECRET": "dns2secretvalue99"}
 VAULT = {"VAULT_ONE": "one$1", "VAULT_JSON": {"x": [1, 2]}, "TAIL": "ends\\"}
 HIBP_PWNED = {"5BAA6": "1E4C9B93F3F0682250B6CF8331B7EE68FD8:3861493\r\nFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF:1\r\n"}
 
