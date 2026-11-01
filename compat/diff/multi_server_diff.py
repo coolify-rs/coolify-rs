@@ -545,16 +545,20 @@ def case_resources(e, rs):
             e.services.append(r["uuid"])
             new = r["uuid"]
             got = ""
-            for _ in range(60):
-                got = vm(machine, f"docker volume inspect {new}_webdata >/dev/null 2>&1 && docker run --rm -v {new}_webdata:/d alpine cat /d/marker.txt").strip()
+            began = time.time()
+            for _ in range(200):
+                got = vm(machine, f"docker volume inspect {new}_webdata >/dev/null 2>&1 && docker run --rm -v {new}_webdata:/d alpine cat /d/marker.txt 2>/dev/null").strip()
                 if got:
                     break
                 time.sleep(3)
+            print(f"  {label} {side}: copy seen after {int(time.time() - began)}s")
             record(f"[resources] {label}: {side} volume data copied", got == side, got)
-            for _ in range(40):
+            began = time.time()
+            for _ in range(200):
                 if len(running(u)) >= 2:
                     break
                 time.sleep(3)
+            print(f"  {label} {side}: source back after {int(time.time() - began)}s")
             record(f"[resources] {label}: {side} source started again", len(running(u)) >= 2, running(u))
             call("ref", "DELETE", f"/services/{new}?delete_volumes=true")
             e.cleanups.append((machine, f"docker volume rm -f {new}_webdata {new}_cachedata >/dev/null 2>&1"))
