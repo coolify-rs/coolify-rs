@@ -962,8 +962,8 @@ mod tests {
     #[test]
     fn range_starts_on_a_minute() {
         let now = chrono::DateTime::from_timestamp(1_793_474_021, 0).unwrap();
-        assert_eq!(range_from("24h", now), "2026-10-30T22:33:00Z");
-        assert_eq!(range_from("7d", now), "2026-10-24T22:33:00Z");
+        assert_eq!(range_from("24h", now), "2026-10-30T19:13:00Z");
+        assert_eq!(range_from("7d", now), "2026-10-24T19:13:00Z");
     }
 
     #[test]

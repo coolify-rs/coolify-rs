@@ -4,7 +4,6 @@
   import Empty from '../Empty.svelte';
   import Listbox from '../Listbox.svelte';
   import LiveToggle from '../LiveToggle.svelte';
-  import Reicon from '../Reicon.svelte';
   import SettingsSection from '../SettingsSection.svelte';
   import StatusBadge from '../StatusBadge.svelte';
   import { link } from '../../lib/router.svelte';
@@ -134,7 +133,9 @@
         {#snippet actions()}
           <a use:link class="button" href="/server/{d.server_uuid}/metrics">
             Server metrics
-            <Reicon name="external-link" class="size-3" />
+            <svg class="inline-flex w-3 h-3 dark:text-neutral-400 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
           </a>
         {/snippet}
         <Empty size="sm" title="Metrics are not enabled" description="Enable metrics for this server before collecting application usage data." iconName="dashboard" />

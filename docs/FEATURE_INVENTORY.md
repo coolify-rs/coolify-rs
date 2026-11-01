@@ -111,6 +111,7 @@ Upstream references are relative to the upstream repository root.
 | Cloud providers (Hetzner, DigitalOcean, Vultr, Hostinger), cloud-init | controllers + jobs | |
 | MCP server, Sentinel metrics, traffic analytics | `routes/ai.php`, `SentinelController` | |
 | Traffic analytics charts (server page and `/analytics`) | `Livewire\Analytics`, `SentinelTrafficClient`, `TrafficAnalyticsAggregator`, `TrafficResource` | `crates/coolify-api/src/ui_server_analytics.rs`, `frontend/src/components/analytics/`, compared by `compat/ui/analytics_compare.mjs` |
+| Fleet metrics, resource and dashboard charts, dashboard and resource traffic analytics | `Fleet\Metrics`, `HasMetrics`, `SentinelMetricsClient`, `Dashboard\{ServerMetricsChart,TrafficAnalytics}`, `Project\Shared\{Metrics,ResourceTrafficAnalytics}` | `crates/coolify-api/src/ui_fleet_metrics.rs`, `ui_server_metrics.rs`, `ui_server_analytics/widgets.rs`, compared by `compat/diff/metrics_diff.py` and `compat/ui/metrics_compare.mjs` |
 | Install / upgrade scripts, self-update | `scripts/install.sh`, `upgrade.sh`, `UpdateCoolifyJob` | planned, Milestone 7 of IMPLEMENTATION_ROADMAP.md |
 | Billing (Stripe, cloud only) | `app/Http/Controllers/Webhook/Stripe.php` | out of scope (self-hosted focus) |
 

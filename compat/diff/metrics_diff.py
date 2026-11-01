@@ -8,6 +8,7 @@ Rows belong to two users of their own; cleanup deletes exactly the ids seed prin
     COOLIFY_RS_BASE=http://127.0.0.1:18087 python3 compat/diff/metrics_diff.py          full run
     python3 compat/diff/metrics_diff.py --keep                                          leaves rows for the screens
     python3 compat/diff/metrics_diff.py --cleanup                                       deletes what a run left
+    python3 compat/diff/metrics_diff.py --sentinel=real|fake                            switches the VM for compat/ui/metrics_compare.mjs
 Add --down to also delete the VM.
 """
 
@@ -163,6 +164,8 @@ def real_phase(state, rs):
     php("touch", ids=list(state["server_ids"].values()))
     # Sentinel flushes the access log in batches.
     time.sleep(75)
+    if rs is None:
+        return
     busy = state["servers"]["busy"]
     who = {"user": state["user"], "team": state["team"]}
 
@@ -323,6 +326,15 @@ def main():
         cleanup()
         if "--down" in sys.argv:
             subprocess.run([VM, "down"], check=False)
+        return
+    switch = next((a.split("=")[1] for a in sys.argv if a.startswith("--sentinel=")), None)
+    if switch:
+        state = json.load(open(STATE))
+        if switch == "real":
+            real_phase(state, None)
+        else:
+            start_fake(state)
+            php("touch", ids=list(state["server_ids"].values()))
         return
     cleanup()
     state = seed()

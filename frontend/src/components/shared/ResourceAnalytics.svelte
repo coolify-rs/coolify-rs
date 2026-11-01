@@ -5,7 +5,6 @@
   import Empty from '../Empty.svelte';
   import Listbox from '../Listbox.svelte';
   import LiveToggle from '../LiveToggle.svelte';
-  import Reicon from '../Reicon.svelte';
   import SettingsSection from '../SettingsSection.svelte';
   import BreakdownSection from '../analytics/BreakdownSection.svelte';
   import DeviceChart from '../analytics/DeviceChart.svelte';
@@ -155,7 +154,9 @@
           {#if data?.analyticsServerUuid}
             <a class="button" href="/server/{data.analyticsServerUuid}/analytics" use:link>
               Server analytics
-              <Reicon name="external-link" class="size-3" />
+              <svg class="inline-flex w-3 h-3 dark:text-neutral-400 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
             </a>
           {/if}
         {/snippet}
