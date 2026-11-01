@@ -430,6 +430,11 @@ only resolves on the reference's Docker network.
   (`server-delete` in `multi_server_diff.py`).
 - `MigrateResourceToDestination` is development-only upstream (`isDev()`), so it answers 404 on both sides and was not run.
 
+## Install
+
+- `ROOT_USER_EMAIL` is checked for shape only: upstream's seeder rule `email:rfc,dns` also needs the domain to resolve, so an address
+  upstream refuses can create the root user here.
+
 ## Canvas, Admin and Subscription
 
 - Canvases are upstream's Svelte code, copied unmodified to `frontend/src/upstream/js`. Live status needs `window.Echo`, which coolify-rs does

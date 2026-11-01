@@ -781,7 +781,7 @@ pub async fn fetch_templates_bundle(url: &str) -> bool {
             false
         }
         Err(e) => {
-            tracing::error!(message = %e, "PullTemplatesFromCDN exception");
+            tracing::error!(error = %e, "PullTemplatesFromCDN exception");
             false
         }
     }
@@ -801,7 +801,7 @@ pub async fn fetch_changelog(url: &str, dir: &std::path::Path, now: DateTime<Utc
             return;
         }
         Err(e) => {
-            tracing::error!(message = %e, "PullChangelogFromGitHub: Exception occurred");
+            tracing::error!(error = %e, "PullChangelogFromGitHub: Exception occurred");
             return;
         }
     };
@@ -810,7 +810,7 @@ pub async fn fetch_changelog(url: &str, dir: &std::path::Path, now: DateTime<Utc
         return;
     };
     if let Err(e) = save_changelog_entries(dir, &releases, now) {
-        tracing::error!(message = %e, "PullChangelogFromGitHub: Exception occurred");
+        tracing::error!(error = %e, "PullChangelogFromGitHub: Exception occurred");
     }
 }
 
