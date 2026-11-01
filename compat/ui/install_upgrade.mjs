@@ -31,6 +31,13 @@ await page.fill('input[name=email]', 'first-root@example.test');
 await page.fill('input[name=password]', password);
 await page.click('button[type=submit]');
 await page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 20000 }).catch(() => {});
+await page.waitForTimeout(1500);
+// The onboarding page stands in front of every page until it is finished or skipped.
+if (new URL(page.url()).pathname === '/onboarding') {
+  await page.waitForTimeout(1500);
+  await page.getByRole('button', { name: 'Skip setup' }).first().click().catch(() => {});
+  await page.waitForTimeout(2500);
+}
 await page.goto(`${base}/settings/updates`);
 await page.waitForTimeout(2500);
 const check = page.getByRole('button', { name: /Check/ }).first();

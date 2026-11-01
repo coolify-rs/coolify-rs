@@ -25,6 +25,6 @@ docker exec coolify php artisan tinker --execute '
 $s = App\Models\Server::find(0);
 echo "ssh as upstream: " . trim(instant_remote_process(["echo reached"], $s)) . PHP_EOL;
 echo "key decrypts: " . (str_contains($s->privateKey->private_key, "PRIVATE KEY") ? "yes" : "no") . PHP_EOL;
-echo "sentinel token decrypts: " . (json_decode(decrypt($s->settings->sentinel_token, false) ?: "{}") ? "yes" : "unparsed") . PHP_EOL;
+echo "sentinel token decrypts: " . ((json_decode(decrypt($s->settings->sentinel_token))->server_uuid ?? null) === $s->uuid ? "yes" : "no") . PHP_EOL;
 echo "shared variable decrypts: " . (App\Models\SharedEnvironmentVariable::where("key","COOLIFY_SERVER_UUID")->first()->value === $s->uuid ? "yes" : "no") . PHP_EOL;
 ' 2>&1 | grep -v '^$' | cut -c1-200
