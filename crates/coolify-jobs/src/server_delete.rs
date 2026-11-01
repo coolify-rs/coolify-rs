@@ -44,30 +44,40 @@ impl Jobs {
         for s in services {
             handles.push(self.spawn_service_delete(s, true, true, true));
         }
+        // Nothing to wait for or call: the rows go before the response.
+        if handles.is_empty() && !from.any() {
+            self.finish_delete_server(&row, from).await;
+            return Ok(());
+        }
         let jobs = self.clone();
         tokio::spawn(async move {
             for h in handles {
                 let _ = h.await;
             }
-            if let Err(e) = cloud::delete_from_providers(&jobs, &row, from).await {
-                tracing::error!(server_uuid = %row.uuid, error = %e, "DeleteServer failed; the server stays soft deleted");
-                return;
-            }
-            // `GithubRunnerExecution::deleteAndDeregister`; the rows go with `forceDelete()`.
-            for e in github_runners::occupying_on_server(&jobs.0.db, row.id)
-                .await
-                .unwrap_or_default()
-            {
-                if let Some(runner_id) = e.runner_id {
-                    jobs.spawn_deregister_runner(e.github_app_id, runner_id);
-                }
-            }
-            if let Err(e) = servers::force_delete(&jobs.0.db, row.id).await {
-                tracing::error!(server_uuid = %row.uuid, error = %e, "Failed to force delete server from Coolify");
-            }
-            jobs.remote().forget_host_key(&row.uuid);
+            jobs.finish_delete_server(&row, from).await;
         });
         Ok(())
+    }
+
+    /// `DeleteServer::handle`.
+    async fn finish_delete_server(&self, row: &ServerRow, from: DeleteFrom) {
+        if let Err(e) = cloud::delete_from_providers(self, row, from).await {
+            tracing::error!(server_uuid = %row.uuid, error = %e, "DeleteServer failed; the server stays soft deleted");
+            return;
+        }
+        // `GithubRunnerExecution::deleteAndDeregister`; the rows go with `forceDelete()`.
+        for e in github_runners::occupying_on_server(&self.0.db, row.id)
+            .await
+            .unwrap_or_default()
+        {
+            if let Some(runner_id) = e.runner_id {
+                self.spawn_deregister_runner(e.github_app_id, runner_id);
+            }
+        }
+        if let Err(e) = servers::force_delete(&self.0.db, row.id).await {
+            tracing::error!(server_uuid = %row.uuid, error = %e, "Failed to force delete server from Coolify");
+        }
+        self.remote().forget_host_key(&row.uuid);
     }
 
     /// `Server::failQueuedDeployments`.

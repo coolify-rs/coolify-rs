@@ -1,6 +1,6 @@
 // Compares the `livewire:analytics` views of the reference and coolify-rs on the same servers and the
 // same Sentinel data: visible text and the tag/class sequence per section, per state and interaction.
-//   node analytics_compare.mjs --rs=18087 --a=<server uuid> --b=<server uuid> --app=<application uuid on a>
+//   node analytics_compare.mjs --rs=18087 --a=<server uuid> --b=<server uuid> --app=<application uuid on a> [--user=alice] [--a-name=<server name>] [--app-name=<application name>]
 import { chromium } from 'playwright-core';
 import fs from 'node:fs';
 
@@ -10,6 +10,7 @@ const rsPort = opt('rs', 18087);
 const A = opt('a', '');
 const B = opt('b', '');
 const APP = opt('app', '');
+const user = opt('user', 'alice');
 const scheme = argv.includes('--light') ? 'light' : 'dark';
 const secret = fs.readFileSync(new URL('../reference/secrets/ui-login.txt', import.meta.url), 'utf8').match(/^password:\s*(.+)$/m)[1].trim();
 const out = new URL('./shots/analytics/', import.meta.url).pathname;
@@ -29,7 +30,7 @@ async function session(base) {
     }
   }, scheme === 'light');
   await page.goto(`${base}/login`);
-  await page.fill('input[name=email]', 'alice@example.test');
+  await page.fill('input[name=email]', `${user}@example.test`);
   await page.fill('input[name=password]', secret);
   await Promise.all([page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 15000 }).catch(() => {}), page.click('button[type=submit]')]);
   return page;
@@ -179,8 +180,8 @@ await state('global', '/analytics');
   const texts = await Promise.all(['ref', 'rs'].map((side) => panelText(pages[side], 'serverUuid')));
   verdict('global: server filter options', texts[0] === texts[1], `ref ${texts[0]}\n     rs  ${texts[1]}`);
 }
-await act('global server filter', async (p) => chooseFilter(p, 'serverUuid', 'diff-ui-a'));
-await act('global application filter', async (p) => chooseFilter(p, 'appUuid', 'diff-traffic-a'));
+await act('global server filter', async (p) => chooseFilter(p, 'serverUuid', opt('a-name', 'diff-ui-a')));
+await act('global application filter', async (p) => chooseFilter(p, 'appUuid', opt('app-name', 'diff-traffic-a')));
 await state('global bookmarked server', `/analytics?server=${B}`);
 await state('global bookmarked application', `/analytics?app=${APP}`);
 await state('global bookmarked 7d', '/analytics?range=7d');
