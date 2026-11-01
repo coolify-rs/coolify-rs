@@ -296,7 +296,7 @@ impl Jobs {
         delete_volumes: bool,
         delete_configurations: bool,
         docker_cleanup: bool,
-    ) {
+    ) -> tokio::task::JoinHandle<()> {
         let jobs = self.clone();
         tokio::spawn(async move {
             let server = jobs.server_for(&d).await;
@@ -344,7 +344,7 @@ impl Jobs {
             if let Err(e) = dbs::force_delete(&jobs.0.db, d.kind, d.id, delete_volumes).await {
                 tracing::warn!(database = %d.uuid, error = %e, "database rows could not be deleted");
             }
-        });
+        })
     }
 
     /// `spawn_database_delete` with upstream's defaults (the UI's delete form has no cleanup switch here).

@@ -324,33 +324,26 @@ pub async fn resource_count(db: &Db, server_id: i64) -> DbResult<i64> {
         .await?)
 }
 
-/// Rows that deleting the server would touch through code coolify-rs has not
-/// ported: queued deployments (log entries) and GitHub runner executions
-/// (deregistration at GitHub).
-pub async fn has_unported_delete_side_effects(db: &Db, server_id: i64) -> DbResult<bool> {
-    Ok(sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM application_deployment_queues WHERE server_id = $1 AND status = 'queued') \
-             OR EXISTS (SELECT 1 FROM github_runner_executions WHERE server_id = $1)",
-    )
-    .bind(server_id)
-    .fetch_one(db.pool())
-    .await?)
-}
-
-/// `$server->delete()` (soft) followed by what the queued `DeleteServer` job
-/// does: `forceDelete()` with the `forceDeleting` hook (destinations, runner
-/// config, settings, SSL certificates, notification throttles). One transaction.
-pub async fn delete(db: &Db, server_id: i64, now: chrono::NaiveDateTime) -> DbResult<()> {
+/// `$server->delete()`: the soft delete.
+pub async fn soft_delete(db: &Db, server_id: i64, now: chrono::NaiveDateTime) -> DbResult<()> {
     db.ensure_writable()?;
-    let mut tx = db.pool().begin().await?;
     sqlx::query("UPDATE servers SET deleted_at = $2, updated_at = $2 WHERE id = $1")
         .bind(server_id)
         .bind(now)
-        .execute(&mut *tx)
+        .execute(db.pool())
         .await?;
+    Ok(())
+}
+
+/// `forceDelete()` with the `forceDeleting` hook (destinations, runner rows and config, settings,
+/// SSL certificates, notification throttles). One transaction.
+pub async fn force_delete(db: &Db, server_id: i64) -> DbResult<()> {
+    db.ensure_writable()?;
+    let mut tx = db.pool().begin().await?;
     for sql in [
         "DELETE FROM standalone_dockers WHERE server_id = $1",
         "DELETE FROM swarm_dockers WHERE server_id = $1",
+        "DELETE FROM github_runner_executions WHERE server_id = $1",
         "DELETE FROM github_runner_configs WHERE server_id = $1",
         "DELETE FROM server_settings WHERE server_id = $1",
         "DELETE FROM ssl_certificates WHERE server_id = $1",

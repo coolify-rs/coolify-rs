@@ -23,6 +23,7 @@ pub mod schedule_sources;
 pub mod scheduled_task;
 pub mod scheduler;
 pub mod server;
+mod server_delete;
 pub mod server_ops;
 pub mod server_transfer;
 pub mod services;

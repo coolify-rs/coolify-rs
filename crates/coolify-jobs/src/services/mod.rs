@@ -711,7 +711,7 @@ impl Jobs {
         delete_volumes: bool,
         delete_networks: bool,
         delete_configurations: bool,
-    ) {
+    ) -> tokio::task::JoinHandle<()> {
         let jobs = self.clone();
         tokio::spawn(async move {
             jobs.stop_service(&s, delete_networks).await;
@@ -734,7 +734,7 @@ impl Jobs {
             if let Err(e) = svc::force_delete(&jobs.0.db, s.id).await {
                 tracing::warn!(service = %s.uuid, error = %e, "deleting service rows failed");
             }
-        });
+        })
     }
 
     /// `DeleteService::cleanupRemote()`.

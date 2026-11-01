@@ -20,6 +20,7 @@ APP_KEY="$APP_KEY_VALUE" DATABASE_URL="postgres://$DB_USER:$DB_PASS@coolify-rs-r
   -v "$ROOT/frontend/dist:/ui:ro" -v "$NAME-target:/target:ro" -e APP_KEY -e DATABASE_URL \
   -e COOLIFY_RS_LISTEN="0.0.0.0:$PORT" -e COOLIFY_RS_UI_DIR=/ui -e COOLIFY_RS_DATA_DIR=/data \
   -e COOLIFY_RS_SKIP_STARTUP_CLEANUP=1 -e COOLIFY_RS_SCHEDULER=off \
+  -e COOLIFY_RS_TEST_ONLY_FAKE_PROVIDERS=http://127.0.0.1:9 -e COOLIFY_RS_CLOUD_API_BASE=http://127.0.0.1:9 \
   rust:1-bookworm /target/debug/coolify-rs serve >/dev/null
 sleep 3
 curl -s -o /dev/null -w "port $PORT: %{http_code}, in container $NAME\n" "http://127.0.0.1:$PORT/login"
