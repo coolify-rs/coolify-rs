@@ -1,0 +1,63 @@
+[
+ {
+  "name": "s6-profile-menu",
+  "path": "/",
+  "steps": [
+   {
+    "click": "button[aria-label^=\"Account menu\"]"
+   },
+   {
+    "wait": 400
+   }
+  ]
+ },
+ {
+  "name": "s6-whatsnew",
+  "path": "/",
+  "steps": [
+   {
+    "click": "button[aria-label^=\"Account menu\"]"
+   },
+   {
+    "click": "button:has-text(\"What's New\")"
+   },
+   {
+    "wait": 1500
+   }
+  ]
+ },
+ {
+  "name": "s6-env-add",
+  "path": "/project/j8xm2emlllhfnyebjzgyzp7z/environment/uj3st9yvtvzxh7rul3c3opcz/application/jgcjpevnufmx9wavlokk3gox/environment-variables",
+  "steps": [
+   {
+    "click": "button:text-is(\"Add\")"
+   },
+   {
+    "wait": 300
+   }
+  ]
+ },
+ {
+  "name": "s6-public-repo",
+  "path": "/project/j8xm2emlllhfnyebjzgyzp7z/environment/uj3st9yvtvzxh7rul3c3opcz/new",
+  "steps": [
+   {
+    "click": "text=Public Repository"
+   },
+   {
+    "wait": 1500
+   }
+  ]
+ },
+ {
+  "name": "s7-onb-1",
+  "path": "/onboarding",
+  "steps": []
+ },
+ {
+  "name": "s7-forgot",
+  "path": "/forgot-password",
+  "steps": []
+ }
+]

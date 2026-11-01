@@ -106,6 +106,19 @@ try {
     await scope(page).locator('button:has-text("Search ID")').click(); await page.waitForTimeout(900);
     await shot(page, 'token-no-id', side);
   }
+  // A successful save with its toast, on the fixture server, on both sides.
+  for (const [side, page] of Object.entries(pages)) {
+    await page.reload(); await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {}); await page.waitForTimeout(1000);
+    await vis(page, 'input#name, input[wire\\:model="name"]').first().fill(`lp-link-fixture-${side === 'ref' ? 'a' : 'b'}`);
+    await page.waitForTimeout(400);
+    await vis(page, 'button:has-text("Save")').first().click({ timeout: 4000 });
+    await page.waitForTimeout(900);
+    await shot(page, 'save-toast', side);
+    await page.reload(); await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {}); await page.waitForTimeout(1000);
+    await menuButton(page).click(); await page.waitForTimeout(300);
+    await item(page, 'Hetzner').click(); await page.waitForTimeout(500);
+    await selectToken(page, 'lp-hetzner');
+  }
   await pages.ref.context().close();
 
   // From here on coolify-rs only, against the fake.
@@ -143,7 +156,7 @@ try {
   results.push(false);
   console.log('FAIL', String(e.message).split('\n')[0].slice(0, 300));
 } finally {
-  await browser.close();
+  await Promise.race([browser.close(), new Promise((r) => setTimeout(r, 5000))]);
   fake.close();
   if (made.server) {
     psql(`delete from standalone_dockers where server_id=${made.server}`);
@@ -151,5 +164,6 @@ try {
     psql(`delete from servers where id=${made.server}`);
   }
   for (const t of made.tokens) psql(`delete from cloud_provider_tokens where id=${t}`);
-  console.log(`${results.filter(Boolean).length}/${results.length}; left: server ${psql(`select count(*) from servers where name='lp-link-fixture'`)}, tokens ${psql("select count(*) from cloud_provider_tokens where name like 'lp-%'")}`);
+  console.log(`${results.filter(Boolean).length}/${results.length}; left: server ${psql(`select count(*) from servers where name like 'lp-link-fixture%'`)}, tokens ${psql("select count(*) from cloud_provider_tokens where name like 'lp-%'")}`);
 }
+process.exit(0);
