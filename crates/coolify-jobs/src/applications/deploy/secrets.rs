@@ -386,7 +386,7 @@ impl Run {
 }
 
 /// `EnvironmentVariable::remoteSecretLogRedactionValues()` for one value.
-fn remote_redaction_values(value: &str) -> Vec<String> {
+pub(crate) fn remote_redaction_values(value: &str) -> Vec<String> {
     let mut out = vec![
         value.to_owned(),
         git::bash_env_value(Some(value)),

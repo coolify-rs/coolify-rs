@@ -519,11 +519,26 @@ async fn run_check(
                 ),
             }
         }
-        "github_app_webhook" | "gitlab_webhook" | "manual_webhook" => done(
-            "action",
-            "No webhook arrived since the transfer.".into(),
-            None,
-        ),
+        "github_app_webhook" | "gitlab_webhook" | "manual_webhook" => {
+            let receipt = match kind.as_str() {
+                "github_app_webhook" => "github_app",
+                "gitlab_webhook" => "gitlab_app",
+                _ => "application",
+            };
+            let received = webhook_received_at(receipt, &subject);
+            match (received, parse(started_at)) {
+                (Some(at), Some(started)) if at > started => done(
+                    "ok",
+                    format!("A webhook arrived at {}.", at.format("%H:%M")),
+                    None,
+                ),
+                _ => done(
+                    "action",
+                    "No webhook arrived since the transfer.".into(),
+                    None,
+                ),
+            }
+        }
         "dns_record" => {
             let owned: Option<(bool,)> =
                 sqlx::query_as("SELECT owned FROM managed_dns_records WHERE uuid = $1")
@@ -532,9 +547,30 @@ async fn run_check(
                     .await
                     .unwrap_or(None);
             match owned {
-                None => done("unchecked", "This instance does not track this record anymore.".into(), None),
-                Some((true,)) => done("action", "Cloudflare does not confirm the record.".into(), Some("The record changed at Cloudflare, or Cloudflare cannot be reached with the token.".into())),
-                Some((false,)) => done("action", "This instance does not own the record yet.".into(), Some("Until it owns the record, this instance does not change or delete it.".into())),
+                None => done(
+                    "unchecked",
+                    "This instance does not track this record anymore.".into(),
+                    None,
+                ),
+                Some((true,)) => {
+                    if reclaim_record(state, &subject).await {
+                        done(
+                            "ok",
+                            "This instance manages the record at Cloudflare.".into(),
+                            None,
+                        )
+                    } else {
+                        done("action", "Cloudflare does not confirm the record.".into(), Some("The record changed at Cloudflare, or Cloudflare cannot be reached with the token.".into()))
+                    }
+                }
+                Some((false,)) => done(
+                    "action",
+                    "This instance does not own the record yet.".into(),
+                    Some(
+                        "Until it owns the record, this instance does not change or delete it."
+                            .into(),
+                    ),
+                ),
             }
         }
         "domain" => check_domain(state, server_id, &subject).await,
@@ -725,7 +761,7 @@ pub async fn check_when_stale(state: &AppState, server_id: i64) -> Result<(), St
     Ok(())
 }
 
-/// `fix`: Sentinel restarts in the background. GitHub and Cloudflare calls are not ported.
+/// `fix`: Sentinel restarts in the background. The GitHub call is not ported.
 pub async fn fix(state: &AppState, server_id: i64, key: &str) -> Result<Value, String> {
     let kind = key.split(':').next().unwrap_or("");
     if fix_label(kind).is_none() {
@@ -760,7 +796,85 @@ pub async fn fix(state: &AppState, server_id: i64, key: &str) -> Result<Value, S
         )
         .await;
     }
+    if kind == "dns_record" {
+        let subject = key.split_once(':').map_or("", |(_, s)| s);
+        if reclaim_record(state, subject).await {
+            let _ = sqlx::query("UPDATE managed_dns_records SET owned = true WHERE uuid = $1")
+                .bind(subject)
+                .execute(state.db.pool())
+                .await;
+            return check(state, server_id, key).await;
+        }
+    }
     update_item(state, server_id, key, "action", "Coolify could not do this step.", Some(if kind == "dns_record" { "Coolify could not take ownership: the record changed at Cloudflare, or Cloudflare cannot be reached.".to_owned() } else { "GitHub cannot be reached from this build.".to_owned() })).await
+}
+
+fn webhook_receipts_path() -> std::path::PathBuf {
+    coolify_jobs::kernel::data_dir().join("transfer-finish-webhooks.json")
+}
+
+static WEBHOOK_RECEIPTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// `now()->addDays(60)` of `recordWebhook`.
+const WEBHOOK_RECEIPT_DAYS: i64 = 60;
+
+/// `TransferFinishChecklist::recordWebhook`: upstream's cache entry, here a small file in the data
+/// directory, so it survives a restart without a cache service.
+pub fn record_webhook(kind: &str, uuid: &str) {
+    if uuid.is_empty() {
+        return;
+    }
+    let Ok(_guard) = WEBHOOK_RECEIPTS.lock() else {
+        return;
+    };
+    let path = webhook_receipts_path();
+    let mut map: serde_json::Map<String, Value> = std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let now = chrono::Utc::now();
+    map.retain(|_, v| {
+        v.as_str()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .is_some_and(|t| (now - t.to_utc()).num_days() < WEBHOOK_RECEIPT_DAYS)
+    });
+    map.insert(format!("{kind}:{uuid}"), json!(now_iso()));
+    if let Ok(text) = serde_json::to_vec(&map) {
+        let _ = std::fs::write(&path, text);
+    }
+}
+
+fn webhook_received_at(kind: &str, uuid: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    let _guard = WEBHOOK_RECEIPTS.lock().ok()?;
+    let map: serde_json::Map<String, Value> =
+        serde_json::from_slice(&std::fs::read(webhook_receipts_path()).ok()?).ok()?;
+    map.get(&format!("{kind}:{uuid}"))
+        .and_then(Value::as_str)
+        .and_then(|t| parse(Some(t)))
+}
+
+/// `CloudflareDnsProvider::reclaimRecord` of the record with this uuid.
+pub(crate) async fn reclaim_record(state: &AppState, uuid: &str) -> bool {
+    let Some(enc) = state.encrypter.as_ref() else {
+        return false;
+    };
+    let id: Option<i64> = sqlx::query_scalar("SELECT id FROM managed_dns_records WHERE uuid = $1")
+        .bind(uuid)
+        .fetch_optional(state.db.pool())
+        .await
+        .unwrap_or(None);
+    let Some(id) = id else {
+        return false;
+    };
+    let Ok(Some(record)) = coolify_db::managed_dns::record_by_id(&state.db, id).await else {
+        return false;
+    };
+    let dns = coolify_jobs::integrations::cloudflare::Dns {
+        db: &state.db,
+        enc,
+        now: state.now(),
+        source: "system",
+    };
+    dns.reclaim_record(&record).await
 }
 
 /// `markDone`.

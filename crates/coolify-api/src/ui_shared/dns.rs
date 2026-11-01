@@ -30,6 +30,7 @@ pub fn routes() -> Router<AppState> {
         .route(&format!("{b}/check"), post(check_dns))
         .route(&format!("{b}/create"), post(create_record))
         .route(&format!("{b}/replace"), post(replace_record))
+        .route(&format!("{b}/finished"), get(finished))
 }
 
 /// A row of the Domains table.
@@ -338,6 +339,24 @@ async fn check_dns(
     let wanted_url = body.get("url").and_then(Value::as_str);
     let wanted_service = body.get("service").and_then(Value::as_str);
     let f = facts(&state, &res).await?;
+    let selected: Vec<&DomainRow> = rows
+        .iter()
+        .filter(|r| {
+            wanted_url.is_none_or(|u| u == r.url)
+                && (wanted_url.is_none() || wanted_service == r.service.as_deref())
+        })
+        .collect();
+    queue_checks(&state, &res, &selected, &f).await?;
+    Ok(ok(json!({})).into_response())
+}
+
+/// `markUrlsAsChecking` and `CheckDomainDnsJob` for these rows.
+async fn queue_checks(
+    state: &AppState,
+    res: &Res,
+    selected: &[&DomainRow],
+    f: &Facts,
+) -> Result<(), ApiError> {
     // `$application->additional_servers->count() > 0`.
     let multi = res.class == Class::Application && {
         let n: i64 = sqlx::query_scalar(
@@ -350,10 +369,7 @@ async fn check_dns(
         n > 0
     };
     let expected = f.configured.clone();
-    for r in rows.iter().filter(|r| {
-        wanted_url.is_none_or(|u| u == r.url)
-            && (wanted_url.is_none() || wanted_service == r.service.as_deref())
-    }) {
+    for r in selected {
         let check_id = new_public_id();
         let checking = json!({
             "status": "checking",
@@ -362,7 +378,7 @@ async fn check_dns(
             "checked_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string(),
             "check_id": check_id,
         });
-        set_status(&state, r, &checking).await?;
+        set_status(state, r, &checking).await?;
         let ctx_check = dns_check::CheckContext {
             validation_enabled: f.validation_enabled,
             dns_servers: f.dns_servers.clone(),
@@ -370,7 +386,7 @@ async fn check_dns(
             server_ip: f.server_ip.clone(),
             skip_multiple_servers: multi,
         };
-        let (st, row, exp, id) = (state.clone(), r.clone(), expected.clone(), check_id);
+        let (st, row, exp, id) = (state.clone(), (*r).clone(), expected.clone(), check_id);
         tokio::spawn(async move {
             let out = dns_check::check(
                 &row.url,
@@ -394,7 +410,241 @@ async fn check_dns(
             }
         });
     }
-    Ok(ok(json!({})).into_response())
+    Ok(())
+}
+
+/// What `addDomain()` does after the save: `configureDnsAfterDomainAdd`, otherwise a DNS check of
+/// each added URL. Answers with the toasts and what the page does next.
+#[allow(clippy::too_many_arguments)]
+pub async fn after_domain_add(
+    state: &AppState,
+    ctx: &AuthCtx,
+    kind: &str,
+    uuid: &str,
+    urls: &[String],
+    service: Option<&str>,
+    sub_id: Option<i64>,
+    warnings: Vec<&str>,
+) -> ApiResult {
+    let mut warnings: Vec<String> = warnings.into_iter().map(str::to_owned).collect();
+    let res = find(state, ctx, kind, uuid).await?;
+    let rows = domain_rows(state, &res).await?;
+    let f = facts(state, &res).await?;
+    let mut added: Vec<&str> = Vec::new();
+    for u in urls {
+        if !added.contains(&u.as_str()) {
+            added.push(u);
+        }
+    }
+    if let Some(dns) = configure_after_add(state, &res, &rows, &f, &added, &mut warnings).await? {
+        return Ok(
+            ok(json!({"message": "Domain added.", "warnings": warnings, "dns": dns}))
+                .into_response(),
+        );
+    }
+    let selected: Vec<&DomainRow> = rows
+        .iter()
+        .filter(|r| {
+            added.contains(&r.url.as_str())
+                && service == r.service.as_deref()
+                && sub_id.is_none_or(|id| id == r.id)
+        })
+        .collect();
+    queue_checks(state, &res, &selected, &f).await?;
+    let message = if selected.is_empty() {
+        "Domain added."
+    } else {
+        "Domain added. DNS check started."
+    };
+    Ok(ok(json!({"message": message, "warnings": warnings})).into_response())
+}
+
+/// `configureDnsAfterDomainAdd`: `None` when it returns false.
+async fn configure_after_add(
+    state: &AppState,
+    res: &Res,
+    rows: &[DomainRow],
+    f: &Facts,
+    urls: &[&str],
+    warnings: &mut Vec<String>,
+) -> Result<Option<Value>, ApiError> {
+    let mut hosts: Vec<String> = Vec::new();
+    for h in urls.iter().filter_map(|u| host_of(u)) {
+        if !hosts.contains(&h) {
+            hosts.push(h);
+        }
+    }
+    let public = public_ips(f);
+    let target = public.first().cloned();
+    let list = proposals(state, res, &hosts, target.as_deref()).await?;
+    if list.is_empty() {
+        return Ok(None);
+    }
+    if f.configured
+        .as_deref()
+        .is_none_or(|c| c.parse::<std::net::IpAddr>().is_err())
+    {
+        return Ok(None);
+    }
+    let Some(content) = target else {
+        warnings.push(cf::NO_PUBLIC_ADDRESS_MESSAGE.to_owned());
+        return Ok(None);
+    };
+    // `markDnsPending` keeps its message on the page only: a pending status is not stored.
+    let mut dns = json!({
+        "pending": hosts,
+        "pending_message": "A connected DNS provider can create this record.",
+    });
+    let mut automatic = true;
+    for host in &hosts {
+        let of_host: Vec<&Value> = list.iter().filter(|p| p["hostname"] == **host).collect();
+        let [only] = of_host.as_slice() else {
+            automatic = false;
+            break;
+        };
+        let zone = store::zone_in_team(
+            &state.db,
+            res.team_id,
+            only["zone_id"].as_i64().unwrap_or(-1),
+        )
+        .await?;
+        // `automaticDnsEnabled()`
+        let enabled = zone.is_some_and(|z| {
+            z.metadata
+                .as_deref()
+                .and_then(|m| serde_json::from_str::<Value>(m).ok())
+                .and_then(|m| m.get("automatic_dns").cloned())
+                != Some(Value::Bool(false))
+        });
+        if !enabled {
+            automatic = false;
+            break;
+        }
+    }
+    if !automatic {
+        dns["open_modal"] = json!(true);
+        return Ok(Some(dns));
+    }
+    let (mut jobs, mut info) = (Vec::new(), Vec::new());
+    for proposal in &list {
+        let hostname = proposal["hostname"].as_str().unwrap_or_default().to_owned();
+        let job = new_public_id();
+        info.push(format!("Adding DNS record for {hostname}."));
+        jobs.push(job.clone());
+        spawn_configure_record(
+            state,
+            res.team_id,
+            proposal["zone_id"].as_i64().unwrap_or(-1),
+            rows,
+            hostname,
+            content.clone(),
+            f.configured.clone(),
+            job,
+        );
+    }
+    dns["jobs"] = json!(jobs);
+    dns["info"] = json!(info);
+    Ok(Some(dns))
+}
+
+/// `DnsRecordConfigurationFinished` for the page that waits: there is no broadcast here, so the page
+/// asks for the end of the jobs its request started.
+static FINISHED: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, (i64, Value)>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// `ConfigureDnsRecordJob`, and what the page's `dnsRecordConfigurationFinished` does.
+#[allow(clippy::too_many_arguments)]
+fn spawn_configure_record(
+    state: &AppState,
+    team_id: i64,
+    zone_id: i64,
+    rows: &[DomainRow],
+    hostname: String,
+    content: String,
+    expected: Option<String>,
+    job: String,
+) {
+    let Some(enc) = state.encrypter.clone() else {
+        return;
+    };
+    let state = state.clone();
+    let rows: Vec<DomainRow> = rows
+        .iter()
+        .filter(|r| host_of(&r.url).as_deref() == Some(hostname.as_str()))
+        .cloned()
+        .collect();
+    tokio::spawn(async move {
+        let dns = Dns {
+            db: &state.db,
+            enc: &enc,
+            now: state.now(),
+            source: "system",
+        };
+        let resource = rows.first().map(dns_resource);
+        let done = cf::configure_dns_record_job(
+            &dns,
+            team_id,
+            zone_id,
+            resource.as_ref(),
+            &hostname,
+            &content,
+        )
+        .await;
+        if done.successful {
+            // `markDnsManaged`
+            let status = json!({
+                "status": "ok",
+                "message": format!("DNS record created through {}.", done.credential),
+                "expected_ip": expected,
+                "checked_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string(),
+                "check_id": Value::Null,
+            });
+            for r in &rows {
+                let _ = set_status(&state, r, &status).await;
+            }
+        }
+        if let Ok(mut map) = FINISHED.lock() {
+            if map.len() > 500 {
+                map.clear();
+            }
+            map.insert(
+                job,
+                (
+                    team_id,
+                    json!({"successful": done.successful, "message": done.message, "hostname": hostname}),
+                ),
+            );
+        }
+    });
+}
+
+/// The jobs of [`spawn_configure_record`] that ended.
+async fn finished(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path((kind, uuid)): P,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> ApiResult {
+    let res = find(&state, &ctx, &kind, &uuid).await?;
+    let mut out = Vec::new();
+    if let Ok(mut map) = FINISHED.lock() {
+        for id in query
+            .get("jobs")
+            .map(String::as_str)
+            .unwrap_or_default()
+            .split(',')
+        {
+            if map.get(id).is_some_and(|(team, _)| *team == res.team_id)
+                && let Some((_, value)) = map.remove(id)
+            {
+                let mut value = value;
+                value["job"] = json!(id);
+                out.push(value);
+            }
+        }
+    }
+    Ok(ok(json!({"finished": out})).into_response())
 }
 
 /// `$resource->domain_dns_statuses[$key] = $status`. The column is plain JSON text upstream.
@@ -681,6 +931,40 @@ pub async fn release_after_remove(
         .await
         .ok()?;
     release_warning(result, "removed")
+}
+
+/// `queueReleaseOfRemovedHostnames` after a resource's domains were saved by the API, General or
+/// a preview. `previous` comes from [`previous_hostnames`], read before the save.
+pub fn queue_release_of_removed_hostnames(
+    state: &AppState,
+    morph: &str,
+    id: i64,
+    previous: Vec<String>,
+    team_id: i64,
+) {
+    let Some(enc) = state.encrypter.as_ref() else {
+        return;
+    };
+    cf::queue_release_of_removed_hostnames(
+        &state.db,
+        enc,
+        DnsResource {
+            morph: morph.to_owned(),
+            id,
+            uuid: None,
+            name: None,
+            type_name: String::new(),
+        },
+        previous,
+        team_id,
+    );
+}
+
+/// `$dnsCleanup->hostnamesOf($resource)` before a save.
+pub async fn previous_hostnames(state: &AppState, morph: &str, id: i64) -> Vec<String> {
+    cf::hostnames_of_resource(&state.db, morph, id)
+        .await
+        .unwrap_or_default()
 }
 
 /// `ReleaseManagedDnsRecordsJob` after a resource is deleted; a failed provider is retried three times.

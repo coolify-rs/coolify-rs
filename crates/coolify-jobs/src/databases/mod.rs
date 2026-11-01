@@ -55,6 +55,8 @@ pub struct StartContext<'a> {
     pub secrets: std::collections::HashMap<&'static str, String>,
     /// `runtime_environment_variables`, resolved.
     pub variables: Vec<env::Var>,
+    /// `resolvedSecretManagerValuesForRedaction()`: what the start fetched from the secret manager.
+    pub fetched_secrets: Vec<String>,
     pub server: &'a ServerInfo,
     pub network: String,
     pub volumes: Vec<(String, String, Option<String>)>,
@@ -440,22 +442,15 @@ impl Jobs {
             .map(|c| credentials.secret(c))
             .filter(|s| !s.is_empty())
             .collect();
-        let mut known: Vec<String> = Vec::new();
         let redact_all = d
             .raw
             .get("redact_all_env_values_in_logs")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        for v in &credentials.variables {
-            let Some(value) = v.resolved.clone().filter(|x| !x.is_empty()) else {
-                continue;
-            };
-            if v.is_shown_once {
-                locked.push(value);
-            } else if redact_all {
-                known.push(value);
-            }
-        }
+        let (known, values) = self
+            .owner_log_redaction_secrets(&env::Owner::database(d), redact_all, None, false, true)
+            .await;
+        locked.extend(values);
         let locked_refs: Vec<&str> = locked.iter().map(String::as_str).collect();
         let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
         Ok(Some(coolify_compat::redact::redact_text(
@@ -664,7 +659,9 @@ impl Jobs {
                 );
             }
         }
-        let variables = env::load(&self.0.db, enc, d, Some(server.id)).await?;
+        let (variables, fetched_secrets) =
+            env::load_for_with_fetched(&self.0.db, enc, &env::Owner::database(d), Some(server.id))
+                .await?;
         let network = d
             .destination
             .as_ref()
@@ -699,6 +696,7 @@ impl Jobs {
             db: d,
             secrets,
             variables,
+            fetched_secrets,
             server,
             network,
             volumes,
@@ -723,6 +721,7 @@ impl Jobs {
             db: d,
             secrets,
             variables,
+            fetched_secrets: Vec::new(),
             server,
             network,
             volumes,
@@ -770,6 +769,9 @@ impl Jobs {
                 .filter_map(|v| v.resolved.clone())
                 .filter(|v| v.len() >= 4),
         );
+        for value in &ctx.fetched_secrets {
+            locked.extend(crate::applications::remote_redaction_values(value));
+        }
         let target = server.target(self).await?;
 
         let _ = dbs::update_activity(
@@ -784,23 +786,22 @@ impl Jobs {
         let db = self.0.db.clone();
         let secrets = locked;
         let writer = tokio::spawn(async move {
+            let locked: Vec<&str> = secrets.iter().map(String::as_str).collect();
             let mut entries: Vec<Value> = Vec::new();
+            // Output is redacted per complete line, so a secret split across two chunks is found.
+            let (mut out, mut err) = (String::new(), String::new());
             while let Some((stream, chunk)) = rx.recv().await {
-                let locked: Vec<&str> = secrets.iter().map(String::as_str).collect();
-                let output = coolify_compat::redact::redact_text(&chunk, &[], &locked);
-                if output.is_empty() {
-                    continue;
-                }
-                entries.push(json!({"type": stream.as_str(), "output": output, "timestamp": hrtime(), "batch": 1, "order": entries.len() + 1}));
-                let _ = dbs::update_activity(
-                    &db,
-                    activity,
-                    &json!({}),
-                    Some(&serde_json::to_string(&entries).unwrap_or_default()),
-                    now(),
-                )
-                .await;
+                let pending = if stream == Stream::Err {
+                    &mut err
+                } else {
+                    &mut out
+                };
+                pending.push_str(&chunk);
+                let lines = coolify_compat::redact::take_complete_lines(pending);
+                append_start_output(&db, activity, &mut entries, stream, &lines, &locked).await;
             }
+            append_start_output(&db, activity, &mut entries, Stream::Out, &out, &locked).await;
+            append_start_output(&db, activity, &mut entries, Stream::Err, &err, &locked).await;
         });
         let result = self
             .remote()
@@ -1141,6 +1142,30 @@ pub fn normalize_status(v: &str) -> String {
         (v, "unhealthy")
     };
     format!("{status}:{health}")
+}
+
+/// `DatabaseStartCommandExecutor::appendOutput()` with the redacted text.
+async fn append_start_output(
+    db: &coolify_db::Db,
+    activity: i64,
+    entries: &mut Vec<Value>,
+    stream: Stream,
+    text: &str,
+    locked: &[&str],
+) {
+    let output = coolify_compat::redact::redact_text(text, &[], locked);
+    if output.is_empty() {
+        return;
+    }
+    entries.push(json!({"type": stream.as_str(), "output": output, "timestamp": hrtime(), "batch": 1, "order": entries.len() + 1}));
+    let _ = dbs::update_activity(
+        db,
+        activity,
+        &json!({}),
+        Some(&serde_json::to_string(entries).unwrap_or_default()),
+        now(),
+    )
+    .await;
 }
 
 #[cfg(test)]

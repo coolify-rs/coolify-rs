@@ -687,6 +687,8 @@ async fn add(
     {
         return Ok(ok(json!({"port_warning": p})).into_response());
     }
+    let mut added = new_urls.clone();
+    added.extend(paired.iter().cloned());
     let mut merged = current;
     merged.extend(new_urls);
     merged.extend(paired);
@@ -707,7 +709,7 @@ async fn add(
     if let Some(answer) = answer {
         return Ok(answer);
     }
-    Ok(ok(json!({"message": "Domain added.", "warnings": warnings})).into_response())
+    dns::after_domain_add(&state, &ctx, &kind, &uuid, &added, service, None, warnings).await
 }
 
 /// `updateDomain()`.

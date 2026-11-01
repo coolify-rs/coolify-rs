@@ -374,6 +374,7 @@ async fn manual_inner(
             out.push(p::failure_payload());
             continue;
         }
+        crate::server_transfer::checklist::record_webhook("application", &a.uuid);
         if !server_functional(state, &a).await {
             out.push(json!({"application": name_of(&a), "status": "failed", "message": "Server is not functional."}));
             continue;

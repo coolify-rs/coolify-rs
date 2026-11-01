@@ -171,6 +171,17 @@ async fn normal_inner(
         audit_failure("gitlab", "invalid_token", &kind);
         return Ok(unauthorized("Invalid webhook token."));
     };
+    let source_uuid: Option<String> =
+        sqlx::query_scalar("SELECT uuid FROM gitlab_apps WHERE id = $1")
+            .bind(source_id)
+            .fetch_optional(state.db.pool())
+            .await
+            .ok()
+            .flatten();
+    crate::server_transfer::checklist::record_webhook(
+        "gitlab_app",
+        source_uuid.as_deref().unwrap_or_default(),
+    );
     let project_id = p::database_id(&payload, "project.id", true)?;
     let mut out: Vec<Value> = Vec::new();
     if kind == "push" {
@@ -399,6 +410,7 @@ async fn manual_inner(
             out.push(p::failure_payload());
             continue;
         }
+        crate::server_transfer::checklist::record_webhook("application", &a.uuid);
         if !server_functional(state, &a).await {
             out.push(json!({"application": name_of(&a), "status": "failed", "message": "Server is not functional"}));
             continue;

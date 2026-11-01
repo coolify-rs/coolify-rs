@@ -10,6 +10,7 @@ pub(super) mod compose_pack;
 mod git;
 mod preview;
 mod secrets;
+pub(crate) use secrets::remote_redaction_values;
 mod servers_multi;
 
 use servers_multi::multi_server_mark_queued;
@@ -34,6 +35,7 @@ use super::labels::{self, LabelInput};
 use super::snapshot;
 use crate::Jobs;
 use crate::databases::env::{self, Owner, Var};
+use crate::integrations::secret_managers;
 use crate::server::ServerInfo;
 use crate::storages::{FileStorage, StorageOwner};
 
@@ -348,7 +350,7 @@ impl Run {
     async fn init_redaction(&mut self) {
         let (known, locked) = self
             .jobs
-            .log_redaction_secrets(&self.app, self.main_server.id, self.b.is_preview())
+            .deployment_log_redaction_secrets(&self.app, self.main_server.id, self.b.is_preview())
             .await;
         self.known.extend(known);
         self.locked.extend(locked);
@@ -880,6 +882,29 @@ impl Jobs {
         server_id: i64,
         include_preview: bool,
     ) -> (Vec<String>, Vec<String>) {
+        self.application_log_redaction_secrets(app, server_id, include_preview, true)
+            .await
+    }
+
+    /// `logRedactionSecretsFor(..., resolveRemoteSecrets: false)`: a deployment registers the
+    /// secrets it fetches itself (`redactRemoteSecrets()`).
+    async fn deployment_log_redaction_secrets(
+        &self,
+        app: &ApplicationRow,
+        server_id: i64,
+        include_preview: bool,
+    ) -> (Vec<String>, Vec<String>) {
+        self.application_log_redaction_secrets(app, server_id, include_preview, false)
+            .await
+    }
+
+    async fn application_log_redaction_secrets(
+        &self,
+        app: &ApplicationRow,
+        server_id: i64,
+        include_preview: bool,
+        resolve_remote: bool,
+    ) -> (Vec<String>, Vec<String>) {
         let owner = Owner {
             morph: apps::MORPH,
             id: app.id,
@@ -892,12 +917,18 @@ impl Jobs {
             .get("redact_all_env_values_in_logs")
             .and_then(Value::as_bool)
             != Some(false);
-        self.owner_log_redaction_secrets(&owner, redact_all, server_id, include_preview)
-            .await
+        self.owner_log_redaction_secrets(
+            &owner,
+            redact_all,
+            Some(server_id),
+            include_preview,
+            resolve_remote,
+        )
+        .await
     }
 
     /// `logRedactionSecretsFor($service)`.
-    pub(crate) async fn service_log_redaction_secrets(
+    pub async fn service_log_redaction_secrets(
         &self,
         service_id: i64,
         team_id: i64,
@@ -915,37 +946,91 @@ impl Jobs {
             project_id,
             environment_id,
         };
-        self.owner_log_redaction_secrets(&owner, redact_all, server_id, false)
+        self.owner_log_redaction_secrets(&owner, redact_all, Some(server_id), false, true)
             .await
     }
 
-    /// The loop of `logRedactionSecretsFor()`.
-    async fn owner_log_redaction_secrets(
+    /// The loop of `logRedactionSecretsFor()` with `remoteSecretLogRedactionValuesFor()`. A failed
+    /// fetch is not repeated, and the reference text is hidden in its place.
+    pub(crate) async fn owner_log_redaction_secrets(
         &self,
         owner: &Owner<'_>,
         redact_all: bool,
-        server_id: i64,
+        server_id: Option<i64>,
         include_preview: bool,
+        resolve_remote: bool,
     ) -> (Vec<String>, Vec<String>) {
         let (mut known, mut locked) = (Vec::new(), Vec::new());
         let Some(enc) = self.0.encrypter.clone() else {
             return (known, locked);
         };
-        // A deployment registers its fetched secrets itself (`resolveRemoteSecrets: false`).
-        let Ok(variables) =
-            env::load_without_remote_for(&self.0.db, &enc, owner, Some(server_id)).await
-        else {
+        let Ok(variables) = env::load_raw_for(&self.0.db, &enc, owner, server_id).await else {
             return (known, locked);
         };
+        let db = &self.0.db;
+        let mut link = None;
+        let mut fetched: Option<secret_managers::Secrets> = None;
+        let mut failed = false;
+        let mut unresolved: Vec<&str> = Vec::new();
+        if resolve_remote
+            && variables
+                .iter()
+                .any(|v| secret_managers::contains_reference(v.resolved.as_deref()))
+        {
+            link = secret_managers::link_of(db, owner.morph, owner.id)
+                .await
+                .ok()
+                .flatten();
+        }
         for v in variables
             .iter()
             .filter(|v| include_preview || !v.is_preview)
         {
+            let value = v.resolved.as_deref().unwrap_or_default();
+            if resolve_remote
+                && secret_managers::contains_reference(Some(value))
+                && (!v.is_literal || link.is_some())
+            {
+                if fetched.is_none() && !failed {
+                    match &link {
+                        Some(l) => match l.fetch(db, &enc, owner.team_id, "").await {
+                            Ok(s) => fetched = Some(s),
+                            Err(_) => failed = true,
+                        },
+                        None => failed = true,
+                    }
+                }
+                match &fetched {
+                    Some(s) if secret_managers::missing_keys(value, s).is_empty() => {
+                        let resolved = secret_managers::substitute(value, s);
+                        if !resolved.is_empty() {
+                            locked.extend(remote_redaction_values(&resolved));
+                        }
+                    }
+                    other => {
+                        if let Some(s) = other {
+                            for key in secret_managers::referenced_keys(value) {
+                                if let Some(x) = s.get(&key).filter(|x| !x.is_empty()) {
+                                    locked.extend(remote_redaction_values(x));
+                                }
+                            }
+                        }
+                        unresolved.push(&v.key);
+                        locked.extend(log_redaction_values(v));
+                    }
+                }
+            }
             if v.is_shown_once {
                 locked.extend(log_redaction_values(v));
             } else if redact_all {
                 known.extend(log_redaction_values(v));
             }
+        }
+        if !unresolved.is_empty() {
+            tracing::warn!(
+                variables = ?unresolved,
+                "Could not resolve remote secrets for log redaction; their resolved values are not hidden."
+            );
         }
         (known, locked)
     }

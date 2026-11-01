@@ -20,7 +20,6 @@ NOT_SCHEDULED = {
     "php artisan cleanup:redis --clear-locks": "no Redis",
     "php artisan horizon:snapshot": "no Horizon",
     "php artisan uploads:clear": "no chunk directory",
-    "php artisan dns:release-orphaned-records": "not ported",
     "php artisan scheduled:dispatch": "Scheduler::tick",
 }
 # Reference name -> name in the table.
@@ -28,6 +27,7 @@ NAMES = {
     "php artisan cleanup:stucked-resources": "cleanup:stucked-resources",
     "php artisan sanctum:prune-expired --hours=1": "sanctum:prune-expired",
     "php artisan cleanup:database-import-uploads": "cleanup:database-import-uploads",
+    "php artisan dns:release-orphaned-records": "dns:release-orphaned-records",
     "php artisan cleanup:unreachable-servers": "cleanup:unreachable-servers",
     "php artisan cleanup:database --yes": "cleanup:database",
 }

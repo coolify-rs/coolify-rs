@@ -421,6 +421,7 @@ pub async fn run_named(jobs: &Jobs, job: &str, server_uuid: &str) -> Result<Stri
         "server-check" => checks::server_check(jobs, id).await?,
         "patch-check" => patches::server_patch_check(jobs, id, true).await?,
         "traefik-check" => checks::check_traefik_version(jobs, id).await?,
+        "reconcile-github-runners" => jobs.reconcile_github_runners().await,
         "ca-certificate" => {
             return certificate::regenerate_ca_certificate(&Srv::from_row(jobs, row)).await;
         }

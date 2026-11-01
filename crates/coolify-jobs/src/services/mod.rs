@@ -429,37 +429,46 @@ impl Jobs {
             Jobs::now(),
         )
         .await;
-        let secrets: Vec<String> = match enc {
-            Some(e) => vars::load_stored_for(&db, e, &owner(s))
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|v| v.is_shown_once)
-                .filter_map(|v| v.value)
-                .filter(|v| v.len() >= 4)
-                .collect(),
-            None => Vec::new(),
-        };
+        // RunRemoteProcess::redact(): `logRedactionSecretsFor($service)`.
+        let (known, locked) = self
+            .service_log_redaction_secrets(s.id, server.team_id, server.id)
+            .await;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(Stream, String)>();
         let writer_db = db.clone();
         let writer = tokio::spawn(async move {
+            let known: Vec<&str> = known.iter().map(String::as_str).collect();
+            let locked: Vec<&str> = locked.iter().map(String::as_str).collect();
             let mut entries: Vec<Value> = Vec::new();
-            while let Some((stream, chunk)) = rx.recv().await {
-                let locked: Vec<&str> = secrets.iter().map(String::as_str).collect();
-                let output = coolify_compat::redact::redact_text(&chunk, &[], &locked);
+            let (mut out, mut err) = (String::new(), String::new());
+            let append = async |entries: &mut Vec<Value>, stream: Stream, text: &str| {
+                let output = coolify_compat::redact::redact_text(text, &known, &locked);
                 if output.is_empty() {
-                    continue;
+                    return;
                 }
                 entries.push(json!({"type": stream.as_str(), "output": output, "timestamp": hrtime(), "batch": 1, "order": entries.len() + 1}));
                 let _ = dbs::update_activity(
                     &writer_db,
                     activity,
                     &json!({}),
-                    Some(&serde_json::to_string(&entries).unwrap_or_default()),
+                    Some(&serde_json::to_string(&*entries).unwrap_or_default()),
                     Jobs::now(),
                 )
                 .await;
+            };
+            while let Some((stream, chunk)) = rx.recv().await {
+                let pending = if stream == Stream::Err {
+                    &mut err
+                } else {
+                    &mut out
+                };
+                pending.push_str(&chunk);
+                let text = coolify_compat::redact::take_complete_output(pending, false);
+                append(&mut entries, stream, &text).await;
             }
+            let text = coolify_compat::redact::take_complete_output(&mut out, true);
+            append(&mut entries, Stream::Out, &text).await;
+            let text = coolify_compat::redact::take_complete_output(&mut err, true);
+            append(&mut entries, Stream::Err, &text).await;
         });
         let result = self
             .remote()

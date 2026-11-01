@@ -10,6 +10,7 @@
   import Modal from './Modal.svelte';
   import Reicon from './Reicon.svelte';
   import DnsMenu from './shared/DnsMenu.svelte';
+  import { followDnsJobs, hostOf, type AfterAddDns } from '../lib/dnsAfterAdd';
   import { request } from '../lib/api';
   import { resPath } from '../lib/sharedApi';
   import ServiceDomainConflict from './ServiceDomainConflict.svelte';
@@ -64,6 +65,11 @@
   const matches = (value: string) => !search.trim() || value.toLowerCase().includes(search.trim().toLowerCase());
   const shown = $derived(groups.filter((g) => matches(`${g.heading} ${g.rows.map((r) => r.url).join(' ')}`)));
 
+  let dnsMenu = $state<DnsMenu>();
+  // `markDnsPending`: on the page only, a pending status is not stored.
+  let dnsPending = $state<{ hosts: string[]; message: string }>({ hosts: [], message: '' });
+  const dnsTitle = (row: { url: string; dns_status: string; dns_message: string }) =>
+    row.dns_status === 'ok' ? undefined : row.dns_status === 'pending' && dnsPending.hosts.includes(hostOf(row.url)) ? dnsPending.message : row.dns_message;
   const dnsType = (s: string) => (s === 'ok' ? 'success' : s === 'failed' ? 'error' : s === 'skipped' ? 'warning' : 'neutral');
   const dnsLabel = (s: string) =>
     s === 'ok' ? 'DNS matches' : s === 'failed' ? 'DNS mismatch' : s === 'skipped' ? 'DNS skipped' : s === 'checking' ? 'Checking DNS...' : s === 'pending' ? 'Not checked' : 'DNS unknown';
@@ -89,9 +95,16 @@
       }
       forces = {};
       for (const w of r.warnings ?? []) notify.warning(w);
+      const dns = (r as { dns?: AfterAddDns }).dns;
+      for (const i of dns?.info ?? []) notify.info(i);
       if (r.message) notify.success(r.message);
       done();
       await load();
+      if (dns) {
+        dnsPending = { hosts: dns.pending ?? [], message: dns.pending_message ?? '' };
+        if (dns.open_modal) void dnsMenu?.openProviders();
+        if (dns.jobs?.length) followDnsJobs('service', serviceUuid, dns.jobs, load);
+      }
     } catch (e) {
       if (e instanceof ApiError && e.errors.domain?.length) setError(e.errors.domain[0]);
       else notify.error(message(e));
@@ -262,7 +275,7 @@
       {/if}
       <div class="ml-auto flex flex-wrap items-center gap-2">
         {#if canUpdate && apps.length > 0}
-          <DnsMenu kind="service" uuid={serviceUuid} showCheckAll={true} onchange={load} />
+          <DnsMenu bind:this={dnsMenu} kind="service" uuid={serviceUuid} showCheckAll={true} onchange={load} />
           <button
             type="button"
             class="button button-highlighted"
@@ -380,7 +393,7 @@
                       <span>{row.is_noindexed ? 'Noindex' : 'Indexable'}</span>
                     </div>
                     <div class="service-domain-dns flex min-w-0 items-center">
-                      <span title={row.dns_status === 'ok' ? undefined : row.dns_message}>
+                      <span title={dnsTitle(row)}>
                         <StatusBadge label={dnsLabel(row.dns_status)} type={dnsType(row.dns_status)} />
                       </span>
                     </div>

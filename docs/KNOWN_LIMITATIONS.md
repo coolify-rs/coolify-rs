@@ -67,15 +67,15 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   page is open after a start; coolify-rs stores it after every start. The ClickHouse "current data is not in the data
   volume" check is not ported. `Str::slug` in container labels does not transliterate non-ASCII names.
 - Notifications (`crates/coolify-jobs/src/notifications`): delivery runs on tokio tasks, so queued retries are lost when
-  the process restarts. Not sent, because their job is not ported: `ForceDisabled` and `ForceEnabled` (`ServerLimitCheckJob`,
-  Stripe and Coolify Cloud), and the internal notifications of Stripe jobs and of `EmailChannel` (a recipient outside the
-  team, Resend errors). `SslExpirationNotification` is wired, but like upstream no caller passes a team. The Livewire test
+  the process restarts. Not sent, because only Stripe on Coolify Cloud starts them: `ForceDisabled` and `ForceEnabled` (`ServerLimitCheckJob`), and
+  the internal notifications of Stripe jobs. The internal messages of `EmailChannel` name the notification as `Notification`
+  and not by its class, and show a masked copy of the team's settings that hides upstream's hidden columns. `SslExpirationNotification` is wired, but like upstream no caller passes a team. The Livewire test
   button of `Patches` exists only in `isDev()`. Not sent yet: the combined result of a deployment to several servers. `StatusChanged` is ported but upstream never sends it. Its mail view reads a variable
   `toMail` does not pass: tinker renders an empty link, a queue worker would throw. Request headers: reqwest adds
   `Accept: */*`, which Guzzle does not send. SMTP mail is the same in from, to, subject and body but has other MIME framing
   (Symfony and lettre differ in `Message-ID`, encoding choice and header folding). `SafeWebhookUrl` at send time uses the
   system resolver, not `custom_dns_servers`. `mb_strwidth` for the 1000 column limit of a commit message uses a table of
-  wide ranges, not mbstring's. The internal notification of `EmailChannel` does not include the settings JSON. Telegram
+  wide ranges, not mbstring's. Telegram
   and Pushover could only be compared on the reference through `Http::fake` (their hosts are fixed there).
 - Deliberate divergence: upstream's `POST` and `PATCH /databases/{uuid}/storages` answers carry the relation the model
   loaded on the way (`resource` or `service`): the whole database with `destination.server`, including the saved proxy
@@ -122,8 +122,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   response. Every create field and `PATCH /applications/{uuid}` store what upstream stores. Inline Dockerfiles deploy, also with
   `instant_deploy` (`inline` and `inline-instant` in `compat/diff/git_deploy_diff.py`). A request that upstream fails halfway (a value PostgreSQL rejects, such as
   `gpu_driver: null` or `connect_to_docker_network: "maybe"`) answers the same 500 but leaves no row behind, where
-  upstream keeps the application it had already saved. PATCH does not queue `ReleaseRemovedDnsHostnamesJob`
-  (`queueReleaseOfRemovedHostnames`); the Domains pages and resource deletes do release records. The GitHub App repository check does not apply upstream's `SafeExternalUrl` private-network policy to the GitHub API URL, and the
+  upstream keeps the application it had already saved. The GitHub App repository check does not apply upstream's `SafeExternalUrl` private-network policy to the GitHub API URL, and the
   GitHub App path is not yet verified against a real GitHub App (only up to the lookup of the App).
 - Application envs, storages, tags and the secret manager link are ported. File storages are written and deleted on the
   server by the API, and the deploy job mounts them and writes missing content files (`EnsureContentFilesOnServer`), also
@@ -144,7 +143,6 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
     upstream's `composeServiceNamesForPreview()` runs `parse(pull_request_id)`: creating a preview does not yet add its bind
     mounts or store the rendered file; the deployment does. A clone of a Compose application with a named volume and a
     preview answers 500 like upstream, but writes nothing where upstream leaves a half-made clone.
-  - Managed DNS records are not released when a preview's domains change through the API.
 - Scheduled tasks and the scheduler are ported for applications (`compat/diff/applications_scheduled_tasks_diff.py`).
   - The scheduler starts with the process. `COOLIFY_RS_SCHEDULER=off` (also `0`, `false`, `no`) turns it off, and
     `scripts/dev-server.sh` sets it to off unless the caller says otherwise, because the reference runs its own scheduler
@@ -157,8 +155,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   - `COOLIFY_RS_SCHEDULER_ONLY` (a comma separated list of schedule keys) limits a test run to named rows, housekeeping
     included. It does not stop `spawn_status_poller`. Production leaves it unset.
   - Not in the table, with the reasons in `kernel.rs`: `cleanup:ssh-mux`, `versions:refresh-local`, `cleanup:redis`,
-    `horizon:snapshot`, `uploads:clear`, and the `isDev()` branch. Waiting for their areas: `dns:release-orphaned-records`,
-    `ReconcileGithubRunnersJob` and `UpdateCoolifyJob`.
+    `horizon:snapshot`, `uploads:clear`, and the `isDev()` branch. Waiting for its area: `UpdateCoolifyJob`.
   - `dump_all` backups, S3 and every provider check were not run by the scheduler on the VM: `cleanup_stucked_resources`,
     `RegenerateSslCertJob`, `CleanupOrphanedPreviewContainersJob` and `ServerCloudProviderStatusCheckJob` ran only in
     tests or not at all, because they act on what other work on the VM owns or call a real provider.
@@ -311,7 +308,7 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 | `PATCH /services/{uuid}/databases/{database_uuid}` that changes `is_public` | `501` | `StartDatabaseProxy` / `StopDatabaseProxy` are not ported |
 | `POST /services/{uuid}/migrate` in a dev instance | `404`, as upstream outside dev | `MigrateResourceToDestination` only runs in dev upstream |
 | `get_service_templates(force: true)` | the shipped file, or `COOLIFY_RS_TEMPLATES_DIR`, which `PullTemplatesFromCDN` replaces | forcing a refresh from a page is not ported |
-| `CleanupDocker` after a stop, maintenance pages, managed DNS cleanup on a changed domain, `parseDockerComposeFile` for parsing versions below 3 | not run | their subsystems are not ported |
+| `CleanupDocker` after a stop, maintenance pages, `parseDockerComposeFile` for parsing versions below 3 | not run | their subsystems are not ported |
 | Order of `environment_variables`, `applications`, `databases` | ordered by id | upstream has no `ORDER BY`: Postgres returns heap order, which changes after updates |
 
 ## Secret managers, Cloudflare, DNS and GitHub runners
@@ -320,17 +317,19 @@ Verified against local fakes only (`compat/diff/fake_providers.py`, `fake_git_pr
 base URLs change only through the test-only setting `COOLIFY_RS_TEST_ONLY_FAKE_PROVIDERS`, which accepts a loopback `http`
 origin and nothing else. `scripts/dev-server.sh` points it at a closed local port by default.
 
-- `reclaimRecord` and `adoptRecord` are ported, but the server transfer import does not call them yet.
-- `adoptRecord` and `reclaimRecord` have no differential: they run only during a transfer.
+- `compat/diff/dns_flows_diff.py`, `dns_transfer_diff.py` and `github_runners_reconcile_diff.py` run the reference under tinker with
+  `Http::fake` and `Bus::fake`. The browser never drives these reference flows, because its workers would call the real provider.
+- `ConfigureDnsRecordJob` marks the row managed itself, and the page asks for the end of its jobs: upstream's status and toast come
+  from a broadcast to an open page, so without a page upstream's row stays unchecked. A restart forgets the jobs a page waits for.
+- `compat/ui/dns_screens.mjs` shows the reference's keys and tunnel conflict states as HTML from its component under tinker, placed on
+  the real page, so the listbox shows no value and the sidebar of the tunnel page is empty on that side.
 - A conflict from "Add with" in the DNS entries modal opens the Configure DNS modal, so the record can be replaced. Upstream
   stores the conflict and shows it only if that modal is open.
 - The hostname lock is per process: upstream's lock is in Redis, shared by its workers.
 - The ownership comment reads `APP_ID` from the environment, as upstream's `config('app.id')`. Without it the comment says
   `default`, so a record created under another id counts as changed outside Coolify.
-- Log redaction of database and service starts does not add fetched secret values (`DatabaseStartCommandExecutor`,
-  `redact`). Deployment logs do. Values in a failing start's output can show.
-- Rows written by earlier coolify-rs builds hold source secrets in serialized form. coolify-rs reads them, but upstream's
-  models read `s:3:"abc";` until the secret is saved again.
+- Rows written by early coolify-rs builds held source secrets in serialized form. coolify-rs still reads that form. The reference
+  database holds none now, and `compat/ui/source_flows.mjs` reads new rows through upstream's models.
 
 What the fakes cannot prove: GitHub's manifest conversion, JWT clock checks, real installation permissions, real runner
 registration (the JIT config was fake and the runner image a stub that sleeps), Cloudflare's real answers and propagation,
@@ -349,7 +348,8 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
   by coolify-rs yet." and comments on the pull request. Closing a pull request cancels, removes containers and deletes
   the row. Compose previews only copy `docker_compose_domains` (`generate_preview_fqdn_compose()` needs the preview
   parser).
-- `TransferFinishChecklist::recordWebhook()` is not ported.
+- `TransferFinishChecklist::recordWebhook()` writes to a file in the data directory, not a cache. The step of a GitHub App webhook
+  does not ask GitHub for `/app/hook/config`: it reads only the receipt.
 - GitHub App setup states, OAuth states and the manual webhook failure counters live in the process: a restart drops
   them (start the flow again).
 - Failure pages of the webhooks are JSON, upstream renders its HTML 500 page (same status).
@@ -386,22 +386,14 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
 
 - A transfer between two real instances with a second Docker host has not been run. Export, job and source side ran against a recorded
   fake target; import and claim ran on the reference and on coolify-rs against the SSH testing host.
-- The import does not take over DNS records at Cloudflare (`adoptRecord`, `reclaimRecord`): an owned record of a bundle is stored as not
-  owned, with the warning upstream gives when the provider refuses. The finish list steps `dns_record`, `github_app_webhook` (GitHub API),
-  `s3_storage` (`testConnection`) and webhook receipts (`recordWebhook`) make no provider call and stay on "Needs action" until marked done.
-- Project icons do not travel: a project with an icon gets upstream's "cannot be read" warning on export, and an icon in a bundle is not
-  stored on import.
-- `clearLocalSshArtifacts` and `remove_iip` have no equivalent: this build keeps no SSH mux or key cache to clear, and messages are not
-  stripped of instance addresses.
-- A database error during import answers with a shorter message than Laravel's, without SQL and bindings.
 - `TransferFinishChanged` is not broadcast: the list refreshes through its 15 second poll.
 - `MigrateServerToInstanceJob::failed` (`recordStoppedMigration`) has no equivalent, because this job has no worker timeout. A restart during a
   transfer leaves the state "running" until `STALE_MIGRATION_SECONDS` passes.
 
 ## Previews, scheduled tasks and the General page
 
-- Preview domains make no DNS check, as on the application Domains page: a new domain stays "Not checked" and the toast has no
-  "DNS check started", and "Check DNS" and "Check all DNS" only say that checks are not available.
+- Preview domains make no DNS check: a new domain stays "Not checked" and the toast has no "DNS check started", and "Check DNS" and
+  "Check all DNS" only say that checks are not available. The application and service Domains pages do check.
 - "Load pull requests" (`githubApi`) has never run against GitHub or a fake: the comparisons do not press it, because it contacts GitHub.
 - A Preview ID that is not a number answers with a message under the field; upstream's `?int` property fails with an error page.
 - A Compose preview that generates domains without a service does not use `generateWithoutApplicationDomain`.
@@ -416,9 +408,8 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
 - Clone and clone-me copy no volume data: neither Blade view has a control for it.
 - Clones of an application made through the UI copy its previews without domains until the preview helpers of the application
   API are on this branch. Clone-me is not one transaction here: a failure partway leaves what was already cloned.
-- The toast after adding a domain is "Domain added.": the DNS check and record creation that upstream starts after adding
-  (`configureDnsAfterDomainAdd`, `ConfigureDnsRecordJob`, the DNS gate of the add and edit dialogs) are not ported. Run them
-  from the DNS menu. The www redirect is set from the domain dialog; suggested www rows are not offered.
+- Upstream's DNS gate of the add and edit dialogs and its suggested www rows are dead code at b5823c7: nothing sets `addDomainDnsFailed` or
+  `editDomainDnsFailed`, and nothing calls `buildSuggestedWwwRows`. So neither appears on any page, as here.
 - Adding, removing, promoting and stopping an additional server work, and so does deploying to one (`only_this_server`).
 - File browser: downloads through an S3 file storage (`FileDownloadStorageService`) are not ported, so files always stream from
   the server. The helper container path for images without a shell is ported but was not run on the VM.

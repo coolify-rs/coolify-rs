@@ -286,8 +286,8 @@ pub enum DnsError {
 impl std::fmt::Display for DnsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DnsError::Conflict { .. } => {
-                f.write_str("Another DNS record already uses this hostname.")
+            DnsError::Conflict { current, .. } => {
+                write!(f, "DNS record already points to {current}.")
             }
             DnsError::Busy => f.write_str("Another DNS change is in progress."),
             DnsError::Other(m) => f.write_str(m),
@@ -302,6 +302,9 @@ impl From<coolify_db::DbError> for DnsError {
 }
 
 /// `ManagedDnsDeletionResult`.
+/// `ManagedDnsRecordCleanup::ORPHAN_GRACE_MINUTES`.
+const ORPHAN_GRACE_MINUTES: i64 = 60;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Deletion {
     Deleted,
@@ -313,6 +316,18 @@ pub enum Deletion {
 }
 
 impl Deletion {
+    /// The enum's value.
+    pub fn value(self) -> &'static str {
+        match self {
+            Deletion::Deleted => "deleted",
+            Deletion::AlreadyGone => "already_gone",
+            Deletion::NotOwned => "not_owned",
+            Deletion::ChangedExternally => "changed_externally",
+            Deletion::Failed => "failed",
+            Deletion::Busy => "busy",
+        }
+    }
+
     /// `shouldRetry()`.
     pub fn should_retry(self) -> bool {
         matches!(self, Deletion::Failed | Deletion::Busy)
@@ -1052,15 +1067,7 @@ impl Dns<'_> {
         previous: &[String],
         team_id: i64,
     ) -> Result<Option<Deletion>, String> {
-        let current = hostnames_of_resource(self.db, &resource.morph, resource.id)
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut removed: Vec<String> = Vec::new();
-        for h in previous.iter().map(|h| normalize(h)) {
-            if !current.contains(&h) && !removed.contains(&h) {
-                removed.push(h);
-            }
-        }
+        let removed = removed_hostnames(self.db, resource, previous).await?;
         let mut worst = None;
         for hostname in removed {
             worst = worse(
@@ -1070,6 +1077,56 @@ impl Dns<'_> {
             );
         }
         Ok(worst)
+    }
+
+    /// `releaseOrphanedRecords`: what happened to records no live resource references, by outcome.
+    pub async fn release_orphaned_records(
+        &self,
+    ) -> Result<std::collections::BTreeMap<&'static str, i64>, String> {
+        let mut counts = std::collections::BTreeMap::new();
+        let cutoff = self.now - chrono::Duration::minutes(ORPHAN_GRACE_MINUTES);
+        let records = store::orphan_candidates(self.db, cutoff)
+            .await
+            .map_err(|e| e.to_string())?;
+        for record in records {
+            let references = store::references(self.db, record.id)
+                .await
+                .map_err(|e| e.to_string())?;
+            let mut live = false;
+            for (_, resource_type, id) in &references {
+                if store::reference_target_exists(self.db, resource_type, *id)
+                    .await
+                    .map_err(|e| e.to_string())?
+                {
+                    live = true;
+                    break;
+                }
+            }
+            if live {
+                continue;
+            }
+            let outcome = self.release_orphaned_record(&record).await;
+            *counts.entry(outcome).or_insert(0) += 1;
+        }
+        Ok(counts)
+    }
+
+    /// `releaseOrphanedRecord`.
+    async fn release_orphaned_record(&self, record: &Record) -> &'static str {
+        match self.release(record, &[], true, None).await {
+            Err(e) => {
+                tracing::warn!(managed_dns_record_id = record.id, hostname = %record.name, error = %e, "Managed DNS orphaned record cleanup failed.");
+                Deletion::Failed.value()
+            }
+            Ok(Some(result)) => result.value(),
+            Ok(None) => {
+                if matches!(store::record_by_id(self.db, record.id).await, Ok(Some(_))) {
+                    "kept"
+                } else {
+                    "forgotten"
+                }
+            }
+        }
     }
 
     /// `releaseResource`: `false` when the release should be retried.
@@ -1100,6 +1157,159 @@ impl Dns<'_> {
         }
         successful
     }
+}
+
+/// `removedHostnames`.
+async fn removed_hostnames(
+    db: &Db,
+    resource: &DnsResource,
+    previous: &[String],
+) -> Result<Vec<String>, String> {
+    let current = hostnames_of_resource(db, &resource.morph, resource.id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut removed: Vec<String> = Vec::new();
+    for h in previous.iter().map(|h| normalize(h)) {
+        if !current.contains(&h) && !removed.contains(&h) {
+            removed.push(h);
+        }
+    }
+    Ok(removed)
+}
+
+/// `queueReleaseOfRemovedHostnames`: nothing is queued when the resource references no managed
+/// record for a removed hostname. `resource` is read after its domains were saved.
+pub fn queue_release_of_removed_hostnames(
+    db: &Db,
+    enc: &Encrypter,
+    resource: DnsResource,
+    previous: Vec<String>,
+    team_id: i64,
+) {
+    if previous.is_empty() {
+        return;
+    }
+    let (db, enc) = (db.clone(), enc.clone());
+    tokio::spawn(async move {
+        let Ok(removed) = removed_hostnames(&db, &resource, &previous).await else {
+            return;
+        };
+        if removed.is_empty() {
+            return;
+        }
+        let keys = [(resource.morph.clone(), resource.id)];
+        let Ok(referenced) = store::records_referenced(&db, Some(team_id), None, None, &keys).await
+        else {
+            return;
+        };
+        if !referenced.iter().any(|r| removed.contains(&r.name)) {
+            return;
+        }
+        release_removed_hostnames_job(&db, &enc, &resource, &removed, team_id).await;
+    });
+}
+
+/// `ReleaseRemovedDnsHostnamesJob`.
+pub async fn release_removed_hostnames_job(
+    db: &Db,
+    enc: &Encrypter,
+    resource: &DnsResource,
+    hostnames: &[String],
+    team_id: i64,
+) {
+    for attempt in 1..=3u64 {
+        // A deleted resource releases all of its records through `ReleaseManagedDnsRecordsJob`.
+        if !store::reference_target_exists(db, &resource.morph, resource.id)
+            .await
+            .unwrap_or(false)
+        {
+            return;
+        }
+        let dns = Dns {
+            db,
+            enc,
+            now: chrono::Utc::now().naive_utc(),
+            source: "system",
+        };
+        let mut retry = false;
+        for hostname in hostnames {
+            match dns
+                .release_hostname(resource, hostname, team_id, true)
+                .await
+            {
+                Ok(Some(r)) if r.should_retry() => retry = true,
+                Ok(_) => {}
+                Err(e) => {
+                    retry = true;
+                    tracing::warn!(%hostname, error = %e, "Managed DNS cleanup of a removed hostname failed.");
+                }
+            }
+        }
+        if !retry {
+            return;
+        }
+        if attempt < 3 {
+            tokio::time::sleep(std::time::Duration::from_secs(60 * attempt)).await;
+        }
+    }
+    tracing::warn!(
+        resource_type = %resource.morph,
+        resource_id = resource.id,
+        hostnames = ?hostnames,
+        "Managed DNS records of removed hostnames could not be cleaned up; they were left in place."
+    );
+}
+
+/// What `DnsRecordConfigurationFinished` carries.
+#[derive(Debug, Clone)]
+pub struct DnsConfigured {
+    pub successful: bool,
+    pub credential: String,
+    pub message: String,
+}
+
+/// `ConfigureDnsRecordJob`: only a busy hostname lock is retried.
+pub async fn configure_dns_record_job(
+    dns: &Dns<'_>,
+    team_id: i64,
+    zone_id: i64,
+    resource: Option<&DnsResource>,
+    hostname: &str,
+    content: &str,
+) -> DnsConfigured {
+    let Ok(Some(zone)) = store::zone_in_team(dns.db, team_id, zone_id).await else {
+        // `failed()`, after `firstOrFail()`.
+        return DnsConfigured {
+            successful: false,
+            credential: String::new(),
+            message: "The DNS zone is no longer available.".to_owned(),
+        };
+    };
+    let finished = |successful: bool, message: String| DnsConfigured {
+        successful,
+        credential: zone.token_name.clone(),
+        message,
+    };
+    if !is_public_address(content) {
+        return finished(false, NO_PUBLIC_ADDRESS_MESSAGE.to_owned());
+    }
+    for attempt in 1..=3u64 {
+        match dns
+            .create_record(&zone, hostname, content, resource, &[], None)
+            .await
+        {
+            Ok(_) => return finished(true, format!("DNS record added for {hostname}.")),
+            Err(DnsError::Busy) if attempt < 3 => {
+                tokio::time::sleep(std::time::Duration::from_secs(10 * attempt)).await;
+            }
+            Err(DnsError::Busy) => break,
+            Err(e) => return finished(false, e.to_string()),
+        }
+    }
+    finished(
+        false,
+        "Another DNS change for this hostname is still in progress. Try again later.".to_owned(),
+    )
 }
 
 /// `worseResult`.

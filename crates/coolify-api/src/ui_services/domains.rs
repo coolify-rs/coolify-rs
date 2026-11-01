@@ -385,11 +385,12 @@ pub async fn add(
             )));
         }
     }
-    let mut merged = current;
-    merged.extend(new_urls.iter().cloned());
+    let mut added = new_urls.clone();
     if matches!(app.str("redirect"), Some("www" | "non-www")) {
-        merged.extend(new_urls.iter().filter_map(|u| www_counterpart(u, false)));
+        added.extend(new_urls.iter().filter_map(|u| www_counterpart(u, false)));
     }
+    let mut merged = current;
+    merged.extend(added.iter().cloned());
     let (answer, warnings) = save_list(
         &state,
         &s,
@@ -408,7 +409,17 @@ pub async fn add(
     if let Some(answer) = answer {
         return Ok(answer);
     }
-    Ok(ok(json!({"message": "Domain added.", "warnings": warnings})).into_response())
+    crate::ui_shared::dns::after_domain_add(
+        &state,
+        &ctx,
+        "service",
+        &uuid,
+        &added,
+        None,
+        Some(app.id),
+        warnings,
+    )
+    .await
 }
 
 /// `Domains::updateDomain`.

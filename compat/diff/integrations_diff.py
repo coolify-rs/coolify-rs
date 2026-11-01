@@ -285,8 +285,21 @@ def ref_teardown(sid):
     return tinker(php)
 
 
+TUNNEL_PREEXISTING = {"id": ""}
+
+
+def vm_cloudflared_id():
+    out = subprocess.run(["orb", "-m", "coolify-rs-e2e", "-u", "root", "bash", "-c", "docker ps -aq --no-trunc --filter name=^/coolify-cloudflared$"],
+                         capture_output=True, text=True, timeout=120)
+    return out.stdout.strip()
+
+
 def reset_tunnel(sid, tid):
-    subprocess.run(["orb", "-m", "coolify-rs-e2e", "-u", "root", "bash", "-c", "docker rm -f coolify-cloudflared >/dev/null 2>&1"], capture_output=True)
+    # The VM is shared. tunnel_section() runs only without a container of this name, so one that
+    # exists now came from this run; it is removed by id, and never one the run did not start with.
+    container = vm_cloudflared_id()
+    if container and container != TUNNEL_PREEXISTING["id"]:
+        subprocess.run(["orb", "-m", "coolify-rs-e2e", "-u", "root", "docker", "rm", "-f", container], capture_output=True)
     sql(f"UPDATE server_settings SET cloudflare_tunnel_id = NULL, cloudflare_tunnel_account_id = NULL, cloudflare_tunnel_integration_token_id = NULL WHERE server_id = {sid}")
     sql(f"DELETE FROM managed_dns_record_references WHERE managed_dns_record_id IN (SELECT id FROM managed_dns_records WHERE integration_token_id = {tid})")
     sql(f"DELETE FROM managed_dns_records WHERE integration_token_id = {tid}")
@@ -294,6 +307,10 @@ def reset_tunnel(sid, tid):
 
 def tunnel_section(ui, tid):
     """`CloudflareTunnelService` on a server row of its own: the shared test server is never edited."""
+    TUNNEL_PREEXISTING["id"] = vm_cloudflared_id()
+    if TUNNEL_PREEXISTING["id"]:
+        print("SKIP  tunnel section: coolify-cloudflared already exists on the VM and was not created here")
+        return
     php = f"""
 $o = \\App\\Models\\Server::where('uuid', '{SERVER}')->first();
 $s = \\App\\Models\\Server::create(['name' => 'diff-tunnel', 'ip' => $o->ip, 'user' => $o->user, 'port' => $o->port, 'team_id' => $o->team_id, 'private_key_id' => $o->private_key_id, 'proxy' => $o->proxy]);

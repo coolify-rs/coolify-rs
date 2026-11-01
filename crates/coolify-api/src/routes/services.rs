@@ -1214,6 +1214,19 @@ pub async fn update(
     let fresh = svc::find_by_id(&state.db, s.id)
         .await?
         .ok_or(ApiError::Internal)?;
+    // `queueReleaseOfRemovedServiceHostnames`.
+    let mut previous_dns_hostnames = Vec::new();
+    if input.has("urls") {
+        for sub in svc::subs(&state.db, SubKind::Application, s.id).await? {
+            let previous = crate::ui_shared::dns::previous_hostnames(
+                &state,
+                "App\\Models\\ServiceApplication",
+                sub.id,
+            )
+            .await;
+            previous_dns_hostnames.push((sub.id, previous));
+        }
+    }
     if let Some(Value::Array(urls)) = input.get("urls")
         && let Some(failure) = apply_service_urls(
             &state,
@@ -1225,6 +1238,15 @@ pub async fn update(
         .await?
     {
         return failure.response();
+    }
+    for (id, previous) in previous_dns_hostnames {
+        crate::ui_shared::dns::queue_release_of_removed_hostnames(
+            &state,
+            "App\\Models\\ServiceApplication",
+            id,
+            previous,
+            ctx.team_id,
+        );
     }
     if input_bool(&input, "instant_deploy") {
         jobs_of(&state)?.spawn_service_start(s.id, false, false);
@@ -1385,26 +1407,10 @@ fn remove_ansi(text: &str) -> String {
 
 /// `sanitizeLogsForExport($logs, EnvironmentVariable::logRedactionSecretsFor($service))`.
 async fn sanitize_logs(state: &AppState, s: &ServiceRow, logs: &str) -> Result<String, ApiError> {
-    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-    let rows = svc::env_rows(&state.db, s.id).await?;
-    let redact_all = s.raw.get("redact_all_env_values_in_logs") != Some(&Value::Bool(false));
-    let (mut known, mut locked): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
-    for r in &rows {
-        let Some(value) = env_value(enc, r) else {
-            continue;
-        };
-        if value.is_empty() {
-            continue;
-        }
-        if r.get("is_shown_once")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            locked.push(value);
-        } else if redact_all {
-            known.push(value);
-        }
-    }
+    let jobs = state.jobs.as_ref().ok_or(ApiError::Internal)?;
+    let (known, locked) = jobs
+        .service_log_redaction_secrets(s.id, s.team_id, s.server_id().unwrap_or_default())
+        .await;
     let known: Vec<&str> = known.iter().map(String::as_str).collect();
     let locked: Vec<&str> = locked.iter().map(String::as_str).collect();
     Ok(coolify_compat::redact::redact_text(logs, &known, &locked))
@@ -3072,7 +3078,20 @@ pub async fn update_application(
         values.push(("max_restart_count", ColumnValue::Int(n)));
         values.push(("restart_limit_reached", ColumnValue::Bool(false)));
     }
+    let previous_dns_hostnames = crate::ui_shared::dns::previous_hostnames(
+        &state,
+        "App\\Models\\ServiceApplication",
+        app.id,
+    )
+    .await;
     svc::sub_update(&state.db, SubKind::Application, app.id, &values, now).await?;
+    crate::ui_shared::dns::queue_release_of_removed_hostnames(
+        &state,
+        "App\\Models\\ServiceApplication",
+        app.id,
+        previous_dns_hostnames,
+        ctx.team_id,
+    );
     if input.has("noindex_domains") {
         let list = app_domains::domain_list(fqdn.as_deref());
         let normalize = |d: &str| app_domains::without_port(&app_domains::normalize_url(d));

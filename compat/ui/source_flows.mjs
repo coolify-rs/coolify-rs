@@ -73,6 +73,13 @@ function rowOf(table, name, hide) {
   return t;
 }
 
+// What upstream's model reads from a row, so a secret stored in another form shows as a difference.
+function phpSecrets(model, name, cols) {
+  const code = `$r = \\App\\Models\\${model}::where('name', '${name}')->first(); echo '<<<'.json_encode($r ? [${cols.map((c) => `'${c}' => (string) $r->${c}`).join(', ')}] : null).'>>>';`;
+  const text = execFileSync('docker', ['exec', 'coolify-rs-reference-coolify-1', 'php', '/var/www/html/artisan', 'tinker', '--execute', code], { encoding: 'utf8' });
+  return JSON.parse(text.split('<<<')[1].split('>>>')[0].replace(/oauth\+access\\?\/\d+/, 'oauth+access'));
+}
+
 const sides = [['ref', 'http://127.0.0.1:18000'], ['rs', `http://127.0.0.1:${rs}`]];
 const pages = {};
 for (const [label, base] of sides) pages[label] = await login(base);
@@ -108,6 +115,7 @@ const compare = (name, a, b) => {
       await page.screenshot({ path: `${out}sf-gh-${label}-done.png`, fullPage: true });
       rows[label] = rowOf('github_apps', 'fake-app', ['client_secret', 'webhook_secret']);
       rows[`${label}-key`] = sql(`SELECT name, is_git_related, description FROM private_keys WHERE name = 'github-app-fake-app' ORDER BY id DESC LIMIT 1`);
+      rows[`${label}-php`] = phpSecrets('GithubApp', 'fake-app', ['client_secret', 'webhook_secret']);
     } catch (e) {
       await page.screenshot({ path: `${out}sf-gh-${label}-error.png`, fullPage: true }).catch(() => {});
       rows[label] = { error: String(e).slice(0, 400) };
@@ -118,6 +126,7 @@ const compare = (name, a, b) => {
   compare('github manifest registered', rows['ref-registered'], rows['rs-registered']);
   compare('github installed', rows.ref, rows.rs);
   compare('github key', rows['ref-key'], rows['rs-key']);
+  compare('github secrets as upstream reads them', rows['ref-php'], rows['rs-php']);
 }
 
 // The OAuth flows.
@@ -145,14 +154,16 @@ for (const provider of ['gitlab', 'gitea']) {
       await page.waitForTimeout(1500);
       await page.screenshot({ path: `${out}sf-${provider}-${label}-connected.png`, fullPage: true });
       rows[label] = rowOf(table, name, hide);
+      rows[`${label}-php`] = phpSecrets(provider === 'gitlab' ? 'GitlabApp' : 'GiteaApp', name, ['client_secret', 'access_token', 'refresh_token']);
     } catch (e) {
       await page.screenshot({ path: `${out}sf-${provider}-${label}-error.png`, fullPage: true }).catch(() => {});
       rows[label] = { error: String(e).slice(0, 400) };
     }
-    sql(`DELETE FROM ${table} WHERE name LIKE 'flow%'`);
+    sql(`DELETE FROM ${table} WHERE name = '${name}'`);
   }
   compare(`${provider} created`, rows['ref-new'], rows['rs-new']);
   compare(`${provider} connected`, rows.ref, rows.rs);
+  compare(`${provider} secrets as upstream reads them`, rows['ref-php'], rows['rs-php']);
 }
 await browser.close();
 process.exit(failed ? 1 : 0);

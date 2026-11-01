@@ -156,7 +156,7 @@ pages `Server/Transfer` and `Server/TransferFinish`. Differential: `compat/diff/
 | Maintenance mode | `Project\Shared\Maintenance`, `Server::setupMaintenancePages` | Traefik files on the VM compared (`compat/ui/flow_files.mjs`) |
 | Files | `Project\Shared\FileBrowser`, `ContainerFilesystemService` | create, edit, chmod, rename, upload, download and delete compared inside a running database container |
 | Danger on service pages, application delete with file storages | `Project\Shared\Danger`, `DeleteResourceJob` | rows, directory and volume compared after deletes through both UIs |
-| Application domains | `Project\Application\Domains` | rows and labels compared (`compat/ui/flow_domains.mjs`); DNS checks not ported |
+| Application domains | `Project\Application\Domains` | rows and labels compared (`compat/ui/flow_domains.mjs`); DNS checks not ported; the steps after adding a domain, managed DNS jobs and `dns:release-orphaned-records` compared (`compat/diff/dns_flows_diff.py`, 64/64), adoption and reclaim (`compat/diff/dns_transfer_diff.py`) |
 | Swarm settings, rollback start, Refresh GPUs, server status badge | `Application\Swarm`, `Rollback`, `Advanced`, `ServerStatusBadge` | compared, except the badge's warning states |
 
 ## Deploy stream

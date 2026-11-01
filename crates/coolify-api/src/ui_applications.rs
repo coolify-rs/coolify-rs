@@ -1232,6 +1232,8 @@ pub async fn update(
     }
     let ports_changed = m.contains_key("ports_exposes")
         && text("ports_exposes").as_deref() != a.str("ports_exposes");
+    let previous_dns_hostnames =
+        crate::ui_shared::dns::previous_hostnames(&state, apps::MORPH, a.id).await;
     let fx = general::apply(&a, &m, &mut values);
     // `isDirty('dockerfile')`: the health check and the port come from the new Dockerfile.
     if m.contains_key("dockerfile") && text("dockerfile").as_deref() != a.str("dockerfile") {
@@ -1262,6 +1264,13 @@ pub async fn update(
     let now = state.now();
     apps::update_settings(&state.db, a.id, &fx.settings, now).await?;
     apps::update_if_changed(&state.db, a.id, &values, now).await?;
+    crate::ui_shared::dns::queue_release_of_removed_hostnames(
+        &state,
+        apps::MORPH,
+        a.id,
+        previous_dns_hostnames,
+        a.team_id,
+    );
     // Validates a changed Compose path before it counts, and puts the old values back on failure.
     let form_pack = m
         .get("build_pack")

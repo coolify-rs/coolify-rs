@@ -1014,7 +1014,8 @@ async fn email_channel(
         for r in &recipients {
             if !members.contains(r) {
                 let text = format!(
-                    "Recipient is not part of the team: {r}\nTeam: {team_id}\nNotification: Notification\nNotifiable: App\\Models\\Team\nEmail Settings:\n[redacted]"
+                    "Recipient is not part of the team: {r}\nTeam: {team_id}\nNotification: Notification\nNotifiable: App\\Models\\Team\nEmail Settings:\n{}",
+                    email_settings_json(team_settings)
                 );
                 spawn_internal(db, encrypter, text);
                 return Err("Recipient is not part of the team".to_owned());
@@ -1063,8 +1064,9 @@ async fn email_channel(
                     db,
                     encrypter,
                     format!(
-                        "Resend Error\nStatus Code: {}\nMessage: {message}\nNotification: Notification\nEmail Settings:\n[redacted]",
-                        e.status
+                        "Resend Error\nStatus Code: {}\nMessage: {message}\nNotification: Notification\nEmail Settings:\n{}",
+                        e.status,
+                        email_settings_json(team_settings)
                     ),
                 );
                 return Err(user_message);
@@ -1092,6 +1094,33 @@ async fn email_channel(
         tracking::record_success(db, &ns::EMAIL, team_id).await;
     }
     Ok(())
+}
+
+/// `json_encode($emailSettings, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)` with the secrets masked.
+/// Credentials never leave: anything with a secret column name becomes `********`.
+fn email_settings_json(settings: &Settings) -> String {
+    let mut row: serde_json::Map<String, Value> = settings
+        .row
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    for hidden in [
+        "smtp_from_address",
+        "smtp_from_name",
+        "smtp_recipients",
+        "smtp_host",
+        "smtp_port",
+        "smtp_encryption",
+        "smtp_username",
+        "smtp_timeout",
+        "smtp_ehlo_domain",
+    ] {
+        row.remove(hidden);
+    }
+    for secret in ["smtp_password", "resend_api_key"] {
+        row.insert(secret.to_owned(), json!("********"));
+    }
+    serde_json::to_string_pretty(&row).unwrap_or_default()
 }
 
 /// `send_internal_notification($message)`.
