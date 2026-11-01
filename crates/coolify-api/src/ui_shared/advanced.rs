@@ -556,7 +556,10 @@ async fn rollback_show(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
     Path((kind, uuid)): P,
+    uri: axum::http::Uri,
 ) -> ApiResult {
+    // `mount()` without `loadImages`, which the page calls after its first render.
+    let settings_only = uri.query().is_some_and(|q| q.contains("settings=1"));
     let res = app_of(&state, &ctx, &kind, &uuid).await?;
     let server = match res.server_id {
         Some(id) => servers::find_by_id(&state.db, id).await?,
@@ -573,7 +576,7 @@ async fn rollback_show(
         .and_then(Value::as_i64)
         .unwrap_or(2);
     let mut images: Vec<Value> = Vec::new();
-    if let (Some(s), Some(jobs), false) = (&server, state.jobs.as_ref(), false) {
+    if let (Some(s), Some(jobs), false) = (&server, state.jobs.as_ref(), settings_only) {
         let image = res
             .str("docker_registry_image_name")
             .filter(|v| !v.is_empty())

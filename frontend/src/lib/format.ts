@@ -45,7 +45,7 @@ export function logTime(ts: string | null | undefined, timeZone: string): string
 }
 
 const UNITS: [string, string, number][] = [
-  ['year', 'y', 365 * 86400],
+  ['year', 'yr', 365 * 86400],
   ['month', 'mo', 30 * 86400],
   ['week', 'w', 7 * 86400],
   ['day', 'd', 86400],
@@ -70,7 +70,8 @@ export function diffForHumans(ts: string | null | undefined, short = false): str
   const [unit, abbr, size] = calendar ?? UNITS.slice(2).find(([, , s]) => abs >= s) ?? UNITS[UNITS.length - 1];
   const count = months >= 12 ? Math.floor(months / 12) : months >= 1 ? months : Math.floor(abs / size);
   const n = Math.max(1, count);
-  if (short) return `${n}${abbr}`;
+  // Carbon's short English units: only `mo` and `yr` take a plural.
+  if (short) return `${n}${abbr}${n > 1 && (abbr === 'mo' || abbr === 'yr') ? 's' : ''}`;
   const text = `${n} ${unit}${n === 1 ? '' : 's'}`;
   return diff >= 0 ? `${text} ago` : `${text} from now`;
 }

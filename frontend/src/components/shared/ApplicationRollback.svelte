@@ -22,13 +22,26 @@
   let saving = $state(false);
   const path = $derived(`${resPath('application', uuid)}/rollback`);
 
+  let images = $state<any[]>([]);
+  // `wire:target="loadImages" wire:loading`.
+  let loadingImages = $state(true);
+
   async function load(toast = false) {
-    data = await request<any>('GET', path);
-    keep = saved = String(data.docker_images_to_keep);
-    if (toast) notify.success('Images loaded.');
+    loadingImages = true;
+    try {
+      images = (await request<any>('GET', path)).images;
+      if (toast) notify.success('Images loaded.');
+    } finally {
+      loadingImages = false;
+    }
   }
 
   $effect(() => {
+    // `mount()`, then `x-init="$wire.loadImages"`.
+    request<any>('GET', `${path}?settings=1`).then((d) => {
+      data = d;
+      keep = saved = String(d.docker_images_to_keep);
+    });
     load();
   });
 
@@ -78,8 +91,11 @@
           <FormInput id="dockerImagesToKeep" type="number" min="0" max="100" label="Images to keep" helper="Set to 0 to keep only the running image. Pull request images are always removed during cleanup." disabled={!data.can_update || data.server_retention_disabled} bind:value={keep} />
         </div>
       </form>
+      {#if loadingImages}
+        <div class="w-full"><SkeletonList rows={3} label="Loading available images" /></div>
+      {:else}
       <div>
-        {#each data.images as image (image.tag)}
+        {#each images as image (image.tag)}
           {@const rollbackable = /^[0-9a-f]{7,128}$/i.test(image.tag) || /^pr-\d+$/.test(image.tag)}
           <div class="flex flex-col gap-3 border-b border-neutral-200 px-4 py-3.5 last:border-b-0 sm:flex-row sm:items-center dark:border-white/[0.07]">
             <div class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-neutral-500 ring-1 ring-neutral-200 dark:bg-white/[0.05] dark:text-fg-dim dark:ring-white/[0.07]">
@@ -110,10 +126,7 @@
           <Empty title="No rollback images" description="No previous application images are stored on this server or in the Docker registry." iconName="layers" />
         {/each}
       </div>
+      {/if}
     </SettingsSection>
   </div>
-{:else}
-  <SettingsSection id="rollback-section" title="Rollback images" flush>
-    <SkeletonList rows={3} label="Loading available images" />
-  </SettingsSection>
 {/if}

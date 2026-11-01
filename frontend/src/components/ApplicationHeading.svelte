@@ -357,7 +357,7 @@
       <div class="resource-heading-navbar application-heading-actions flex w-auto min-w-0 items-center justify-end gap-1 overflow-visible">
         <div class="resource-heading-actions flex shrink-0 items-center gap-0.5">
           {@render deploying('mr-1')}
-          {@render linksMenu('desktop', false)}
+          {#if !needsComposeFile}{@render linksMenu('desktop', false)}{/if}
           {#if functional}
             {#if canDeploy}{@render actions('application-desktop-actions')}{/if}
           {:else}
