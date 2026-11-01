@@ -15,6 +15,7 @@ pub mod applications;
 pub mod audit;
 pub mod auth;
 pub mod auth_pages;
+pub mod bootstrap;
 pub mod canvas;
 pub mod cloud;
 pub mod compose;

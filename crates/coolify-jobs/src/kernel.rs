@@ -6,8 +6,8 @@
 //! `versions:refresh-local` (Coolify Cloud only), `cleanup:redis --clear-locks` and
 //! `horizon:snapshot` (no Redis, no Horizon), `uploads:clear` (the import route appends to the
 //! final file, so there is no chunk directory), and the `isDev()` branch of the schedule.
-//! `dns:release-orphaned-records` and `UpdateCoolifyJob` belong to their own areas
-//! (`docs/KNOWN_LIMITATIONS.md`).
+//! `dns:release-orphaned-records` is not ported (`docs/KNOWN_LIMITATIONS.md`), and `UpdateCoolifyJob`
+//! is in [`crate::updates`].
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -678,12 +678,22 @@ fn releases_url() -> String {
         .unwrap_or_else(|_| "https://cdn.coollabs.io/coolify/releases.json".into())
 }
 
+/// The release address of this installation, not upstream's.
+fn own_update_address() -> Option<String> {
+    ["COOLIFY_RS_VERSIONS_URL", "VERSIONS_URL"]
+        .iter()
+        .find_map(|name| std::env::var(name).ok().filter(|v| !v.is_empty()))
+        .or_else(|| {
+            std::env::var("CDN_URL")
+                .ok()
+                .filter(|v| !v.is_empty())
+                .map(|cdn| format!("{cdn}/coolify/versions.json"))
+        })
+}
+
 /// `config('constants.coolify.versions_url')`.
 fn versions_url() -> String {
-    std::env::var("VERSIONS_URL").unwrap_or_else(|_| {
-        let cdn = std::env::var("CDN_URL").unwrap_or_else(|_| "https://cdn.coollabs.io".into());
-        format!("{cdn}/coolify/versions.json")
-    })
+    own_update_address().unwrap_or_else(|| "https://cdn.coollabs.io/coolify/versions.json".into())
 }
 
 /// `Http::retry($tries, ...)->timeout($seconds)->get($url)`: a connection error, a 429 or a 5xx
@@ -914,6 +924,10 @@ pub async fn check_for_updates(jobs: &Jobs, tries: u32) -> bool {
         return false;
     };
     check_traefik_versions(jobs).await;
+    // Upstream's version says nothing about this build, so it must not offer an upgrade.
+    if own_update_address().is_none() {
+        return true;
+    }
     let latest = versions
         .pointer("/coolify/v4/version")
         .and_then(Value::as_str)

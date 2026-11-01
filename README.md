@@ -43,6 +43,39 @@ migration/              tracking state and run ledger
 docs/                   specs, decisions (docs/decisions), project state
 ```
 
+## Install on a server
+
+Run as root on a clean server (Debian, Ubuntu, RHEL family, SUSE, Arch or Alpine, with at least 30 GB of disk):
+
+```sh
+curl -fsSL "$COOLIFY_RS_CDN/install.sh" | COOLIFY_RS_CDN="$COOLIFY_RS_CDN" bash
+```
+
+The script prepares the host as upstream's installer does: required packages, the OpenSSH server, Docker, the
+`/data/coolify` folders, generated secrets in `/data/coolify/source/.env`, and an SSH key for this server. It then
+starts `coolify`, `coolify-db` and `coolify-redis` with Docker Compose. Open `http://<server>:8000` and register within
+10 minutes: the first user owns the instance (`docker restart coolify` opens the window again). Back up the `.env` file;
+the database cannot be read without its `APP_KEY`. Running the script again keeps the secrets, the key and the data.
+
+| Variable | Meaning |
+|---|---|
+| `COOLIFY_RS_CDN` | Address `scripts/install` is published at. Required on the first run; kept afterwards |
+| `REGISTRY_URL`, `COOLIFY_RS_IMAGE` | Registry and image name, by default `docker.io` and `coolify-rs/coolify-rs` |
+| `COOLIFY_RS_PULL=false` | Use the image already on this server |
+| `COOLIFY_RS_IMAGE_FILE` | Load the image from a `docker save` file |
+| `ROOT_USER_EMAIL`, `ROOT_USER_PASSWORD`, `ROOT_USERNAME` | Create the first user at install |
+| `AUTOUPDATE=false`, `DOCKER_ADDRESS_POOL_*` | As in upstream's installer |
+
+**No image or `COOLIFY_RS_CDN` is published yet.** Until then, build with `docker build -t coolify-rs/coolify-rs:<version> .`
+and use `COOLIFY_RS_IMAGE_FILE`.
+
+**Upgrades:** the Upgrade button, the auto-update schedule, or `bash /data/coolify/source/upgrade.sh <version> <helper version>`.
+`upgrade.sh` dumps the database to `/data/coolify/backups/coolify-rs-upgrades/` first and stops if that fails. To restore a
+dump: `docker exec -i coolify-db pg_restore -U coolify -d coolify --clean --if-exists < <file>`.
+
+The schema is only ever created on a database with no tables. `coolify-rs` refuses any other, and a database made by a
+coolify-rs install can be taken over by upstream Coolify at the same version.
+
 ## Quick start (development)
 
 ```bash

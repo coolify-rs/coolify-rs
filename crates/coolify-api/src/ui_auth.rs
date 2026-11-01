@@ -214,6 +214,36 @@ fn registration_limited(email: &str, ip: &str) -> bool {
     false
 }
 
+/// `RootUserSeeder`: `ROOT_USER_EMAIL` and `ROOT_USER_PASSWORD` create the root user at startup and
+/// close registration. Invalid values are reported and change nothing. Its breach check of the
+/// password is not run: a server does not send anything to a third party while it starts.
+pub async fn seed_root_user(state: &AppState) -> Result<(), ApiError> {
+    if db::user_count(&state.db).await? != 0 {
+        return Ok(());
+    }
+    let setting = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
+    let (Some(email), Some(pass)) = (setting("ROOT_USER_EMAIL"), setting("ROOT_USER_PASSWORD"))
+    else {
+        return Ok(());
+    };
+    // The installer writes an empty ROOT_USERNAME line, so an empty value must also use the default.
+    let name = setting("ROOT_USERNAME").unwrap_or_else(|| "Root User".to_owned());
+    let name_valid = (3..=255).contains(&name.chars().count())
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c.is_whitespace());
+    let email = email.trim().to_lowercase();
+    let password_errors = crate::ui_profile::password_errors_for("password", &pass, &pass);
+    if !is_email(&email) || !name_valid || !password_errors.is_empty() {
+        tracing::error!("Invalid Root User Environment Variables");
+        return Ok(());
+    }
+    let hash = password::hash(&pass).ok_or(ApiError::Internal)?;
+    db::create_root_user(&state.db, &name, &email, &hash, state.now()).await?;
+    tracing::info!("Root user created successfully.");
+    Ok(())
+}
+
 /// `RegisteredUserController::store` with `CreateNewUser::create`.
 async fn register(State(state): State<AppState>, meta: Meta, Json(body): Json<Value>) -> ApiResult {
     let settings = coolify_db::instance_settings::row(&state.db).await?;
