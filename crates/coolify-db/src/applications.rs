@@ -140,6 +140,16 @@ pub async fn find_in_team(
     r.as_ref().map(to_row).transpose()
 }
 
+/// `Application::withTrashed()->find($id)`.
+pub async fn find_with_trashed(db: &Db, id: i64) -> DbResult<Option<ApplicationRow>> {
+    let sql = select("a.id = $1").replace("a.deleted_at IS NULL AND ", "");
+    let r: Option<Joined> = sqlx::query_as(&sql)
+        .bind(id)
+        .fetch_optional(db.pool())
+        .await?;
+    r.as_ref().map(to_row).transpose()
+}
+
 pub async fn find_by_id(db: &Db, id: i64) -> DbResult<Option<ApplicationRow>> {
     let r: Option<Joined> = sqlx::query_as(&select("a.id = $1"))
         .bind(id)

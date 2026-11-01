@@ -446,6 +446,7 @@ pub async fn regenerate_ca_certificate(srv: &Srv) -> Result<String, String> {
             "server.ca_certificate",
         )
         .await;
+    srv.jobs.spawn_regenerate_ssl_certificates(srv.id());
     Ok(certificate)
 }
 

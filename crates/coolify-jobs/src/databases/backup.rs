@@ -151,45 +151,8 @@ impl Jobs {
         });
     }
 
-    /// What `ScheduledJobManager::processScheduledBackup` does for a due schedule: deletes a
-    /// schedule whose database or server is gone, skips a server that is not functional, then
-    /// queues the job. Returns whether a backup was queued.
-    pub async fn dispatch_scheduled_backup(&self, backup_id: i64) -> bool {
-        let Ok(Some(backup)) = parts::backup_by_id(&self.0.db, backup_id).await else {
-            return false;
-        };
-        let Some(database) = self.backup_database(&backup).await else {
-            let _ = parts::delete_backup(&self.0.db, backup_id).await;
-            tracing::warn!(
-                backup = backup_id,
-                skip_reason = "database_deleted",
-                "backup skipped"
-            );
-            return false;
-        };
-        let Ok(server) = self.server_for(&database).await else {
-            let _ = parts::delete_backup(&self.0.db, backup_id).await;
-            tracing::warn!(
-                backup = backup_id,
-                skip_reason = "server_deleted",
-                "backup skipped"
-            );
-            return false;
-        };
-        if !server.is_functional() {
-            tracing::warn!(
-                backup = backup_id,
-                skip_reason = "server_not_functional",
-                "backup skipped"
-            );
-            return false;
-        }
-        self.spawn_database_backup(backup_id);
-        true
-    }
-
     /// `$backup->database` of a schedule.
-    async fn backup_database(&self, backup: &Record) -> Option<DatabaseRow> {
+    pub(crate) async fn backup_database(&self, backup: &Record) -> Option<DatabaseRow> {
         let morph = parts::str_of(backup, "database_type")?;
         let id = backup.get("database_id").and_then(Value::as_i64)?;
         let team = backup.get("team_id").and_then(Value::as_i64)?;
@@ -222,6 +185,23 @@ impl Jobs {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(&backup_id);
+    }
+
+    /// `DatabaseBackupJob::handle` of an occurrence: `Err` marks the occurrence failed. The overlap
+    /// lock and the claim are the scheduler's; `RUNNING` also keeps a manual run out.
+    pub(crate) async fn run_scheduled_database_backup(&self, backup_id: i64) -> Result<(), String> {
+        {
+            let mut running = RUNNING.lock().unwrap_or_else(|p| p.into_inner());
+            if !running.insert(backup_id) {
+                return Ok(());
+            }
+        }
+        let result = self.run_backup_inner(backup_id).await;
+        RUNNING
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&backup_id);
+        result
     }
 
     async fn run_backup_inner(&self, backup_id: i64) -> Result<(), String> {
@@ -1095,7 +1075,7 @@ impl Jobs {
     }
 
     /// `removeOldBackups`.
-    async fn remove_old_backups(
+    pub(crate) async fn remove_old_backups(
         &self,
         backup: &Record,
         database: &DatabaseRow,

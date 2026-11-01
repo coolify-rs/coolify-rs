@@ -163,7 +163,7 @@ fn rate_limiter_hit(key: &str, decay: Duration) {
 }
 
 /// `NotificationThrottle::claim($notifiable, $notification, $sentBefore)`.
-async fn claim_throttle(
+pub(crate) async fn claim_throttle(
     db: &Db,
     notifiable_type: &str,
     notifiable_id: i64,
@@ -258,6 +258,15 @@ pub async fn release_high_disk_usage(db: &Db, server_id: i64) {
     if let Err(e) = release_throttle(db, SERVER_MODEL, server_id, HIGH_DISK_CLASS).await {
         tracing::warn!(error = %e, "could not release the disk usage throttle");
     }
+}
+
+/// `$team->getEnabledChannels('backup_failure') !== []`.
+pub async fn backup_failure_channel_enabled(
+    db: &Db,
+    encrypter: Option<&Encrypter>,
+    team_id: i64,
+) -> bool {
+    channels::any_enabled(db, encrypter, team_id, "backup_failure").await
 }
 
 /// `$team->notify($notification)`. Runs the throttle and rate limit here, then delivers on a

@@ -9,11 +9,16 @@
 //!
 //! Upstream's Redis pieces have no counterpart: `onOneServer` and the manager's overlap lock are
 //! covered by the one loop in the process, and the job overlap lock is held in the process.
+//!
+//! This is the only scheduler: [`crate::kernel`] holds the rest of `Kernel::schedule()`, including
+//! `ServerManagerJob`, and [`crate::schedule_sources`] and [`crate::scheduled_task`] the types of
+//! `ScheduledJobManager::TYPES`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Timelike, Utc};
@@ -198,6 +203,63 @@ pub fn is_duplicate_occurrence(
     format(last) == format(scheduled_for)
 }
 
+/// `COOLIFY_RS_SCHEDULER_ONLY`: a comma separated list of schedule keys (`scheduled-task:12`,
+/// `server:3`, `kernel:cleanup:database`). When set, nothing else is touched: a controlled test on
+/// a database other schedules and other agents share. Unset in production.
+pub fn parse_only(value: Option<&str>) -> Option<HashSet<String>> {
+    value.map(|v| {
+        v.split(',')
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+            .map(str::to_owned)
+            .collect()
+    })
+}
+
+static ONLY: LazyLock<Option<HashSet<String>>> =
+    LazyLock::new(|| parse_only(std::env::var("COOLIFY_RS_SCHEDULER_ONLY").ok().as_deref()));
+
+/// Whether this schedule key may be acted on, housekeeping included.
+pub fn allowed(key: &str) -> bool {
+    ONLY.as_ref().is_none_or(|only| only.contains(key))
+}
+
+static HEARTBEAT: AtomicI64 = AtomicI64::new(0);
+
+/// `Cache::put('scheduled-job-manager:heartbeat', now()->toIso8601String(), 300)`.
+pub fn record_heartbeat(now: DateTime<Utc>) {
+    HEARTBEAT.store(now.timestamp(), Ordering::Relaxed);
+}
+
+/// `Cache::get('scheduled-job-manager:heartbeat') !== null`.
+pub fn heartbeat_alive(now: DateTime<Utc>) -> bool {
+    let last = HEARTBEAT.load(Ordering::Relaxed);
+    last > 0 && now.timestamp() - last < 300
+}
+
+static CRON_DEDUPE: LazyLock<Mutex<HashMap<String, DateTime<Utc>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// `shouldRunCronNow($frequency, $timezone, $dedupKey, $executionTime)`: a missed minute is caught up
+/// on the next run; the first run only fires on an exact match and seeds the key.
+pub fn should_run_cron_now(frequency: &str, timezone: &str, key: &str, at: DateTime<Utc>) -> bool {
+    let Ok(cron) = parse_frequency(frequency) else {
+        return false;
+    };
+    let local = in_zone(at, zone(timezone));
+    let Ok(previous) = cron.previous_run_date(&local, true) else {
+        return false;
+    };
+    let previous = previous.with_timezone(&Utc);
+    let mut seen = CRON_DEDUPE.lock().unwrap_or_else(|p| p.into_inner());
+    let fire = match seen.get(key) {
+        None => cron.is_due(&local),
+        Some(last) => previous > *last,
+    };
+    seen.insert(key.to_owned(), if fire { at } else { previous });
+    fire
+}
+
 /// Whether the setting turns the scheduler on. `COOLIFY_RS_SCHEDULER` unset means on, the
 /// production default; `scripts/dev-server.sh` sets it to `off`.
 pub fn enabled_by_setting(value: Option<&str>) -> bool {
@@ -286,21 +348,26 @@ impl Scheduler {
     /// Every source the process runs. A new area adds its line here.
     pub fn with_default_sources(jobs: Jobs) -> Self {
         let mut scheduler = Self::new(jobs);
-        scheduler.register(crate::scheduled_task::ScheduledTaskSource);
+        scheduler
+            .register(crate::schedule_sources::DatabaseBackupSource)
+            .register(crate::scheduled_task::ScheduledTaskSource)
+            .register(crate::schedule_sources::VolumeBackupSource)
+            .register(crate::schedule_sources::DockerCleanupSource);
         scheduler
     }
 
-    /// Runs one tick at the start of every minute (`schedule:work` with `everyMinute()`). A tick
-    /// only dispatches, so it does not outlive its minute in normal work; a late tick is caught up
-    /// by the window in [`due_occurrence`].
+    /// `schedule:work`: one run at the start of every minute. A tick only dispatches, so it does
+    /// not outlive its minute in normal work; a late tick is caught up by the window in
+    /// [`due_occurrence`]. The rest of `Kernel::schedule()` runs beside the manager, so a slow
+    /// manager cannot make it skip a minute.
     pub fn spawn(self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            let mut cleaned_on: Option<chrono::NaiveDate> = None;
             loop {
                 let now = Utc::now();
                 let wait = 60 - u64::from(now.second());
                 tokio::time::sleep(Duration::from_secs(wait)).await;
                 let now = Utc::now();
+                crate::kernel::run_due(&self.jobs, now).await;
                 let summary = self.tick(now).await;
                 tracing::info!(
                     target: "scheduled",
@@ -308,13 +375,7 @@ impl Scheduler {
                     skipped = summary.skipped,
                     "ScheduledJobManager completed"
                 );
-                // `dailyAt('04:00')`: `deleteOldOccurrences()`.
-                if now.hour() == 4 && cleaned_on != Some(now.date_naive()) {
-                    cleaned_on = Some(now.date_naive());
-                    if let Err(e) = deliveries::delete_old(&self.jobs.0.db, now).await {
-                        tracing::error!(target: "scheduled-errors", error = %e, "Failed to delete old occurrences");
-                    }
-                }
+                record_heartbeat(Utc::now());
             }
         })
     }
@@ -332,6 +393,9 @@ impl Scheduler {
                 }
             };
             for item in due {
+                if !allowed(&item.schedule_key) {
+                    continue;
+                }
                 if let Err(e) = self.process(source, &item, now, &mut summary).await {
                     tracing::error!(target: "scheduled-errors", schedule_key = %item.schedule_key, error = %e, "Error processing schedule");
                 }
@@ -431,7 +495,9 @@ impl Scheduler {
         match deliveries::stale_enqueued(db, types, stale_before, RECOVERY_BATCH_SIZE).await {
             Ok(rows) => {
                 for row in rows {
-                    self.recover_unstarted(source, &row, now).await;
+                    if allowed(&row.schedule_key) {
+                        self.recover_unstarted(source, &row, now).await;
+                    }
                 }
             }
             Err(e) => {
@@ -441,20 +507,25 @@ impl Scheduler {
         let started_before = now
             - chrono::Duration::seconds(WORKER_TIMEOUT_SECONDS)
             - chrono::Duration::minutes(INTERRUPTED_CLAIM_MARGIN_MINUTES);
-        if let Err(e) = deliveries::fail_interrupted_claims(
-            db,
-            types,
-            started_before,
-            RECOVERY_BATCH_SIZE,
-            now.naive_utc(),
-        )
-        .await
+        // The update has no per-row step: with a key filter on, it is left to whoever owns the rows.
+        if ONLY.is_none()
+            && let Err(e) = deliveries::fail_interrupted_claims(
+                db,
+                types,
+                started_before,
+                RECOVERY_BATCH_SIZE,
+                now.naive_utc(),
+            )
+            .await
         {
             tracing::error!(target: "scheduled-errors", error = %e, "Failed to recover interrupted occurrences");
         }
         match deliveries::pending(db, types, RECOVERY_BATCH_SIZE).await {
             Ok(rows) => {
                 for row in rows {
+                    if !allowed(&row.schedule_key) {
+                        continue;
+                    }
                     let old = row.created_at.is_some_and(|c| c < stale_before.naive_utc());
                     if old {
                         self.recover_unstarted(source, &row, now).await;
@@ -498,7 +569,6 @@ impl Scheduler {
             return;
         }
         tracing::warn!(target: "scheduled", occurrence_uuid = %row.uuid, previous_status = %row.status, "Scheduled occurrence missed: its queued job was not started");
-        // Notifications are not ported: `notifyMissedOccurrence()` belongs in each report_missed.
         source
             .report_missed(&self.jobs, &Occurrence::from(row), MISSED_MESSAGE)
             .await;
@@ -554,6 +624,72 @@ mod tests {
 
     fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(y, mo, d, h, mi, s).unwrap()
+    }
+
+    #[test]
+    fn the_key_filter_is_a_comma_separated_list() {
+        assert_eq!(parse_only(None), None);
+        let only = parse_only(Some("scheduled-task:1, server:2,,")).unwrap();
+        assert!(only.contains("scheduled-task:1") && only.contains("server:2"));
+        assert_eq!(only.len(), 2);
+    }
+
+    #[test]
+    fn should_run_cron_now_catches_up_a_missed_minute() {
+        let key = "test-should-run-catch-up";
+        let hourly = "0 * * * *";
+        // First run: only an exact match fires, and it seeds the key.
+        assert!(!should_run_cron_now(
+            hourly,
+            "UTC",
+            key,
+            utc(2026, 10, 1, 12, 1, 0)
+        ));
+        assert!(!should_run_cron_now(
+            hourly,
+            "UTC",
+            key,
+            utc(2026, 10, 1, 12, 30, 0)
+        ));
+        // 13:00 was missed: 13:02 catches it up, once.
+        assert!(should_run_cron_now(
+            hourly,
+            "UTC",
+            key,
+            utc(2026, 10, 1, 13, 2, 0)
+        ));
+        assert!(!should_run_cron_now(
+            hourly,
+            "UTC",
+            key,
+            utc(2026, 10, 1, 13, 3, 0)
+        ));
+    }
+
+    #[test]
+    fn should_run_cron_now_uses_the_time_zone() {
+        // 03:00 in Karachi is 22:00 UTC.
+        let at = utc(2026, 7, 1, 22, 0, 0);
+        assert!(should_run_cron_now(
+            "0 3 * * *",
+            "Asia/Karachi",
+            "test-zone-karachi",
+            at
+        ));
+        assert!(!should_run_cron_now(
+            "0 3 * * *",
+            "UTC",
+            "test-zone-utc",
+            at
+        ));
+    }
+
+    #[test]
+    fn the_heartbeat_expires_after_five_minutes() {
+        let at = utc(2026, 10, 1, 12, 0, 0);
+        record_heartbeat(at);
+        assert!(heartbeat_alive(at + chrono::Duration::seconds(299)));
+        assert!(!heartbeat_alive(at + chrono::Duration::seconds(300)));
     }
 
     #[test]

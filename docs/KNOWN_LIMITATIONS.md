@@ -31,10 +31,11 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   (upstream only disables auto renewal there). Throttling of validations exists only on Cloud upstream.
 - Server jobs differ from upstream as follows: `remote_process` activities have no `callEventOnFinish` queue, the proxy
   file upload goes through the shell instead of scp, maintenance pages are written for "no resource in maintenance"
-  only, the CA certificate's subject key identifier is SHA-256 based, `PushServerUpdateJob` and `GetContainersStatus` from a Sentinel push are not run (the
-  heartbeat is), `RegenerateSslCertJob` after a CA change is not run, marks upstream keeps in Redis are per process. The
-  scheduler (`ServerManagerJob`) runs only with `COOLIFY_RS_SERVER_SCHEDULER=1`, because an instance sharing its database
-  with upstream must not check servers twice, and evaluates cron expressions in UTC. Compose merge tags (`!reset`,
+  only, the CA certificate's subject key identifier is SHA-256 based, marks upstream keeps in Redis are per process.
+  `PushServerUpdateJob` goes through the code of `GetContainersStatus`, so `additional_servers_status` is not updated from a
+  push, and containers on a Swarm are not told apart. `spawn_status_poller` still runs `GetContainersStatus` every minute on
+  every server, also with the scheduler off and also when Sentinel is live, where upstream's `ServerCheckJob` skips it.
+  Compose merge tags (`!reset`,
   `!override`) in a proxy configuration are ignored when reading it, but traffic analytics does not rewrite a stored
   configuration.
 - Server and destination pages: ported are destinations (index, new, show, resources, danger), Advanced, Private Key, CA
@@ -45,7 +46,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   (`CloudflareTunnelService`) and the integration token form answer with an error toast or link to the unported token page; manual mode and the
   tunnel token path are ported. GitHub Runners: the page, settings, Sysbox install and cancel are ported; a GitHub App that is ready for runners
   answers with an error toast, because `GithubRunnerApi`, provisioning, reconciling and the `workflow_job` webhook are not ported. Security
-  Patches: the `ServerPatchCheck` notifications are not sent. Saving a CA certificate does not run `RegenerateSslCertJob`. Log drains: the secret fields stay empty for a
+  Log drains: the secret fields stay empty for a
   member, where upstream's Livewire snapshot carries them. Proxy status toasts come from real-time events upstream
   (`ProxyStatusChangedUI`); the UI here polls, and neither side shows them when the real-time service is down.
   Traffic analytics: the charts of the server page and of `/analytics` are ported (Traefik verified, the Caddy proxy not run);
@@ -60,11 +61,10 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   ends without a run. Reading MongoDB credentials from the container and the MySQL and MariaDB branches are ported but
   only PostgreSQL ran on the VM.
 - Storage backups (`PUT`, `DELETE`, `POST .../run` on `/{applications,databases,services}/{uuid}/storages/{storage_uuid}/backups`):
-  `VolumeBackupJob` runs for a manual run or "Back up now". The scheduler does not start it yet (needs
-  `Jobs::spawn_volume_backup(backup_id)` per due `scheduled_volume_backups` row, plus `BackupMissing` and the recovery
-  sweep). Recovery runs once in the job, or on "Retry recovery" (`Jobs::retry_volume_recovery`), not on a timer. A run
+  `VolumeBackupJob` runs for a manual run or "Back up now". The scheduler starts it too (`schedule_sources.rs`), and every 5 minutes one
+  attempt of `Jobs::retry_volume_recovery` for an execution that waits for recovery. A run
   that finds another run of the same schedule in progress is dropped using the executions table, not a cache lock.
-  The `VolumeBackup/*` notifications are sent, but their delivery was not compared: the test team has no channel enabled.
+  The `VolumeBackup/*` notifications are sent; `compat/diff/scheduler_window.py` sees them on a local channel.
 - `/download/backup/{id}` and `/download/volume-backup/{id}` read over `cat` on the ssh connection instead of SFTP. Through
   the `scripts/ssh-via-orb.sh` wrapper `orb` truncates large output (about 4 to 5 MB) with exit code 0, so large downloads
   were not verified; small ones were byte-identical. The S3 download storage of `PreparesBackupDownloads`
@@ -80,12 +80,10 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   page is open after a start; coolify-rs stores it after every start. The ClickHouse "current data is not in the data
   volume" check is not ported. `Str::slug` in container labels does not transliterate non-ASCII names.
 - Notifications (`crates/coolify-jobs/src/notifications`): delivery runs on tokio tasks, so queued retries are lost when
-  the process restarts. Not sent yet, because their job is not ported: `RestartLimitReached` for applications, previews
-  and databases, `ContainerRestarted` and the disk usage check of `PushServerUpdateJob`, `BackupMissing`,
-  tasks of applications and the missed runs of `ScheduledJobDeliveryService`,
-  `ApiTokenExpiringNotification`, `SslExpirationNotification`, `ForceDisabled` and `ForceEnabled` (`ServerLimitCheckJob`,
-  cloud), the `GeneralNotification` of `DeleteResourceJob` and server transfers, the combined result of a deployment to
-  several servers and previews. `StatusChanged` is ported but upstream never sends it. Its mail view reads a variable
+  the process restarts. Not sent, because their job is not ported: `ForceDisabled` and `ForceEnabled` (`ServerLimitCheckJob`,
+  Stripe and Coolify Cloud), and the internal notifications of Stripe jobs and of `EmailChannel` (a recipient outside the
+  team, Resend errors). `SslExpirationNotification` is wired, but like upstream no caller passes a team. The Livewire test
+  button of `Patches` exists only in `isDev()`. Not sent yet: the combined result of a deployment to several servers. `StatusChanged` is ported but upstream never sends it. Its mail view reads a variable
   `toMail` does not pass: tinker renders an empty link, a queue worker would throw. Request headers: reqwest adds
   `Accept: */*`, which Guzzle does not send. SMTP mail is the same in from, to, subject and body but has other MIME framing
   (Symfony and lettre differ in `Message-ID`, encoding choice and header folding). `SafeWebhookUrl` at send time uses the
@@ -105,9 +103,9 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - Database imports run in the coolify-rs process: a restart drops a running import, and the stop-after-transport-failure
   path of `DatabaseImportCleanup` is not ported. `fileContainsPostgresqlProgramExecution` scans plain uploads locally;
   gzip uploads rely on the scan in the container. The upload's `mime_type` is derived from the file's signature.
-- Scheduled backups run through `Jobs::dispatch_scheduled_backup(id)`; cron timing belongs to the scheduler. Backup
-  overlap protection and the reservation live in the process.
-- SSL certificates are not regenerated when they near expiry (`RegenerateSslCertJob`).
+- Backup overlap protection and the reservation live in the process.
+- `RegenerateSslCertJob` regenerates the certificates of databases, through the code that made them, so the names come from
+  the database rather than from the stored `common_name`. A row without a database resource is left alone.
 - Applications in the UI: Docker image applications and git applications from a public repository (new-resource
   "Docker Image" and "Public Git Repository" forms with Smart Scan and env file import, General page for the Docker
   image, Dockerfile, Static, Nixpacks and Railpack build packs, Git Source page, Deployment Logs list and log viewer,
@@ -151,9 +149,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   `proxy.last_saved_proxy_configuration` for tokens without `read:sensitive`: an upstream leak kept for parity.
 - Application operations are ported in the API (`compat/diff/applications_ops_diff.py`): previews, clone, rollback,
   logs, move, destinations. What they do not do yet:
-  - Preview deployments build and run for every build pack (`preview-*` in `compat/diff/git_deploy_diff.py`). Not ported
-    around them: `ApplicationPullRequestUpdateJob` (no GitHub App to comment on), the preview restart limit
-    (the status poller counts restarts but does not stop the preview), deployment notifications. `POST /deploy` by tag answers 501. An application with
+  - Preview deployments build and run for every build pack (`preview-*` in `compat/diff/git_deploy_diff.py`). `ApplicationPullRequestUpdateJob` ran against a local fake of the GitHub API only. `POST /deploy` by tag answers 501. An application with
     an additional destination answers 501 to start, restart and rollback (`unported_parts`).
   - `POST /migrate` answers 404 like upstream outside a Coolify development instance (`isDev()`), so
     `MigrateResourceToDestination` is not ported.
@@ -170,17 +166,25 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
     `scripts/dev-server.sh` sets it to off unless the caller says otherwise, because the reference runs its own scheduler
     on the same database. Both use `scheduled_job_states` and `scheduled_job_deliveries`, so running both still runs an
     occurrence once; a manual execute works with the scheduler off.
-  - Only the `tasks` source is registered. Database backups, volume backups and Docker cleanups register their sources
-    with `Scheduler::with_default_sources` when they are ported. Notifications are not ported: `TaskSuccess` and
-    `TaskFailed` end in `notify_task_success()` and `notify_task_failed()`, the missed-run throttle too. The
-    `ScheduledTaskDone` broadcast and the manager's cache heartbeat for the UI are not ported.
+  - One loop runs everything: `Scheduler::tick` is `ScheduledJobManager` (`tasks`, `backups`, `volume-backups`,
+    `docker-cleanups`) and `coolify_jobs::kernel` the rest of `Kernel::schedule()`, including `ServerManagerJob`
+    (`compat/diff/kernel_schedule_diff.py` compares it with `schedule:list`). `is_scheduler_healthy` is the heartbeat of that
+    loop, so it is false on an instance with the scheduler off.
+  - `COOLIFY_RS_SCHEDULER_ONLY` (a comma separated list of schedule keys) limits a test run to named rows, housekeeping
+    included. It does not stop `spawn_status_poller`. Production leaves it unset.
+  - Not in the table, with the reasons in `kernel.rs`: `cleanup:ssh-mux`, `versions:refresh-local`, `cleanup:redis`,
+    `horizon:snapshot`, `uploads:clear`, and the `isDev()` branch. Waiting for their areas: `dns:release-orphaned-records`,
+    `ReconcileGithubRunnersJob` and `UpdateCoolifyJob`.
+  - `dump_all` backups, S3 and every provider check were not run by the scheduler on the VM: `cleanup_stucked_resources`,
+    `RegenerateSslCertJob`, `CleanupOrphanedPreviewContainersJob` and `ServerCloudProviderStatusCheckJob` ran only in
+    tests or not at all, because they act on what other work on the VM owns or call a real provider.
+  - The `ScheduledTaskDone` broadcast is not ported.
   - Jobs run on tokio tasks, not on a queue. A job that finds the overlap lock of its task held does nothing, as upstream's
     middleware says, but with one Horizon worker upstream's second job only starts after the first ended, so it runs then
     (a manual execute during a run: one execution here, two on the reference). The lock lives in the process, not in Redis.
     A process restart fails the running executions at startup ("The worker stopped..."), without a trace in `error_details`.
-  - Service tasks: the job and the scheduler handle them, untested, since services are not ported. The routes are not
-    registered (`routes/scheduled_tasks.rs` has the generic handlers), and a service that is starting counts as running
-    if its containers run, because `isStarting()` needs the service start activities.
+  - One job handles the tasks of applications and services (`scheduled_task.rs`). A service that is starting counts as
+    running if its containers run, because `isStarting()` needs the service start activities.
   - `subscription_unpaid` is not ported: it applies to Coolify Cloud only. Redaction does not resolve remote secrets. A
     timezone uses chrono-tz data, not PHP's, so a future rule change could differ until both update. A cron step below zero
     (`*/-5`) is invalid here and an endless loop upstream; `validate_cron_expression()` refuses it anyway.
@@ -247,8 +251,7 @@ change, password, two-factor enrollment and recovery codes, passkey management, 
   no audit events for those rows and does not remove a key's file (upstream's model events do).
 - A password confirmation is remembered per session and skips the password step only on the pages listed above. Older
   pages (server, application and database deletion) still ask for the password within upstream's three hours.
-- What's New reads `{COOLIFY_RS_DATA_DIR}/changelogs/*.json`. `PullChangelog` is not ported, because it fetches them
-  from upstream's CDN, so a new install shows no updates. Unread counts are not cached.
+- What's New reads `{COOLIFY_RS_DATA_DIR}/changelogs/*.json`, which `PullChangelog` writes. Unread counts are not cached.
 - A new user is sent to `/onboarding` as upstream does, but the wizard is not ported: the page offers "Skip setup".
 - `Password::defaults()` in coolify-rs has no `uncompromised()` rule: it would send a hash prefix of the password to
   Have I Been Pwned. Upstream in production refuses a password found there; coolify-rs accepts it.
@@ -329,8 +332,7 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 | `POST /services/{uuid}/clone` with `clone_volumes: true` | `501` | `VolumeCloneJob` is not ported |
 | `PATCH /services/{uuid}/databases/{database_uuid}` that changes `is_public` | `501` | `StartDatabaseProxy` / `StopDatabaseProxy` are not ported |
 | `POST /services/{uuid}/migrate` in a dev instance | `404`, as upstream outside dev | `MigrateResourceToDestination` only runs in dev upstream |
-| Scheduled tasks on their cron schedule | only `POST .../execute` runs a task | the scheduler is not ported |
-| `PullTemplatesFromCDN`, `get_service_templates(force: true)` | the shipped file, or `COOLIFY_RS_TEMPLATES_DIR` | no scheduler |
+| `get_service_templates(force: true)` | the shipped file, or `COOLIFY_RS_TEMPLATES_DIR`, which `PullTemplatesFromCDN` replaces | forcing a refresh from a page is not ported |
 | `CleanupDocker` after a stop, maintenance pages, secret managers (`{{vault.*}}` stops a start), managed DNS cleanup on a changed domain, `parseDockerComposeFile` for parsing versions below 3 | not run | their subsystems are not ported |
 | Order of `environment_variables`, `applications`, `databases` | ordered by id | upstream has no `ORDER BY`: Postgres returns heap order, which changes after updates |
 

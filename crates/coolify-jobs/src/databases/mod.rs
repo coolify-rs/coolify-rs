@@ -255,7 +255,20 @@ impl Jobs {
     ) {
         let jobs = self.clone();
         tokio::spawn(async move {
-            if let Ok(server) = jobs.server_for(&d).await
+            let server = jobs.server_for(&d).await;
+            if let Ok(server) = &server
+                && server.is_functional()
+                && let Err(e) = server.target(&jobs).await
+            {
+                jobs.notify_remote_cleanup_failed(
+                    d.str("name").unwrap_or_default(),
+                    d.int("environment_id"),
+                    server.id,
+                    &e,
+                )
+                .await;
+            }
+            if let Ok(server) = server
                 && server.is_functional()
                 && let Ok(t) = server.target(&jobs).await
             {
@@ -923,9 +936,24 @@ impl Jobs {
             return;
         };
         let containers = json_lines(&out);
+        self.apply_database_containers(
+            &databases,
+            &containers,
+            crate::applications::status::Snapshot::POLLED,
+        )
+        .await;
+    }
+
+    /// The database part of `GetContainersStatus` and `PushServerUpdateJob`.
+    pub async fn apply_database_containers(
+        &self,
+        databases: &[DatabaseRow],
+        containers: &[Value],
+        snapshot: crate::applications::status::Snapshot,
+    ) {
         let now = now();
         let mut found = Vec::new();
-        for c in &containers {
+        for c in containers {
             let labels = c.pointer("/Config/Labels");
             let uuid = labels
                 .and_then(|l| l.get("coolify.databaseUuid"))
@@ -952,7 +980,7 @@ impl Jobs {
                 .await;
             }
         }
-        if containers.is_empty() {
+        if !snapshot.not_found_counts(containers) {
             return;
         }
         for d in databases.iter().filter(|d| !found.contains(&d.id)) {

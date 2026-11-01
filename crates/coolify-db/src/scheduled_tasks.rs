@@ -196,16 +196,18 @@ pub struct TaskContext {
     pub application_id: Option<i64>,
     pub application_uuid: Option<String>,
     pub application_status: Option<String>,
+    pub application_environment_id: Option<i64>,
     /// `$task->service`: `None` when missing or soft deleted.
     pub service_id: Option<i64>,
     pub service_uuid: Option<String>,
+    pub service_environment_id: Option<i64>,
     /// `$task->server()`: the server of the resource's destination.
     pub server_id: Option<i64>,
 }
 
 const CONTEXT: &str = "SELECT t.id, t.uuid, t.name, t.command, t.frequency, t.container, t.timeout, t.team_id, \
-    a.id AS application_id, a.uuid AS application_uuid, a.status AS application_status, \
-    sv.id AS service_id, sv.uuid AS service_uuid, \
+    a.id AS application_id, a.uuid AS application_uuid, a.status AS application_status, a.environment_id AS application_environment_id, \
+    sv.id AS service_id, sv.uuid AS service_uuid, sv.environment_id AS service_environment_id, \
     CASE WHEN a.id IS NOT NULL THEN COALESCE(ad.server_id, asw.server_id) \
          WHEN sv.id IS NOT NULL THEN COALESCE(sd.server_id, ssw.server_id) END AS server_id \
     FROM scheduled_tasks t \

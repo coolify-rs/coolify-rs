@@ -27,6 +27,7 @@ pub mod environment_variables;
 pub mod git_sources;
 pub mod github_runners;
 pub mod instance;
+pub mod instance_jobs;
 pub mod instance_settings;
 pub mod integration_tokens;
 pub mod notification_settings;

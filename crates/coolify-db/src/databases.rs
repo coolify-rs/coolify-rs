@@ -374,6 +374,25 @@ fn to_row(kind: Kind, j: &Joined) -> DbResult<DatabaseRow> {
 }
 
 /// `queryDatabaseByUuidWithinTeam`: the first kind with that UUID, if it belongs to the team.
+/// `$model::find($id)` for one kind, in any team.
+pub async fn find_by_id(db: &Db, kind: Kind, id: i64) -> DbResult<Option<DatabaseRow>> {
+    let r: Option<Joined> = sqlx::query_as(&select(kind, "d.id = $1"))
+        .bind(id)
+        .fetch_optional(db.pool())
+        .await?;
+    r.as_ref().map(|j| to_row(kind, j)).transpose()
+}
+
+/// `$model::withTrashed()->find($id)`.
+pub async fn find_with_trashed(db: &Db, kind: Kind, id: i64) -> DbResult<Option<DatabaseRow>> {
+    let sql = select(kind, "d.id = $1").replace("d.deleted_at IS NULL AND ", "");
+    let r: Option<Joined> = sqlx::query_as(&sql)
+        .bind(id)
+        .fetch_optional(db.pool())
+        .await?;
+    r.as_ref().map(|j| to_row(kind, j)).transpose()
+}
+
 pub async fn find_in_team(db: &Db, team_id: TeamId, uuid: &str) -> DbResult<Option<DatabaseRow>> {
     for kind in Kind::ALL {
         let r: Option<Joined> = sqlx::query_as(&select(kind, "d.uuid = $1 ORDER BY d.id LIMIT 1"))

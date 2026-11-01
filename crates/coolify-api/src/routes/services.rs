@@ -3665,7 +3665,7 @@ pub async fn execute_scheduled_task(
     let Some(task) = svc::scheduled_task(&state.db, s.id, &task_uuid).await? else {
         return Err(TASK_NOT_FOUND);
     };
-    jobs_of(&state)?.spawn_scheduled_task(s, task);
+    jobs_of(&state)?.dispatch_scheduled_task(task.get("id").and_then(Value::as_i64).unwrap_or(-1));
     tracing::info!(target: "audit", event = "api.scheduled_task.executed", team_id = ctx.team_id, task_uuid = %task_uuid, "scheduled task queued");
     Ok(ok(json!({"message": "Scheduled task execution queued."})).into_response())
 }

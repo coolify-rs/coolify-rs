@@ -284,8 +284,14 @@ impl Jobs {
         if containers.is_empty() {
             return;
         }
+        self.apply_service_containers(&services, &containers).await;
+    }
+
+    /// The service part of `GetContainersStatus` and `PushServerUpdateJob`.
+    pub async fn apply_service_containers(&self, services: &[ServiceRow], containers: &[Value]) {
+        let db = &self.0.db;
         let now = Jobs::now();
-        for s in &services {
+        for s in services {
             let apps = svc::subs(db, SubKind::Application, s.id)
                 .await
                 .unwrap_or_default();
@@ -294,7 +300,7 @@ impl Jobs {
                 .unwrap_or_default();
             let mut groups: Vec<Group> = Vec::new();
             let mut found: Vec<(SubKind, i64)> = Vec::new();
-            for c in &containers {
+            for c in containers {
                 let labels = labels_of(c);
                 if oneoff(&labels) {
                     continue;

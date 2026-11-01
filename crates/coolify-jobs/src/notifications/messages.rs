@@ -3460,6 +3460,12 @@ pub enum Mail {
         reason: String,
         url: String,
     },
+    /// `S3Storage::testConnection`.
+    S3ConnectionError {
+        name: String,
+        reason: String,
+        url: String,
+    },
 }
 
 /// `config('auth.passwords.users.expire')`.
@@ -3566,6 +3572,10 @@ impl Mail {
             } => (
                 format!("Coolify: {channel} notifications were disabled"),
                 views::notification_channel_disabled(app, channel, *failures, reason, url),
+            ),
+            Mail::S3ConnectionError { name, reason, url } => (
+                "Coolify: S3 Storage Connection Error".to_owned(),
+                views::s3_connection_error(app, name, reason, url),
             ),
         };
         MailMessage { subject, html }

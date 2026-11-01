@@ -207,6 +207,67 @@ impl Jobs {
         });
     }
 
+    /// `StopApplicationPreview::handle`.
+    pub async fn stop_application_preview(
+        &self,
+        a: &ApplicationRow,
+        preview_id: i64,
+        pull_request_id: i64,
+        reset_restart_count: bool,
+        remove_container: bool,
+    ) {
+        let db = &self.0.db;
+        let now = Self::now();
+        if let Some(server_id) = a.server_id()
+            && let Ok(Some(row)) = servers::find_by_id(db, server_id).await
+            && let server = ServerInfo::from_row(&row)
+            && let Ok(t) = server.target(self).await
+        {
+            let label = format!("coolify.pullRequestId={pull_request_id}");
+            let containers = self
+                .application_containers(&t, &a.uuid, true)
+                .await
+                .unwrap_or_default();
+            let grace = a
+                .setting_int("stop_grace_period")
+                .filter(|g| (1..=3600).contains(g))
+                .unwrap_or(30);
+            for c in containers {
+                let labels = c.get("Labels").and_then(Value::as_str).unwrap_or_default();
+                if !labels.split(',').any(|l| l == label) {
+                    continue;
+                }
+                let Some(n) = c.get("Names").and_then(Value::as_str) else {
+                    continue;
+                };
+                let mut cmds = vec![crate::databases::docker_stop_command(
+                    u32::try_from(grace).unwrap_or(30),
+                    &quote(n),
+                    server.docker_version(),
+                )];
+                if remove_container {
+                    cmds.push(format!("docker rm -f {}", quote(n)));
+                }
+                let refs: Vec<&str> = cmds.iter().map(String::as_str).collect();
+                let _ = self
+                    .remote()
+                    .run_quiet(&t, &refs, RunOptions::op("application.stop"))
+                    .await;
+            }
+        }
+        let _ = coolify_db::application_ops::update_preview(
+            db,
+            preview_id,
+            &[("status", ColumnValue::Text(Some("exited".into())))],
+            now,
+        )
+        .await;
+        if reset_restart_count {
+            let _ =
+                coolify_db::application_ops::reset_preview_restart_limit(db, preview_id, now).await;
+        }
+    }
+
     /// `DeleteResourceJob` for an application (already soft deleted).
     pub fn spawn_application_delete(
         &self,
@@ -218,7 +279,18 @@ impl Jobs {
         let jobs = self.clone();
         tokio::spawn(async move {
             let db = jobs.0.db.clone();
-            let _ = jobs.stop_application(&a, true, true, true).await;
+            if let Some(e) = jobs.stop_application(&a, true, true, true).await
+                && e != "Server is not functional"
+                && let Some(server_id) = a.server_id()
+            {
+                jobs.notify_remote_cleanup_failed(
+                    a.str("name").unwrap_or_default(),
+                    a.int("environment_id"),
+                    server_id,
+                    &e,
+                )
+                .await;
+            }
             if let Some(server_id) = a.server_id()
                 && let Ok(Some(row)) = servers::find_by_id(&db, server_id).await
                 && let Ok(t) = ServerInfo::from_row(&row).target(&jobs).await

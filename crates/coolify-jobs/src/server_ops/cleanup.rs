@@ -15,7 +15,7 @@ use crate::notifications::{self, Notification, lookup};
 const REMOTE_COMMANDS_DEADLINE: u64 = 540;
 /// `CleanupDocker::STOP_CLEANUP_COOLDOWN`.
 const STOP_CLEANUP_COOLDOWN: u64 = 3600;
-const OVERLAP_LOCK_SECONDS: u64 = 660;
+pub(crate) const OVERLAP_LOCK_SECONDS: u64 = 660;
 
 /// `preg_replace('/([.\\\\+*?\[\]^$(){}|])/', '\\\\$1', $v)`.
 fn ere_escape(v: &str) -> String {
