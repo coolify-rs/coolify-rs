@@ -541,11 +541,7 @@ async fn create_oauth(
     let token = random_token(32);
     let (org_col, secret_col, secret_value) = match p {
         Provider::Gitlab => ("group_name", "webhook_token", enc.encrypt_string(&token)),
-        _ => (
-            "organization",
-            "webhook_secret",
-            enc.encrypt_string(&token),
-        ),
+        _ => ("organization", "webhook_secret", enc.encrypt_string(&token)),
     };
     sqlx::query(&format!(
         "INSERT INTO {} (uuid, name, api_url, html_url, custom_user, custom_port, is_system_wide, {org_col}, {secret_col}, team_id, created_at, updated_at) \
@@ -852,10 +848,7 @@ pub async fn update_github(
         let plain = text(&m, k);
         let current = secret(&state, &row, k);
         if plain != current {
-            values.push((
-                k,
-                ColumnValue::Text(plain.map(|p| enc.encrypt_string(&p))),
-            ));
+            values.push((k, ColumnValue::Text(plain.map(|p| enc.encrypt_string(&p)))));
         }
     }
     coolify_db::database_parts::update_row(

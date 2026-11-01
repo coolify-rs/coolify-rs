@@ -47,7 +47,7 @@ def compare(name, ref, rs):
 
 def sql(q):
     out = subprocess.run(["docker", "exec", "coolify-rs-reference-postgres-1", "psql", "-U", "coolify", "-d", "coolify", "-At", "-c", q],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, timeout=120)
     if out.returncode:
         raise SystemExit(out.stderr)
     return out.stdout.strip()
@@ -541,6 +541,9 @@ echo '<<<'.json_encode(['value' => $e->value, 'runtime' => (bool) $e->is_runtime
 
 
 if __name__ == "__main__":
+    import signal
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda *_: sys.exit(1))
     try:
         code = main()
     finally:

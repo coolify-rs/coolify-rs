@@ -701,10 +701,7 @@ pub async fn github_update(
                 .and_then(Value::as_str)
                 .and_then(|c| enc.decrypt_maybe_serialized(c).ok());
             if plain.map(str::to_owned) != current {
-                values.push((
-                    k,
-                    ColumnValue::Text(plain.map(|p| enc.encrypt_string(p))),
-                ));
+                values.push((k, ColumnValue::Text(plain.map(|p| enc.encrypt_string(p)))));
             }
         }
     }

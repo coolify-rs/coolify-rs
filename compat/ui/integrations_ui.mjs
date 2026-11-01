@@ -3,7 +3,7 @@
 //   node integrations_ui.mjs --rs=18091 --fixture=<json file from integrations_ui_fixture.py>
 // then `python3 pair.py <name>` for each name it prints. The password is read here and never printed.
 import { readFileSync } from 'node:fs';
-import { chromium } from 'playwright';
+import { chromium } from 'playwright-core';
 
 const arg = (k) => process.argv.find((a) => a.startsWith(`--${k}=`))?.split('=')[1];
 const rsPort = arg('rs') ?? '18091';
@@ -11,7 +11,7 @@ const fixture = JSON.parse(readFileSync(arg('fixture'), 'utf8'));
 const password = /^password:\s*(.+)$/m.exec(readFileSync('../reference/secrets/ui-login.txt', 'utf8'))[1].trim();
 const out = 'shots/';
 const sides = { ref: 'http://127.0.0.1:18000', rs: `http://127.0.0.1:${rsPort}` };
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true });
 
 async function session(base) {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1100 }, colorScheme: 'dark' });

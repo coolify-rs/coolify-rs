@@ -184,7 +184,7 @@
               onchange={(v: string) => changeToken(v)}
             />
             {#if data.linked}
-              <button type="button" class="button button-danger" onclick={() => (confirmRemove = true)}>Remove</button>
+              <button type="button" class="button button-error" onclick={() => (confirmRemove = true)}>Remove</button>
             {/if}
           </div>
 

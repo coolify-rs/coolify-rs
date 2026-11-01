@@ -41,20 +41,19 @@
       fail(e);
     }
   }
+  /** `openManualDnsRecords`. */
   async function manualRecords() {
     open = false;
     await load();
-    if ((data?.proposals.length ?? 0) > 0) {
-      showProviders = true;
-    } else {
-      showRecords = true;
-    }
+    showRecords = true;
   }
   async function createRecord(p: Proposal) {
     try {
       const r = await request<{ message?: string; conflict?: Conflict }>('POST', `${base()}/create`, { hostname: p.hostname, zone_id: p.zone_id });
       if (r.conflict) {
         conflicts[`${p.hostname}|${p.zone_id}`] = r.conflict;
+        showRecords = false;
+        showProviders = true;
       } else if (r.message) {
         notify.success(r.message);
         await load();
@@ -79,11 +78,27 @@
       delete conflicts[key];
     }
   }
+  let copied = $state(false);
+  const copy = (text: string) => navigator.clipboard?.writeText(text);
+  /** `DnsRecordHints::toCopyText`. */
   function copyRecords() {
     if (!data) return;
-    const text = data.hints.map((h) => `${h.name} ${h.type} ${h.value}`).join('\n') + '\n';
-    navigator.clipboard?.writeText(text);
-    notify.success('DNS records copied.');
+    const names = data.hints.map((h) => (h.name === '' || h.name === '@' ? '@' : `${h.name.replace(/\.+$/, '')}.`));
+    const width = Math.max(...names.map((n) => n.length));
+    const lines = data.hints.map((h, i) => `${names[i].padEnd(width)}  IN ${h.type.toUpperCase().padEnd(5)} ${h.value}`);
+    copy(`${lines.join('\n')}\n`);
+    copied = true;
+    setTimeout(() => (copied = false), 2000);
+  }
+  /** `recheckDnsRecordsInModal`. */
+  async function recheck() {
+    try {
+      await request('POST', `${base()}/check`, {});
+      onchange?.();
+      await load();
+    } catch (e) {
+      fail(e);
+    }
   }
 </script>
 
@@ -114,24 +129,83 @@
 </div>
 
 {#if showRecords && data}
-  <Modal title="DNS records" onclose={() => (showRecords = false)}>
-    {#if data.hints.length === 0}
-      <p class="text-sm text-neutral-600 dark:text-fg-dim">No DNS records are needed right now.</p>
-    {:else}
-      <table class="w-full text-left text-[13px]">
-        <thead><tr><th>Type</th><th>Name</th><th>Value</th></tr></thead>
-        <tbody>
-          {#each data.hints as h (`${h.type}|${h.name}|${h.value}`)}
-            <tr><td>{h.type}</td><td class="font-mono">{h.name}</td><td class="font-mono">{h.value}</td></tr>
-          {/each}
-        </tbody>
-      </table>
-      <div class="mt-3 flex justify-end gap-2">
-        <button type="button" class="button" onclick={copyRecords}>Copy records</button>
-        <button type="button" class="button" onclick={checkAll}>Check again</button>
+  {@const hints = data.hints}
+  <div class="fixed inset-0 z-99 overflow-y-auto">
+    <button type="button" aria-label="Close" class="absolute inset-0 h-full w-full bg-black/50 backdrop-blur-[2px]" onclick={() => (showRecords = false)}></button>
+    <div class="relative flex min-h-full items-start justify-center p-4 sm:items-center">
+      <div class="application-settings-form application-settings-section relative flex w-full max-w-2xl flex-col overflow-hidden" style="box-shadow: 0 0 0 1px var(--coollabs-hairline), var(--shadow-modal)">
+        <header class="flex-nowrap!">
+          <h3 class="min-w-0 flex-1 truncate">DNS entries</h3>
+          <button type="button" class="icon-button shrink-0" aria-label="Close" onclick={() => (showRecords = false)}>
+            <Reicon name="x" class="size-4" />
+          </button>
+        </header>
+        <div class="application-settings-section-body flex flex-col gap-4">
+          <p class="text-sm leading-6 text-neutral-600 dark:text-fg-dim">
+            Hosts that still need DNS at your provider (working domains are omitted). Create matching Type / Name / Value records so traffic reaches this server.
+          </p>
+          {#if !data.server_ip && hints.length === 0}
+            <Callout type="warning" title="No server IP">Could not determine a public IP for this destination. Set the server IP (or instance public IPv4 for localhost) first.</Callout>
+          {:else if hints.length === 0}
+            <Callout type="info" title="Nothing to configure">No pending DNS entries. All listed domains already resolve correctly, or no domains are configured yet. Use Recheck after changing DNS.</Callout>
+          {:else}
+            {#if data.proposals.length > 0 && data.proposals.some((p) => !p.target)}
+              <Callout type="warning" title="No public IP">{data.no_public_address_message}</Callout>
+            {/if}
+            <div class="overflow-x-auto rounded-md border border-neutral-200 dark:border-coolgray-300">
+              <table class="w-full min-w-[32rem] text-left text-sm">
+                <thead class="bg-neutral-50 text-[12px] uppercase tracking-wide text-neutral-500 dark:bg-coolgray-100 dark:text-fg-dim">
+                  <tr>
+                    <th class="px-3 py-2 font-medium">Type</th>
+                    <th class="px-3 py-2 font-medium">Name</th>
+                    <th class="px-3 py-2 font-medium">Value</th>
+                    <th class="px-3 py-2 font-medium"><span class="sr-only">Action</span></th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-neutral-200 dark:divide-coolgray-300">
+                  {#each hints as h (`${h.type}|${h.name}|${h.value}`)}
+                    <tr class="text-[13px] text-black dark:text-fg">
+                      <td class="px-3 py-2.5">{h.type}</td>
+                      <td class="px-3 py-2.5">
+                        <div class="flex min-w-0 items-center gap-1.5">
+                          <span class="min-w-0 break-all">{h.name}</span>
+                          <button type="button" class="icon-button shrink-0" aria-label="Copy name" onclick={() => copy(h.name)}><Reicon name="copy" class="size-3.5" /></button>
+                        </div>
+                      </td>
+                      <td class="px-3 py-2.5">
+                        <div class="flex min-w-0 items-center gap-1.5">
+                          <span class="min-w-0 break-all">{h.value}</span>
+                          <button type="button" class="icon-button shrink-0" aria-label="Copy value" onclick={() => copy(h.value)}><Reicon name="copy" class="size-3.5" /></button>
+                        </div>
+                      </td>
+                      <td class="px-3 py-2.5 text-right">
+                        {#if data.can_update}
+                          {#each data.proposals.filter((p) => p.hostname === h.name && p.target && !p.managed) as p (p.zone_id)}
+                            <button type="button" class="button" onclick={() => createRecord(p)}>Add with {p.credential}</button>
+                          {/each}
+                        {/if}
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <p class="text-[12px] text-neutral-500 dark:text-fg-dim">{hints.length} {hints.length === 1 ? 'entry' : 'entries'} · BIND zone format</p>
+              <button type="button" class="button shrink-0" title="Copy as BIND-compatible zone file" onclick={copyRecords}>{copied ? 'Copied' : 'Copy all'}</button>
+            </div>
+          {/if}
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-2">
+            <button type="button" class="button" title="Recheck DNS" onclick={recheck}>
+              <Reicon name="refresh" class="size-3.5" />
+              Recheck
+            </button>
+            <button type="button" class="button" {...{ ishighlighted: '' }} onclick={() => (showRecords = false)}>Done</button>
+          </div>
+        </div>
       </div>
-    {/if}
-  </Modal>
+    </div>
+  </div>
 {/if}
 
 {#if showProviders && data}
@@ -153,7 +227,7 @@
           {:else if conflict}
             <div class="flex flex-col items-end gap-2 text-xs">
               <span class="text-red-600 dark:text-red-400">Currently {conflict.current}</span>
-              <button type="button" class="button button-danger" onclick={() => (replacing = p)}>Replace record</button>
+              <button type="button" class="button button-error" onclick={() => (replacing = p)}>Replace record</button>
             </div>
           {:else if !p.target}
             <span class="text-xs text-neutral-500 dark:text-fg-dim">Add manually</span>
@@ -163,7 +237,7 @@
         </div>
       {/each}
       <div class="flex justify-end">
-        <button type="button" class="button" onclick={() => { showProviders = false; showRecords = true; }}>Manual records</button>
+        <button type="button" class="button" {...{ ishighlighted: '' }} onclick={() => (showProviders = false)}>Done</button>
       </div>
     </div>
   </Modal>

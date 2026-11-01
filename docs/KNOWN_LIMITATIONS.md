@@ -41,10 +41,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   Certificate, Swarm, server Destinations, Resources (no canvas toggle), Proxy (configuration, dynamic configurations, TLS
   list, logs, start/stop/restart), Sentinel (configuration, logs), Docker Cleanup with executions, Images, Log Drains,
   Registries (server and `/registries`), Terminal Access, Security Patches, Cloudflare Tunnel, GitHub Runners and the settings of Traffic Analytics. Not ported yet (the page
-  says "not available"): Transfer, the Terminal page. Cloudflare Tunnel: the setup and tear down through the Cloudflare API
-  (`CloudflareTunnelService`) and the integration token form answer with an error toast or link to the unported token page; manual mode and the
-  tunnel token path are ported. GitHub Runners: the page, settings, Sysbox install and cancel are ported; a GitHub App that is ready for runners
-  answers with an error toast, because `GithubRunnerApi`, provisioning, reconciling and the `workflow_job` webhook are not ported. Security
+  says "not available"): Transfer, the Terminal page. Security
   Patches: the `ServerPatchCheck` notifications are not sent. Saving a CA certificate does not run `RegenerateSslCertJob`. Log drains: the secret fields stay empty for a
   member, where upstream's Livewire snapshot carries them. Proxy status toasts come from real-time events upstream
   (`ProxyStatusChangedUI`); the UI here polls, and neither side shows them when the real-time service is down.
@@ -76,7 +73,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   endpoint unless `webhook_allowed_internal_hosts` names it, and that setting stayed unchanged. The refusal itself matches.
   `PATCH /databases/{uuid}/envs/bulk` applies `key`, `value`, `is_literal`, `is_multiline`, `is_shown_once` and `comment`;
   upstream's mass assignment also takes other fillable columns of an item, including `resourceable_*`.
-  Secret manager `{{vault.X}}` references stop a start with a message. Upstream stores `config_hash` only when the database
+  Upstream stores `config_hash` only when the database
   page is open after a start; coolify-rs stores it after every start. The ClickHouse "current data is not in the data
   volume" check is not ported. `Str::slug` in container labels does not transliterate non-ASCII names.
 - Notifications (`crates/coolify-jobs/src/notifications`): delivery runs on tokio tasks, so queued retries are lost when
@@ -137,11 +134,10 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
   response. Every create field and `PATCH /applications/{uuid}` store what upstream stores. Inline Dockerfiles deploy, also with
   `instant_deploy` (`inline` and `inline-instant` in `compat/diff/git_deploy_diff.py`). A request that upstream fails halfway (a value PostgreSQL rejects, such as
   `gpu_driver: null` or `connect_to_docker_network: "maybe"`) answers the same 500 but leaves no row behind, where
-  upstream keeps the application it had already saved. PATCH does not queue `ReleaseRemovedDnsHostnamesJob`: managed DNS
-  is not ported. The GitHub App repository check does not apply upstream's `SafeExternalUrl` private-network policy to the GitHub API URL, and the
+  upstream keeps the application it had already saved. PATCH does not queue `ReleaseRemovedDnsHostnamesJob`
+  (`queueReleaseOfRemovedHostnames`); the Domains pages and resource deletes do release records. The GitHub App repository check does not apply upstream's `SafeExternalUrl` private-network policy to the GitHub API URL, and the
   GitHub App path is not yet verified against a real GitHub App (only up to the lookup of the App).
-- Application envs, storages, tags and the secret manager link are ported; the secret manager stores only the source
-  (nothing fetches secrets from Doppler, Infisical or Vault at deployment). File storages are written and deleted on the
+- Application envs, storages, tags and the secret manager link are ported. File storages are written and deleted on the
   server by the API, and the deploy job mounts them and writes missing content files (`EnsureContentFilesOnServer`), also
   when a directory is in the way (`file-storage*` and `compose-files` in `compat/diff/git_deploy_diff.py`, with the delete).
   The job reads the rows `ORDER BY id`; upstream has no `ORDER BY`, so its mount order in the Compose file follows the
@@ -163,8 +159,7 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
     upstream's `composeServiceNamesForPreview()` runs `parse(pull_request_id)`: creating a preview does not yet add its bind
     mounts or store the rendered file; the deployment does. A clone of a Compose application with a named volume and a
     preview answers 500 like upstream, but writes nothing where upstream leaves a half-made clone.
-  - Managed DNS records (`ManagedDnsRecordCleanup`) are not released when a preview's domains change or it is deleted, and
-    log redaction does not resolve remote secrets.
+  - Managed DNS records are not released when a preview's domains change through the API.
 - Scheduled tasks and the scheduler are ported for applications (`compat/diff/applications_scheduled_tasks_diff.py`).
   - The scheduler starts with the process. `COOLIFY_RS_SCHEDULER=off` (also `0`, `false`, `no`) turns it off, and
     `scripts/dev-server.sh` sets it to off unless the caller says otherwise, because the reference runs its own scheduler
@@ -208,9 +203,6 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 
 ## Keys, notifications, tags, shared variables and S3 pages
 
-- Integration tokens for Cloudflare: `IntegrationTokenValidator` for Cloudflare and `CloudflareDnsProvider::syncZones` are not
-  ported. Creating such a token shows the provider's validation error, and "Refresh zones" shows an error. Stored Cloudflare
-  tokens can be listed, renamed and deleted.
 - Cloud token "Validate" and "Validate and add" call the real provider APIs, as upstream. They were only exercised up to the
   form validation, since nothing may go to an external service during tests.
 - Send-test on Pushover and Telegram calls the real services, as upstream, so the comparison flows leave them out. The Telegram
@@ -235,9 +227,6 @@ Ported and compared with the reference (`compat/ui/flow_teams.mjs`, `flow_teams2
 change, password, two-factor enrollment and recovery codes, passkey management, account deletion, `/select-team`,
 `/user/confirm-password` and the user menu's What's New.
 
-- A valid new password is not checked against Have I Been Pwned: upstream's `uncompromised()` rule asks an external
-  service. The other production rules apply. A successful password change could only be tried on coolify-rs for the
-  same reason, so it is compared with the PHP and not with reference rows.
 - Avatars are stored on the local disk (`{COOLIFY_RS_DATA_DIR}/images`). Upstream's `avatar_storage_type = s3` is not
   used for writing, and a row with an S3 avatar answers 404 in coolify-rs. A file stored by upstream's container is not
   visible to coolify-rs unless the disks are shared.
@@ -250,8 +239,6 @@ change, password, two-factor enrollment and recovery codes, passkey management, 
 - What's New reads `{COOLIFY_RS_DATA_DIR}/changelogs/*.json`. `PullChangelog` is not ported, because it fetches them
   from upstream's CDN, so a new install shows no updates. Unread counts are not cached.
 - A new user is sent to `/onboarding` as upstream does, but the wizard is not ported: the page offers "Skip setup".
-- `Password::defaults()` in coolify-rs has no `uncompromised()` rule: it would send a hash prefix of the password to
-  Have I Been Pwned. Upstream in production refuses a password found there; coolify-rs accepts it.
 - Sign-in state before login (the two-factor challenge's `login.id`, OAuth state, passkey challenge, flash messages)
   lives in memory under its own cookie, like the sessions: a restart ends a challenge in progress. Rate limits are also
   per process.
@@ -322,8 +309,7 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 | Pages `Project/Service/{Analytics,ImportBackup,DatabaseBackups,BackupExecutions,VolumeBackup/*}` | the page says it is not available | later task |
 | Page `Project/Service/Analytics` | the page says it is not available | later task |
 | `Project/Shared/*` sections on service pages (variables, tags, danger, logs, volumes and others) | placeholder named after the section | connected when the shared components merge |
-| DNS checks and Cloudflare automation on the service Domains page (`CheckDomainDnsJob`, `checkDomainDns`, `cloudflare-autoconfigure`) | rows stay "Not checked", `domain_dns_statuses` is not written, the buttons say it is not available | they contact external services |
-| `addSuggestedDomain` and `ManagedDnsRecordCleanup` on the Domains page | not ported | they need the DNS checks |
+| `addSuggestedDomain` on the Domains page | not ported | suggestions are not offered |
 | Configuration warning on service pages, with the diff of changes | the warning without the diff | no configuration diff yet |
 | Livewire pages `Project/Service/*`, `one-click-service-*` in `Project/Resource/Create` | not available | later task |
 | `POST /services/{uuid}/clone` with `clone_volumes: true` | `501` | `VolumeCloneJob` is not ported |
@@ -331,8 +317,31 @@ The API, the parser, the actions and status polling are ported (`compat/diff/ser
 | `POST /services/{uuid}/migrate` in a dev instance | `404`, as upstream outside dev | `MigrateResourceToDestination` only runs in dev upstream |
 | Scheduled tasks on their cron schedule | only `POST .../execute` runs a task | the scheduler is not ported |
 | `PullTemplatesFromCDN`, `get_service_templates(force: true)` | the shipped file, or `COOLIFY_RS_TEMPLATES_DIR` | no scheduler |
-| `CleanupDocker` after a stop, maintenance pages, secret managers (`{{vault.*}}` stops a start), managed DNS cleanup on a changed domain, `parseDockerComposeFile` for parsing versions below 3 | not run | their subsystems are not ported |
+| `CleanupDocker` after a stop, maintenance pages, `parseDockerComposeFile` for parsing versions below 3 | not run | their subsystems are not ported |
 | Order of `environment_variables`, `applications`, `databases` | ordered by id | upstream has no `ORDER BY`: Postgres returns heap order, which changes after updates |
+
+## Secret managers, Cloudflare, DNS and GitHub runners
+
+Verified against local fakes only (`compat/diff/fake_providers.py`, `fake_git_provider.py`), never a real provider. Provider
+base URLs change only through the test-only setting `COOLIFY_RS_TEST_ONLY_FAKE_PROVIDERS`, which accepts a loopback `http`
+origin and nothing else. `scripts/dev-server.sh` points it at a closed local port by default.
+
+- `reclaimRecord` and `adoptRecord` are ported, but the server transfer import does not call them yet.
+- `adoptRecord` and `reclaimRecord` have no differential: they run only during a transfer.
+- A conflict from "Add with" in the DNS entries modal opens the Configure DNS modal, so the record can be replaced. Upstream
+  stores the conflict and shows it only if that modal is open.
+- The hostname lock is per process: upstream's lock is in Redis, shared by its workers.
+- The ownership comment reads `APP_ID` from the environment, as upstream's `config('app.id')`. Without it the comment says
+  `default`, so a record created under another id counts as changed outside Coolify.
+- Log redaction of database and service starts does not add fetched secret values (`DatabaseStartCommandExecutor`,
+  `redact`). Deployment logs do. Values in a failing start's output can show.
+- Rows written by earlier coolify-rs builds hold source secrets in serialized form. coolify-rs reads them, but upstream's
+  models read `s:3:"abc";` until the secret is saved again.
+
+What the fakes cannot prove: GitHub's manifest conversion, JWT clock checks, real installation permissions, real runner
+registration (the JIT config was fake and the runner image a stub that sleeps), Cloudflare's real answers and propagation,
+Doppler, Infisical, Vault and Have I Been Pwned themselves, and GitLab's real OAuth. Gitea was a real container. A real GitHub
+App test stays with the user.
 
 ## Git sources and webhooks
 
@@ -346,7 +355,6 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
   by coolify-rs yet." and comments on the pull request. Closing a pull request cancels, removes containers and deletes
   the row. Compose previews only copy `docker_compose_domains` (`generate_preview_fqdn_compose()` needs the preview
   parser).
-- `workflow_job` deliveries (GitHub Actions runners) answer without doing anything: runners are not ported.
 - `TransferFinishChecklist::recordWebhook()` is not ported.
 - GitHub App setup states, OAuth states and the manual webhook failure counters live in the process: a restart drops
   them (start the flow again).
@@ -406,9 +414,9 @@ manifest and OAuth browser flows (`compat/ui/source_flows.mjs`) and the private 
   `clone_volumes` still answers 501, and a database clone across servers skips the data.
 - Clones of an application made through the UI copy its previews without domains until the preview helpers of the application
   API are on this branch. Clone-me is not one transaction here: a failure partway leaves what was already cloned.
-- DNS checks (`CheckDomainDns`, `CheckDomainDnsJob`) and the Cloudflare automation on the application Domains page are not
-  ported, as they contact external services. Rows stay "Not checked" and the toast after adding is "Domain added.". The www
-  redirect is set from the domain dialog; suggested www rows are not offered.
+- The toast after adding a domain is "Domain added.": the DNS check and record creation that upstream starts after adding
+  (`configureDnsAfterDomainAdd`, `ConfigureDnsRecordJob`, the DNS gate of the add and edit dialogs) are not ported. Run them
+  from the DNS menu. The www redirect is set from the domain dialog; suggested www rows are not offered.
 - Deploying to one additional server (`only_this_server`) answers 501: the deploy job has no multi-server path. Adding, removing,
   promoting and stopping work. A Swarm application shows "Server unavailable" in its heading, because `ApplicationRow` only loads
   standalone destinations; deploying to Swarm is not ported.

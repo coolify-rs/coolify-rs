@@ -217,8 +217,17 @@ impl Jobs {
             let uuid = d.uuid.clone();
             match jobs.server_for(&d).await {
                 Ok(server) if server.is_functional() => {
-                    jobs.stop_database(&d, &server, false).await;
-                    jobs.start_database(&d, user_id).await;
+                    // `ensureRemoteSecretsResolvable`: a failing secret manager leaves it running.
+                    let resolvable = match jobs.0.encrypter.as_ref() {
+                        Some(enc) => env::load(&jobs.0.db, enc, &d, Some(server.id)).await,
+                        None => Ok(Vec::new()),
+                    };
+                    if let Err(e) = resolvable {
+                        jobs.record_failed_start(&d, &e, user_id).await;
+                    } else {
+                        jobs.stop_database(&d, &server, false).await;
+                        jobs.start_database(&d, user_id).await;
+                    }
                 }
                 Ok(_) => jobs.record_failed_start(&d, NOT_FUNCTIONAL, user_id).await,
                 Err(e) => tracing::warn!(database = %uuid, error = %e, "database restart failed"),

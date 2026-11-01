@@ -133,6 +133,9 @@ def main():
 
 
 if __name__ == "__main__":
+    import signal
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda *_: sys.exit(1))
     try:
         code = main()
     finally:
