@@ -54,7 +54,17 @@ export const settingsUi = {
   updatesAction: (action: string, values: Values = {}) => post('updates', action, values),
   upgradeState: () => request<UpgradeState>('GET', '/ui/settings/upgrade'),
   upgrade: () => request<ActionResult>('POST', '/ui/settings/upgrade', {}),
-  upgradeStatus: () => request<{ status: string; step?: number; message?: string }>('GET', '/ui/settings/upgrade/status'),
+  // Not through `request`: the restart ends the session, and the progress view must stay on screen
+  // instead of going to the login page. It counts the 401 as the instance having restarted.
+  upgradeStatus: async (): Promise<{ status: string; step?: number; message?: string }> => {
+    const res = await fetch('/ui/settings/upgrade/status', {
+      headers: { Accept: 'application/json' },
+      credentials: 'same-origin',
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    return res.json();
+  },
   email: () => request<ActionResult & { test_email: string }>('GET', '/ui/settings/email'),
   emailAction: (action: string, values: Values) => post('email', action, values),
   backup: () => request<BackupPayload>('GET', '/ui/settings/backup'),

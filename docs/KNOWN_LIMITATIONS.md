@@ -212,6 +212,8 @@ Everything here is deliberate or known; none of it is hidden behind a "compatibl
 - `RootUserSeeder`: the password is not checked against the breach list, because the server sends nothing to a third party
   while it starts.
 - `upgrade-postgres.sh` is upstream's script unchanged and was not run.
+- Browser sessions are kept in memory, not in the `sessions` table, so a restart or an upgrade signs users out. Upstream
+  keeps them signed in. The upgrade's progress view still finishes, and its reload shows the login page.
 
 ## Keys, notifications, tags, shared variables and S3 pages
 
