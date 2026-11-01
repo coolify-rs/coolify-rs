@@ -421,16 +421,16 @@ fn abilities_for(role: Role) -> Abilities {
     Abilities::new(list.iter().map(|a| a.as_str().to_string()).collect())
 }
 
-struct Live {
+pub(crate) struct Live {
     id: String,
-    user: LoginUser,
+    pub(crate) user: LoginUser,
     memberships: Vec<Membership>,
     team_id: TeamId,
     csrf: String,
 }
 
 /// Loads and validates the session; ends it if the user or password changed.
-async fn live_session(state: &AppState, headers: &HeaderMap) -> Result<Live, ApiError> {
+pub(crate) async fn live_session(state: &AppState, headers: &HeaderMap) -> Result<Live, ApiError> {
     let id = session_cookie(headers).ok_or(ApiError::Unauthenticated)?;
     let (user_id, team_id, csrf, password_fp) =
         state.sessions.get(&id).ok_or(ApiError::Unauthenticated)?;

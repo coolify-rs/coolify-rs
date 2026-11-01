@@ -764,6 +764,26 @@ async fn checked_invitation(
     Ok(invitation)
 }
 
+/// The status of the `/invitations/{uuid}` document for this user: `checked_invitation` without
+/// its delete, because the page's own request right after it does that part.
+pub(crate) async fn invitation_page_status(
+    state: &AppState,
+    user_id: i64,
+    uuid: &str,
+) -> Result<StatusCode, ApiError> {
+    let Some(invitation) = tp::invitation_by_uuid(&state.db, uuid).await? else {
+        return Ok(StatusCode::NOT_FOUND);
+    };
+    let Some(invitee) = coolify_db::users::find_by_email(&state.db, &invitation.email).await?
+    else {
+        return Ok(StatusCode::NOT_FOUND);
+    };
+    if invitee.id != user_id || expired(state, invitation.created_at) {
+        return Ok(StatusCode::BAD_REQUEST);
+    }
+    Ok(StatusCode::OK)
+}
+
 /// `Controller::showInvitation`.
 async fn show_invitation(
     State(state): State<AppState>,

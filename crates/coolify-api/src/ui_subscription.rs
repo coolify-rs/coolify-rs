@@ -1297,16 +1297,24 @@ pub fn admin_routes(state: AppState) -> Router<AppState> {
 }
 
 fn admin_access(state: &AppState, ctx: &AuthCtx, headers: &HeaderMap) -> Result<(), ApiError> {
-    let forbidden = ApiError::Message(StatusCode::FORBIDDEN, "This action is unauthorized.");
+    if admin_allowed(state, ctx.user_id, headers) {
+        Ok(())
+    } else {
+        Err(ApiError::Message(
+            StatusCode::FORBIDDEN,
+            "This action is unauthorized.",
+        ))
+    }
+}
+
+/// `Admin\Index::mount`: also decides the status of the `/admin` document.
+pub(crate) fn admin_allowed(state: &AppState, user_id: i64, headers: &HeaderMap) -> bool {
     if !is_cloud() && !is_dev() {
-        return Err(forbidden);
+        return false;
     }
     let impersonator =
         crate::session::session_id(headers).and_then(|id| state.sessions.impersonator(&id));
-    if ctx.user_id != 0 && impersonator != Some(0) {
-        return Err(forbidden);
-    }
-    Ok(())
+    user_id == 0 || impersonator == Some(0)
 }
 
 async fn admin_page(
