@@ -4,17 +4,11 @@ Status legend: **verified** (implemented + contract tests + differential match a
 **implemented**, **partial**, **not started**, **out of scope (for now)**.
 Upstream references are relative to the upstream repository root.
 
-## 1. REST API coverage (generated from `compat/api/upstream-routes.json`, 2026-10-27)
+## 1. REST API coverage
 
-321 upstream operations (excluding the catch-all). Ported operations are listed in `crates/coolify-api/src/routes/mod.rs`
-(`ROUTES`); unported upstream routes answer 501.
-
-| Resource group | Upstream ops | Ported | Status |
-|---|---|---|---|
-| `services` | 57 | 57 | see KNOWN_LIMITATIONS; `compat/diff/services_diff.py`, `compat/diff/service_backups_diff.py` for storage backups and database imports |
-| `github-apps`, `gitlab-apps` | 10 | 10 | all, verified by `compat/diff/git_sources_diff.py` (130/130) with provider answers from `compat/diff/fake_git_provider.py`, not a real provider |
-| `s3-storages` | 6 | 6 | list, show, create, update, delete, validate |
-| `health`, `version`, `disable` | 5 | 5 | verified |
+All 321 upstream operations (excluding the catch-all) are implemented and listed in
+`crates/coolify-api/src/routes/mod.rs` (`ROUTES`). `scripts/parity.py` compares them, the web pages and the Livewire
+components with upstream; `compat/diff/` holds the differential scripts per area.
 
 ## 2. Cross-cutting foundations
 
