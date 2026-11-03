@@ -4,6 +4,8 @@
 //! their own modules. Previews and the rest answer 501.
 //! compat/notes/applications-api.md and deployment-job-git.md describe upstream.
 
+use std::collections::{HashMap, HashSet};
+
 use axum::Extension;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
@@ -84,16 +86,82 @@ pub(crate) fn status_getter(v: Option<&str>) -> String {
     coolify_jobs::applications::status::normalize_status(v.unwrap_or_default())
 }
 
+/// What `present` loads for each application, fetched once for a whole list. Lookups it doesn't
+/// hold go to the database, so an empty `Preloaded` behaves like no cache.
+#[derive(Default)]
+pub(crate) struct Preloaded {
+    loaded: bool,
+    servers: HashMap<i64, Option<servers::ServerRow>>,
+    pivots: HashMap<i64, Vec<(i64, i64, String)>>,
+}
+
+impl Preloaded {
+    pub(crate) async fn load(state: &AppState, rows: &[ApplicationRow]) -> Result<Self, ApiError> {
+        let ids: Vec<i64> = rows.iter().map(|a| a.id).collect();
+        let mut pivots: HashMap<i64, Vec<(i64, i64, String)>> = HashMap::new();
+        for (app, docker, server, status) in apps::additional_pivots_for(&state.db, &ids).await? {
+            pivots
+                .entry(app)
+                .or_default()
+                .push((docker, server, status));
+        }
+        let mut server_ids: Vec<i64> = rows
+            .iter()
+            .filter_map(ApplicationRow::server_id)
+            .chain(pivots.values().flatten().map(|p| p.1))
+            .collect();
+        server_ids.sort_unstable();
+        server_ids.dedup();
+        let mut servers = HashMap::new();
+        for id in server_ids {
+            servers.insert(id, servers::find_by_id(&state.db, id).await?);
+        }
+        Ok(Self {
+            loaded: true,
+            servers,
+            pivots,
+        })
+    }
+
+    async fn server(
+        &self,
+        state: &AppState,
+        id: i64,
+    ) -> Result<Option<servers::ServerRow>, ApiError> {
+        match self.servers.get(&id) {
+            Some(s) => Ok(s.clone()),
+            None => Ok(servers::find_by_id(&state.db, id).await?),
+        }
+    }
+
+    async fn pivots(
+        &self,
+        state: &AppState,
+        application_id: i64,
+    ) -> Result<Vec<(i64, i64, String)>, ApiError> {
+        if self.loaded {
+            return Ok(self
+                .pivots
+                .get(&application_id)
+                .cloned()
+                .unwrap_or_default());
+        }
+        Ok(apps::additional_pivots(&state.db, application_id).await?)
+    }
+}
+
 /// `$application->additional_servers`, each with the `pivot` and its settings.
 async fn additional_servers(
     state: &AppState,
     ctx: &AuthCtx,
+    pre: &Preloaded,
     application_id: i64,
+    pivots: &[(i64, i64, String)],
     model: bool,
 ) -> Result<Vec<Value>, ApiError> {
     let mut out = Vec::new();
-    for row in apps::additional_pivots(&state.db, application_id).await? {
-        let Some(server) = servers::find_by_id(&state.db, row.1).await? else {
+    for row in pivots {
+        let Some(server) = pre.server(state, row.1).await? else {
             continue;
         };
         let expose = !model && ctx.can_read_sensitive;
@@ -134,8 +202,20 @@ pub(crate) async fn present_as(
     show: bool,
     model: bool,
 ) -> Result<Value, ApiError> {
+    present_preloaded(state, ctx, a, show, model, &Preloaded::default()).await
+}
+
+/// `present_as` with the per-application lookups served from `pre`.
+pub(crate) async fn present_preloaded(
+    state: &AppState,
+    ctx: &AuthCtx,
+    a: &ApplicationRow,
+    show: bool,
+    model: bool,
+    pre: &Preloaded,
+) -> Result<Value, ApiError> {
     let server = match a.server_id() {
-        Some(id) => servers::find_by_id(&state.db, id).await?,
+        Some(id) => pre.server(state, id).await?,
         None => swarm_server(state, a).await?,
     };
     let mut r = APPLICATION.present(a.raw.clone());
@@ -178,7 +258,8 @@ pub(crate) async fn present_as(
             .unwrap_or_else(|_| v.clone());
         r.insert("custom_network_aliases".into(), Value::String(list));
     }
-    let additional = additional_servers(state, ctx, a.id, model).await?;
+    let pivots = pre.pivots(state, a.id).await?;
+    let additional = additional_servers(state, ctx, pre, a.id, &pivots, model).await?;
     r.insert("additional_servers_count".into(), json!(additional.len()));
     r.insert("additional_networks_count".into(), json!(additional.len()));
     // `serverStatus`: the additional servers are loaded by the count above.
@@ -201,7 +282,8 @@ pub(crate) async fn present_as(
             None => (raw.to_owned(), raw.to_owned()),
         };
         let (main_status, main_health) = (status.clone(), health.clone());
-        for pivot in apps::additional_statuses(&state.db, a.id).await? {
+        // `additional_servers->pluck('pivot.status')`: every pivot, its server loaded or not.
+        for (_, _, pivot) in &pivots {
             let (s, h) = match pivot.split_once(':') {
                 Some((s, h)) => (s, Some(h)),
                 None => (pivot.as_str(), None),
@@ -261,9 +343,10 @@ pub async fn list(
         let ids = coolify_db::tags::resource_ids_with_tag(&state.db, apps::MORPH, &tag).await?;
         rows.retain(|a| ids.contains(&a.id));
     }
+    let pre = Preloaded::load(&state, &rows).await?;
     let mut items = Vec::with_capacity(rows.len());
     for a in &rows {
-        items.push(present(&state, &ctx, a, false).await?);
+        items.push(present_preloaded(&state, &ctx, a, false, false, &pre).await?);
     }
     Ok(ok(Value::Array(items)).into_response())
 }
@@ -2251,17 +2334,17 @@ pub async fn deployments(
         .iter()
         .map(|s| s.id)
         .collect();
-    let team_apps: Vec<String> = apps::list_for_team(&state.db, ctx.team_id)
+    let team_apps: HashSet<String> = apps::ids_for_team(&state.db, ctx.team_id)
         .await?
         .iter()
-        .map(|a| a.id.to_string())
+        .map(i64::to_string)
         .collect();
     let rows = apps::running_for_servers(&state.db, &server_ids).await?;
     let items: Vec<Value> = rows
         .iter()
         .filter(|d| {
             d.str("application_id")
-                .is_some_and(|id| team_apps.iter().any(|t| t == id))
+                .is_some_and(|id| team_apps.contains(id))
         })
         .map(|d| present_deployment(&ctx, d, true))
         .collect();

@@ -169,6 +169,18 @@ pub async fn list_for_team(db: &Db, team_id: TeamId) -> DbResult<Vec<Application
     rows.iter().map(to_row).collect()
 }
 
+/// Ids of the rows `list_for_team` returns.
+pub async fn ids_for_team(db: &Db, team_id: TeamId) -> DbResult<Vec<i64>> {
+    Ok(sqlx::query_scalar(
+        "SELECT a.id FROM applications a JOIN environments e ON e.id = a.environment_id \
+         JOIN projects p ON p.id = e.project_id JOIN teams t ON t.id = p.team_id \
+         WHERE a.deleted_at IS NULL AND p.team_id = $1",
+    )
+    .bind(team_id)
+    .fetch_all(db.pool())
+    .await?)
+}
+
 /// `Environment::applications()` (table order).
 pub async fn list_for_environment(db: &Db, environment_id: i64) -> DbResult<Vec<ApplicationRow>> {
     let rows: Vec<Joined> = sqlx::query_as(&select("a.environment_id = $1 ORDER BY a.id"))
@@ -730,12 +742,16 @@ pub async fn additional_pivots(db: &Db, application_id: i64) -> DbResult<Vec<(i6
     .await?)
 }
 
-/// `$this->additional_servers->pluck('pivot.status')`.
-pub async fn additional_statuses(db: &Db, application_id: i64) -> DbResult<Vec<String>> {
-    Ok(sqlx::query_scalar(
-        "SELECT status FROM additional_destinations WHERE application_id = $1 ORDER BY id",
+/// `additional_pivots` of many applications in one query: `(application_id, standalone_docker_id, server_id, status)`.
+pub async fn additional_pivots_for(
+    db: &Db,
+    application_ids: &[i64],
+) -> DbResult<Vec<(i64, i64, i64, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT application_id, standalone_docker_id, server_id, status FROM additional_destinations \
+         WHERE application_id = ANY($1) ORDER BY id",
     )
-    .bind(application_id)
+    .bind(application_ids)
     .fetch_all(db.pool())
     .await?)
 }
