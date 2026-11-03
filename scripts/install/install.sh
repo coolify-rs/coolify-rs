@@ -1,5 +1,5 @@
 #!/bin/bash
-## Prepares a server and starts coolify-rs. Derived from upstream coolify-rs's scripts/install.sh (Apache-2.0).
+## Prepares a server and starts coolify-rs. Derived from Coolify's scripts/install.sh (Apache-2.0).
 ## Running it again keeps the secrets, the database and the SSH key.
 
 ## Environment variables that can be set:

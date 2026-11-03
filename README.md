@@ -1,137 +1,209 @@
 # coolify-rs
 
-A Rust implementation of [Coolify](https://github.com/coollabsio/coolify)'s API and data model, plus a migration
-engine that tracks upstream Coolify and ports its changes. *Working name; not affiliated with coolLabs.*
+A Rust implementation of [Coolify](https://github.com/coollabsio/coolify), the open-source, self-hostable platform for
+deploying applications, databases and services to your own servers.
 
-**Status: early.** 68 of 321 upstream API operations are implemented and verified against the official
-`coollabsio/coolify` image built from upstream `main` @ b5823c7 (`sha-b5823c7`). A web UI that reproduces upstream's interface covers what is ported (dashboard, projects, environments, private keys, team). Servers can be added and validated over SSH, and standalone databases (PostgreSQL, Redis, KeyDB, Dragonfly, MongoDB, MySQL, MariaDB, ClickHouse) can be created, started, stopped, restarted and deleted on them. Applications from Docker images deploy through the ported deployment engine (queue, helper container, Traefik/Caddy labels, rolling update, logs); git build packs, service templates and proxy management are not ported yet. See
-[docs/PROJECT_STATE.md](docs/PROJECT_STATE.md) and [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
+coolify-rs keeps Coolify's behaviour and changes its foundations. It serves the same REST API, reads and writes the same
+PostgreSQL database, encrypts secrets the same way, runs the same commands on your servers and shows the same interface.
+Underneath, it is one compiled Rust service in place of PHP, Laravel, Horizon and their workers.
 
-## What works
+*coolify-rs is an independent project. It is not affiliated with or endorsed by coolLabs, the makers of Coolify.*
 
-- Upstream-compatible `/api`: token auth chain (Sanctum tokens, team binding, API switch, IP allowlist, abilities),
-  teams, projects and environments, private keys, servers (records and validation), standalone databases of every engine but SQLite (list, show, create, start, stop, restart, delete), health/version/disable. Response bodies are byte-identical to
-  upstream for all 194 differential cases.
-- Remote execution over the system OpenSSH client with pinned host keys, ephemeral key files and a cleared environment
-  (ADR 0009). Server validation (API and UI) writes the same rows and messages as upstream for every scenario of the
-  SSH test host (8/8, `compat/diff/validate_diff.py`).
-- Databases run on managed servers: for every ported engine the Docker Compose file coolify-rs writes is byte-identical
-  to the one upstream writes for the same database, and rows, variables, responses and errors match
-  (`compat/diff/databases_diff.py --kind <engine>`, 39–42 checks per engine, run against a real VM). Container statuses are refreshed every minute, as upstream's server check does.
-- Web UI (`frontend/`, Svelte): a port of upstream Coolify's interface (same layout, navigation, URLs, markup and
-  vendored stylesheet; coolify-rs's own name and logo) for sign-in with 2FA, team switching, the dashboard, projects,
-  environments, private keys (including key generation), team settings and member roles, and appearance settings.
-  Pages coolify-rs does not implement yet open a "not available yet" page inside the same chrome (ADR 0008).
-- Adoption of an existing Coolify PostgreSQL database (schema of upstream `main` @ b5823c7) in place, with a schema
-  guard that goes read-only when the database is older or newer than the build.
-- Laravel `APP_KEY` encryption interop in both directions.
-- `coolify-port`: tracks upstream, classifies changes with evidence, maps them to Rust components, plans risk,
-  regenerates deterministic artifacts in an isolated branch, validates, and writes a ledger.
+## Why we love Coolify
 
-## Layout
+Coolify shows what self-hosting can feel like. Point it at a server you own, and you get the experience people pay
+platforms for: git push deploys, preview deployments, one-click services, managed databases with backups, automatic
+TLS, logs, metrics and a terminal, all on hardware and in a place you control. It is open source under Apache-2.0,
+built in the open and shaped by a large, friendly community. It has taken a lot of people off platforms they were
+locked into, and many of us learned how deployment works by reading its code.
 
-```
-crates/coolify-domain   pure types and rules
-crates/coolify-compat   Laravel/PHP formats (encrypter, Sanctum, json_encode)
-crates/coolify-db       adopted upstream schema, schema guard, repositories
-crates/coolify-api      /api contract: middleware, validation, serialization, handlers
-crates/coolify-port     upstream migration engine
-apps/coolify-rs         server binary
-apps/coolify-port       engine CLI
-compat/                 baselines, route inventory, mapping registry, reference env, differential harness
-migration/              tracking state and run ledger
-docs/                   specs, decisions (docs/decisions), project state
-```
+coolify-rs exists because of that. Every behaviour here was first designed, built and tested by the Coolify
+maintainers and contributors. Thank you, Andras and the whole Coolify community.
 
-## Install on a server
+## Why coolify-rs
 
-Run as root on a clean server (Debian, Ubuntu, RHEL family, SUSE, Arch or Alpine, with at least 30 GB of disk):
+Coolify runs on PHP and Laravel, with a web server, queue workers, a scheduler and Redis next to the application.
+That is a good stack for building a product quickly. coolify-rs explores what the same product looks like as a single
+Rust service:
 
-```sh
+- **One process, small footprint.** The API, web UI, job runner and scheduler share one binary, which helps on the
+  small servers many people self-host on.
+- **Safety by construction.** Remote commands are built without shell interpolation, secrets never reach the logs,
+  every query is scoped to the team, and SSH host keys are pinned. Where coolify-rs deliberately differs from
+  upstream for security, the difference is documented, never silent.
+- **Compatibility you can check.** "Identical" is tested, not assumed. Differential scripts run the same requests,
+  deployments and screens against an official Coolify image and coolify-rs side by side, and compare responses,
+  database rows, commands on the server and screenshots.
+- **No lock-in in either direction.** coolify-rs can adopt an existing Coolify database, and Coolify can take a
+  coolify-rs database back at the same version.
+
+## What it includes
+
+- The Coolify REST API (`/api/v1`): tokens, teams, projects, environments, servers, applications, databases,
+  services, deployments, backups, notifications, cloud providers and more, with upstream's responses and errors.
+- The web UI, a port of Coolify's interface: the same pages, layout, markup and stylesheet, with coolify-rs's own
+  name and logo.
+- Deployments for every build pack: Dockerfile, Docker Compose, Docker image, static, Nixpacks and Railpack, plus
+  preview deployments, rollbacks, additional servers, build servers, registries and Swarm.
+- Servers over SSH: validation, Traefik and Caddy proxies, Sentinel metrics, Docker cleanup, the terminal, server
+  transfers and patch checks.
+- Standalone databases (PostgreSQL, MySQL, MariaDB, MongoDB, Redis, KeyDB, Dragonfly, ClickHouse) with S3 backups
+  and imports, and one-click services from Coolify's template catalogue.
+- The scheduler: scheduled tasks, backups and the instance jobs from Coolify's `Kernel`.
+- Git sources (GitHub Apps, GitLab, Gitea, Bitbucket and deploy keys), secret managers, managed DNS and Cloudflare
+  Tunnels, notifications and GitHub runners.
+- An installer and upgrader modelled on Coolify's own.
+
+Where coolify-rs and Coolify still differ, [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) says so.
+
+## Getting started
+
+### Install on a server
+
+coolify-rs installs the way Coolify does: one script, run as root on a clean server with at least 30 GB of disk.
+It is tested on Ubuntu; like Coolify's installer, it also handles Debian, the RHEL family, SUSE, Arch and Alpine. It installs Docker and OpenSSH if needed, creates the
+`/data/coolify` folders, generates secrets and an SSH key for the server, and starts coolify-rs with Docker Compose.
+
+```bash
 curl -fsSL "$COOLIFY_RS_CDN/install.sh" | COOLIFY_RS_CDN="$COOLIFY_RS_CDN" bash
 ```
 
-The script prepares the host as upstream's installer does: required packages, the OpenSSH server, Docker, the
-`/data/coolify` folders, generated secrets in `/data/coolify/source/.env`, and an SSH key for this server. It then
-starts `coolify`, `coolify-db` and `coolify-redis` with Docker Compose. Open `http://<server>:8000` and register within
-10 minutes: the first user owns the instance (`docker restart coolify` opens the window again). Back up the `.env` file;
-the database cannot be read without its `APP_KEY`. Running the script again keeps the secrets, the key and the data.
+`COOLIFY_RS_CDN` is the address the files in `scripts/install` are published at. No official release is published
+yet, so build and serve your own; see [Install from a local build](#install-from-a-local-build).
+
+When the script finishes, open `http://<your-server>:8000` and register. The first account owns the instance, and
+registration stays open for 10 minutes after a start (`docker restart coolify` opens it again). Then add a server,
+create a project and deploy.
+
+**Back up `/data/coolify/source/.env`.** It holds the `APP_KEY` that encrypts your secrets, and the database cannot be
+read without it. Running the installer again keeps the secrets, the key and the data.
 
 | Variable | Meaning |
 |---|---|
-| `COOLIFY_RS_CDN` | Address `scripts/install` is published at. Required on the first run; kept afterwards |
-| `REGISTRY_URL`, `COOLIFY_RS_IMAGE` | Registry and image name, by default `docker.io` and `coolify-rs/coolify-rs` |
-| `COOLIFY_RS_PULL=false` | Use the image already on this server |
-| `COOLIFY_RS_IMAGE_FILE` | Load the image from a `docker save` file |
-| `ROOT_USER_EMAIL`, `ROOT_USER_PASSWORD`, `ROOT_USERNAME` | Create the first user at install |
-| `AUTOUPDATE=false`, `DOCKER_ADDRESS_POOL_*` | As in upstream's installer |
+| `COOLIFY_RS_CDN` | Where `install.sh`, `upgrade.sh`, the Compose files and `versions.json` are published. Required on the first run, kept afterwards |
+| `REGISTRY_URL`, `COOLIFY_RS_IMAGE` | Registry and image name. Default `docker.io` and `coolify-rs/coolify-rs` |
+| `COOLIFY_RS_IMAGE_FILE` | Load the image from a `docker save` file instead of pulling it |
+| `COOLIFY_RS_PULL=false` | Use the image already on the server |
+| `ROOT_USER_EMAIL`, `ROOT_USER_PASSWORD`, `ROOT_USERNAME` | Create the first user during the install |
+| `AUTOUPDATE=false`, `DOCKER_ADDRESS_POOL_*` | As in Coolify's installer |
 
-**No image or `COOLIFY_RS_CDN` is published yet.** Until then, build with `docker build -t coolify-rs/coolify-rs:<version> .`
-and use `COOLIFY_RS_IMAGE_FILE`.
+### Install from a local build
 
-**Upgrades:** the Upgrade button, the auto-update schedule, or `bash /data/coolify/source/upgrade.sh <version> <helper version>`.
-`upgrade.sh` dumps the database to `/data/coolify/backups/coolify-rs-upgrades/` first and stops if that fails. To restore a
-dump: `docker exec -i coolify-db pg_restore -U coolify -d coolify --clean --if-exists < <file>`.
-
-The schema is only ever created on a database with no tables. `coolify-rs` refuses any other, and a database made by a
-coolify-rs install can be taken over by upstream Coolify at the same version.
-
-## Quick start (development)
+On a machine with Docker and this repository, build the image. Its tag must match the version in
+`scripts/install/versions.json`:
 
 ```bash
-docker compose up -d --wait          # dev Postgres on 127.0.0.1:25432
-./scripts/test.sh                    # fmt + clippy + all tests (against the upstream main@b5823c7 schema)
-(cd frontend && npm ci && npm run build)   # web UI into frontend/dist (served by coolify-rs)
+VERSION=$(python3 -c "import json; print(json.load(open('scripts/install/versions.json'))['coolify']['v4']['version'])")
+docker build -t "coolify-rs/coolify-rs:$VERSION" .
+docker save "coolify-rs/coolify-rs:$VERSION" -o coolify-rs.tar
 ```
 
-UI development with hot reload: run coolify-rs on `127.0.0.1:18080`, then `cd frontend && npm run dev`
-(Vite on :5173 proxies `/ui` and `/api`).
-
-Run against an existing Coolify database at the baseline (read the caveats in docs/DATABASE_COMPATIBILITY.md §6 first):
+Copy `coolify-rs.tar` and the `scripts/install` folder to the server. Then, as root on the server, publish the folder
+on an address that both the server and its containers can reach, and run the installer:
 
 ```bash
-DATABASE_URL=postgres://coolify:...@host:5432/coolify cargo run -p coolify-rs -- check-schema
-DATABASE_URL=postgres://coolify:...@host:5432/coolify COOLIFY_RS_LISTEN=127.0.0.1:8080 cargo run -p coolify-rs
+grep -q host.docker.internal /etc/hosts || echo "127.0.0.1 host.docker.internal" >> /etc/hosts
+(cd install && nohup python3 -m http.server 8899 --bind 0.0.0.0 > /tmp/coolify-rs-cdn.log 2>&1 &)
+curl -fsSL http://host.docker.internal:8899/install.sh |
+  COOLIFY_RS_CDN=http://host.docker.internal:8899 COOLIFY_RS_IMAGE_FILE="$PWD/coolify-rs.tar" bash
 ```
 
-Configuration: `DATABASE_URL` or upstream's `DB_HOST/DB_PORT/DB_DATABASE/DB_USERNAME/DB_PASSWORD`;
-`APP_KEY` / `APP_PREVIOUS_KEYS` (the upstream instance's key; needed for private keys and 2FA logins);
-`COOLIFY_RS_UI_DIR` (default `frontend/dist`); `COOLIFY_RS_SECURE_COOKIES=true` behind HTTPS; `SESSION_LIFETIME`
-(minutes, default 10080);
-`COOLIFY_RS_LISTEN` (default `0.0.0.0:8080`); `COOLIFY_VERSION` (reported by `/api/v1/version`, default `4.5.1-dev.b5823c777`);
-`COOLIFY_RS_TRUSTED_PROXIES` (IPs/CIDRs whose `X-Forwarded-For` is trusted; default none);
-`COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA`; `COOLIFY_RS_LOG_FORMAT=pretty|json`; `RUST_LOG`.
-Remote execution: `COOLIFY_RS_DATA_DIR` (default `/data/coolify-rs`; pinned host keys, short-lived key files);
-`COOLIFY_RS_SSH_HOST_KEYS=pin|ignore` (default `pin`; `ignore` is upstream's behaviour); `COOLIFY_RS_SSH_MAX_CONCURRENCY`
-(default 32); `SSH_COMMAND_TIMEOUT` (seconds, default 3600); `COOLIFY_RS_SSH_BINARY` (default `ssh`). Needs OpenSSH 7.6+.
+A throwaway virtual machine (Multipass, OrbStack, UTM or a cloud server) is a good place for a first try.
 
-## Differential testing against upstream
+### Upgrade
+
+Use the Upgrade button, turn on automatic updates, or run:
+
+```bash
+bash /data/coolify/source/upgrade.sh <version> <helper version>
+```
+
+`upgrade.sh` first dumps the database to `/data/coolify/backups/coolify-rs-upgrades/` and stops if that fails. To
+restore a dump: `docker exec -i coolify-db pg_restore -U coolify -d coolify --clean --if-exists < <file>`.
+
+### Run it against an existing Coolify database
+
+coolify-rs uses Coolify's schema as it is. Read [docs/DATABASE_COMPATIBILITY.md](docs/DATABASE_COMPATIBILITY.md)
+first, and try it on a copy of your database. A database from a different Coolify version puts coolify-rs into
+read-only mode.
+
+```bash
+export DATABASE_URL=postgres://coolify:<password>@<host>:5432/coolify
+export APP_KEY=<the APP_KEY of that Coolify instance>
+cargo run -p coolify-rs -- check-schema
+COOLIFY_RS_LISTEN=127.0.0.1:8080 cargo run -p coolify-rs
+```
+
+## Development
+
+You need Rust (the toolchain in `rust-toolchain.toml`), Node.js, Docker and OpenSSH 7.6 or newer.
+
+```bash
+docker compose up -d --wait                  # development PostgreSQL on 127.0.0.1:25432
+./scripts/test.sh                            # format check, clippy and every test
+(cd frontend && npm ci && npm run build)     # web UI into frontend/dist, which coolify-rs serves
+```
+
+For the UI with hot reload, run coolify-rs on `127.0.0.1:18080`, then `cd frontend && npm run dev`. Vite on port
+5173 forwards `/ui` and `/api` to it.
+
+### Layout
+
+```
+apps/coolify-rs         the server binary: serve, boot, schema and operator commands
+crates/coolify-api      HTTP API and web UI routes: middleware, validation, serialization, handlers
+crates/coolify-jobs     deployments, server work, the scheduler, notifications, integrations
+crates/coolify-remote   SSH execution with pinned host keys and short-lived key files
+crates/coolify-db       Coolify's schema, the schema guard and queries
+crates/coolify-compat   Laravel and PHP formats: encrypter, Sanctum tokens, json_encode, cron expressions
+crates/coolify-domain   types and rules with no I/O
+frontend/               the web UI (Svelte 5)
+compat/                 baselines, route inventory, mapping registry, differential and screenshot tests
+docs/                   architecture, compatibility, security model and decisions (docs/decisions)
+```
+
+### Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DATABASE_URL`, or `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD` | | PostgreSQL connection |
+| `APP_KEY`, `APP_PREVIOUS_KEYS` | | Coolify's encryption key; needed for private keys, secrets and two-factor sign-in |
+| `COOLIFY_RS_LISTEN` | `0.0.0.0:8080` | Listen address |
+| `COOLIFY_RS_UI_DIR` | `frontend/dist` | Built web UI |
+| `COOLIFY_RS_DATA_DIR` | `/data/coolify-rs` | Pinned host keys, short-lived key files and other state |
+| `COOLIFY_RS_SCHEDULER` | on | `off` stops the scheduler, for example when Coolify shares the database |
+| `COOLIFY_RS_SECURE_COOKIES` | `false` | Set to `true` behind HTTPS |
+| `COOLIFY_RS_TRUSTED_PROXIES` | none | IPs or CIDRs whose `X-Forwarded-For` is trusted |
+| `COOLIFY_RS_SSH_HOST_KEYS` | `pin` | `ignore` behaves like Coolify |
+| `COOLIFY_RS_SSH_MAX_CONCURRENCY` | `32` | Concurrent SSH commands |
+| `SSH_COMMAND_TIMEOUT` | `3600` | Seconds, as in Coolify |
+| `SESSION_LIFETIME` | `10080` | Minutes |
+| `COOLIFY_RS_LOG_FORMAT`, `RUST_LOG` | | `pretty` or `json`, and the log filter |
+
+### Comparing with Coolify
+
+The differential tests run an official Coolify image as the reference and compare it with coolify-rs, request by
+request, deployment by deployment and screen by screen:
 
 ```bash
 git clone --bare --no-single-branch https://github.com/coollabsio/coolify .upstream/coolify.git
-./scripts/reference-up.sh            # official sha-b5823c7 image on 127.0.0.1:18000 (throwaway secrets)
-./scripts/reference-seed.sh          # fixture users/teams/tokens via upstream's own models
-# start coolify-rs on :18080 against the reference database (password in compat/reference/secrets/reference.envfile)
-# (COOLIFY_RS_TRUSTED_PROXIES=127.0.0.1 enables the allowlist cases via --db-url)
-python3 compat/diff/differential.py --tokens compat/reference/secrets/tokens.json [--db-url postgres://...]
-./scripts/testing-host-up.sh         # SSH test host on 127.0.0.1:2223 (also joins the reference network)
-python3 compat/diff/validate_diff.py # server validation: reference vs coolify-rs (needs COOLIFY_RS_DATA_DIR set)
-python3 compat/diff/databases_diff.py --server <uuid> --vm <orbstack machine>  # databases on a real, validated server
+./scripts/reference-up.sh                    # official Coolify image on 127.0.0.1:18000, throwaway secrets
+./scripts/reference-seed.sh                  # fixture users, teams and tokens through Coolify's own models
+scripts/dev-server.sh 18080                  # coolify-rs on 127.0.0.1:18080 against the same database
+python3 compat/diff/differential.py --tokens compat/reference/secrets/tokens.json
 ```
 
-The live SSH tests run when `COOLIFY_RS_TEST_SSH=127.0.0.1:2223` and
-`COOLIFY_RS_TEST_SSH_KEY=compat/testing-host/secrets/id_ed25519` are set.
+Each script in `compat/diff/` covers one area and says what it needs at the top. The screenshot comparisons are in
+`compat/ui/`. [compat/notes/porting-brief.md](compat/notes/porting-brief.md) describes how an area is ported and
+when it counts as done.
 
-## Upstream migration engine
+## Contributing and security
 
-```bash
-cargo run -p coolify-port-cli --bin coolify-port -- status
-cargo run -p coolify-port-cli --bin coolify-port -- run --generate     # needs COOLIFY_RS_TEST_DATABASE_URL
-```
-
-Reports land in `.migration-runs/<run>/report.md`; ledger entries in `migration/ledger/`. See
-[docs/MIGRATION_STRATEGY.md](docs/MIGRATION_STRATEGY.md).
+Contributions are welcome; [CONTRIBUTING.md](CONTRIBUTING.md) explains how. Report vulnerabilities privately as
+described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-Apache-2.0. Includes files copied or generated from Coolify (Apache-2.0); see [NOTICE](NOTICE).
+Apache-2.0, the same as Coolify. coolify-rs includes files copied or generated from Coolify, which keep their
+Apache-2.0 license; see [NOTICE](NOTICE). "Coolify" is a name of coolLabs, used here only to describe what this
+project is compatible with.
