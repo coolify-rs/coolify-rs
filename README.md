@@ -1,4 +1,10 @@
-# coolify-rs
+<p align="center">
+  <img src="frontend/public/coolify-rs-logo.svg" alt="coolify-rs logo" width="120" height="120">
+</p>
+
+<h1 align="center">coolify-rs</h1>
+
+<p align="center"><strong>Everything you love about Coolify, in one lightweight Rust binary.</strong></p>
 
 A Rust implementation of [Coolify](https://github.com/coollabsio/coolify), the open-source, self-hostable platform for
 deploying applications, databases and services to your own servers.
