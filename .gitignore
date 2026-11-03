@@ -4,6 +4,8 @@
 /.migration-runs/
 *.local.toml
 /compat/diff/last-report.json
+/compat/bench/results-quick.json
+/compat/bench/.*.json
 /compat/testing-host/secrets/
 __pycache__/
 /compat/ui/node_modules

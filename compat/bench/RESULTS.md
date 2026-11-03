@@ -1,63 +1,111 @@
 # Performance: Coolify and coolify-rs
 
-Measured on 2026-11-03 with `compat/bench/memory.sh` and `compat/bench/api_bench.py`.
+Measured on 2026-11-03 at commit 4b6d7d0. The raw numbers are in `results.json`. To reproduce:
+
+```bash
+docker build -t coolify-rs:bench .
+compat/bench/stack.sh up        # needs the reference environment from compat/reference for the data copy
+python3 compat/bench/bench.py   # about an hour; --quick for a short check
+compat/bench/stack.sh down
+```
 
 ## Setup
 
-- Machine: Apple M5 Max, 36 GB, Docker in OrbStack's Linux VM (18 CPUs, 16 GB).
-- Coolify: the official image `coollabsio/coolify:sha-b5823c7` as shipped. That means production mode with
-  opcache, plus Redis, Horizon, the scheduler and Reverb running in its container.
-- coolify-rs: the production image from this repository's `Dockerfile` (release build, mimalloc), with
-  the scheduler turned off.
-- Both run on the same Docker network and use the same PostgreSQL 15 database. Requests come from the Mac
-  through Docker's port forwarding, which is the same path for both.
-- The data is a team with 113 applications, 7 databases, 9 projects and 2 servers. Every response has the same size on both
-  sides, and the applications, deployments and projects lists were checked byte for byte.
-- Coolify limits its API to 200 requests a minute per user. For the runs, that limit was raised in
-  the reference's config cache, so the numbers measure Coolify and not its limiter. coolify-rs has no
-  API rate limit (see docs/KNOWN_LIMITATIONS.md).
+Each side runs as its own stack, shaped like a small VPS:
 
-## Startup and memory
+| | Coolify stack | coolify-rs stack |
+|---|---|---|
+| Application | official image `coollabsio/coolify:sha-b5823c7`, production mode, Horizon, scheduler and Reverb running | image from this repository's `Dockerfile`, scheduler running |
+| Also in the stack | PostgreSQL 15, Redis 7 | PostgreSQL 15 |
+| CPU | 2 cores shared by the whole stack (`--cpuset-cpus`) | 2 other cores, likewise |
+| Memory limit | 4 GB for the application | 4 GB for the application |
+
+- **Data:** both databases start as copies of the same database: a team with 113 applications,
+  7 databases, 9 projects and 2 servers. The same API tokens work on both, and responses have the
+  same size on both sides.
+- **Network:** internal, with no internet access and no route to the servers in the data. The
+  schedulers run their jobs, and server checks fail as they would for unreachable servers.
+- **Rate limit:** Coolify's API limit (`API_RATE_LIMIT`, 200 requests a minute per user) is raised so
+  the numbers measure Coolify and not the limiter. coolify-rs has no API rate limit.
+- **Load:** k6 0.57 runs on 8 more cores inside the same network, so Docker's port forwarding is not
+  measured. Each virtual user keeps one of three API tokens of the team.
+- **Host:** Apple M5 Max, with Docker in OrbStack's Linux VM (18 CPUs, 16 GB). Other containers on
+  this machine were not pinned and could share the stacks' cores, which is the main source of the
+  run-to-run spread below.
+
+## Startup and idle
+
+Startup is the time from `docker start` of the application to its first healthy response, as the
+median of 5 runs. Idle figures are medians over 10 minutes, measured after 2 minutes of settling.
+Memory is from `docker stats`; CPU is from each container's cgroup.
 
 | | Coolify | coolify-rs |
 |---|---|---|
-| Container start to first healthy response | 1.64 s | 0.19 s |
-| Memory at idle | 411 MiB + 10 MiB Redis | 37 MiB |
-| Peak memory, 16 clients reading the 1.7 MB applications list | 690 MiB | 166 MiB |
-| Throughput of that load | 67 req/s | 277 req/s |
-| Memory right after the load | 683 MiB | 168 MiB |
-| Image size (unpacked / compressed) | 932 MB / 210 MB | 357 MB / 142 MB |
+| Startup | 1.62 s | 0.22 s |
+| Application memory at idle | 366 MiB (+ 6 MiB Redis) | 30 MiB |
+| PostgreSQL memory at idle | 83 MiB | 118 MiB |
+| Whole stack at idle | 455 MiB | 148 MiB |
+| CPU at idle, whole stack | 3.6% of a core | 0.5% of a core |
 
-Memory is the container's usage as `docker stats` reports it. Coolify's idle figure includes its
-queue workers and scheduler. coolify-rs ran with its scheduler off, because both instances share one
-database and its servers. Its scheduler runs in the same process, so it adds no separate workers.
+coolify-rs's PostgreSQL uses more memory because its pool keeps up to 10 connections open, and each one
+is a PostgreSQL process. Coolify's PHP workers open fewer.
 
-## API latency
+## API under load
 
-Each row is 200 sequential requests on one connection (milliseconds), then 2,000 requests over 16
-connections.
+Each cell is the median of 3 runs of 20 seconds, each after a 3-second warm-up.
+- **Latency:** milliseconds, p50 / p95.
+- **CPU:** the whole stack's CPU time per request, from the cgroups.
+- **Peak:** the application's highest memory during the run.
 
-| Endpoint | Response | Coolify p50 / p95 | coolify-rs p50 / p95 | Coolify req/s | coolify-rs req/s |
-|---|---|---|---|---|---|
-| `GET /api/v1/version` | 19 B | 13.0 / 14.6 | 1.7 / 2.1 | 595 | 735 |
-| `GET /api/v1/teams/current` | 355 B | 13.4 / 16.5 | 1.9 / 2.6 | 612 | 935 |
-| `GET /api/v1/projects` | 792 B | 13.7 / 16.4 | 2.0 / 2.5 | 585 | 1,065 |
-| `GET /api/v1/servers` | 9 KB | 17.6 / 23.6 | 2.2 / 2.6 | 505 | 1,161 |
-| `GET /api/v1/applications` | 1.7 MB | 128.0 / 139.1 | 25.8 / 28.7 | 63 | 275 |
-| `GET /api/v1/services` | 2 B | 16.6 / 19.0 | 2.7 / 3.0 | 461 | 1,320 |
-| `GET /api/v1/databases` | 92 KB | 55.6 / 69.8 | 13.1 / 16.0 | 150 | 308 |
-| `GET /api/v1/deployments` | 2 B | 21.2 / 24.8 | 2.4 / 3.0 | 352 | 1,388 |
+### 1 client
 
-On small responses, a single request is 6 to 9 times faster. Throughput rises less than latency
-because both servers update the token's `last_used_at` on every request, as Sanctum does. Sixteen
-clients sharing one token therefore wait on commits to the same row. The throughput numbers vary by
-about 30% between runs, while the latency numbers repeat within a few percent.
+| Endpoint (response size) | Coolify req/s | coolify-rs req/s | Coolify p50 / p95 | coolify-rs p50 / p95 | Coolify CPU/req | coolify-rs CPU/req |
+|---|---|---|---|---|---|---|
+| `/api/v1/version` (19 B) | 89 | 641 | 10.9 / 13.9 | 1.3 / 2.4 | 11.5 ms | 0.51 ms |
+| `/api/v1/projects` (792 B) | 94 | 739 | 10.2 / 13.7 | 1.2 / 1.8 | 10.8 ms | 0.43 ms |
+| `/api/v1/servers` (9 KB) | 87 | 757 | 10.9 / 14.7 | 1.2 / 1.7 | 12.2 ms | 0.54 ms |
+| `/api/v1/databases` (92 KB) | 28 | 93 | 35.3 / 41.3 | 10.4 / 13.6 | 36.0 ms | 9.4 ms |
+| `/api/v1/applications` (1.7 MB) | 10 | 61 | 95.5 / 125.2 | 15.7 / 19.1 | 110.3 ms | 15.4 ms |
+
+### 10 clients
+
+| Endpoint | Coolify req/s | coolify-rs req/s | Coolify p50 / p95 | coolify-rs p50 / p95 | Coolify peak | coolify-rs peak |
+|---|---|---|---|---|---|---|
+| `/api/v1/version` | 165 | 1,430 | 59.6 / 84.9 | 5.8 / 13.2 | 412 MiB | 41 MiB |
+| `/api/v1/projects` | 178 | 1,155 | 55.3 / 75.8 | 6.8 / 14.4 | 420 MiB | 46 MiB |
+| `/api/v1/servers` | 165 | 1,285 | 60.1 / 78.9 | 6.6 / 13.8 | 411 MiB | 48 MiB |
+| `/api/v1/databases` | 43 | 319 | 224.0 / 302.3 | 31.1 / 50.2 | 435 MiB | 47 MiB |
+| `/api/v1/applications` | 18 | 124 | 543.7 / 663.1 | 77.6 / 125.9 | 553 MiB | 104 MiB |
+
+### 50 clients
+
+| Endpoint | Coolify req/s | coolify-rs req/s | Coolify p50 / p95 | coolify-rs p50 / p95 | Coolify peak | coolify-rs peak |
+|---|---|---|---|---|---|---|
+| `/api/v1/version` | 127 | 1,304 | 391.7 / 498.0 | 31.9 / 71.3 | 430 MiB | 45 MiB |
+| `/api/v1/projects` | 185 | 1,954 | 263.6 / 313.6 | 18.5 / 50.4 | 416 MiB | 24 MiB |
+| `/api/v1/servers` | 160 | 1,284 | 307.6 / 370.8 | 33.6 / 60.5 | 464 MiB | 47 MiB |
+| `/api/v1/databases` | 43 | 338 | 1,157 / 1,371 | 141.3 / 205.9 | 479 MiB | 56 MiB |
+| `/api/v1/applications` | 18 | 126 | 2,794 / 3,238 | 390.4 / 456.4 | 773 MiB | 165 MiB |
+
+## Reading the numbers
+
+- **CPU is the main difference.** On small endpoints, a request costs Coolify 11–16 ms of CPU and
+  coolify-rs about 0.5 ms. On a 2-core server, that sets how many requests each can serve: Coolify
+  levels off at 130–190 req/s, and coolify-rs at 1,100–2,600.
+- **Run-to-run spread.**
+  - Coolify's throughput varied by up to 16% between runs, and coolify-rs's by 5–76%. coolify-rs was
+    the noisier one because at its throughput, cores borrowed by other containers on the host
+    matter more.
+  - In every cell, the slowest coolify-rs run beat the fastest Coolify run.
+  - Latency and CPU per request moved little between runs.
+- **Large lists.** These are the closest results, at 3–7× apart. coolify-rs reproduces upstream's
+  queries, with each list mirroring the order Eloquent produces.
 
 ## Not measured
 
-- Deployment time. A deployment mostly waits on `docker build` and image pulls on the server, which
-  are the same commands on both sides, and the network during these runs was too unstable to time
-  them fairly.
-- The web UI. It is a static bundle served by coolify-rs; Coolify renders Livewire pages per request.
-- A smaller server. These numbers come from a fast machine. On a 1–2 vCPU VPS both sides are slower,
-  but the difference in memory stays.
+- **Deployments.** A deployment mostly waits on `docker build` and image pulls on the server, and
+  those run the same commands on both sides.
+- **The web UI.** coolify-rs serves a static bundle and the JSON behind it, while Coolify renders
+  Livewire pages on the server. Comparing them needs a browser-driven benchmark.
+- **Real hardware.** These are cores pinned inside a VM on a laptop. A run on two identical cloud
+  servers would be the cleaner comparison.

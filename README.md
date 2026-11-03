@@ -4,7 +4,7 @@
 
 <h1 align="center">coolify-rs</h1>
 
-<p align="center"><strong>Everything you love about Coolify, in one Rust binary: a tenth of the memory at idle and API responses up to 8× faster.</strong></p>
+<p align="center"><strong>Everything you love about Coolify, in one Rust binary that idles in 30 MB and answers the API up to 9× faster.</strong></p>
 
 A Rust implementation of [Coolify](https://github.com/coollabsio/coolify), the open-source, self-hostable platform for
 deploying applications, databases and services to your own servers.
@@ -45,18 +45,23 @@ Rust service:
 
 ## Performance
 
-Measured side by side against the official Coolify image, on the same database and data. The full
-setup and every number are in [compat/bench/RESULTS.md](compat/bench/RESULTS.md):
+We measured both against each other on two isolated stacks shaped like a small VPS. Each had 2 CPU cores,
+its own PostgreSQL, its scheduler running and the same data: 113 applications. The full setup and every
+number are in [compat/bench/RESULTS.md](compat/bench/RESULTS.md):
 
 | | Coolify | coolify-rs |
 |---|---|---|
-| Memory at idle | 421 MiB | 37 MiB |
-| Peak memory, 16 clients reading a 1.7 MB list | 690 MiB | 166 MiB |
-| Container start to healthy | 1.64 s | 0.19 s |
-| Median API response, small endpoints | 13–21 ms | 1.7–2.7 ms |
-| Median `GET /api/v1/applications`, 113 applications | 128 ms | 26 ms |
+| Application memory at idle | 372 MiB (with Redis) | 30 MiB |
+| CPU at idle, whole stack | 3.6% of a core | 0.5% of a core |
+| Startup to healthy | 1.62 s | 0.22 s |
+| Median API response, small endpoints, 1 client | 10–11 ms | 1.2–1.3 ms |
+| CPU per API request, small endpoints | 11–12 ms | about 0.5 ms |
+| Requests per second, small endpoints, 10 clients | 165–178 | 1,155–1,430 |
+| `GET /api/v1/applications` (1.7 MB), 10 clients | 18 req/s, p50 544 ms | 124 req/s, p50 78 ms |
 
-The scripts are in `compat/bench/`, so you can rerun the comparison yourself.
+PostgreSQL itself uses a little more memory with coolify-rs (118 MiB against 83 MiB), because the
+connection pool keeps more connections open. To rerun the comparison, use `compat/bench/stack.sh` and
+`compat/bench/bench.py`.
 
 ## What it includes
 
