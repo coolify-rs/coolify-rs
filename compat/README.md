@@ -12,5 +12,6 @@
 | `mapping/registry.toml` | upstream → Rust traceability | maintained by hand, reviewed with architecture changes |
 | `reference/` | compose file + seed script for the upstream reference instance | — |
 | `diff/differential.py` | differential API test, upstream vs coolify-rs | — |
+| `bench/` | performance comparison, upstream vs coolify-rs, and the last results | `bench/api_bench.py`, `bench/memory.sh` |
 
 Secrets for the reference instance are generated into `reference/secrets/` (git-ignored) and are throwaway.

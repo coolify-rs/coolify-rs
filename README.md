@@ -4,7 +4,7 @@
 
 <h1 align="center">coolify-rs</h1>
 
-<p align="center"><strong>Everything you love about Coolify, in one lightweight Rust binary.</strong></p>
+<p align="center"><strong>Everything you love about Coolify, in one Rust binary: a tenth of the memory at idle and API responses up to 8× faster.</strong></p>
 
 A Rust implementation of [Coolify](https://github.com/coollabsio/coolify), the open-source, self-hostable platform for
 deploying applications, databases and services to your own servers.
@@ -42,6 +42,21 @@ Rust service:
   database rows, commands on the server and screenshots.
 - **No lock-in in either direction.** coolify-rs can adopt an existing Coolify database, and Coolify can take a
   coolify-rs database back at the same version.
+
+## Performance
+
+Measured side by side against the official Coolify image, on the same database and data. The full
+setup and every number are in [compat/bench/RESULTS.md](compat/bench/RESULTS.md):
+
+| | Coolify | coolify-rs |
+|---|---|---|
+| Memory at idle | 421 MiB | 37 MiB |
+| Peak memory, 16 clients reading a 1.7 MB list | 690 MiB | 166 MiB |
+| Container start to healthy | 1.64 s | 0.19 s |
+| Median API response, small endpoints | 13–21 ms | 1.7–2.7 ms |
+| Median `GET /api/v1/applications`, 113 applications | 128 ms | 26 ms |
+
+The scripts are in `compat/bench/`, so you can rerun the comparison yourself.
 
 ## What it includes
 
