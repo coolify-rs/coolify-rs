@@ -26,7 +26,9 @@ COPY --from=build /coolify-rs /usr/local/bin/coolify-rs
 COPY --from=ui /ui/dist /usr/share/coolify-rs/ui
 COPY templates/service-templates-latest.json /usr/share/coolify-rs/templates/service-templates-latest.json
 USER 9999
-ENV COOLIFY_RS_LISTEN=0.0.0.0:8080 \
+# MIMALLOC_PURGE_DELAY=0: hand freed memory back at once, so a burst of large responses doesn't hold the peak.
+ENV MIMALLOC_PURGE_DELAY=0 \
+    COOLIFY_RS_LISTEN=0.0.0.0:8080 \
     COOLIFY_RS_UI_DIR=/usr/share/coolify-rs/ui \
     COOLIFY_RS_TEMPLATES_DIR=/usr/share/coolify-rs/templates \
     COOLIFY_RS_DATA_DIR=/data/coolify-rs

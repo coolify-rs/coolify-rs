@@ -24,6 +24,11 @@ use std::path::PathBuf;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::{DefaultOnFailure, DefaultOnResponse, TraceLayer};
 
+/// glibc's malloc keeps freed memory in per-thread arenas, so after a burst of large responses the
+/// process stayed at its peak. mimalloc returns it to the system.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// The upstream release whose API contract and schema this build implements.
 const UPSTREAM_COMPAT_VERSION: &str = "4.5.1-dev.b5823c777";
 
