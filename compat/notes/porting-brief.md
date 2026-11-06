@@ -5,8 +5,7 @@ same API responses (key order, messages, status codes), same database rows, same
 
 ## Setup in a git worktree
 
-Git-ignored things are missing in a new worktree. Link them once (M = the main checkout,
-`/Users/azeemhassni/Code/coolify-rs`):
+Git-ignored things are missing in a new worktree. Link them once (M = the path of the main checkout):
 
     ln -s M/.upstream .upstream
     ln -s M/compat/reference/secrets compat/reference/secrets

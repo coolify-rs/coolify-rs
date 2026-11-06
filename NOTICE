@@ -19,10 +19,21 @@ retain that license; they are unmodified unless noted:
   compat/api/upstream-routes.json, compat/api/reference-route-list-4.5.0.json
   compat/baseline/supported-migrations.txt                (generated from Coolify source)
 
-frontend/src/upstream/ contains files copied unmodified from Coolify main @ b5823c7:
-  css/app.css, css/fonts.css, css/utilities.css   (Apache-2.0, Copyright coolLabs Technologies)
-  fonts/*.woff2                                    (Inter, Geist Sans, Geist Mono; SIL Open Font License 1.1)
+frontend/src/upstream/ contains files copied from Coolify main @ b5823c7:
+  css/app.css, css/fonts.css, css/utilities.css   (Apache-2.0, Copyright coolLabs Technologies; unmodified)
+  fonts/*.woff2                                    (Inter, Geist Sans, Geist Mono; SIL Open Font License 1.1,
+                                                    see fonts/OFL.txt; unmodified)
+  js/                                              (resources/js: the deploy and environment canvases;
+                                                    Apache-2.0; unmodified)
 frontend/src/upstream/reicons.ts is generated from resources/views/components/reicon.blade.php.
+templates/service-templates-latest.json is Coolify's one-click service catalogue (Apache-2.0), unmodified.
+scripts/install/ (install.sh, upgrade.sh, upgrade-postgres.sh, the Docker Compose files and env.production)
+is derived from Coolify's scripts and other/nightly files (Apache-2.0) and modified to install coolify-rs.
+
+Third-party code shipped with the web UI keeps its own license:
+  frontend/public/js/apexcharts.js                 (ApexCharts 3.49.1, MIT, (c) 2018-2024 ApexCharts)
+The npm and Cargo dependencies built into the binary and the image are listed in frontend/package-lock.json
+and Cargo.lock; each keeps its own license.
 frontend/public/svgs/{discord,telegram,slack,pushover}.svg are copied from Coolify's public/svgs
 (trademarks of their owners, used as navigation icons as upstream does).
 frontend/public/svgs/resources/*.svg (database and source logos) are copied from Coolify's

@@ -1,5 +1,5 @@
 #!/bin/bash
-## Replaces the running coolify-rs containers. Derived from upstream coolify-rs's scripts/upgrade.sh (Apache-2.0).
+## Replaces the running coolify-rs containers. Derived from Coolify's scripts/upgrade.sh (Apache-2.0).
 ## The database is dumped first, and the upgrade stops when that fails.
 
 LATEST_IMAGE=${1:-latest}
