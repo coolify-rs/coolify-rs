@@ -56,6 +56,11 @@
   const formatBytes = (value: number) => formatWholeBytes(Math.trunc(value));
 
   const scoped = $derived(serverUuid !== '');
+  const cpuHelper = $derived(
+    scoped
+      ? 'Average usage of all CPU cores on this server. 100% means that all cores are fully busy.'
+      : 'Average CPU usage of the servers. The value of each server is the average of all its CPU cores, so 100% means that all cores are fully busy. Servers are not weighted by their number of cores.',
+  );
   const kpis = $derived(data?.kpis);
   const topContainers = $derived(rankContainers(data?.containersRaw ?? [], cmetric));
   const serverOptions = $derived([{ value: '', label: 'All servers' }, ...(data?.serverOptions ?? [])]);
@@ -455,7 +460,7 @@
 
     <div class="grid gap-6 lg:grid-cols-2">
       {#each sections as [key, label] (key)}
-        <SettingsSection title={label} class={key === 'cpu' ? 'lg:col-span-2' : ''}>
+        <SettingsSection title={label} description={key === 'cpu' ? cpuHelper : undefined} class={key === 'cpu' ? 'lg:col-span-2' : ''}>
           {#snippet actions()}
             <div id="fleet-chart-{key}-legend" class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs"></div>
           {/snippet}
@@ -471,7 +476,7 @@
         <div class="data-table-header fleet-servers-table-grid border-b-0!">
           <SortHeader table={serverTable} column="name" label="Server" text class="justify-self-start" />
           {#each [['cpu', 'CPU'], ['memory', 'Memory'], ['disk', 'Disk'], ['load', 'Load'], ['network', 'Network']] as [column, label] (column)}
-            <SortHeader table={serverTable} {column} {label} text dir="desc" class="justify-self-start" />
+            <SortHeader table={serverTable} {column} {label} text dir="desc" class="justify-self-start" title={column === 'cpu' ? 'Sort by CPU. 100% means that all cores of the server are fully busy.' : undefined} />
           {/each}
           <SortHeader table={serverTable} column="containers" label="Containers" class="justify-self-end" />
         </div>
@@ -511,7 +516,7 @@
             <SortHeader table={containerTable} column="name" label="Container" text class="justify-self-start" />
             <SortHeader table={containerTable} column="server" label="Server" text class="justify-self-start" />
             {#each containerMetrics as [key, label] (key)}
-              <SortHeader table={containerTable} column={key} {label} class="justify-self-end" />
+              <SortHeader table={containerTable} column={key} {label} class="justify-self-end" title={key === 'cpu' ? 'Sort by CPU. 100% means one CPU core is fully busy, so a container can go above 100%.' : undefined} />
             {/each}
           </div>
           <div class="flex flex-col">

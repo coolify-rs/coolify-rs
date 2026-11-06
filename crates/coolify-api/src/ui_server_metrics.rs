@@ -201,12 +201,18 @@ async fn toggle(
 
 pub(crate) const TYPES: [&str; 5] = ["cpu", "memory", "disk", "load", "network"];
 
-/// `HasMetrics::getMetricsEndpoint`: `container` is the uuid of a resource.
-fn endpoint(container: Option<&str>, kind: &str, from: &str) -> String {
+/// `HasMetrics::getMetricsEndpoint`: `container` is the uuid of a resource. Ranges over an hour
+/// ask Sentinel to average rows into whole-minute windows, at most 1000 per range; older
+/// Sentinels ignore `bucket_ms` and the rows are still downsampled here.
+fn endpoint(container: Option<&str>, kind: &str, from: &str, mins: i64) -> String {
     let base = "http://localhost:8888/api";
+    let mut query = format!("from={from}");
+    if mins > 60 {
+        query.push_str(&format!("&bucket_ms={}", (mins + 999) / 1000 * 60_000));
+    }
     match container {
-        None => format!("{base}/{kind}/history?from={from}"),
-        Some(uuid) => format!("{base}/container/{uuid}/{kind}/history?from={from}"),
+        None => format!("{base}/{kind}/history?{query}"),
+        Some(uuid) => format!("{base}/container/{uuid}/{kind}/history?{query}"),
     }
 }
 
@@ -226,7 +232,7 @@ pub(crate) async fn prefetch(
         .map(|t| {
             format!(
                 "curl -s -H @- \"{}\" <<'COOLIFY_SENTINEL_AUTH'\nAuthorization: Bearer {token}\nCOOLIFY_SENTINEL_AUTH",
-                endpoint(container, t, &from)
+                endpoint(container, t, &from, mins)
             )
         })
         .collect::<Vec<_>>()
@@ -268,11 +274,11 @@ async fn fetch_rows(
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
     let token = sentinel::ensure_valid_token(srv).await?;
-    let url = endpoint(container, kind, &from);
+    let url = endpoint(container, kind, &from, mins);
     let response = srv
         .run_quiet(
             &[format!(
-                "docker exec coolify-sentinel sh -c 'curl -H \"Authorization: Bearer {token}\" {url}'"
+                "docker exec coolify-sentinel sh -c 'curl -H \"Authorization: Bearer {token}\" \"{url}\"'"
             )],
             "server.metrics",
         )
@@ -409,9 +415,11 @@ async fn data(
         .await
         .ok()
         .map(|r| {
+            // `SentinelMetricsClient::rootMountName`, as the Fleet page picks it.
             let root: Vec<Value> = if r.iter().any(|row| row.get("mount").is_some()) {
+                let mount = crate::ui_fleet_metrics::root_mount_name(&r);
                 r.into_iter()
-                    .filter(|row| row.get("mount").and_then(Value::as_str) == Some("/"))
+                    .filter(|row| row.get("mount").and_then(Value::as_str) == mount)
                     .collect()
             } else {
                 r
@@ -532,12 +540,21 @@ mod tests {
     #[test]
     fn endpoints_of_servers_and_containers() {
         assert_eq!(
-            endpoint(None, "cpu", "T"),
+            endpoint(None, "cpu", "T", 60),
             "http://localhost:8888/api/cpu/history?from=T"
         );
         assert_eq!(
-            endpoint(Some("abc"), "memory", "T"),
+            endpoint(Some("abc"), "memory", "T", 5),
             "http://localhost:8888/api/container/abc/memory/history?from=T"
+        );
+        // Over an hour: whole-minute buckets, at most 1000 per range.
+        assert_eq!(
+            endpoint(None, "cpu", "T", 1440),
+            "http://localhost:8888/api/cpu/history?from=T&bucket_ms=120000"
+        );
+        assert_eq!(
+            endpoint(Some("abc"), "disk", "T", 43200),
+            "http://localhost:8888/api/container/abc/disk/history?from=T&bucket_ms=2640000"
         );
     }
 

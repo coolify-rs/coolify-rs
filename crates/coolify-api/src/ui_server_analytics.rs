@@ -373,11 +373,24 @@ async fn load_data(
     let mut aggregate = Aggregator::new(dimensions.clone());
     let mut app_rows: Vec<(String, AppRowOut)> = Vec::new();
     let mut host_totals: Vec<(String, HostRowOut)> = Vec::new();
-    for server in targets {
-        let client = Client::new(Srv::from_row(jobs, (*server).clone()));
+    let clients: Vec<Client> = targets
+        .iter()
+        .map(|server| Client::new(Srv::from_row(jobs, (*server).clone())))
+        .collect();
+    if selected.is_none() {
+        Client::prefetch_server_wide_concurrently(
+            &clients,
+            &from,
+            &to,
+            range,
+            MAX_LEADERBOARD_APPS as i64,
+        )
+        .await;
+    }
+    for client in &clients {
         // Skip unreachable/failed servers so one bad server doesn't break the whole view.
         let _ = collect_server(
-            &client,
+            client,
             selected,
             &from,
             &to,
