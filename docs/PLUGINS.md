@@ -8,6 +8,22 @@ The interface is [`crates/coolify-plugins/wit/plugin.wit`](../crates/coolify-plu
 (`coolify-rs:plugin@0.1.2`; components built for 0.1.0 and 0.1.1 load unchanged). Any language that can build a WebAssembly component can implement it. This
 guide uses Rust and the SDK in [`plugins/sdk-rust`](../plugins/sdk-rust).
 
+## First-party plugins
+
+These are maintained in this repository under [`plugins/official`](../plugins/official) and listed in the
+registry template under [`registry/plugins/coolify-rs`](../registry/plugins/coolify-rs). Each README lists
+the settings, exactly what is sent where, and the capabilities.
+
+| Plugin | What it does | Capabilities beyond events, storage and routes |
+|---|---|---|
+| [`coolify-rs/alerts`](../plugins/official/alerts) | Sends failed deployments, backups and scheduled tasks, unreachable servers, restart limits and expiring certificates to ntfy, Google Chat, PagerDuty or Opsgenie. PagerDuty and Opsgenie incidents resolve when the resource recovers. | `http` (the five service hosts), dashboard panel, encrypted settings for keys |
+| [`coolify-rs/healthchecks`](../plugins/official/healthchecks) | Pings Healthchecks.io for every scheduled task and database or volume backup, so a job that silently stops running raises an alarm. | `http` (hc-ping.com), dashboard panel, encrypted ping key |
+| [`coolify-rs/deploy-chains`](../plugins/official/deploy-chains) | After an application deploys successfully, deploys the applications that depend on it. Refuses loops and never runs for previews. | `resources: applications`, `deploy` (needs the team's consent), application and dashboard panels |
+| [`coolify-rs/delivery-metrics`](../plugins/official/delivery-metrics) | The four DORA metrics per team and application, with bands, and CSV exports of metrics, deployments and the team's resources. | `resources` (all kinds, read only), dashboard and application panels |
+
+The examples in [`plugins/examples`](../plugins/examples) are smaller and meant for reading: `deploy-stats`
+(events and a route), `deploy-board` (panels), `inventory` (reading resources).
+
 ## A plugin in Rust
 
 [`plugins/examples/deploy-stats`](../plugins/examples/deploy-stats) is a complete example. It counts
@@ -99,6 +115,8 @@ Logging (`coolify_rs_plugin::log`) is always available.
   - Requests go only to listed host names, over HTTPS on port 443.
   - Hosts that resolve to private, loopback or link-local addresses are refused.
   - Redirects are not followed, and bodies are limited to 1 MiB each way.
+  - A request ends before the call's own deadline, so a slow host gives the plugin an ordinary error to
+    handle instead of timing out the whole call.
 - **Limited view of the caller.** A route never sees the caller's API token or cookies.
 - **Restricted responses.**
   - A route's response can set only `content-type`, `cache-control`, `etag` and `last-modified`.
