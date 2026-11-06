@@ -202,7 +202,9 @@ pub async fn installation_token(
             .and_then(Value::as_str)
             .map_or_else(|| format!("HTTP {}", status.as_u16()), str::to_owned);
         if error == "Not Found" {
-            error = "Repository not found. Is it moved or deleted?".into();
+            error = format!(
+                "GitHub App installation {installation} was not found. Install the GitHub App again or update its installation ID."
+            );
         }
         return Err(format!(
             "Failed to get installation token for {name} with error: {error}"
@@ -369,8 +371,18 @@ pub async fn repository_page(
         &[("per_page", "100"), ("page", page_text.as_str())],
     )
     .await?;
+    if status != 200 {
+        let error = body
+            .get("message")
+            .and_then(Value::as_str)
+            .map_or_else(|| format!("HTTP {status}"), str::to_owned);
+        return Err(format!(
+            "Failed to load repositories for {} with error: {error}",
+            field(source, "name").unwrap_or_default()
+        ));
+    }
     let total = body.get("total_count").and_then(Value::as_i64).unwrap_or(0);
-    if status != 200 || total == 0 {
+    if total == 0 {
         return Ok(serde_json::json!({"total_count": 0, "repositories": []}));
     }
     Ok(serde_json::json!({"total_count": total, "repositories": body.get("repositories")}))

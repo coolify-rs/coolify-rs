@@ -259,11 +259,13 @@ pub async fn branches(
                     )
                     .await?;
                     if status != 200 {
-                        return Err(body
+                        let error = body
                             .get("message")
                             .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned());
+                            .map_or_else(|| format!("HTTP {status}"), str::to_owned);
+                        return Err(format!(
+                            "Failed to load branches of {repository} with error: {error}"
+                        ));
                     }
                     body.as_array().cloned().unwrap_or_default()
                 }
