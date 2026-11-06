@@ -28,6 +28,7 @@ const ALLOWED: &[&str] = &[
     "region",
     "key",
     "secret",
+    "use_path_style_endpoint",
     "is_usable",
 ];
 
@@ -143,6 +144,10 @@ fn fields(required: bool) -> Vec<Field> {
             rules: req(vec![Rule::String, Rule::Max(255)]),
         },
         Field {
+            name: "use_path_style_endpoint",
+            rules: vec![Rule::Boolean],
+        },
+        Field {
             name: "is_usable",
             rules: vec![Rule::Boolean],
         },
@@ -205,12 +210,17 @@ pub async fn store(
     run_validation(&state, &headers, &input, true).await?;
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let trimmed = |k: &str| input.str(k).unwrap_or_default().trim().to_owned();
-    let is_usable = match input.get("is_usable") {
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Number(n)) => n.as_i64() == Some(1),
-        Some(Value::String(s)) => s == "1",
-        _ => false,
+    let flag = |k: &str| match input.get(k) {
+        Some(Value::Bool(b)) => Some(*b),
+        Some(Value::Number(n)) => Some(n.as_i64() == Some(1)),
+        Some(Value::String(s)) => Some(s == "1"),
+        _ => None,
     };
+    let is_usable = flag("is_usable").unwrap_or(false);
+    // `$body['use_path_style_endpoint'] ?? S3Storage::detectPathStyleEndpoint($body['endpoint'])`
+    let use_path_style_endpoint = flag("use_path_style_endpoint").unwrap_or_else(|| {
+        coolify_jobs::databases::s3::detect_path_style_endpoint(input.str("endpoint"))
+    });
     let uuid = parts::s3_create(
         &state.db,
         &NewS3Storage {
@@ -225,6 +235,7 @@ pub async fn store(
             region: &trimmed("region"),
             key_encrypted: &enc.encrypt_string(&trimmed("key")),
             secret_encrypted: &enc.encrypt_string(&trimmed("secret")),
+            use_path_style_endpoint,
             is_usable,
         },
         state.now(),
@@ -275,13 +286,13 @@ pub async fn update(
             }
         }
     }
-    match input.get("is_usable") {
-        Some(Value::Bool(b)) => values.push(("is_usable", ColumnValue::Bool(*b))),
-        Some(Value::Number(n)) => {
-            values.push(("is_usable", ColumnValue::Bool(n.as_i64() == Some(1))))
+    for k in ["use_path_style_endpoint", "is_usable"] {
+        match input.get(k) {
+            Some(Value::Bool(b)) => values.push((k, ColumnValue::Bool(*b))),
+            Some(Value::Number(n)) => values.push((k, ColumnValue::Bool(n.as_i64() == Some(1)))),
+            Some(Value::String(s)) => values.push((k, ColumnValue::Bool(s == "1"))),
+            _ => {}
         }
-        Some(Value::String(s)) => values.push(("is_usable", ColumnValue::Bool(s == "1"))),
-        _ => {}
     }
     parts::update_row(
         &state.db,
@@ -328,7 +339,7 @@ pub async fn validate_storage(
     let result = jobs.test_s3_connection(&row).await;
     tracing::info!(target: "audit", event = "api.s3_storage.validated", team_id = ctx.team_id, s3_storage_uuid = %uuid, valid = result.is_ok(), "s3 storage validated");
     Ok(match result {
-        Ok(()) => ok(json!({"valid": true, "message": "S3 storage connection is valid."})),
+        Ok(_) => ok(json!({"valid": true, "message": "S3 storage connection is valid."})),
         Err(error) => ok(json!({"valid": false, "message": error})),
     }
     .into_response())

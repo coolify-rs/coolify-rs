@@ -16,11 +16,14 @@ export interface StorageForm {
   region: string;
   key: string;
   secret: string;
+  use_path_style_endpoint: boolean;
 }
 
 export interface StorageDetails extends StorageForm {
   uuid: string;
   is_usable: boolean;
+  /** The saved URL style is not the one detection picks: a user choice, kept when the endpoint changes. */
+  use_path_style_endpoint_changed: boolean;
   can_update: boolean;
   backup_count: number;
   storages: { name: string; uuid: string }[];
@@ -51,8 +54,9 @@ export const storagesUi = {
   list: () => request<{ storages: StorageRow[]; can_create: boolean }>('GET', '/ui/storages'),
   create: (form: StorageForm) => request<{ uuid: string }>('POST', '/ui/storages', form),
   show: (uuid: string) => request<StorageDetails>('GET', one(uuid)),
-  update: (uuid: string, form: StorageForm) => request<{ message: string }>('PATCH', one(uuid), form),
-  test: (uuid: string, form: StorageForm) => request<{ message: string; details: string; is_usable: boolean }>('POST', `${one(uuid)}/test`, form),
+  update: (uuid: string, form: StorageForm) => request<{ message: string; use_path_style_endpoint: boolean }>('PATCH', one(uuid), form),
+  test: (uuid: string, form: StorageForm) =>
+    request<{ message: string; details: string; is_usable: boolean; use_path_style_endpoint: boolean }>('POST', `${one(uuid)}/test`, form),
   destroy: (uuid: string) => request<unknown>('DELETE', one(uuid)),
   resources: (uuid: string) => request<StorageResources>('GET', `${one(uuid)}/resources`),
   move: (uuid: string, backup: number, volume: boolean, target: number) =>
@@ -75,6 +79,20 @@ export function composeEndpoint(p: EndpointParts): string {
   let path = p.path.trim();
   if (path !== '' && !path.startsWith('/') && !path.startsWith('?') && !path.startsWith('#')) path = `/${path}`;
   return `${scheme}://${host}${port !== '' ? `:${port}` : ''}${path}`;
+}
+
+/** Endpoint host suffixes of providers that reject path-style URLs (`S3Storage::VIRTUAL_HOSTED_STYLE_HOST_SUFFIXES`). */
+const VIRTUAL_HOSTED_STYLE_HOST_SUFFIXES = ['aliyuncs.com', 'myqcloud.com', 'volces.com', 'bytepluses.com'];
+
+/** `S3Storage::detectPathStyleEndpoint`: virtual-hosted style for providers that reject path-style URLs, else path-style. */
+export function detectPathStyleEndpoint(endpoint: string | null): boolean {
+  let host = '';
+  try {
+    host = endpoint ? new URL(endpoint).hostname.toLowerCase() : '';
+  } catch {
+    host = '';
+  }
+  return !VIRTUAL_HOSTED_STYLE_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
 }
 
 /** `DomainUrlParts::split`. */

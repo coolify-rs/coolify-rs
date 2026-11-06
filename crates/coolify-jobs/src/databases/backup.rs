@@ -936,7 +936,8 @@ impl Jobs {
         location: &str,
         network: &str,
     ) -> Result<(), String> {
-        self.test_s3_connection(row).await?;
+        let path_style = self.test_s3_connection(row).await?;
+        let alias_options = super::s3::minio_client_alias_options(path_style);
         let helper = format!("backup-of-{uuid}");
         let mount = quote(&format!("{location}:{location}:ro"));
         let resolve = minio_resolve_options(&s3.endpoint)
@@ -960,25 +961,40 @@ impl Jobs {
                 helper_image(self)
             ),
             format!(
-                "docker exec {helper} mc alias set{resolve} temporary {} {} {}",
+                "docker exec {helper} mc alias set{resolve}{alias_options} temporary {} {} {}",
                 quote(&s3.endpoint),
                 quote(&s3.key),
                 quote(&s3.secret)
             ),
-            format!(
-                "docker exec {helper} mc cp{resolve} {} {destination}",
-                quote(location)
-            ),
         ];
         let refs: Vec<&str> = commands.iter().map(String::as_str).collect();
-        let result = self
+        let copy_command = format!(
+            "docker exec {helper} mc cp{resolve} {} {destination}",
+            quote(location)
+        );
+        let copy = [copy_command.as_str()];
+        let result = match self
             .remote()
             .run(
                 &run.target,
                 &refs,
                 RunOptions::op("database.backup").timeout(run.timeout),
             )
-            .await;
+            .await
+        {
+            // `S3Storage::retryMinioClientUpload()` around the copy.
+            Ok(_) => {
+                super::s3::retry_minio_client_upload(|| {
+                    self.remote().run(
+                        &run.target,
+                        &copy,
+                        RunOptions::op("database.backup").timeout(run.timeout),
+                    )
+                })
+                .await
+            }
+            Err(e) => Err(e),
+        };
         let remove = super::proxy::docker_remove_command(&helper);
         let _ = self
             .remote()

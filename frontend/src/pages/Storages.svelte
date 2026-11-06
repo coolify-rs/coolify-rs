@@ -6,9 +6,10 @@
   import ViewToggle from '../components/ViewToggle.svelte';
   import StatusBadge from '../components/StatusBadge.svelte';
   import FormInput from '../components/FormInput.svelte';
+  import Checkbox from '../components/Checkbox.svelte';
   import EndpointInput from '../components/EndpointInput.svelte';
   import { ApiError } from '../lib/api';
-  import { storagesUi, composeEndpoint, type EndpointParts, type StorageRow } from '../lib/storagesApi';
+  import { storagesUi, composeEndpoint, detectPathStyleEndpoint, type EndpointParts, type StorageRow } from '../lib/storagesApi';
   import { link, router } from '../lib/router.svelte';
   import { notify } from '../lib/toast.svelte';
 
@@ -56,13 +57,20 @@
   let region = $state('us-east-1');
   let key = $state('');
   let secret = $state('');
+  let usePathStyleEndpoint = $state(true);
+  let usePathStyleEndpointChanged = $state(false);
   let busy = $state(false);
+
+  /** `updatedEndpointParts`: the URL style follows the provider until the user picks one. */
+  function endpointChanged() {
+    if (!usePathStyleEndpointChanged) usePathStyleEndpoint = detectPathStyleEndpoint(composeEndpoint(parts));
+  }
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
     busy = true;
     try {
-      const r = await storagesUi.create({ name, description, endpoint: composeEndpoint(parts), bucket, region, key, secret });
+      const r = await storagesUi.create({ name, description, endpoint: composeEndpoint(parts), bucket, region, key, secret, use_path_style_endpoint: usePathStyleEndpoint });
       router.go(`/storages/${r.uuid}`);
     } catch (err) {
       const error = err instanceof ApiError ? err : new ApiError(0, String(err));
@@ -179,7 +187,10 @@
           <FormInput required label="Name" id="name" bind:value={name} />
           <FormInput label="Description" id="description" bind:value={description} />
         </div>
-        <EndpointInput bind:parts />
+        <!-- Sends the endpoint right away, so the URL style below follows the provider. -->
+        <div onchange={endpointChanged}>
+          <EndpointInput bind:parts />
+        </div>
         <div class="flex gap-2">
           <FormInput required label="Bucket" id="bucket" bind:value={bucket} />
           <FormInput required helper="Region only required for AWS. Leave it as-is for other providers." label="Region" id="region" bind:value={region} />
@@ -187,6 +198,9 @@
         <div class="flex gap-2">
           <FormInput required type="password" label="Access Key" id="key" bind:value={key} />
           <FormInput required type="password" label="Secret Key" id="secret" bind:value={secret} />
+        </div>
+        <div class="w-64">
+          <Checkbox id="usePathStyleEndpoint" label="Use path-style URLs" helper="Turn this off for providers that only accept virtual-hosted-style URLs (bucket.endpoint). coolify-rs turns it off for Alibaba Cloud OSS, Tencent Cloud COS, and Volcengine TOS, and when the provider rejects path-style URLs." bind:checked={usePathStyleEndpoint} onchange={() => (usePathStyleEndpointChanged = true)} />
         </div>
         <button class="button mt-4" type="submit" disabled={busy}>Validate Connection & Continue</button>
       </form>

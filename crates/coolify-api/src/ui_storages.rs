@@ -184,6 +184,15 @@ fn candidate(
     for k in ["endpoint", "bucket", "region"] {
         r.insert(k.into(), Value::String(get(k)));
     }
+    // `usePathStyleEndpoint`: the form's choice, else the saved style, else the detected one.
+    let path_style = values
+        .get("use_path_style_endpoint")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| match base {
+            Some(row) => s3::uses_path_style_endpoint(row),
+            None => s3::detect_path_style_endpoint(Some(&get("endpoint"))),
+        });
+    r.insert("use_path_style_endpoint".into(), Value::Bool(path_style));
     r.insert("key".into(), Value::String(enc.encrypt_string(&get("key"))));
     r.insert(
         "secret".into(),
@@ -256,7 +265,8 @@ async fn create(
         ));
     }
     let row = candidate(&state, None, values)?;
-    if let Err(e) = jobs(&state)?.check_s3_connection(&row).await {
+    let (result, path_style) = jobs(&state)?.check_s3_connection_style(&row).await;
+    if let Err(e) = result {
         return Ok(failed(escape_html(&e)));
     }
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
@@ -284,6 +294,7 @@ async fn create(
             region: &get("region"),
             key_encrypted: &enc.encrypt_string(&get("key")),
             secret_encrypted: &enc.encrypt_string(&get("secret")),
+            use_path_style_endpoint: path_style,
             is_usable: true,
         },
         state.now(),
@@ -307,6 +318,7 @@ async fn create(
             "region": {"old": null, "new": get("region")},
             "bucket": {"old": null, "new": get("bucket")},
             "endpoint": {"old": null, "new": get("endpoint")},
+            "use_path_style_endpoint": {"old": null, "new": path_style},
             "team_id": {"old": null, "new": ctx.team_id},
             "unusable_email_sent": {"old": null, "new": false},
             "is_usable": {"old": null, "new": true},
@@ -367,6 +379,11 @@ async fn show(
         "endpoint": row.get("endpoint"),
         "bucket": row.get("bucket"),
         "region": row.get("region"),
+        "use_path_style_endpoint": s3::uses_path_style_endpoint(&row),
+        // A saved style that detection would not pick is a user choice, so it stays when the
+        // endpoint changes.
+        "use_path_style_endpoint_changed": s3::uses_path_style_endpoint(&row)
+            != s3::detect_path_style_endpoint(text(&row, "endpoint")),
         "key": plain("key")?,
         "secret": plain("secret")?,
         "is_usable": row.get("is_usable").and_then(Value::as_bool).unwrap_or(false),
@@ -399,7 +416,9 @@ async fn update(
     }
     // The transaction rolls back when the connection test fails, so test first.
     let test = candidate(&state, Some(&row), &values)?;
-    if let Err(e) = jobs(&state)?.check_s3_connection(&test).await {
+    let chosen_style = s3::uses_path_style_endpoint(&test);
+    let (result, path_style) = jobs(&state)?.check_s3_connection_style(&test).await;
+    if let Err(e) = result {
         return Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, e));
     }
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
@@ -435,15 +454,34 @@ async fn update(
     let secret_changed = plain("secret").as_deref() != Some(get("secret").as_str());
     text_field("bucket", Some(get("bucket")));
     text_field("endpoint", Some(get("endpoint")));
+    let saved_style = s3::uses_path_style_endpoint(&row);
+    if chosen_style != saved_style {
+        audit.insert(
+            "use_path_style_endpoint".to_owned(),
+            json!({"old": saved_style, "new": chosen_style}),
+        );
+        changed.push("use_path_style_endpoint".to_owned());
+    }
     if key_changed {
         changes.push(("key", C::Text(Some(enc.encrypt_string(&get("key"))))));
     }
     if secret_changed {
         changes.push(("secret", C::Text(Some(enc.encrypt_string(&get("secret"))))));
     }
-    // The second `save()` of the transaction: the connection works.
+    // The second `save()` of the transaction: the connection works, maybe with
+    // virtual-hosted-style URLs.
     let mut second: Vec<String> = Vec::new();
     let mut second_audit = Map::new();
+    if path_style != saved_style {
+        changes.push(("use_path_style_endpoint", C::Bool(path_style)));
+    }
+    if path_style != chosen_style {
+        second_audit.insert(
+            "use_path_style_endpoint".into(),
+            json!({"old": chosen_style, "new": path_style}),
+        );
+        second.push("use_path_style_endpoint".to_owned());
+    }
     if !row
         .get("is_usable")
         .and_then(Value::as_bool)
@@ -507,7 +545,11 @@ async fn update(
         )
         .await;
     }
-    Ok(ok(json!({"message": "Storage settings updated and connection verified."})).into_response())
+    Ok(ok(json!({
+        "message": "Storage settings updated and connection verified.",
+        "use_path_style_endpoint": path_style,
+    }))
+    .into_response())
 }
 
 /// `Form::testConnection`.
@@ -538,7 +580,9 @@ async fn test_connection(
         .get("is_usable")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let result = jobs(&state)?.check_s3_connection(&test).await;
+    let chosen_style = s3::uses_path_style_endpoint(&test);
+    let (result, path_style) = jobs(&state)?.check_s3_connection_style(&test).await;
+    let switched = chosen_style && !path_style;
     // `$this->storage->save()` with the tested `is_usable`.
     if was_usable != result.is_ok() {
         crate::audit::mutation(
@@ -562,8 +606,13 @@ async fn test_connection(
             parts::s3_set_usable(&state.db, id, true, state.now()).await?;
             Ok(ok(json!({
                 "message": "Connection is working.",
-                "details": "Tested with \"ListObjectsV2\" action.",
+                "details": if switched {
+                    "The provider rejects path-style URLs, so \"Use path-style URLs\" is now off. Save to keep it."
+                } else {
+                    "Tested with \"ListObjectsV2\" action."
+                },
                 "is_usable": true,
+                "use_path_style_endpoint": path_style,
             }))
             .into_response())
         }
