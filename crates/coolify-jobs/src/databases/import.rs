@@ -170,11 +170,28 @@ fi"#
     )
 }
 
+/// `MYSQL_CLIENT_COMMAND_PATTERN`: a short mysql/mariadb client command (`\\!`, `\\T`, `\\P`, `\\e`,
+/// `\\.`) after an odd run of backslashes. mysqldump escapes a backslash in data as `\\\\`.
+const MYSQL_CLIENT_COMMAND_PATTERN: &str = r"(^|[^\\])(\\\\)*\\[!TPe.]";
+/// `MYSQL_NAMED_CLIENT_COMMAND_PATTERN`: a long client command at the start of a line.
+const MYSQL_NAMED_CLIENT_COMMAND_PATTERN: &str =
+    "^[[:space:]]*(system|tee|pager|edit|source)([[:space:]]|;|$)";
+
+/// `DatabaseImportCommandBuilder::mysql()`. A dump with a client command that runs a shell command
+/// or uses a file is refused, and the client runs with its client commands off where it can
+/// (`--sandbox` on MariaDB, `--commands=FALSE` on MySQL).
 fn mysql_script(binary: &str, prefix: &str, dump_all: bool, restore_users: bool) -> String {
-    let mut preflight = "if is_tar; then\n  extract_tar\n  use_single_tar_member || fail 'A tar backup must contain exactly one SQL dump. Nothing was changed.'\nfi\nis_text || fail 'Unsupported backup format. Use an SQL dump. Nothing was changed.'\n".to_owned();
+    let mut preflight = format!(
+        "if is_tar; then\n  extract_tar\n  use_single_tar_member || fail 'A tar backup must contain exactly one SQL dump. Nothing was changed.'\nfi\nis_text || fail 'Unsupported backup format. Use an SQL dump. Nothing was changed.'\nif stream | LC_ALL=C grep -Eq {} || stream | LC_ALL=C grep -Eiq {}; then\n  fail 'Blocked restore: the backup contains a {binary} client command (system, tee, pager, edit or source). If you trust this dump, restore it from the database container terminal. Nothing was changed.'\nfi\n",
+        quote(MYSQL_CLIENT_COMMAND_PATTERN),
+        quote(MYSQL_NAMED_CLIENT_COMMAND_PATTERN)
+    );
+    let client_safety = format!(
+        "client_safety=\nif {binary} --help 2>/dev/null | grep -q -e '--sandbox'; then\n  client_safety=--sandbox\nelif {binary} --help 2>/dev/null | grep -q -e '--commands'; then\n  client_safety=--commands=FALSE\nfi\n"
+    );
     if !dump_all {
         return format!(
-            "{preflight}if [ \"$(stream | grep -c '^USE `')\" -gt 1 ]; then\n  fail 'This backup contains more than one database. Select \"Backup contains all databases\" to restore it. Nothing was changed.'\nfi\nstream | {binary} -u ${prefix}_USER -p${prefix}_PASSWORD ${prefix}_DATABASE"
+            "{preflight}{client_safety}if [ \"$(stream | grep -c '^USE `')\" -gt 1 ]; then\n  fail 'This backup contains more than one database. Select \"Backup contains all databases\" to restore it. Nothing was changed.'\nfi\nstream | {binary} $client_safety -u ${prefix}_USER -p${prefix}_PASSWORD ${prefix}_DATABASE"
         );
     }
     let root = format!("{binary} -u root -p${{{prefix}_ROOT_PASSWORD}}");
@@ -189,7 +206,7 @@ fn mysql_script(binary: &str, prefix: &str, dump_all: bool, restore_users: bool)
         )
     };
     format!(
-        "{preflight}for pid in $({root} -N -e \"SELECT id FROM information_schema.processlist WHERE user != 'root';\"); do {root} -e \"KILL $pid\" 2>/dev/null || true; done\n{root} -N -e \"SELECT CONCAT('DROP DATABASE IF EXISTS \\`',schema_name,'\\`;') FROM information_schema.schemata WHERE schema_name NOT IN ('information_schema','mysql','performance_schema','sys');\" | {root} || exit 1\n{root} -e \"CREATE DATABASE IF NOT EXISTS \\`{database}\\`;\" || exit 1\n{source} | {root} {database}"
+        "{preflight}{client_safety}for pid in $({root} -N -e \"SELECT id FROM information_schema.processlist WHERE user != 'root';\"); do {root} -e \"KILL $pid\" 2>/dev/null || true; done\n{root} -N -e \"SELECT CONCAT('DROP DATABASE IF EXISTS \\`',schema_name,'\\`;') FROM information_schema.schemata WHERE schema_name NOT IN ('information_schema','mysql','performance_schema','sys');\" | {root} || exit 1\n{root} -e \"CREATE DATABASE IF NOT EXISTS \\`{database}\\`;\" || exit 1\n{source} | {binary} $client_safety -u root -p${{{prefix}_ROOT_PASSWORD}} {database}"
     )
 }
 
@@ -1095,6 +1112,63 @@ mod tests {
         assert!(!contains_postgres_program_execution("SELECT 1;"));
         assert!(!contains_postgres_program_execution(
             "PGDMP anything from program"
+        ));
+    }
+
+    #[test]
+    fn mysql_restores_refuse_client_commands() {
+        let script = mysql_script("mariadb", "MARIADB", false, false);
+        assert!(script.contains(
+            "if stream | LC_ALL=C grep -Eq '(^|[^\\\\])(\\\\\\\\)*\\\\[!TPe.]' || stream | LC_ALL=C grep -Eiq '^[[:space:]]*(system|tee|pager|edit|source)([[:space:]]|;|$)'; then\n  fail 'Blocked restore: the backup contains a mariadb client command"
+        ));
+        assert!(script.contains("client_safety=\nif mariadb --help 2>/dev/null | grep -q -e '--sandbox'; then\n  client_safety=--sandbox\nelif mariadb --help 2>/dev/null | grep -q -e '--commands'; then\n  client_safety=--commands=FALSE\nfi\nif [ "));
+        assert!(script.ends_with(
+            "stream | mariadb $client_safety -u $MARIADB_USER -p$MARIADB_PASSWORD $MARIADB_DATABASE"
+        ));
+        let all = mysql_script("mysql", "MYSQL", true, false);
+        assert!(all.contains("fi\ncommand -v awk >/dev/null 2>&1 || fail 'awk is required to skip the system databases of the backup. Nothing was changed.'\nclient_safety=\n"));
+        assert!(all.ends_with(
+            "|| echo 'Coolify could not filter the system databases of the backup;'; } | mysql $client_safety -u root -p${MYSQL_ROOT_PASSWORD} ${MYSQL_DATABASE:-default}"
+        ));
+        // The patterns as grep -E sees them.
+        let matches = |pattern: &str, flags: &str, text: &str| {
+            std::process::Command::new("grep")
+                .args([flags, pattern])
+                .env("LC_ALL", "C")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .and_then(|mut child| {
+                    use std::io::Write as _;
+                    child.stdin.take().map(|mut i| i.write_all(text.as_bytes()));
+                    child.wait()
+                })
+                .is_ok_and(|s| s.success())
+        };
+        for blocked in ["\\! id\n", "SELECT 1;\\T /tmp/x\n", "a\\\\\\. x\n"] {
+            assert!(
+                matches(MYSQL_CLIENT_COMMAND_PATTERN, "-Eq", blocked),
+                "{blocked}"
+            );
+        }
+        for data in [
+            "INSERT INTO t VALUES ('a\\\\!b');\n",
+            "INSERT INTO t VALUES ('\\n');\n",
+        ] {
+            assert!(
+                !matches(MYSQL_CLIENT_COMMAND_PATTERN, "-Eq", data),
+                "{data}"
+            );
+        }
+        assert!(matches(
+            MYSQL_NAMED_CLIENT_COMMAND_PATTERN,
+            "-Eiq",
+            "  SYSTEM id\n"
+        ));
+        assert!(!matches(
+            MYSQL_NAMED_CLIENT_COMMAND_PATTERN,
+            "-Eiq",
+            "INSERT INTO system VALUES (1);\n"
         ));
     }
 
