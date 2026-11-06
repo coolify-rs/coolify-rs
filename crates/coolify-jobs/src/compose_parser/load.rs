@@ -19,6 +19,7 @@ use super::domains;
 use super::php::{self, escapeshellarg};
 use super::validate;
 use crate::Jobs;
+use crate::applications::deploy::git::{ImportSettings, set_git_import_settings_with};
 
 /// `Application::MAX_DOCKER_COMPOSE_SIZE_BYTES`.
 const MAX_COMPOSE_BYTES: usize = 5 * 1024 * 1024;
@@ -177,6 +178,26 @@ async fn git_commands(
     );
     let base = escapeshellarg(checkout_dir);
     let key_loc = format!("/root/.ssh/id_rsa_coolify_{uuid}");
+    // `setGitImportSettings(..., onlyCheckout: true)`: Git LFS downloads skipped, and the commit
+    // checkout when the application pins a commit.
+    let settings = ImportSettings {
+        shallow,
+        submodules: app.setting_bool("is_git_submodules_enabled"),
+        lfs: app.setting_bool("is_git_lfs_enabled"),
+    };
+    let commit = app.str("git_commit_sha").unwrap_or("HEAD").to_owned();
+    let import = |clone: String, public: bool, ssh: Option<&str>, git_config: Option<&str>| {
+        set_git_import_settings_with(
+            &clone,
+            settings,
+            public,
+            &commit,
+            ssh,
+            git_config,
+            checkout_dir,
+            true,
+        )
+    };
     let out = match kind {
         Kind::GithubApp(src) => {
             let html_url = src
@@ -192,7 +213,12 @@ async fn git_commands(
                 let url = format!("{html_url}/{repository}");
                 GitCommands {
                     ls_remote: format!("git ls-remote {}", escapeshellarg(&url)),
-                    clone: format!("{clone} {} {base}", escapeshellarg(&url)),
+                    clone: import(
+                        format!("{clone} {} {base}", escapeshellarg(&url)),
+                        true,
+                        None,
+                        None,
+                    ),
                     git: "git".into(),
                 }
             } else {
@@ -219,7 +245,12 @@ async fn git_commands(
                 clone = clone.replacen("git clone", &format!("git {option} clone"), usize::MAX);
                 GitCommands {
                     ls_remote: format!("git ls-remote {}", escapeshellarg(&repo_url)),
-                    clone: format!("{clone} {} {base}", escapeshellarg(&repo_url)),
+                    clone: import(
+                        format!("{clone} {} {base}", escapeshellarg(&repo_url)),
+                        false,
+                        None,
+                        Some(&option),
+                    ),
                     git: format!("git {option}"),
                 }
             }
@@ -256,7 +287,12 @@ async fn git_commands(
                 clone = clone.replacen("git clone", &format!("git {option} clone"), usize::MAX);
                 GitCommands {
                     ls_remote: format!("git ls-remote {}", escapeshellarg(&repo_url)),
-                    clone: format!("{clone} {} {base}", escapeshellarg(&repo_url)),
+                    clone: import(
+                        format!("{clone} {} {base}", escapeshellarg(&repo_url)),
+                        false,
+                        None,
+                        Some(&option),
+                    ),
                     git: format!("git {option}"),
                 }
             } else if let Some(pem) = crate::github::team_private_key(&jobs.0.db, enc, src).await {
@@ -275,9 +311,11 @@ async fn git_commands(
                     escapeshellarg(&repository)
                 ));
                 let mut cl = ssh_key_setup(uuid, &key_b64);
-                cl.push(format!(
-                    "{env} {clone} {} {base}",
-                    escapeshellarg(&repository)
+                cl.push(import(
+                    format!("{env} {clone} {} {base}", escapeshellarg(&repository)),
+                    false,
+                    Some(&ssh),
+                    None,
                 ));
                 GitCommands {
                     ls_remote: ls.join(" && "),
@@ -287,7 +325,12 @@ async fn git_commands(
             } else {
                 GitCommands {
                     ls_remote: format!("git ls-remote {}", escapeshellarg(&repository)),
-                    clone: format!("{clone} {} {base}", escapeshellarg(&repository)),
+                    clone: import(
+                        format!("{clone} {} {base}", escapeshellarg(&repository)),
+                        true,
+                        None,
+                        None,
+                    ),
                     git: "git".into(),
                 }
             }
@@ -313,9 +356,11 @@ async fn git_commands(
                 repository.replace('\'', "'\\''")
             ));
             let mut cl = ssh_key_setup(uuid, &key_b64);
-            cl.push(format!(
-                "{env} {clone} {} {base}",
-                escapeshellarg(&repository)
+            cl.push(import(
+                format!("{env} {clone} {} {base}", escapeshellarg(&repository)),
+                false,
+                Some(&ssh),
+                None,
             ));
             GitCommands {
                 ls_remote: ls.join(" && "),
@@ -323,32 +368,23 @@ async fn git_commands(
                 git: format!("{env} git"),
             }
         }
-        Kind::Other => {
-            let mut c = format!("{clone} {} {base}", escapeshellarg(&repository));
-            // setGitImportSettings(public: true, onlyCheckout: true): only the commit checkout.
-            let commit = app.str("git_commit_sha").unwrap_or("HEAD").to_owned();
-            if commit != "HEAD" {
-                let ssh = "GIT_SSH_COMMAND=\"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null\"";
-                let esc = escapeshellarg(&commit);
-                if shallow {
-                    c = format!(
-                        "{c} && cd {base} && echo 'Fetching the commit.' && {ssh} git fetch --depth=1 origin {esc} && git -c advice.detachedHead=false checkout {esc} >/dev/null 2>&1"
-                    );
-                } else {
-                    c = format!(
-                        "{c} && cd {base} && {ssh} git -c advice.detachedHead=false checkout {esc} >/dev/null 2>&1"
-                    );
-                }
-            }
-            GitCommands {
-                ls_remote: format!("git ls-remote {}", escapeshellarg(&repository)),
-                clone: c,
-                git: "git".into(),
-            }
-        }
+        Kind::Other => GitCommands {
+            ls_remote: format!("git ls-remote {}", escapeshellarg(&repository)),
+            clone: import(
+                format!("{clone} {} {base}", escapeshellarg(&repository)),
+                true,
+                None,
+                None,
+            ),
+            git: "git".into(),
+        },
     };
+    // Callers read data from stdout after the checkout, so the checkout's progress goes to stderr.
     Ok(GitCommands {
-        clone: out.clone.replace(" clone ", " clone --quiet "),
+        clone: format!(
+            "exec >&2 && {}",
+            out.clone.replace(" clone ", " clone --quiet ")
+        ),
         ..out
     })
 }
@@ -377,24 +413,22 @@ fn compose_file_read_commands(run: &Run<'_>, uuid: &str, git: &GitCommands) -> V
     let compose_file = format!("{}{location}", base.trim_end_matches('/'))
         .trim_start_matches('/')
         .to_owned();
-    let mut submodule_commands: Vec<String> = Vec::new();
-    if app.setting_bool("is_git_submodules_enabled") {
+    // `composeFileSubmoduleCommand()`: appended to the clone script, because a deploy key is
+    // removed when that script exits.
+    let submodule_command = app.setting_bool("is_git_submodules_enabled").then(|| {
         let depth = if app.setting_bool("is_git_shallow_clone_enabled") {
             " --depth=1"
         } else {
             ""
         };
         let escaped = escapeshellarg(&compose_file);
-        submodule_commands.push("git read-tree HEAD".into());
-        submodule_commands.push(format!(
-            "sh -c {}",
-            escapeshellarg(&format!(
-                "git ls-files -s | while read -r mode object stage path; do if [ \"$mode\" = 160000 ]; then case {escaped} in \"$path\"/*) {} submodule update --init --recursive{depth} -- \"$path\" >/dev/null || exit 1 ;; esac; fi; done",
-                git.git
-            ))
-        ));
-    }
-    let enter = if submodule_commands.is_empty() {
+        format!(
+            "cd {} && git read-tree HEAD && git ls-files -s | while read -r mode object stage path; do if [ \"$mode\" = 160000 ]; then case {escaped} in \"$path\"/*) {} submodule update --init --recursive{depth} -- \"$path\" >/dev/null || exit 1 ;; esac; fi; done",
+            escapeshellarg(&checkout_dir),
+            git.git
+        )
+    });
+    let enter = if submodule_command.is_none() {
         String::new()
     } else {
         [
@@ -423,10 +457,15 @@ fn compose_file_read_commands(run: &Run<'_>, uuid: &str, git: &GitCommands) -> V
         format!("rm -rf /tmp/{uuid}"),
         format!("mkdir -p /tmp/{uuid}"),
         format!("cd /tmp/{uuid}"),
-        format!("sh -c {}", escapeshellarg(&git.clone)),
+        format!(
+            "sh -c {}",
+            escapeshellarg(&match &submodule_command {
+                Some(sub) => format!("{} && {sub}", git.clone),
+                None => git.clone.clone(),
+            })
+        ),
         format!("cd {checkout_dir}"),
     ];
-    cmds.extend(submodule_commands);
     cmds.push(format!("sh -c {}", escapeshellarg(&read)));
     cmds
 }

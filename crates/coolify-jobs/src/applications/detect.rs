@@ -55,10 +55,11 @@ impl Detection {
 }
 
 /// `Application::serverCheckoutCommand($uuid, $checkoutDir)` for a public repository: the
-/// clone without a checkout (`--quiet` added like upstream's `str_replace`).
+/// clone without a checkout (`--quiet` added like upstream's `str_replace`), its progress on
+/// stderr and without Git LFS downloads (the detection application has Git LFS off).
 pub fn checkout_command(clone_url: &str, branch: &str, checkout_dir: &str) -> String {
     format!(
-        "git clone --quiet --depth=1 --no-checkout -b {} {} {}",
+        "exec >&2 && export GIT_LFS_SKIP_SMUDGE=1 && git clone --quiet --depth=1 --no-checkout -b {} {} {}",
         quote(branch),
         quote(clone_url),
         quote(checkout_dir)
@@ -276,6 +277,8 @@ impl Jobs {
             .as_ref()
             .ok_or("No application encryption key has been specified.")?;
         let checkout_dir = quote(&format!("/tmp/{uuid}/checkout"));
+        // `setGitImportSettings(onlyCheckout: true)` puts `gitLfsSkipSmudgePrefix()` before the clone.
+        let lfs = "export GIT_LFS_SKIP_SMUDGE=1 && ";
         let clone = format!("git clone --depth=1 --no-checkout -b {}", quote(branch));
         let command = match c {
             CheckoutCredentials::Github(source) => {
@@ -296,7 +299,7 @@ impl Jobs {
                 );
                 let url = format!("{scheme}://x-access-token:{encoded}@{host}/{repository}");
                 format!(
-                    "{} {} {checkout_dir}",
+                    "{lfs}{} {} {checkout_dir}",
                     clone.replacen("git clone", &format!("git {option} clone"), 1),
                     quote(&url)
                 )
@@ -321,7 +324,7 @@ impl Jobs {
                 );
                 let url = format!("{scheme}://oauth2:{encoded}@{host}{prefix}/{repository}.git");
                 format!(
-                    "{} {} {checkout_dir}",
+                    "{lfs}{} {} {checkout_dir}",
                     clone.replacen("git clone", &format!("git {option} clone"), 1),
                     quote(&url)
                 )
@@ -333,12 +336,16 @@ impl Jobs {
                     "ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -p {port} -o Port={port} -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i {location} -o IdentitiesOnly=yes"
                 );
                 format!(
-                    "mkdir -p /root/.ssh && echo '{key_b64}' | base64 -d | tee {location} > /dev/null && chmod 600 {location} && GIT_SSH_COMMAND=\"{ssh}\" {clone} {} {checkout_dir}",
+                    "mkdir -p /root/.ssh && echo '{key_b64}' | base64 -d | tee {location} > /dev/null && chmod 600 {location} && {lfs}GIT_SSH_COMMAND=\"{ssh}\" {clone} {} {checkout_dir}",
                     quote(repository)
                 )
             }
         };
-        Ok(command.replace(" clone ", " clone --quiet "))
+        // Callers read data from stdout after the checkout, so its progress goes to stderr.
+        Ok(format!(
+            "exec >&2 && {}",
+            command.replace(" clone ", " clone --quiet ")
+        ))
     }
 
     async fn detect_with_checkout(
@@ -559,7 +566,7 @@ mod tests {
         let c = scan_commands("u", "https://github.com/a/b", "main", "/static").unwrap_or_default();
         assert_eq!(
             c[3],
-            "sh -c 'git clone --quiet --depth=1 --no-checkout -b '\\''main'\\'' '\\''https://github.com/a/b'\\'' '\\''/tmp/u/checkout'\\'''"
+            "sh -c 'exec >&2 && export GIT_LFS_SKIP_SMUDGE=1 && git clone --quiet --depth=1 --no-checkout -b '\\''main'\\'' '\\''https://github.com/a/b'\\'' '\\''/tmp/u/checkout'\\'''"
         );
         assert!(c[5].contains("'\\''HEAD:static'\\''"));
         assert_eq!(urlencode("feat/a b"), "feat%2Fa+b");

@@ -6,7 +6,9 @@
 //! persistent volumes. Generated secrets are compared by key, length and character class.
 //! The fixtures were recorded at b5823c7; the port-suffixed `SERVICE_URL_*_<port>` and
 //! `SERVICE_FQDN_*_<port>` values were updated by hand for v4.5.3 (1440ea83d,
-//! `syncComposeServiceUrlVariables`), which keeps them in sync with the service domain.
+//! `syncComposeServiceUrlVariables`), which keeps them in sync with the service domain, and the
+//! clone line of the `load-*` read commands for 1a2a5362a and 56af27d46 (`exec >&2`, the Git LFS
+//! skip, and the submodule step inside the clone script).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

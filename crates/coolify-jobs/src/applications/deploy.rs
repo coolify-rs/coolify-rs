@@ -7,7 +7,7 @@
 mod build;
 mod commands;
 pub(super) mod compose_pack;
-mod git;
+pub(crate) mod git;
 mod preview;
 mod secrets;
 pub(crate) use secrets::remote_redaction_values;

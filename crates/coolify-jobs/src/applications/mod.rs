@@ -2,7 +2,7 @@
 //! queue and the deployment job (Docker image build pack).
 
 pub mod compose;
-mod deploy;
+pub(crate) mod deploy;
 pub use deploy::compose_pack::{inject_build_args, inject_compose_flags};
 pub(crate) use deploy::remote_redaction_values;
 pub mod detect;
