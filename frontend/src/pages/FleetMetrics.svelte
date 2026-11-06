@@ -243,10 +243,22 @@
     }
   }
 
-  // `wire:poll.60s="loadData"`.
+  /** `pollSeconds()`: null while live refresh is off. */
+  const pollSeconds = $derived(live ? 60 : null);
+  let lastPoll = 0;
+  /** `pollData()`: at most one refresh a minute (one second of slack), and none while paused. */
+  function pollData() {
+    if (pollSeconds === null) return;
+    const now = Date.now();
+    if (now - lastPoll < (pollSeconds - 1) * 1000) return;
+    lastPoll = now;
+    void load();
+  }
+
+  // `wire:poll.{pollSeconds}s="pollData"`.
   $effect(() => {
     clearInterval(poll);
-    poll = live ? setInterval(() => void load(), 60000) : undefined;
+    poll = pollSeconds === null ? undefined : setInterval(pollData, pollSeconds * 1000);
   });
   onDestroy(() => {
     clearInterval(poll);
@@ -324,15 +336,25 @@
 
         <div class="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
           <div class="relative w-full transition-opacity sm:w-44 {loading === 'setRange' ? 'pointer-events-none opacity-60' : ''}">
-            <Listbox id="range" bind:value={range} options={rangeOptions} onchange={() => void load('setRange')} />
+            <Listbox
+              id="range"
+              bind:value={range}
+              options={rangeOptions}
+              onchange={() => {
+                // `setRange()`: every refresh fetches the full range from each server, so a new range starts paused.
+                live = false;
+                void load('setRange');
+              }}
+            />
             {@render filterOverlay('setRange')}
           </div>
           <LiveToggle
             bind:live
             storageKey="metrics-live"
+            restoreLive={range === '24h'}
             title="Turn live refresh on or off (updates every 60 seconds)"
             onchange={(next) => {
-              if (next) void load();
+              if (next) pollData();
             }}
           />
         </div>

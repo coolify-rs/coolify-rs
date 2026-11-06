@@ -1,16 +1,20 @@
 <script lang="ts">
-  // Port of upstream components/live-toggle.blade.php.
+  // Port of upstream components/live-toggle.blade.php. `storageKey` keeps the last choice the user
+  // clicked; changes made by the page (a range that starts paused) are not stored. A stored "off"
+  // always applies on load; a stored "on" applies only when `restoreLive` is true.
   let {
     live = $bindable(),
     storageKey,
+    restoreLive = true,
     title = 'Turn live refresh on or off',
     onchange,
-  }: { live: boolean; storageKey: string; title?: string; onchange?: (live: boolean) => void } = $props();
+  }: { live: boolean; storageKey: string; restoreLive?: boolean; title?: string; onchange?: (live: boolean) => void } = $props();
 
   try {
     const stored = localStorage.getItem(storageKey);
     if (stored === '0') live = false;
-    if (stored === '1') live = true;
+    // svelte-ignore state_referenced_locally
+    if (stored === '1' && restoreLive) live = true;
   } catch {
     // The component's default applies.
   }

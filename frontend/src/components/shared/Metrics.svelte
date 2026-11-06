@@ -31,7 +31,9 @@
   let memory: ApexChart | null = null;
   let poll: ReturnType<typeof setInterval> | undefined;
   const showCharts = $derived(d && !(d.is_application && d.build_pack === 'dockercompose') && d.metrics_enabled && d.running);
-  const pollSeconds = $derived(Number(interval) <= 60 ? 5 : 60);
+  /** `pollSeconds()`: null while live refresh is off. */
+  const pollSeconds = $derived(live ? (Number(interval) <= 60 ? 5 : 60) : null);
+  let lastPoll = 0;
 
   $effect(() => {
     request<any>('GET', `${resPath(kind, uuid)}/metrics`).then((r) => (d = r));
@@ -88,9 +90,18 @@
     }
   }
 
+  /** `pollData()`: at most one refresh per poll period (one second of slack), and none while paused. */
+  function pollData() {
+    if (pollSeconds === null) return;
+    const now = Date.now();
+    if (now - lastPoll < (pollSeconds - 1) * 1000) return;
+    lastPoll = now;
+    void loadData();
+  }
+
   function schedule() {
     clearInterval(poll);
-    poll = live ? setInterval(loadData, pollSeconds * 1000) : undefined;
+    poll = pollSeconds === null ? undefined : setInterval(pollData, pollSeconds * 1000);
   }
 
   let mounted = false;
@@ -154,7 +165,7 @@
             bind:live
             storageKey="resource-metrics-live"
             onchange={(next) => {
-              if (next) void loadData();
+              if (next) pollData();
               schedule();
             }}
           />
@@ -166,12 +177,14 @@
             bind:value={interval}
             options={INTERVALS}
             onchange={() => {
+              // `updatedInterval()`: ranges up to one hour refresh live; longer ranges load once.
+              live = Number(interval) <= 60;
               void loadData();
               schedule();
             }}
           />
         </div>
-        <p class="mt-3 text-xs leading-5 text-neutral-500 dark:text-fg-dim">While live, ranges up to one hour refresh every five seconds. Longer ranges refresh every minute.</p>
+        <p class="mt-3 text-xs leading-5 text-neutral-500 dark:text-fg-dim">Ranges up to one hour refresh live every five seconds. Longer ranges load once; turn on live refresh to update them every minute.</p>
       </SettingsSection>
 
       <SettingsSection id="cpu-metrics-section" title="CPU usage" description="CPU usage of the container, as in docker stats. 100% means one CPU core is fully busy, so a container that uses more than one core can go above 100%. The maximum is the number of cores × 100%.">
