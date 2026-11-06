@@ -372,7 +372,9 @@ pub async fn change(
         Value::Object(o) => o,
         _ => serde_json::Map::new(),
     };
-    let repository = a.str("git_repository").unwrap_or_default().to_owned();
+    // `gitRepositorySlug($customRepository)`: an SSH repository URL becomes `owner/repo`.
+    let repository =
+        coolify_jobs::github::git_repository_slug(a.str("git_repository").unwrap_or_default());
     let enc = state.encrypter.as_ref();
     let connected = |r: &serde_json::Map<String, Value>| {
         let filled = |k: &str| {

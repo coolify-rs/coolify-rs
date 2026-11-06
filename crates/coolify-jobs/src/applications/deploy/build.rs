@@ -1036,7 +1036,7 @@ impl Run {
                 &self.jobs.0.db,
                 &source.row,
                 &token,
-                &self.b.repository,
+                &crate::github::git_repository_slug(&self.b.repository),
             )
             .await
             .map_err(Fail::new)?;

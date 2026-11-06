@@ -19,6 +19,47 @@ use sha2::Sha256;
 
 use crate::git_http;
 
+/// `sshGitUrlToHttps()`.
+pub fn ssh_git_url_to_https(url: &str) -> Option<String> {
+    if let Some(rest) = url.strip_prefix("ssh://") {
+        let (authority, path) = rest.split_once('/')?;
+        let host = authority.rsplit('@').next()?;
+        let host = match host.strip_prefix('[') {
+            Some(h) => format!("[{}", h.split_once(']').map(|x| x.0).unwrap_or(h)) + "]",
+            None => host.split(':').next().unwrap_or(host).to_owned(),
+        };
+        let path = path.trim_start_matches('/');
+        return (!host.is_empty() && !path.is_empty()).then(|| format!("https://{host}/{path}"));
+    }
+    let re = regex::Regex::new(
+        r"^(?<user>[A-Za-z0-9._-]+)@(?<host>\[[0-9A-Fa-f:.]+\]|[^:\[\]]+):(?:(?<port>\d+)/)?(?<path>.+)$",
+    )
+    .unwrap_or_else(|_| unreachable!());
+    let c = re.captures(url)?;
+    let host = c["host"].trim();
+    let path = c["path"].trim_start_matches('/');
+    (!host.is_empty() && !path.is_empty()).then(|| format!("https://{host}/{path}"))
+}
+
+/// `gitRepositorySlug()`: the `owner/repo` that the GitHub API takes, also for SSH repository URLs.
+pub fn git_repository_slug(repository: &str) -> String {
+    if repository.is_empty() {
+        return String::new();
+    }
+    let slug = match ssh_git_url_to_https(repository) {
+        Some(https) => crate::applications::domains::UrlParts::parse(&https)
+            .and_then(|p| p.path)
+            .unwrap_or_default(),
+        None if repository.starts_with("http") || repository.contains("github.com") => repository
+            .replace("https://", "")
+            .replace("http://", "")
+            .replace("github.com/", ""),
+        None => repository.to_owned(),
+    };
+    let slug = slug.trim_matches('/');
+    slug.strip_suffix(".git").unwrap_or(slug).to_owned()
+}
+
 fn field<'a>(source: &'a Record, k: &str) -> Option<&'a str> {
     source.get(k).and_then(Value::as_str)
 }

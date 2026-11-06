@@ -255,7 +255,7 @@ pub fn git_commit_link(
         return Some(format!("{html}/{repo}/{path}/{commit}"));
     }
     let repo = git_repository?;
-    let repo = ssh_git_url_to_https(repo).unwrap_or_else(|| repo.to_owned());
+    let repo = crate::github::ssh_git_url_to_https(repo).unwrap_or_else(|| repo.to_owned());
     let (scheme, rest) = repo.split_once("://")?;
     if !matches!(scheme, "http" | "https") {
         return None;
@@ -282,28 +282,6 @@ pub fn git_commit_link(
         "commit"
     };
     Some(format!("{scheme}://{host}{path}{segment}/{commit}"))
-}
-
-/// `sshGitUrlToHttps()`.
-fn ssh_git_url_to_https(url: &str) -> Option<String> {
-    if let Some(rest) = url.strip_prefix("ssh://") {
-        let (authority, path) = rest.split_once('/')?;
-        let host = authority.rsplit('@').next()?;
-        let host = match host.strip_prefix('[') {
-            Some(h) => format!("[{}", h.split_once(']').map(|x| x.0).unwrap_or(h)) + "]",
-            None => host.split(':').next().unwrap_or(host).to_owned(),
-        };
-        let path = path.trim_start_matches('/');
-        return (!host.is_empty() && !path.is_empty()).then(|| format!("https://{host}/{path}"));
-    }
-    let re = regex::Regex::new(
-        r"^(?<user>[A-Za-z0-9._-]+)@(?<host>\[[0-9A-Fa-f:.]+\]|[^:\[\]]+):(?:(?<port>\d+)/)?(?<path>.+)$",
-    )
-    .unwrap_or_else(|_| unreachable!());
-    let c = re.captures(url)?;
-    let host = c["host"].trim();
-    let path = c["path"].trim_start_matches('/');
-    (!host.is_empty() && !path.is_empty()).then(|| format!("https://{host}/{path}"))
 }
 
 /// A pull request preview of a deployment.

@@ -1801,21 +1801,7 @@ impl GitKind {
 
 /// `gitRepositorySlug()`: `owner/repo` of a GitHub URL, SSH URL or slug.
 fn git_repository_slug(repository: &str) -> String {
-    if repository.is_empty() {
-        return String::new();
-    }
-    let slug = match git_urls::ssh_git_url_to_https(repository) {
-        Some(https) => UrlParts::parse(&https)
-            .and_then(|p| p.path)
-            .unwrap_or_default(),
-        None if repository.starts_with("http") || repository.contains("github.com") => repository
-            .replace("https://", "")
-            .replace("http://", "")
-            .replace("github.com/", ""),
-        None => repository.to_owned(),
-    };
-    let slug = slug.trim_matches('/');
-    slug.strip_suffix(".git").unwrap_or(slug).to_owned()
+    coolify_jobs::github::git_repository_slug(repository)
 }
 
 /// The git branches of `create_application()` (AC:1542-2395): validation, the type's
