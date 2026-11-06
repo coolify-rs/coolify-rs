@@ -6,7 +6,7 @@ services:
     deploy:
       replicas: 0
   coolify:
-    image: "${REGISTRY_URL:-docker.io}/${COOLIFY_RS_IMAGE:-coolify-rs/coolify-rs}:${LATEST_IMAGE:-latest}"
+    image: "${COOLIFY_RS_REGISTRY:-ghcr.io}/${COOLIFY_RS_IMAGE:-coolify-rs/coolify-rs}:${LATEST_IMAGE:-latest}"
     command: ["boot"]
     volumes:
       - /data/coolify/ssh:/data/coolify-rs/ssh

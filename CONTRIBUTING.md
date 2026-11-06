@@ -5,6 +5,18 @@
 Read `docs/PROJECT_STATE.md` (where things stand) and `docs/MIGRATION_STRATEGY.md` (how features are ported).
 Verify claims in those documents against the code and tests before relying on them.
 
+## Branches and releases
+
+- `develop` is the default branch. Work happens on a feature branch cut from `develop`, and goes back into `develop`
+  through a pull request once CI passes.
+- `main` holds released code only. A release merges `develop` into `main`, then tags `main` as `v<version>`.
+- The version names the Coolify release coolify-rs matches plus a counter: `4.5.3-rs.1`, `4.5.3-rs.2`, then
+  `4.6.0-rs.1` once Coolify 4.6.0 is ported.
+- To release: set `coolify.v4.version` (and `nightly`) in `scripts/install/versions.json`, write
+  `docs/releases/v<version>.md`, merge into `main`, then push the tag. `.github/workflows/release.yml` checks that
+  they agree, builds and pushes the amd64 and arm64 image to `ghcr.io/coolify-rs/coolify-rs`, and publishes the GitHub
+  release with the installer files, which is where installs and upgrades fetch them from.
+
 ## Porting a feature (vertical slice)
 
 1. Find the upstream implementation and record it in `compat/mapping/registry.toml` (paths, symbols, routes, tables,

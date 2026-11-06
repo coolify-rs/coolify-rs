@@ -9,10 +9,10 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 
 ## Install and upgrades
 
-- **Install and update address.** Upstream installs and updates from Coolify's CDN. coolify-rs has no published
-  install address yet: `COOLIFY_RS_CDN` must be set on the first install, and the image name `coolify-rs/coolify-rs` is
-  a placeholder. Update checks only read coolify-rs's own version file (`COOLIFY_RS_VERSIONS_URL` or `CDN_URL`);
-  without one, updates are off.
+- **Install and update address.** Upstream installs and updates from Coolify's CDN. coolify-rs installs and updates
+  from its GitHub releases (`COOLIFY_RS_CDN`, default `https://github.com/coolify-rs/coolify-rs/releases/latest/download`)
+  and pulls `ghcr.io/coolify-rs/coolify-rs` (`COOLIFY_RS_REGISTRY`). `REGISTRY_URL` applies to Coolify's helper image
+  only. Update checks read coolify-rs's own version file (`COOLIFY_RS_VERSIONS_URL` or `CDN_URL`).
 - **Existing Coolify databases.** coolify-rs does not run upstream's migrations. A database from an older Coolify
   release is served read-only until upstream Coolify upgrades it. A database with migrations newer than the build is
   read-only too (writes answer `503`) unless `COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA=true`.

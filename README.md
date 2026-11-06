@@ -85,66 +85,21 @@ Where coolify-rs and Coolify still differ, [docs/KNOWN_LIMITATIONS.md](docs/KNOW
 
 ### Install on a server
 
-coolify-rs installs the way Coolify does: one script, run as root on a clean server with at least 30 GB of disk.
-It is tested on Ubuntu; like Coolify's installer, it also handles Debian, the RHEL family, SUSE, Arch and Alpine. It installs Docker and OpenSSH if needed, creates the
-`/data/coolify` folders, generates secrets and an SSH key for the server, and starts coolify-rs with Docker Compose.
+On a clean server (amd64 or arm64, 30 GB of disk; Ubuntu is tested), as root:
 
 ```bash
-curl -fsSL "$COOLIFY_RS_CDN/install.sh" | COOLIFY_RS_CDN="$COOLIFY_RS_CDN" bash
+curl -fsSL https://github.com/coolify-rs/coolify-rs/releases/latest/download/install.sh | sudo bash
 ```
 
-`COOLIFY_RS_CDN` is the address the files in `scripts/install` are published at. No official release is published
-yet, so build and serve your own; see [Install from a local build](#install-from-a-local-build).
+Then open `http://<your-server>:8000` and register; the first account owns the instance. Back up
+`/data/coolify/source/.env`: it holds the `APP_KEY` that encrypts your secrets. Requirements, installer settings,
+upgrades and installing a local build: [docs/INSTALL.md](docs/INSTALL.md).
 
-When the script finishes, open `http://<your-server>:8000` and register. The first account owns the instance, and
-registration stays open for 10 minutes after a start (`docker restart coolify` opens it again). Then add a server,
-create a project and deploy.
+### Move from Coolify
 
-**Back up `/data/coolify/source/.env`.** It holds the `APP_KEY` that encrypts your secrets, and the database cannot be
-read without it. Running the installer again keeps the secrets, the key and the data.
-
-| Variable | Meaning |
-|---|---|
-| `COOLIFY_RS_CDN` | Where `install.sh`, `upgrade.sh`, the Compose files and `versions.json` are published. Required on the first run, kept afterwards |
-| `REGISTRY_URL`, `COOLIFY_RS_IMAGE` | Registry and image name. Default `docker.io` and `coolify-rs/coolify-rs` |
-| `COOLIFY_RS_IMAGE_FILE` | Load the image from a `docker save` file instead of pulling it |
-| `COOLIFY_RS_PULL=false` | Use the image already on the server |
-| `ROOT_USER_EMAIL`, `ROOT_USER_PASSWORD`, `ROOT_USERNAME` | Create the first user during the install |
-| `AUTOUPDATE=false`, `DOCKER_ADDRESS_POOL_*` | As in Coolify's installer |
-
-### Install from a local build
-
-On a machine with Docker and this repository, build the image. Its tag must match the version in
-`scripts/install/versions.json`:
-
-```bash
-VERSION=$(python3 -c "import json; print(json.load(open('scripts/install/versions.json'))['coolify']['v4']['version'])")
-docker build -t "coolify-rs/coolify-rs:$VERSION" .
-docker save "coolify-rs/coolify-rs:$VERSION" -o coolify-rs.tar
-```
-
-Copy `coolify-rs.tar` and the `scripts/install` folder to the server. Then, as root on the server, publish the folder
-on an address that both the server and its containers can reach, and run the installer:
-
-```bash
-grep -q host.docker.internal /etc/hosts || echo "127.0.0.1 host.docker.internal" >> /etc/hosts
-(cd install && nohup python3 -m http.server 8899 --bind 0.0.0.0 > /tmp/coolify-rs-cdn.log 2>&1 &)
-curl -fsSL http://host.docker.internal:8899/install.sh |
-  COOLIFY_RS_CDN=http://host.docker.internal:8899 COOLIFY_RS_IMAGE_FILE="$PWD/coolify-rs.tar" bash
-```
-
-A throwaway virtual machine (Multipass, OrbStack, UTM or a cloud server) is a good place for a first try.
-
-### Upgrade
-
-Use the Upgrade button, turn on automatic updates, or run:
-
-```bash
-bash /data/coolify/source/upgrade.sh <version> <helper version>
-```
-
-`upgrade.sh` first dumps the database to `/data/coolify/backups/coolify-rs-upgrades/` and stops if that fails. To
-restore a dump: `docker exec -i coolify-db pg_restore -U coolify -d coolify --clean --if-exists < <file>`.
+coolify-rs takes over a Coolify server in place, with the same database, secrets, SSH keys and running resources, and
+Coolify can take it back. Each release matches one Coolify release: `4.5.3-rs.1` matches Coolify 4.5.3. Back up, run
+the dry-run check, then the same installer: [docs/MIGRATING.md](docs/MIGRATING.md).
 
 ### Run it against an existing Coolify database
 
