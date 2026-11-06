@@ -13,9 +13,11 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
   from its GitHub releases (`COOLIFY_RS_CDN`, default `https://github.com/coolify-rs/coolify-rs/releases/latest/download`)
   and pulls `ghcr.io/coolify-rs/coolify-rs` (`COOLIFY_RS_REGISTRY`). `REGISTRY_URL` applies to Coolify's helper image
   only. Update checks read coolify-rs's own version file (`COOLIFY_RS_VERSIONS_URL` or `CDN_URL`).
-- **Existing Coolify databases.** coolify-rs does not run upstream's migrations. A database from an older Coolify
-  release is served read-only until upstream Coolify upgrades it. A database with migrations newer than the build is
-  read-only too (writes answer `503`) unless `COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA=true`.
+- **Existing Coolify databases.** Each release takes over exactly one Coolify release (4.5.3 for `4.5.3-rs.1`; see
+  [MIGRATING.md](MIGRATING.md)). `coolify-rs boot` runs only the upstream migrations that bring its own earlier
+  installs up to that release. A database from an older Coolify release is served read-only until Coolify itself is
+  upgraded to the matching release. A database with migrations newer than the build is read-only too (writes answer
+  `503`) unless `COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA=true`.
 - **Install layout.** No SSH key files or multiplexing sockets on disk, ports 6001 and 6002 are not published, and
   there are no `applications`, `databases`, `services` or `backups` mounts. The terminal websocket is served at
   `/terminal/ws` on the UI's port, so `TERMINAL_PROTOCOL`, `TERMINAL_HOST` and `TERMINAL_PORT` do not apply.
