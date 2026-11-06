@@ -78,7 +78,7 @@ fn status(code: StatusCode, body: Value) -> ApiError {
     ApiError::Status(code, body)
 }
 
-fn registry_error(e: RegistryError) -> ApiError {
+pub(crate) fn registry_error(e: RegistryError) -> ApiError {
     let message = e.to_string();
     match e {
         RegistryError::GrantRequired {

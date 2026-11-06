@@ -16,7 +16,7 @@
 //! - `PATCH`, `DELETE /ui/plugins/{publisher}/{name}`: instance-wide switch; uninstall (password step).
 //! - `GET /ui/plugins/team`, `POST /ui/plugins/{publisher}/{name}/team`: the team page and its switch.
 //! - `GET /ui/plugins/catalog`, `POST /ui/plugins/catalog/refresh`, `POST /ui/plugins/catalog/install`,
-//!   `POST /ui/plugins/{publisher}/{name}/update`: the registry catalogue, through [`catalog`].
+//!   `POST /ui/plugins/{publisher}/{name}/update`: the registry catalogue, with the catalogue API's calls and answers.
 //! - `GET /ui/plugins/{publisher}/{name}/panels/{slot}?panel=&resource=`: one panel's document, for a
 //!   sandboxed frame (see [`panel`]).
 //! - `/ui/ext/{publisher}/{name}/...`: the plugin's own routes for the session's team, any method, served
@@ -31,12 +31,14 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Extension, Router};
 use base64::Engine as _;
+use coolify_plugins::registry;
 use coolify_plugins::{Caller, Installed, Manifest, PanelError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::auth::AuthCtx;
 use crate::response::{ApiError, ApiResult, created, ok};
+use crate::routes::plugin_registry::registry_error;
 use crate::routes::plugins::{call, find, host, internal, not_found, present};
 use crate::state::AppState;
 
@@ -138,11 +140,9 @@ async fn nav(State(state): State<AppState>, Extension(ctx): Extension<AuthCtx>) 
     let installed = coolify_plugins::store::list(host.db())
         .await
         .map_err(internal)?;
-    let admin = coolify_db::instance_settings::is_instance_admin(&state.db, ctx.user_id).await?;
-    let settings = admin
-        && (!installed.is_empty()
-            || state.allow_unverified_plugins
-            || catalog(&state, &ctx, CatalogOp::Available).await.is_some());
+    // Every running plugin host has the registry catalogue (ADR 0010, section 7), so instance admins always
+    // have Settings → Plugins while plugins are on: that is where the first plugin is installed.
+    let settings = coolify_db::instance_settings::is_instance_admin(&state.db, ctx.user_id).await?;
     let panels: Vec<Value> = host
         .panels_for_team(ctx.team_id)
         .await
@@ -557,97 +557,102 @@ struct TeamBody {
 }
 
 // ---- Settings: the registry catalogue ----
+//
+// The same calls and answers as `routes/plugin_registry.rs` (ADR 0010, section 7): `registry::*` does the
+// work, and `registry_error` maps its errors to the API's statuses and bodies.
 
-/// A request of the settings page to the registry catalogue.
-#[derive(Debug)]
-pub(crate) enum CatalogOp<'a> {
-    /// Whether this instance has a catalogue at all.
-    Available,
-    /// `GET /api/v1/plugins/catalog`: `[{id, name, description, license, source, latest_version,
-    /// capabilities, installed_version, update_available, pending_update, yanked, revoked}]`.
-    List,
-    /// `POST /api/v1/plugins/catalog/refresh`.
-    Refresh,
-    /// `POST /api/v1/plugins/catalog/install` with `{id, version?, grant?}`; without the grant it answers
-    /// 422 `{message, capabilities}`.
-    Install(&'a Value),
-    /// `POST /api/v1/plugins/{publisher}/{name}/update` with `{version?, grant?}`.
-    Update(&'a str, &'a Value),
-}
-
-/// The one place the web UI reaches the registry catalogue (ADR 0010, phase 2), as a status and a JSON
-/// body in the shapes of the catalogue API. `None` means this instance has no catalogue: the endpoints
-/// answer 404 and the page hides the section. The caller has already checked that `ctx` is an instance
-/// admin.
-pub(crate) async fn catalog(
-    state: &AppState,
-    ctx: &AuthCtx,
-    op: CatalogOp<'_>,
-) -> Option<Result<(StatusCode, Value), ApiError>> {
-    // The registry client lands with phase 2; until then there is nothing to proxy.
-    let _ = (state, ctx);
-    match op {
-        CatalogOp::Available | CatalogOp::List | CatalogOp::Refresh => None,
-        CatalogOp::Install(body) => {
-            let _ = body;
-            None
-        }
-        CatalogOp::Update(id, body) => {
-            let _ = (id, body);
-            None
-        }
-    }
-}
-
-async fn proxied(state: &AppState, ctx: &AuthCtx, op: CatalogOp<'_>) -> ApiResult {
-    host(state)?;
-    instance_admin(state, ctx).await?;
-    match catalog(state, ctx, op).await {
-        None => Err(ApiError::Status(
-            StatusCode::NOT_FOUND,
-            json!({"message": "The plugin catalogue is not available on this instance."}),
-        )),
-        Some(Ok((status, body))) => Ok(crate::response::PhpJson(status, body).into_response()),
-        Some(Err(e)) => Err(e),
-    }
-}
-
+/// The catalogue page: `{index, plugins}`. Before the first refresh `index` is null and `plugins` empty.
 async fn catalog_list(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
 ) -> ApiResult {
-    proxied(&state, &ctx, CatalogOp::List).await
+    let host = host(&state)?;
+    instance_admin(&state, &ctx).await?;
+    let catalog = registry::catalog(host).await.map_err(registry_error)?;
+    Ok(ok(serde_json::to_value(catalog).map_err(internal)?).into_response())
 }
 
 async fn catalog_refresh(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
 ) -> ApiResult {
-    proxied(&state, &ctx, CatalogOp::Refresh).await
+    let host = host(&state)?;
+    instance_admin(&state, &ctx).await?;
+    let refreshed = registry::refresh(host).await.map_err(registry_error)?;
+    Ok(ok(serde_json::to_value(refreshed).map_err(internal)?).into_response())
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CatalogInstallBody {
+    id: String,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    grant: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct CatalogUpdateBody {
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    grant: Option<Vec<String>>,
+}
+
+/// Installs from the catalogue; without the exact capability list as `grant` it answers 422 with it.
 async fn catalog_install(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
     body: Bytes,
 ) -> ApiResult {
-    let body: Value = parse(&body)?;
-    proxied(&state, &ctx, CatalogOp::Install(&body)).await
+    let host = host(&state)?;
+    instance_admin(&state, &ctx).await?;
+    let b: CatalogInstallBody = parse(&body)?;
+    let installed = registry::install(
+        host,
+        &b.id,
+        b.version.as_deref(),
+        b.grant.as_deref(),
+        Some(ctx.user_id),
+    )
+    .await
+    .map_err(registry_error)?;
+    let on = coolify_plugins::store::enabled_for_team(host.db(), &installed.id, ctx.team_id)
+        .await
+        .map_err(internal)?;
+    Ok(created(settings_item(&installed, on)).into_response())
 }
 
+/// Updates to the newest version, or `version`; one that asks for more answers 422 with what it adds.
 async fn catalog_update(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
     Path((publisher, name)): Path<(String, String)>,
     body: Bytes,
 ) -> ApiResult {
-    let body: Value = if body.is_empty() {
-        json!({})
+    let host = host(&state)?;
+    instance_admin(&state, &ctx).await?;
+    let b: CatalogUpdateBody = if body.iter().all(u8::is_ascii_whitespace) {
+        CatalogUpdateBody::default()
     } else {
         parse(&body)?
     };
     let id = format!("{publisher}/{name}");
-    proxied(&state, &ctx, CatalogOp::Update(&id, &body)).await
+    let installed = registry::update(
+        host,
+        &id,
+        b.version.as_deref(),
+        b.grant.as_deref(),
+        Some(ctx.user_id),
+    )
+    .await
+    .map_err(registry_error)?;
+    let on = coolify_plugins::store::enabled_for_team(host.db(), &installed.id, ctx.team_id)
+        .await
+        .map_err(internal)?;
+    Ok(ok(settings_item(&installed, on)).into_response())
 }
 
 #[cfg(test)]

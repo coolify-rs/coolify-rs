@@ -115,18 +115,25 @@ endpoint is the plugin's routes for the session's team, with exactly the respons
   **Unverified** badge, the granted capabilities, the instance switch, why a plugin was switched off, and
   uninstall through the usual confirmation modal (type the id, then the password). Upload install in
   development mode: the first request answers the capability list, a modal shows exactly what will be granted,
-  and approving sends it back as the grant. The registry catalogue (ADR 0010 phase 2) is listed when the
-  instance has one, with install, update and approval of updates that ask for more.
-- **Team → Plugins**: plugins switched on for the instance, with their capabilities and the team's switch. For a plugin holding `deploy` (ADR 0011), switching it on opens a dialog that asks whether it may queue the team's deployments, and the page shows and can change that answer.
-  Owners and admins change it; members see it.
-- The menus get these entries only when there is something there: Settings → Plugins when a plugin is
-  installed, development mode is on or a catalogue exists; Team → Plugins when an installed plugin is switched
-  on. `GET /ui/plugins/nav` tells the UI, and answers 404 when plugins are switched off.
+  and approving sends it back as the grant. The registry catalogue (ADR 0010, section 7) lists the signed
+  index with Refresh, Install, Update and the approval of updates that ask for more, showing what they add.
+  Before the first refresh it is an empty catalogue with the Refresh button. The registry's errors (never
+  fetched, already installed, yanked, revoked, a bad signature or hash) are shown as the API words them.
+  Uninstalling a plugin that still owns rows of Coolify's tables (ADR 0012) shows the 409's message.
+- **Team → Plugins**: plugins switched on for the instance, with their capabilities and the team's switch.
+  Owners and admins change it; members see it. For a plugin holding `deploy` (ADR 0011), switching it on
+  opens a dialog that asks whether it may queue the team's deployments, and the page shows and can change
+  that answer.
+- The menus get these entries only when there is something there: Settings → Plugins for instance admins
+  while plugins are on (the registry catalogue is always there, and it is where the first plugin is
+  installed); Team → Plugins when an installed plugin is switched on. `GET /ui/plugins/nav` tells the UI, and
+  answers 404 when plugins are switched off.
 
 ## Consequences
 
-- With no plugin installed, no page changes: no menu entry, no section, no frame. A test compares the
-  dashboard, team, session and settings data with and without the plugin system.
+- With no plugin installed, pages show no Team entry, no section, no frame and no resource tab. Instance admins
+  see one extra Settings entry, Plugins, unless `COOLIFY_RS_PLUGINS=off`. A test compares the dashboard, team,
+  session and settings data with and without the plugin system.
 - Panels can't use web fonts, remote images or stylesheets; they inline what they need or use `data:` URLs.
   The SDK's `ui::STYLE` gives them coolify-rs's look in both themes.
 - Panels can't link out (`allow-popups` is not granted). A plugin that needs to send the user somewhere shows

@@ -261,9 +261,12 @@ async fn settings_and_team_pages_follow_the_api_rules() {
     root.write(&h, "PATCH", switch, json!({"enabled": true}))
         .await;
 
-    // The catalogue is not part of this build: the page hides it on 404.
+    // The registry catalogue (ui_plugin_catalog.rs covers it): empty until the first refresh.
     let r = root.get(&h, "/ui/plugins/catalog").await;
-    assert_eq!(r.status, 404, "{}", r.body);
+    assert_eq!(
+        (r.status.as_u16(), r.body.as_str()),
+        (200, r#"{"index":null,"plugins":[]}"#)
+    );
     assert_eq!(alice.get(&h, "/ui/plugins/catalog").await.status, 403);
 
     // Uninstalling takes the password step of the confirmation modal.
@@ -577,8 +580,8 @@ async fn no_plugins_installed_changes_nothing() {
                 "{path} as {email}"
             );
         }
-        // Without plugins: nothing to show. With the host but nothing installed and no way to install:
-        // no Plugins entry in either menu, and no panels.
+        // Without plugins: nothing to show. With the host but nothing installed: no Team entry and no
+        // panels; only instance admins get Settings → Plugins, where the registry catalogue is.
         let r = a.get(&plain, "/ui/plugins/nav").await;
         assert_eq!(
             (r.status.as_u16(), r.body.as_str()),
@@ -587,26 +590,13 @@ async fn no_plugins_installed_changes_nothing() {
                 r#"{"message":"Plugins are switched off on this instance."}"#
             )
         );
+        let admin = email == "root@example.test";
         assert_eq!(
             b.get(&with, "/ui/plugins/nav").await.json(),
-            json!({"settings": false, "team": false, "panels": []}),
+            json!({"settings": admin, "team": false, "panels": []}),
             "{email}"
         );
     }
     plain.finish().await;
     with.finish().await;
-
-    // In development mode, instance admins get the Settings entry to upload the first plugin.
-    let dev = Harness::with_plugins(true).await;
-    let root = Browser::login(&dev, "root@example.test").await;
-    assert_eq!(
-        root.get(&dev, "/ui/plugins/nav").await.json(),
-        json!({"settings": true, "team": false, "panels": []})
-    );
-    let alice = Browser::login(&dev, "alice@example.test").await;
-    assert_eq!(
-        alice.get(&dev, "/ui/plugins/nav").await.json(),
-        json!({"settings": false, "team": false, "panels": []})
-    );
-    dev.finish().await;
 }

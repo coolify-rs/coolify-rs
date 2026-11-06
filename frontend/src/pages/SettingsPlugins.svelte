@@ -20,6 +20,7 @@
     pluginsUi,
     readFile,
     type Approval,
+    type Catalog,
     type CatalogEntry,
     type InstalledPlugin,
     type PendingPlugin,
@@ -29,8 +30,9 @@
   document.title = 'Plugins | coolify-rs';
 
   let data = $state<SettingsData | null>(null);
-  /** `null` while loading or when this instance has no catalogue (the section is hidden). */
-  let catalog = $state<CatalogEntry[] | null>(null);
+  /** The registry catalogue; `null` while loading. `catalogError` when it could not be read. */
+  let catalog = $state<Catalog | null>(null);
+  let catalogError = $state<string | null>(null);
   let removing = $state<InstalledPlugin | null>(null);
   let busy = $state<string | null>(null);
 
@@ -39,8 +41,19 @@
   let manifestInput: HTMLInputElement | undefined = $state();
   let componentInput: HTMLInputElement | undefined = $state();
 
+  /** Install or update: `grant` approves exactly the list shown, `version` pins what was shown. */
+  type Run = (grant?: string[], version?: string) => Promise<Approval>;
   /** The capabilities waiting for approval, and what approving does. */
-  let approval = $state<{ title: string; plugin?: PendingPlugin; capabilities: string[]; unverified: boolean; done: string; confirm: (grant: string[]) => Promise<Approval> } | null>(null);
+  let approval = $state<{
+    title: string;
+    plugin?: PendingPlugin;
+    capabilities: string[];
+    added?: string[];
+    version?: string;
+    unverified: boolean;
+    done: string;
+    run: Run;
+  } | null>(null);
   let approving = $state(false);
 
   const leave = () => router.go('/', true);
@@ -61,8 +74,9 @@
   async function loadCatalog() {
     try {
       catalog = await pluginsUi.catalog();
-    } catch {
-      catalog = null;
+      catalogError = null;
+    } catch (e) {
+      catalogError = message(e);
     }
   }
 
@@ -70,10 +84,8 @@
     await Promise.all([load(), loadCatalog(), pluginNav.load()]);
   }
 
-  Promise.all([load(), loadCatalog()]).then(() => {
-    // Nothing installed, nothing to install from: the menu has no entry and the page does not exist.
-    if (data && !data.plugins.length && !data.allow_upload && catalog === null) leave();
-  });
+  load();
+  loadCatalog();
 
   async function setEnabled(p: InstalledPlugin, enabled: boolean) {
     busy = p.id;
@@ -106,17 +118,27 @@
   }
 
   /** The first request answers what the plugin asks for; the admin approves exactly that list. */
-  async function ask(title: string, unverified: boolean, run: (grant?: string[]) => Promise<Approval>, done = 'Plugin installed.') {
+  async function ask(title: string, unverified: boolean, run: Run, done = 'Plugin installed.', version?: string) {
     try {
-      const first = await run();
+      const first = await run(undefined, version);
       if (first.done) {
         notify.success(done);
         await refreshAll();
         return;
       }
-      approval = { title, unverified, done, plugin: first.plugin, capabilities: first.capabilities, confirm: (grant) => run(grant) };
+      approval = {
+        title,
+        unverified,
+        done,
+        run,
+        plugin: first.plugin,
+        capabilities: first.capabilities,
+        added: first.added,
+        version: first.version ?? version,
+      };
     } catch (e) {
       notify.failure(message(e));
+      await loadCatalog();
     }
   }
 
@@ -124,10 +146,10 @@
     if (!approval) return;
     approving = true;
     try {
-      const r = await approval.confirm($state.snapshot(approval.capabilities));
+      const r = await approval.run($state.snapshot(approval.capabilities), approval.version);
       if (!r.done) {
         // The plugin changed between the two requests: show the new list.
-        approval = { ...approval, capabilities: r.capabilities, plugin: r.plugin ?? approval.plugin };
+        approval = { ...approval, capabilities: r.capabilities, added: r.added, version: r.version ?? approval.version, plugin: r.plugin ?? approval.plugin };
         notify.failure('The capabilities changed. Review them again.');
         return;
       }
@@ -159,14 +181,36 @@
   async function refreshCatalog() {
     busy = 'catalog';
     try {
-      await pluginsUi.refreshCatalog();
-      notify.success('Plugin registry refreshed.');
+      const r = await pluginsUi.refreshCatalog();
+      const notes = [
+        `${r.plugins} ${r.plugins === 1 ? 'plugin' : 'plugins'} in the registry.`,
+        r.revoked.length ? `Switched off as revoked: ${r.revoked.join(', ')}.` : '',
+        r.pending_updates.length ? `Updates waiting for approval: ${r.pending_updates.join(', ')}.` : '',
+      ];
+      notify.success(`Plugin registry refreshed. ${notes.filter(Boolean).join(' ')}`);
     } catch (e) {
       notify.failure(message(e));
     } finally {
       busy = null;
-      await loadCatalog();
+      await refreshAll();
     }
+  }
+
+  const date = (s: string) => new Date(s).toLocaleString();
+  /** What the catalogue lets the admin do with a plugin. */
+  function action(c: CatalogEntry): { label: string; title: string; done: string; version?: string; update: boolean } | null {
+    if (c.revoked) return null;
+    if (c.pending_update) return { label: 'Review update', title: `Update ${c.name} to v${c.pending_update.version}`, done: 'Plugin updated.', version: c.pending_update.version, update: true };
+    if (c.installed_version && c.update_available && c.latest_version)
+      return { label: 'Update', title: `Update ${c.name} to v${c.latest_version}`, done: 'Plugin updated.', version: c.latest_version, update: true };
+    if (!c.installed_version && c.latest_version) return { label: 'Install', title: `Install ${c.name}`, done: 'Plugin installed.', version: c.latest_version, update: false };
+    return null;
+  }
+  function run(c: CatalogEntry) {
+    const a = action(c);
+    if (!a) return;
+    const call: Run = a.update ? (grant, version) => pluginsUi.update(c.id, grant, version) : (grant, version) => pluginsUi.install(c.id, grant, version);
+    ask(a.title, false, call, a.done, a.version);
   }
 </script>
 
@@ -249,49 +293,53 @@
           {/if}
         </SettingsSection>
 
-        {#if catalog !== null}
-          <SettingsSection id="plugin-registry-section" title="Plugin registry" description="Plugins reviewed and signed by the coolify-rs plugin registry.">
-            {#snippet actions()}
-              <button type="button" class="button" disabled={busy === 'catalog'} onclick={refreshCatalog}>Refresh</button>
-            {/snippet}
-            {#if !catalog.length}
+        <SettingsSection id="plugin-registry-section" title="Plugin registry" description="Plugins reviewed and signed by the coolify-rs plugin registry. The index is refreshed once a day.">
+          {#snippet actions()}
+            <button type="button" class="button" disabled={busy === 'catalog'} onclick={refreshCatalog}>Refresh</button>
+          {/snippet}
+          {#if catalogError}
+            <Callout type="danger" title="The catalogue could not be read" class="mb-4">{catalogError}</Callout>
+          {/if}
+          {#if catalog}
+            {#if catalog.index}
+              <p class="mb-4 text-[11px] text-neutral-500 dark:text-fg-faint">
+                Index signed with {catalog.index.key_id}, generated {date(catalog.index.generated_at)}, fetched {date(catalog.index.fetched_at)}.
+              </p>
+            {/if}
+            {#if !catalog.index}
+              <Empty title="The registry has not been fetched yet" description="Refresh to fetch and verify the plugin registry's index." iconName="browser-code" size="sm" />
+            {:else if !catalog.plugins.length}
               <Empty title="The registry is empty" iconName="browser-code" size="sm" />
             {:else}
               <div class="flex flex-col gap-4">
-                {#each catalog as c (c.id)}
+                {#each catalog.plugins as c (c.id)}
+                  {@const a = action(c)}
                   <div class="rounded-lg border border-neutral-200 p-4 dark:border-white/[0.08]" data-catalog={c.id}>
                     <div class="flex flex-wrap items-start justify-between gap-3">
                       <div class="min-w-0">
                         <div class="flex flex-wrap items-center gap-2">
                           <h4 class="text-[13px] font-semibold text-black dark:text-fg">{c.name}</h4>
-                          <span class="table-badge">v{c.latest_version}</span>
+                          {#if c.latest_version}<span class="table-badge">v{c.latest_version}</span>{/if}
                           {#if c.installed_version}<span class="table-badge table-badge-success">Installed v{c.installed_version}</span>{/if}
+                          {#if c.installed_yanked}<span class="table-badge table-badge-warning" title="The installed version was yanked from the registry">Yanked</span>{/if}
                           {#if c.update_available}<span class="table-badge table-badge-warning">Update available</span>{/if}
-                          {#if c.yanked}<span class="table-badge table-badge-warning">Yanked</span>{/if}
                           {#if c.revoked}<span class="table-badge table-badge-danger">Revoked</span>{/if}
                         </div>
                         <p class="mt-0.5 text-[12px] text-neutral-500 dark:text-fg-dim">{c.description}</p>
                         <p class="mt-0.5 text-[11px] text-neutral-500 dark:text-fg-faint">{c.id} · {c.license}</p>
                       </div>
-                      <div class="flex shrink-0 items-center gap-2">
-                        {#if c.revoked}
-                          <!-- A revoked plugin cannot be installed or updated. -->
-                        {:else if !c.installed_version && !c.yanked}
-                          <button type="button" class="button button-highlighted" onclick={() => ask(`Install ${c.name}`, false, (grant) => pluginsUi.install(c.id, grant))}>Install</button>
-                        {:else if c.pending_update}
-                          <button type="button" class="button button-highlighted" onclick={() => ask(`Update ${c.name} to v${c.pending_update?.version}`, false, (grant) => pluginsUi.update(c.id, grant, c.pending_update?.version), 'Plugin updated.')}>Review update</button>
-                        {:else if c.update_available}
-                          <button type="button" class="button button-highlighted" onclick={() => ask(`Update ${c.name}`, false, (grant) => pluginsUi.update(c.id, grant), 'Plugin updated.')}>Update</button>
-                        {/if}
-                      </div>
+                      {#if a}
+                        <button type="button" class="button button-highlighted shrink-0" onclick={() => run(c)}>{a.label}</button>
+                      {/if}
                     </div>
                     {#if c.revoked}
-                      <Callout type="danger" title="Revoked" class="mt-3">{c.revoked.reason}</Callout>
-                    {/if}
-                    {#if c.pending_update}
+                      <Callout type="danger" title="Revoked by the plugin registry" class="mt-3">{c.revoked.reason}</Callout>
+                    {:else if c.pending_update}
                       <Callout type="warning" title="Update waiting for approval" class="mt-3">
-                        Version {c.pending_update.version} asks for more than the installed version was granted, so it is not installed until you approve its capabilities.
+                        Version {c.pending_update.version} asks for more than was granted: {c.pending_update.added.join('; ')}. The installed version keeps running until you approve it.
                       </Callout>
+                    {:else if !c.latest_version}
+                      <Callout type="info" title="Nothing to install" class="mt-3">No version of this plugin can run on this coolify-rs.</Callout>
                     {/if}
                     <div class="mt-3">
                       <h5 class="mb-1.5 text-[12px] font-medium text-neutral-700 dark:text-fg-dim">Capabilities</h5>
@@ -301,8 +349,8 @@
                 {/each}
               </div>
             {/if}
-          </SettingsSection>
-        {/if}
+          {/if}
+        </SettingsSection>
 
         {#if data.allow_upload}
           <SettingsSection id="plugin-upload-section" title="Install from files" description="Development mode: install a plugin you built yourself. It is pinned by its hash and shown as Unverified.">
@@ -328,12 +376,24 @@
 </div>
 
 {#if approval}
-  <Modal title={approval.title} subtitle={approval.plugin ? `${approval.plugin.name} v${approval.plugin.version} (${approval.plugin.id})` : undefined} onclose={() => (approval = null)} narrow>
+  <Modal
+    title={approval.title}
+    subtitle={approval.plugin ? `${approval.plugin.name} v${approval.plugin.version} (${approval.plugin.id})` : approval.version ? `Version ${approval.version}` : undefined}
+    onclose={() => (approval = null)}
+    narrow
+  >
     {#if approval.unverified}
       <Callout type="warning" title="Unverified" class="mb-4">This plugin is not from the plugin registry. Nobody has reviewed what it does.</Callout>
     {/if}
     {#if approval.plugin?.description}
       <p class="mb-3 text-[12px] text-neutral-600 dark:text-fg-dim">{approval.plugin.description}</p>
+    {/if}
+    {#if approval.added?.length && approval.added.length < approval.capabilities.length}
+      <Callout type="warning" title="This version asks for more" class="mb-4">
+        <ul class="list-disc pl-4">
+          {#each approval.added as a (a)}<li>{a}</li>{/each}
+        </ul>
+      </Callout>
     {/if}
     <h4 class="mb-2 text-[12px] font-semibold">The plugin will be granted exactly these capabilities:</h4>
     <CapabilityList capabilities={approval.capabilities} />

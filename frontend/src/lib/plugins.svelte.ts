@@ -56,23 +56,33 @@ export interface TeamData {
   can_manage: boolean;
 }
 
-/** One entry of the registry catalogue (`GET /api/v1/plugins/catalog`). */
+/** One plugin of the registry catalogue (`GET /api/v1/plugins/catalog`, docs/PLUGINS.md). */
 export interface CatalogEntry {
   id: string;
   name: string;
   description: string;
   license: string;
   source: string | null;
-  latest_version: string;
+  /** Newest version that is not yanked and runs here; null when none qualifies. */
+  latest_version: string | null;
   capabilities: string[];
+  verified: boolean;
   installed_version: string | null;
+  installed_yanked: boolean;
   update_available: boolean;
-  pending_update: { version: string; capabilities: string[] } | null;
-  yanked: boolean;
+  update_requires_approval: boolean;
+  pending_update: { version: string; capabilities: string[]; added: string[]; found_at: string } | null;
   revoked: { reason: string } | null;
+  versions: { version: string; yanked: boolean; compatible: boolean; capabilities: string[] }[];
 }
 
-/** The plugin a 422 "approve the capabilities" answer describes. */
+export interface Catalog {
+  /** The last verified index; null until the first refresh succeeds. */
+  index: { url: string; key_id: string; generated_at: string; fetched_at: string } | null;
+  plugins: CatalogEntry[];
+}
+
+/** The plugin a 422 "approve the capabilities" answer describes (uploads). */
 export interface PendingPlugin {
   id: string;
   name: string;
@@ -83,7 +93,18 @@ export interface PendingPlugin {
 }
 
 /** What an install or update answers: done, or the capabilities to approve first. */
-export type Approval = { done: true } | { done: false; capabilities: string[]; plugin?: PendingPlugin; message: string };
+export type Approval =
+  | { done: true }
+  | {
+      done: false;
+      capabilities: string[];
+      /** What the version asks for beyond the current grant (registry installs and updates). */
+      added?: string[];
+      /** The version to approve (registry installs and updates). */
+      version?: string;
+      plugin?: PendingPlugin;
+      message: string;
+    };
 
 /** POST that turns the "approve these capabilities" 422 into a value; every other error throws. */
 async function approving(path: string, body: unknown): Promise<Approval> {
@@ -93,7 +114,14 @@ async function approving(path: string, body: unknown): Promise<Approval> {
     credentials: 'same-origin',
     body: JSON.stringify(body),
   });
-  let data: { message?: string; capabilities?: unknown; plugin?: PendingPlugin; errors?: Record<string, string[]> } = {};
+  let data: {
+    message?: string;
+    capabilities?: unknown;
+    added?: unknown;
+    version?: string;
+    plugin?: PendingPlugin;
+    errors?: Record<string, string[]>;
+  } = {};
   try {
     data = await res.json();
   } catch {
@@ -101,7 +129,14 @@ async function approving(path: string, body: unknown): Promise<Approval> {
   }
   if (res.ok) return { done: true };
   if (res.status === 422 && Array.isArray(data.capabilities)) {
-    return { done: false, capabilities: data.capabilities as string[], plugin: data.plugin, message: data.message ?? '' };
+    return {
+      done: false,
+      capabilities: data.capabilities as string[],
+      added: Array.isArray(data.added) ? (data.added as string[]) : undefined,
+      version: data.version,
+      plugin: data.plugin,
+      message: data.message ?? '',
+    };
   }
   throw new ApiError(res.status, data.message ?? `Request failed (${res.status})`, data.errors ?? {});
 }
@@ -118,8 +153,9 @@ export const pluginsUi = {
   /** `grantDeploy` is the team's answer for a plugin holding `deploy`; enabling one without it is refused. */
   setTeam: (id: string, enabled: boolean, grantDeploy?: boolean) =>
     request<InstalledPlugin>('POST', `${path(id)}/team`, { enabled, grant_deploy: grantDeploy }),
-  catalog: () => request<CatalogEntry[]>('GET', '/ui/plugins/catalog'),
-  refreshCatalog: () => request<unknown>('POST', '/ui/plugins/catalog/refresh', {}),
+  catalog: () => request<Catalog>('GET', '/ui/plugins/catalog'),
+  refreshCatalog: () =>
+    request<{ plugins: number; revoked: string[]; pending_updates: string[] }>('POST', '/ui/plugins/catalog/refresh', {}),
   install: (id: string, grant?: string[], version?: string) => approving('/ui/plugins/catalog/install', { id, version, grant }),
   update: (id: string, grant?: string[], version?: string) => approving(`${path(id)}/update`, { version, grant }),
 };
