@@ -77,6 +77,8 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 - **Server page after linking a cloud provider** shows no provider status badge, refresh or power controls.
 - **Connection retries**: upstream sends every idempotent outgoing HTTP request once more after a connection failure
   (`RetryHttpConnectionFailures`, global 10 s connect and 30 s timeouts). coolify-rs does this for Cloudflare only.
+- **Metrics live refresh** is throttled in the browser (one refresh per poll period, none while paused); upstream also
+  enforces it on the server. Loading a range is not limited on either side.
 - **"Configuration changed" warning** on application, database and service pages has no list of the changes.
 - **Remembered list or canvas view** is read in the browser, so a list page shows for an instant before it switches to
   the canvas.
@@ -121,6 +123,9 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
   databases are).
 - **Deployment rows.** `current_process_id` stays empty, and commands upstream feeds on stdin carry their input inside
   the script.
+- **A registry image name or tag that does not validate** (saved before the forms checked it) fails the deployment
+  when its worker starts, with upstream's "Deployment could not be started" lines. Upstream already refuses it when the
+  job is queued, so its Deploy button or API call answers with an error; coolify-rs answers "Deployment queued.".
 
 ## Servers
 
@@ -184,9 +189,11 @@ These differences are deliberate.
 - **SSH options.** coolify-rs adds `-F /dev/null`, `BatchMode`, `IdentitiesOnly`, no agent and no forwarding, and
   clears the environment, so a hostile server or operator config cannot change behaviour.
 - **Remote output is capped** at 16 MiB for stdout and 1 MiB for stderr.
-- **Client IP.** Upstream trusts `X-Forwarded-For` from any peer, so its API allowlist can be spoofed when the app is
-  reachable without a proxy. coolify-rs uses the peer address unless `COOLIFY_RS_TRUSTED_PROXIES` is set, and then the
-  rightmost untrusted hop. The same rule applies to the scheme and host used for a new server's `sentinel_custom_url`.
+- **Client IP.** Upstream v4.5.3's `client_ip()` uses the forwarded address whenever the TCP peer is a private,
+  loopback or link-local address, so anything on the Docker network or host can set it. coolify-rs keeps its trusted-proxy
+  model (ADR 0006): it uses the peer address unless `COOLIFY_RS_TRUSTED_PROXIES` is set, and then the rightmost untrusted
+  hop, so a private peer is trusted only when listed. The same rule applies to the scheme and host used for a new
+  server's `sentinel_custom_url`.
 - **Database storage responses.** Upstream's `POST` and `PATCH /databases/{uuid}/storages` answers include the whole
   database with its server and saved proxy configuration, also for tokens without `read:sensitive`. coolify-rs leaves
   that relation out.

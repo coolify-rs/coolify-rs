@@ -830,5 +830,95 @@ async fn public_pull_request_parse_does_not_use_production_values() {
         service_env(&parsed, "web-pr-7", "BARE_PASSTHROUGH").as_deref(),
         Some("shared-value")
     );
+
+    // 2dcf8eeca: a preview from before v4.5.1 (`keeps_production_values`) is not treated as
+    // public, so it keeps production values and secrets and `{{...}}` in the compose file resolves.
+    sqlx::query(
+        "INSERT INTO application_previews (uuid, pull_request_id, pull_request_html_url, application_id, keeps_production_values) \
+         VALUES ('keepsproductionvalues', $1, 'https://example.test/pull/7', $2, true)",
+    )
+    .bind(PR as i32)
+    .bind(app_id)
+    .execute(db.pool())
+    .await
+    .unwrap();
+    set_value(db, &enc, prev, "BARE_PASSTHROUGH", "prod-value").await;
+    set_value(db, &enc, prev, "SERVICE_PASSWORD_DB", &prod_password).await;
+    let parsed = compose_parser::application_parser_at(&jobs, app_id, PR, None, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        service_env(&parsed, "web-pr-7", "BARE_PASSTHROUGH").as_deref(),
+        Some("prod-value")
+    );
+    assert_eq!(
+        service_env(&parsed, "web-pr-7", "SHARED").as_deref(),
+        Some("shared-value")
+    );
+    let preview = variables(db, &enc, app_id, true).await;
+    assert_eq!(
+        value_of(&preview, "SERVICE_PASSWORD_DB").flatten(),
+        Some(prod_password)
+    );
+    tdb.drop_db().await;
+}
+
+/// `validateDockerRegistryImageConfiguration()` (here because the reference fixture seeds a whole
+/// application): a deployment whose registry image name does not validate is failed before it
+/// runs, with the `fail_undispatchable_deployment()` log lines, and runs no command.
+#[tokio::test]
+async fn deployment_with_invalid_registry_image_name_fails_before_it_runs() {
+    let enc = Encrypter::new(APP_KEY).unwrap();
+    let (tdb, jobs, app_id, _) = seed_reference(&enc).await;
+    let db = &tdb.db;
+    sqlx::query("UPDATE private_keys SET private_key = $1")
+        .bind(enc.encrypt_string("not a real key"))
+        .execute(db.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE applications SET docker_registry_image_name = 'acme/app;id' WHERE id = $1")
+        .bind(app_id)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    let (server_id, destination_id): (i64, i64) = sqlx::query_as(
+        "SELECT s.id, d.id FROM servers s JOIN standalone_dockers d ON d.server_id = s.id LIMIT 1",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    let queue_id: i64 = sqlx::query_scalar(
+        "INSERT INTO application_deployment_queues (application_id, deployment_uuid, status, server_id, destination_id, logs) \
+         VALUES ($1, 'badimagedeployment', 'in_progress', $2, $3, '[]') RETURNING id",
+    )
+    .bind(app_id.to_string())
+    .bind(server_id)
+    .bind(destination_id.to_string())
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+
+    jobs.run_application_deployment(queue_id).await;
+
+    let (status, logs): (String, Option<String>) =
+        sqlx::query_as("SELECT status, logs FROM application_deployment_queues WHERE id = $1")
+            .bind(queue_id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(status, "failed");
+    let outputs: Vec<String> = serde_json::from_str::<Vec<Value>>(&logs.unwrap())
+        .unwrap()
+        .iter()
+        .map(|e| e["output"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(
+        outputs,
+        [
+            "========================================",
+            "Deployment could not be started: Docker registry image name contains invalid characters.",
+            "========================================",
+        ]
+    );
     tdb.drop_db().await;
 }

@@ -411,6 +411,50 @@ fn check_backups(errors: &mut Vec<String>, at: &str, database: &Value) {
     }
 }
 
+/// A single port or port range with an optional protocol: `\d+(?:-\d+)?(?:/(?:tcp|udp|sctp))?`.
+static CONTAINER_PORT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\d+(?:-\d+)?(?:/(?:tcp|udp|sctp))?\n?\z").expect("regex"));
+
+/// `ServerTransferBundle::checkDatabasePorts`: older databases were saved before the UI checked
+/// their ports, so any public port in 1-65535, spaces around mappings, empty entries and
+/// container-only ports pass. Values that are not ports are refused: they reach the compose file.
+fn check_database_ports(errors: &mut Vec<String>, at: &str, database: &Value) {
+    let Some(attributes) = database.get("attributes").and_then(Value::as_object) else {
+        return;
+    };
+    // `check(..., ['nullable', 'integer', 'between:1,65535'])` with the path as the attribute.
+    if let Some(port) = attributes.get("public_port").filter(|v| !v.is_null()) {
+        let field = format!("{at}.public_port");
+        if !crate::validation::is_php_int(port) {
+            errors.push(format!("The {field} field must be an integer."));
+        }
+        let size = crate::validation::numeric_rule_size(port);
+        if !(1.0..=65535.0).contains(&size) {
+            errors.push(format!("The {field} field must be between 1 and 65535."));
+        }
+    }
+    let Some(mappings) = attributes.get("ports_mappings").filter(|v| !v.is_null()) else {
+        return;
+    };
+    let Some(mappings) = mappings.as_str() else {
+        errors.push(format!("{at}.ports_mappings must be a string."));
+        return;
+    };
+    for mapping in mappings.split(',') {
+        let mapping = mapping.trim_matches([' ', '\t']);
+        if mapping.is_empty()
+            || CONTAINER_PORT.is_match(mapping)
+            || crate::ui_databases::PORT_MAPPINGS.is_match(mapping)
+        {
+            continue;
+        }
+        errors.push(format!(
+            "{at}.ports_mappings must be a comma-separated list of port mappings (e.g. 5432:5432,127.0.0.1:8080:80/udp)."
+        ));
+        return;
+    }
+}
+
 /// `ServerTransferBundle::contentErrors`.
 fn content_errors(bundle: &Value) -> Vec<String> {
     let mut errors = Vec::new();
@@ -497,6 +541,7 @@ fn content_errors(bundle: &Value) -> Vec<String> {
             }
             for (d, db) in items(env.get("databases")) {
                 let dat = format!("{at}.databases.{d}");
+                check_database_ports(&mut errors, &dat, db);
                 check_storages(&mut errors, &dat, db);
                 check_backups(&mut errors, &dat, db);
             }
@@ -518,4 +563,48 @@ fn content_errors(bundle: &Value) -> Vec<String> {
         }
     }
     errors
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn port_errors(attributes: Value) -> Vec<String> {
+        let mut errors = Vec::new();
+        check_database_ports(&mut errors, "db", &json!({ "attributes": attributes }));
+        errors
+    }
+
+    #[test]
+    fn database_ports_accept_old_values() {
+        assert!(port_errors(json!({ "public_port": 5432, "ports_mappings": " 5432:5432 , ,6379/udp,127.0.0.1:8080:80/udp" })).is_empty());
+        assert!(port_errors(json!({ "public_port": null, "ports_mappings": null })).is_empty());
+        assert!(port_errors(json!({ "public_port": "65535", "ports_mappings": "" })).is_empty());
+        assert!(port_errors(json!({})).is_empty());
+    }
+
+    #[test]
+    fn database_ports_refuse_values_that_are_not_ports() {
+        assert_eq!(
+            port_errors(json!({ "public_port": 0 })),
+            ["The db.public_port field must be between 1 and 65535."]
+        );
+        assert_eq!(
+            port_errors(json!({ "public_port": "abc" })),
+            // `getSize` of a non-numeric string is its length, so `between` passes.
+            ["The db.public_port field must be an integer."]
+        );
+        assert_eq!(
+            port_errors(json!({ "ports_mappings": "5432:5432,$(id)" })),
+            [
+                "db.ports_mappings must be a comma-separated list of port mappings (e.g. 5432:5432,127.0.0.1:8080:80/udp)."
+            ]
+        );
+        assert_eq!(
+            port_errors(json!({ "ports_mappings": 5432 })),
+            ["db.ports_mappings must be a string."]
+        );
+    }
 }

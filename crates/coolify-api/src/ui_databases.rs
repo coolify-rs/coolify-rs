@@ -299,7 +299,7 @@ static DB_PASSWORD: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[A-Za-z0-9!@#%^*()_+\-=\[\]{}:,.?/~]+\n?\z").unwrap_or_else(|_| unreachable!())
 });
 /// `ValidationPatterns::PORT_MAPPINGS_PATTERN`.
-static PORT_MAPPINGS: LazyLock<Regex> = LazyLock::new(|| {
+pub(crate) static PORT_MAPPINGS: LazyLock<Regex> = LazyLock::new(|| {
     let ip = r"(?:(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[[\da-fA-F:]+\]):)?";
     let host = r"(?:\d+(?:-\d+)?(?:/(?:tcp|udp|sctp))?)?";
     let container = r"\d+(?:-\d+)?(?:/(?:tcp|udp|sctp))?";

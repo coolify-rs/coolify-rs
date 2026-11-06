@@ -742,10 +742,7 @@ pub(crate) async fn application_parser(
     commit: Option<&str>,
 ) -> Result<ParsedCompose, String> {
     let is_pull_request = pull_request_id != 0;
-    // A public preview can run the compose file of a fork pull request.
-    let is_public_pull_request =
-        is_pull_request && run.setting_default("is_pr_deployments_public_enabled", false);
-    // `$resource->previews()->find($preview_id)`
+    // `$pullRequestPreview`: `$resource->previews()->find($preview_id)`, else the preview of the pull request.
     let preview = if is_pull_request {
         coolify_db::application_ops::preview(run.db, run.app.id, pull_request_id)
             .await
@@ -753,6 +750,16 @@ pub(crate) async fn application_parser(
     } else {
         None
     };
+    // A public preview can run the compose file of a fork pull request. A preview from before
+    // v4.5.1 keeps the production values (`keeps_production_values`, a v4.5.3 column: read from
+    // the row, so it is false on an older schema).
+    let keeps_production_values = preview
+        .as_ref()
+        .and_then(|p| p.get("keeps_production_values"))
+        .is_some_and(|v| v.as_bool() == Some(true));
+    let is_public_pull_request = is_pull_request
+        && run.setting_default("is_pr_deployments_public_enabled", false)
+        && !keeps_production_values;
     run.warnings.clear();
     let uuid = run.uuid();
     let Some(compose) = run
