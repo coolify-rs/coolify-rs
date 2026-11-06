@@ -528,7 +528,7 @@ impl Jobs {
         )
         .await;
         if docker_cleanup {
-            self.spawn_cleanup_after_stop(server.clone());
+            self.spawn_cleanup_after_stop(server.id, server.uuid.clone());
         }
         // The row was read before the stop; a public database loses its proxy too.
         let public = dbs::find_in_team(&self.0.db, d.team_id, &d.uuid)

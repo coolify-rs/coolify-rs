@@ -281,9 +281,9 @@ impl Jobs {
             jobs.stop_service(&s, false).await;
             if cleanup && let Some(id) = s.server_id() {
                 // `CleanupDocker::dispatchAfterStop`: skipped while the last run is recent.
-                let _ =
-                    crate::server_ops::cleanup::docker_cleanup_job(&jobs, id, false, false, true)
-                        .await;
+                if let Ok(Some(row)) = coolify_db::servers::find_by_id(&jobs.0.db, id).await {
+                    jobs.spawn_cleanup_after_stop(id, row.uuid);
+                }
             }
         });
     }
