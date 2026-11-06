@@ -1,12 +1,20 @@
-# Fixtures in this repository contain throwaway test material only.
+# gitleaks with its default rules, minus findings reviewed as not secret.
 [extend]
 useDefault = true
 
 [allowlist]
-description = "Throwaway test keys and generated ciphertext fixtures"
+description = "Reviewed: test fixtures, resource UUIDs and placeholder keys"
 paths = [
-  '''crates/coolify-compat/tests/fixtures/.*''',
-  '''crates/coolify-api/tests/fixtures/.*''',
-  '''crates/coolify-compat/src/encrypter\.rs''',
-  '''scripts/verify-encrypter-interop\.sh''',
+  # Output captured from the throwaway reference instance: resource UUIDs and Supabase demo JWTs
+  # signed with that instance's generated secret.
+  '''^crates/coolify-jobs/tests/fixtures/''',
+  # SSH keys generated only to test key parsing and fingerprints; they open nothing.
+  '''^crates/coolify-compat/tests/fixtures/''',
+  # Placeholder PEM blocks used to test redaction and key parsing.
+  '''^crates/coolify-compat/src/redact\.rs$''',
+  '''^crates/coolify-compat/src/sshkey\.rs$''',
+  '''^crates/coolify-jobs/src/server_ops/certificate\.rs$''',
+  '''^crates/coolify-remote/tests/fake_ssh\.rs$''',
 ]
+# The UUID of the private key record the differential scripts use (an id, not key material).
+regexes = ['''hv41morfjv9x0av5kakzdmv8''']

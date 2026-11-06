@@ -69,9 +69,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: rustsec/audit-check@v2
+      # A prebuilt cargo-audit: building it needs a newer Rust than the pinned toolchain.
+      - uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: cargo-audit
+      # Reviewed exceptions are in .cargo/audit.toml.
+      - run: cargo audit
 
   secrets:
     runs-on: ubuntu-24.04
@@ -79,9 +82,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The gitleaks CLI; the gitleaks action needs a license for organization repositories.
+      # Reviewed findings are allowed in .gitleaks.toml.
+      - name: gitleaks
+        run: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo" zricethezav/gitleaks:v8.21.2 git /repo --redact --no-banner --config /repo/.gitleaks.toml
 
   image:
     runs-on: ubuntu-24.04

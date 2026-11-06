@@ -1,0 +1,12 @@
+# Advisories reviewed and accepted. Each needs a reason, and an advisory that gains a fix should be fixed.
+[advisories]
+ignore = [
+  # rsa 0.9, the Marvin attack: timing side channel in RSA private-key operations, no fixed release.
+  # coolify-rs never decrypts with RSA. It generates keys, derives public keys and signs GitHub App
+  # JWTs locally, so nothing gives an attacker the decryption oracle the attack needs.
+  "RUSTSEC-2023-0071",
+  # crypto-bigint 0.5 (through p256, p384 and p521 0.13): timing variability. Fixed in 0.7, which needs
+  # the 0.14 elliptic-curve crates. Here ECDSA verifies passkey signatures, which uses public keys only,
+  # and signs certificates locally, so an attacker has no secret operation to time.
+  "RUSTSEC-2026-0387",
+]
