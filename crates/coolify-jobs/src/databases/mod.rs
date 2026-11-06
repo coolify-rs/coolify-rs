@@ -359,7 +359,7 @@ impl Jobs {
         self.spawn_database_delete(d, delete_volumes, delete_configurations, true);
     }
 
-    /// `logs_by_uuid`: `None` when the database has no running container.
+    /// `logs_by_uuid`: `None` when the database has no container.
     pub async fn database_logs(
         &self,
         d: &DatabaseRow,
@@ -396,25 +396,8 @@ impl Jobs {
         let Some(first) = containers.first() else {
             return Ok(None);
         };
-        let names = first
-            .get("Names")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        // A stopped container still has logs, like in the UI.
         let id = first.get("ID").and_then(Value::as_str).unwrap_or_default();
-        let inspect = format!("docker inspect --format '{{{{json .}}}}' {}", quote(names));
-        let state = self
-            .remote()
-            .run_quiet(&t, &[inspect.as_str()], RunOptions::op("database.logs"))
-            .await
-            .unwrap_or_default();
-        let running = json_lines(&state)
-            .first()
-            .and_then(|c| c.pointer("/State/Status"))
-            .and_then(Value::as_str)
-            == Some("running");
-        if !running {
-            return Ok(None);
-        }
         let mut command = format!("docker logs -n {lines}");
         if timestamps {
             command.push_str(" --timestamps");

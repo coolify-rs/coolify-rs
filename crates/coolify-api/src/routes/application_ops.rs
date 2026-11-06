@@ -139,7 +139,7 @@ async fn logs(
         LogsResult::NoService => Ok(PhpJson(
             StatusCode::NOT_FOUND,
             json!({"message": format!(
-                "No running container found for service_name '{}'.",
+                "No container found for service_name '{}'.",
                 service_name.unwrap_or_default()
             )}),
         )

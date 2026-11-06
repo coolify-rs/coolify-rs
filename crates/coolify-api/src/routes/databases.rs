@@ -201,6 +201,20 @@ pub(crate) fn server_functional(s: &ServerRow) -> bool {
         && !(ip.is_empty() || ["1.2.3.4", "0.0.0.0", "::"].contains(&ip))
 }
 
+/// `$database::CONFIGURATION_ATTRIBUTES`: free-form configuration that can embed credentials. Only
+/// users who can update the database and `read:sensitive` tokens read it.
+pub(crate) fn configuration_attributes(kind: Kind) -> &'static [&'static str] {
+    match kind {
+        Kind::Postgresql => &["postgres_conf", "custom_docker_run_options"],
+        Kind::Redis => &["redis_conf", "custom_docker_run_options"],
+        Kind::Mongodb => &["mongo_conf", "custom_docker_run_options"],
+        Kind::Mysql => &["mysql_conf", "custom_docker_run_options"],
+        Kind::Mariadb => &["mariadb_conf", "custom_docker_run_options"],
+        Kind::Keydb => &["keydb_conf", "custom_docker_run_options"],
+        Kind::Dragonfly | Kind::Clickhouse | Kind::Sqlite => &["custom_docker_run_options"],
+    }
+}
+
 /// `removeSensitiveData($database)`.
 pub(crate) async fn present(
     state: &AppState,
@@ -228,13 +242,10 @@ pub(crate) async fn present_as(
     let mut r = dbs::present(d.kind, d.raw.clone());
     let status = coolify_jobs::databases::normalize_status(d.str("status").unwrap_or_default());
     r.insert("status".into(), Value::String(status));
-    // StandaloneKeydb does not append `database_type`.
-    if d.kind != Kind::Keydb {
-        r.insert(
-            "database_type".into(),
-            Value::String(d.kind.type_name().into()),
-        );
-    }
+    r.insert(
+        "database_type".into(),
+        Value::String(d.kind.type_name().into()),
+    );
     r.insert(
         "server_status".into(),
         Value::Bool(server.as_ref().is_some_and(server_functional)),
@@ -263,6 +274,14 @@ pub(crate) async fn present_as(
         };
         r.insert("internal_db_url".into(), internal);
         r.insert("external_db_url".into(), external);
+    }
+    if ctx.can_read_sensitive {
+        // `makeVisible([...$database::CONFIGURATION_ATTRIBUTES])`.
+        for column in configuration_attributes(d.kind) {
+            if let Some(v) = d.raw.get(*column) {
+                r.insert((*column).into(), v.clone());
+            }
+        }
     }
     if let Some(dest) = &d.destination {
         let mut dest = dest.clone();

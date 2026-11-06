@@ -378,13 +378,17 @@ pub async fn create_variable(
         .to_owned())
 }
 
-/// `$env->value = ...; $env->fill(...); $env->save()` with Eloquent's dirty check and the
-/// model's `saving` hook. `value` is `null` when the request does not send it.
+/// `if ($request->has('value')) $env->value = ...; $env->fill(...); $env->save()` with Eloquent's
+/// dirty check and the model's `saving` hook. A request without a value keeps the stored one.
 async fn save_variable(state: &AppState, row: &Record, input: &Input) -> Result<Record, ApiError> {
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let id = row.get("id").and_then(Value::as_i64).unwrap_or_default();
     let old = plain_value(state, row)?;
-    let new = input.str("value").map(php_trim);
+    let new = if input.has("value") {
+        input.str("value").map(php_trim)
+    } else {
+        old.as_deref()
+    };
     let mut dirty: Vec<(&'static str, ColumnValue)> = Vec::new();
     let value_dirty = old.as_deref() != new;
     if value_dirty {

@@ -15,7 +15,6 @@ use coolify_jobs::applications::labels::{self, LabelInput};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
-use crate::auth::AuthCtx;
 use crate::input::Input;
 use crate::response::{ApiError, PhpJson};
 use crate::routes::databases::input_bool;
@@ -605,35 +604,6 @@ pub(super) fn check_custom_internal_name(
             ]),
         );
         return Err(ApiError::Validation(errors));
-    }
-    Ok(())
-}
-
-/// `manualWebhookSecretForbiddenResponse()`.
-pub(super) fn check_webhook_secret_ability(
-    ctx: &AuthCtx,
-    input: &Input,
-    enc: &Encrypter,
-    application: Option<&ApplicationRow>,
-) -> Result<(), ApiError> {
-    use coolify_domain::Ability;
-    if ctx.abilities.can(Ability::Deploy) || ctx.abilities.can(Ability::Root) {
-        return Ok(());
-    }
-    for field in WEBHOOK_SECRETS {
-        if !input.filled(field) {
-            continue;
-        }
-        let stored = match application {
-            Some(a) => decrypted(enc, a, field)?,
-            None => None,
-        };
-        if input.str(field) != stored.as_deref() {
-            return Err(ApiError::Message(
-                StatusCode::FORBIDDEN,
-                "Missing required permissions: deploy. A manual webhook secret lets anyone who knows it start a deployment, so it needs a token with the deploy permission.",
-            ));
-        }
     }
     Ok(())
 }

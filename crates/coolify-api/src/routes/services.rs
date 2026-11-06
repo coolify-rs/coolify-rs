@@ -1435,25 +1435,14 @@ pub async fn logs(
         .service_target(&s)
         .await
         .map_err(jobs_error)?;
-    let status = jobs_of(&state)?
-        .service_container_status(&target, &name)
+    // A stopped container still has logs, like in the UI.
+    let found = jobs_of(&state)?
+        .service_container_exists(&target, &s.uuid, &name)
         .await;
-    if status == "exited" {
-        // The owner listing finds no container, or the inspect found none running.
-        let found = jobs_of(&state)?
-            .service_container_exists(&target, &s.uuid, &name)
-            .await;
-        if !found {
-            return Err(ApiError::Message(
-                StatusCode::NOT_FOUND,
-                "Container not found.",
-            ));
-        }
-    }
-    if status != "running" {
+    if !found {
         return Err(ApiError::Message(
-            StatusCode::BAD_REQUEST,
-            "Container is not running.",
+            StatusCode::NOT_FOUND,
+            "Container not found.",
         ));
     }
     let lines = normalize_log_lines(query_param(&uri, "lines"));
@@ -1751,8 +1740,8 @@ pub async fn update_env(
             "Environment variable not found.",
         ));
     }
-    // `$env->value = $request->value`: a request without value sets null.
-    let row = env_upsert(&state, &s, &key, &input, true).await?;
+    // `if ($request->has('value'))`: a request without a value keeps the stored one.
+    let row = env_upsert(&state, &s, &key, &input, false).await?;
     tracing::info!(target: "audit", event = "api.service.env_updated", team_id = ctx.team_id, service_uuid = %s.uuid, env_key = %key, "service variable updated");
     Ok(created(present_env(&state, &ctx, &s, &row).await?).into_response())
 }
@@ -3194,10 +3183,10 @@ async fn part_logs(
         .service_target(s)
         .await
         .map_err(jobs_error)?;
-    if jobs_of(state)?
-        .service_container_status(&target, &name)
+    // A stopped container still has logs, like in the UI.
+    if !jobs_of(state)?
+        .service_container_inspected(&target, &name)
         .await
-        != "running"
     {
         return Err(ApiError::Message(StatusCode::BAD_REQUEST, not_running));
     }

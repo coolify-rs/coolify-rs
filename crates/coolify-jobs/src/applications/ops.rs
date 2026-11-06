@@ -404,7 +404,7 @@ pub enum LogsResult {
     Logs(String),
     /// 400 `Application is not running.`
     NotRunning,
-    /// 404: no running container for the `service_name`.
+    /// 404: no container (running or stopped) for the `service_name`.
     NoService,
 }
 
@@ -470,41 +470,16 @@ impl Jobs {
                 };
                 found
             }
-            None => &containers[0],
+            // A stopped container still has logs, like in the UI; a running one is preferred.
+            None => containers
+                .iter()
+                .find(|c| c.get("State").and_then(Value::as_str) == Some("running"))
+                .unwrap_or(&containers[0]),
         };
-        let name = container
-            .get("Names")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
         let id = container
             .get("ID")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        // getContainerStatus(): `throwError` is false.
-        let inspected = self
-            .remote()
-            .run_quiet(
-                &t,
-                &[&format!(
-                    "docker inspect --format '{{{{json .}}}}' {}",
-                    quote(name)
-                )],
-                RunOptions::op("application.logs"),
-            )
-            .await
-            .unwrap_or_default();
-        let status = inspected
-            .lines()
-            .find_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
-            .and_then(|v| {
-                v.pointer("/State/Status")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .unwrap_or_else(|| "exited".into());
-        if status != "running" {
-            return Ok(LogsResult::NotRunning);
-        }
         let lines = normalize_log_lines(lines);
         let mut command = format!("docker logs -n {lines}");
         if show_timestamps {

@@ -289,7 +289,12 @@ pub static STANDALONE_POSTGRESQL: ModelSpec = ModelSpec {
         "redact_all_env_values_in_logs",
         "include_coolify_default_variables",
     ],
-    hidden: &["postgres_password", "init_scripts"],
+    hidden: &[
+        "postgres_password",
+        "init_scripts",
+        "postgres_conf",
+        "custom_docker_run_options",
+    ],
     timestamps: &[
         "started_at",
         "created_at",

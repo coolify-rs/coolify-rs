@@ -125,7 +125,7 @@ async fn api_disabled_and_ip_allowlist() {
     // In-process requests come from 127.0.0.1.
     h.get("/api/v1/projects", "acme_owner_read").await.assert(
         403,
-        r#"{"success":true,"message":"You are not allowed to access the API."}"#,
+        r#"{"success":false,"message":"You are not allowed to access the API."}"#,
     );
     sqlx::query("UPDATE instance_settings SET allowed_ips = '127.0.0.1, 10.0.0.0/8' WHERE id = 0")
         .execute(&pool)
@@ -142,7 +142,7 @@ async fn api_disabled_and_ip_allowlist() {
         .unwrap();
     h.get("/api/v1/projects", "acme_owner_read")
         .await
-        .assert(403, r#"{"success":true,"message":"API is disabled."}"#);
+        .assert(403, r#"{"success":false,"message":"API is disabled."}"#);
     // Authentication still runs first.
     h.call("GET", "/api/v1/projects", None, None)
         .await
@@ -172,7 +172,7 @@ async fn disable_endpoint() {
         .assert(200, r#"{"message":"API disabled."}"#);
     h.get("/api/v1/projects", "root_read")
         .await
-        .assert(403, r#"{"success":true,"message":"API is disabled."}"#);
+        .assert(403, r#"{"success":false,"message":"API is disabled."}"#);
     h.finish().await;
 }
 

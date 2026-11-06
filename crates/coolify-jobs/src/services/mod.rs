@@ -981,8 +981,9 @@ impl Jobs {
         });
     }
 
-    /// `getContainerStatus($server, $container)`.
-    pub async fn service_container_status(&self, target: &Target, container: &str) -> String {
+    /// `is_array(getContainerStatus($server, $container, all_data: true))`: the container exists,
+    /// running or stopped.
+    pub async fn service_container_inspected(&self, target: &Target, container: &str) -> bool {
         let c = format!(
             "docker inspect --format '{{{{json .}}}}' {}",
             quote(container)
@@ -992,16 +993,12 @@ impl Jobs {
             .run_quiet(target, &[c.as_str()], RunOptions::op("service.status"))
             .await
         else {
-            return "exited".into();
+            return false;
         };
-        serde_json::from_str::<Value>(out.trim())
-            .ok()
-            .and_then(|v| {
-                v.pointer("/State/Status")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .unwrap_or_else(|| "exited".into())
+        out.lines()
+            .find(|l| !l.trim().is_empty())
+            .and_then(|l| serde_json::from_str::<Value>(l.trim()).ok())
+            .is_some_and(|v| v.is_object())
     }
 
     /// `getContainerLogs($server, $container, $lines, $showTimestamps)`.
