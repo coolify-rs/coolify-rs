@@ -1,0 +1,36 @@
+//! A plugin built against `coolify-rs:plugin@0.1.1` as it was released (`wit/plugin.wit` is a frozen copy;
+//! never edit it). It stores the kind of each event, and answers requests with the last one and the team's
+//! applications through `resources`, an interface 0.1.1 added, so a test can prove that every later 0.1.x
+//! host still loads and runs 0.1.1 components.
+
+wit_bindgen::generate!({
+    world: "plugin",
+    path: "wit",
+});
+
+use coolify_rs::plugin::{resources, storage};
+
+struct Compat;
+
+impl Guest for Compat {
+    fn on_event(event: Event) -> Result<(), String> {
+        storage::set("last", event.kind.as_bytes())
+    }
+
+    fn handle_request(caller: Caller, _request: Request) -> Response {
+        let last = storage::get("last").ok().flatten().unwrap_or_default();
+        let apps = resources::all(resources::Kind::Applications).unwrap_or_else(|e| e);
+        Response {
+            status: 200,
+            headers: vec![("content-type".into(), "text/plain".into())],
+            body: format!(
+                "{} {} {apps}",
+                caller.team_id,
+                String::from_utf8_lossy(&last)
+            )
+            .into_bytes(),
+        }
+    }
+}
+
+export!(Compat);

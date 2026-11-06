@@ -22,6 +22,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "compat-0-1-1"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
+name = "configured"
+version = "0.1.0"
+dependencies = [
+ "coolify-rs-plugin",
+ "serde_json",
+]
+
+[[package]]
 name = "coolify-rs-plugin"
 version = "0.1.0"
 dependencies = [

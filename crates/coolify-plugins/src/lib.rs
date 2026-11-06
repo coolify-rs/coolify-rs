@@ -10,12 +10,14 @@ pub mod portable;
 pub mod registry;
 pub mod runtime;
 pub mod store;
+pub mod team_config;
 
 pub use data::{Actor, DeployRequest, Deployer, ResourceKind, ResourceQuery, ResourceSource};
-pub use manifest::{API_VERSION, Capabilities, Manifest, Panel, UI_SLOTS};
+pub use manifest::{API_VERSION, Capabilities, Manifest, Panel, Setting, SettingKind, UI_SLOTS};
 pub use panels::{PanelError, TeamPanel};
 pub use runtime::{CallError, Caller, Event, Host, Limits, Request, Response, Settings};
 pub use store::Installed;
+pub use team_config::{Changed, TeamConfig, UpdateError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PluginError {

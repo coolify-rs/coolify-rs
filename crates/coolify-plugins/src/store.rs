@@ -69,10 +69,27 @@ CREATE TABLE IF NOT EXISTS coolify_rs_plugins.owned_resources (
 );
 ";
 
+/// Addition of ADR 0014: each team's values of a plugin's `[[settings]]`. A secret's `value` is
+/// `Encrypter::encrypt_string` of it (Laravel's payload under `APP_KEY`), any other value is plain text. The
+/// foreign key deletes them with the plugin; switching the plugin off for a team keeps them.
+const SCHEMA_0014: &str = "
+CREATE TABLE IF NOT EXISTS coolify_rs_plugins.team_settings (
+    plugin_id text NOT NULL REFERENCES coolify_rs_plugins.plugins (id) ON DELETE CASCADE,
+    team_id bigint NOT NULL,
+    key text NOT NULL,
+    value text NOT NULL,
+    secret boolean NOT NULL,
+    updated_by bigint,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (plugin_id, team_id, key)
+);
+";
+
 /// Creates the schema when missing.
 pub async fn migrate(db: &Db) -> Result<(), PluginError> {
     sqlx::raw_sql(SCHEMA).execute(db.pool()).await?;
     sqlx::raw_sql(SCHEMA_0011).execute(db.pool()).await?;
+    sqlx::raw_sql(SCHEMA_0014).execute(db.pool()).await?;
     crate::registry::db::migrate(db).await
 }
 

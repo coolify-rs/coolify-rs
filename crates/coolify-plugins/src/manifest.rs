@@ -28,6 +28,130 @@ pub struct Manifest {
     pub api: String,
     #[serde(default)]
     pub capabilities: Capabilities,
+    /// `[[settings]]`: what each team configures for the plugin, read through the `config` interface. Not a
+    /// capability: it never changes [`Manifest::capability_summary`], so grants made before settings existed
+    /// still match (ADR 0014).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settings: Vec<Setting>,
+}
+
+/// One `[[settings]]` entry: a value each team sets under Team → Plugins (ADR 0014).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Setting {
+    /// Lowercase snake case, unique in the manifest; what the plugin passes to `config.get`.
+    pub key: String,
+    /// The form field's label.
+    pub label: String,
+    /// A line of help next to the label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
+    /// Encrypted at rest with `APP_KEY`, never shown again after saving, readable only by the plugin.
+    #[serde(default)]
+    pub secret: bool,
+    /// The plugin needs it; Team → Plugins says "Needs configuration" while it is unset.
+    #[serde(default)]
+    pub required: bool,
+    /// What `config.get` answers while the team has not set a value. Not for secrets or required settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    /// The allowed values, shown as a select.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    /// `text` (the default), `url` (an https URL) or `select` (the default when `options` are given).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<SettingKind>,
+}
+
+/// How a setting's value is entered and checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SettingKind {
+    Text,
+    /// An `https://` URL with a host and no credentials.
+    Url,
+    /// One of the setting's `options`.
+    Select,
+}
+
+impl SettingKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Url => "url",
+            Self::Select => "select",
+        }
+    }
+}
+
+/// Most settings a manifest may declare.
+pub const MAX_SETTINGS: usize = 32;
+/// Longest value of a setting, in bytes.
+pub const MAX_SETTING_VALUE: usize = 4096;
+
+static SETTING_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[a-z][a-z0-9_]{0,63}$").unwrap_or_else(|_| unreachable!()));
+
+impl Setting {
+    pub fn kind(&self) -> SettingKind {
+        self.kind.unwrap_or(if self.options.is_empty() {
+            SettingKind::Text
+        } else {
+            SettingKind::Select
+        })
+    }
+
+    /// The value as it is stored: surrounding whitespace removed. An empty result means "not set".
+    pub fn normalize(value: &str) -> &str {
+        value.trim()
+    }
+
+    /// Whether `value` (normalized) is acceptable. The message never repeats the value, which may be a
+    /// secret.
+    pub fn check(&self, value: &str) -> Result<(), String> {
+        if value.is_empty() {
+            return Err(format!("{} can't be empty.", self.label));
+        }
+        if value.len() > MAX_SETTING_VALUE {
+            return Err(format!(
+                "{} must be at most {MAX_SETTING_VALUE} bytes.",
+                self.label
+            ));
+        }
+        if value.chars().any(char::is_control) {
+            return Err(format!(
+                "{} can't contain line breaks or control characters.",
+                self.label
+            ));
+        }
+        match self.kind() {
+            SettingKind::Text => Ok(()),
+            SettingKind::Url => {
+                let ok = reqwest::Url::parse(value).is_ok_and(|u| {
+                    u.scheme() == "https"
+                        && u.host_str().is_some_and(|h| !h.is_empty())
+                        && u.username().is_empty()
+                        && u.password().is_none()
+                });
+                if ok {
+                    Ok(())
+                } else {
+                    Err(format!("{} must be an https:// URL.", self.label))
+                }
+            }
+            SettingKind::Select => {
+                if self.options.iter().any(|o| o == value) {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "{} must be one of: {}.",
+                        self.label,
+                        self.options.join(", ")
+                    ))
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,7 +300,13 @@ impl Manifest {
             }
         }
         validate_ui(caps)?;
+        validate_settings(&self.settings)?;
         Ok(())
+    }
+
+    /// A declared setting.
+    pub fn setting(&self, key: &str) -> Option<&Setting> {
+        self.settings.iter().find(|s| s.key == key)
     }
 
     /// The capability names, as shown when asking an admin to grant them.
@@ -284,6 +414,82 @@ fn validate_ui(caps: &Capabilities) -> Result<(), PluginError> {
                 "ui panel {:?} is listed twice in {}",
                 p.title, p.slot
             ));
+        }
+    }
+    Ok(())
+}
+
+/// `[[settings]]`: unique snake-case keys, short labels, and defaults and options that make sense together.
+fn validate_settings(settings: &[Setting]) -> Result<(), PluginError> {
+    let bad = |msg: String| Err(PluginError::Manifest(msg));
+    if settings.len() > MAX_SETTINGS {
+        return bad(format!("at most {MAX_SETTINGS} settings"));
+    }
+    let text = |s: &str, max: usize| {
+        !s.trim().is_empty() && s.chars().count() <= max && !s.chars().any(char::is_control)
+    };
+    for (i, s) in settings.iter().enumerate() {
+        let key = &s.key;
+        if !SETTING_KEY.is_match(key) {
+            return bad(format!(
+                "setting keys must be lowercase snake case (a-z, 0-9 and _, starting with a letter, at most 64), not {key:?}"
+            ));
+        }
+        if settings[..i].iter().any(|o| o.key == *key) {
+            return bad(format!("setting {key:?} is listed twice"));
+        }
+        if !text(&s.label, 64) {
+            return bad(format!("setting {key:?}: label must be 1 to 64 characters"));
+        }
+        if let Some(help) = &s.help
+            && !text(help, 280)
+        {
+            return bad(format!("setting {key:?}: help must be 1 to 280 characters"));
+        }
+        let kind = s.kind();
+        if s.options.is_empty() && kind == SettingKind::Select {
+            return bad(format!("setting {key:?}: select needs options"));
+        }
+        if !s.options.is_empty() {
+            if kind != SettingKind::Select {
+                return bad(format!(
+                    "setting {key:?}: options are only for kind = \"select\""
+                ));
+            }
+            if s.secret {
+                return bad(format!("setting {key:?}: a secret can't have options"));
+            }
+            if s.options.len() > 32 {
+                return bad(format!("setting {key:?}: at most 32 options"));
+            }
+            for (j, o) in s.options.iter().enumerate() {
+                if !text(o, 128) || o.trim() != o {
+                    return bad(format!(
+                        "setting {key:?}: options must be 1 to 128 characters without surrounding spaces"
+                    ));
+                }
+                if s.options[..j].contains(o) {
+                    return bad(format!("setting {key:?}: option {o:?} is listed twice"));
+                }
+            }
+        }
+        if let Some(default) = &s.default {
+            if s.secret {
+                return bad(format!("setting {key:?}: a secret can't have a default"));
+            }
+            if s.required {
+                return bad(format!(
+                    "setting {key:?}: a setting with a default is never unset, so it can't be required"
+                ));
+            }
+            if Setting::normalize(default) != default {
+                return bad(format!(
+                    "setting {key:?}: the default can't have surrounding spaces"
+                ));
+            }
+            if let Err(e) = s.check(default) {
+                return bad(format!("setting {key:?}: the default is invalid: {e}"));
+            }
         }
     }
     Ok(())
@@ -436,6 +642,165 @@ path = "/panels/failures"
         // Without panels the summary is unchanged, so grants made before `ui` existed still match.
         let json = serde_json::to_value(Manifest::parse(OK).unwrap().capabilities).unwrap();
         assert!(json.get("ui").is_none());
+    }
+
+    /// Appended to `OK`: four settings of every kind.
+    const SETTINGS: &str = r#"
+[[settings]]
+key = "topic"
+label = "Topic"
+help = "The ntfy topic to publish to."
+required = true
+
+[[settings]]
+key = "api_token"
+label = "Access token"
+secret = true
+
+[[settings]]
+key = "server"
+label = "Server"
+kind = "url"
+default = "https://ntfy.sh"
+
+[[settings]]
+key = "priority"
+label = "Priority"
+options = ["low", "default", "high"]
+default = "default"
+"#;
+
+    #[test]
+    fn parses_settings_without_changing_the_capabilities() {
+        let m = Manifest::parse(&format!("{OK}{SETTINGS}")).unwrap();
+        assert_eq!(m.settings.len(), 4);
+        assert_eq!(m.setting("server").unwrap().kind(), SettingKind::Url);
+        assert_eq!(m.setting("priority").unwrap().kind(), SettingKind::Select);
+        assert_eq!(m.setting("topic").unwrap().kind(), SettingKind::Text);
+        assert!(m.setting("api_token").unwrap().secret);
+        assert!(m.setting("nope").is_none());
+        // Settings are not a capability: the summary, and so every existing grant, is unchanged.
+        assert_eq!(
+            m.capability_summary(),
+            Manifest::parse(OK).unwrap().capability_summary()
+        );
+        // A manifest without settings stores no `settings` field, and one with them round-trips.
+        let plain = serde_json::to_value(Manifest::parse(OK).unwrap()).unwrap();
+        assert!(plain.get("settings").is_none());
+        let json = serde_json::to_value(&m).unwrap();
+        assert_eq!(serde_json::from_value::<Manifest>(json).unwrap(), m);
+    }
+
+    #[test]
+    fn rejects_bad_settings() {
+        let cases = [
+            ("key = \"topic\"", "key = \"Topic\"", "snake case"),
+            ("key = \"topic\"", "key = \"1topic\"", "snake case"),
+            ("key = \"topic\"", "key = \"to-pic\"", "snake case"),
+            ("key = \"api_token\"", "key = \"topic\"", "listed twice"),
+            ("label = \"Topic\"", "label = \"\"", "label must be"),
+            (
+                "help = \"The ntfy topic to publish to.\"",
+                "help = \"\"",
+                "help must be",
+            ),
+            (
+                "secret = true",
+                "secret = true\ndefault = \"x\"",
+                "secret can't have a default",
+            ),
+            (
+                "required = true",
+                "required = true\ndefault = \"x\"",
+                "can't be required",
+            ),
+            (
+                "default = \"https://ntfy.sh\"",
+                "default = \"http://ntfy.sh\"",
+                "https:// URL",
+            ),
+            (
+                "default = \"https://ntfy.sh\"",
+                "default = \"ntfy.sh\"",
+                "https:// URL",
+            ),
+            (
+                "default = \"default\"",
+                "default = \"urgent\"",
+                "must be one of",
+            ),
+            (
+                "options = [\"low\", \"default\", \"high\"]",
+                "options = [\"low\", \"low\"]\nkind = \"select\"",
+                "listed twice",
+            ),
+            (
+                "kind = \"url\"",
+                "kind = \"select\"",
+                "select needs options",
+            ),
+            ("kind = \"url\"", "kind = \"color\"", "unknown variant"),
+            (
+                "options = [\"low\", \"default\", \"high\"]",
+                "options = [\"low\", \"default\"]\nkind = \"text\"",
+                "only for kind",
+            ),
+            (
+                "secret = true",
+                "secret = true\noptions = [\"a\"]",
+                "secret can't have options",
+            ),
+            (
+                "required = true",
+                "required = true\nshell = true",
+                "unknown field",
+            ),
+            ("required = true", "required = \"yes\"", "invalid type"),
+        ];
+        for (from, to, want) in cases {
+            let text = format!("{OK}{}", SETTINGS.replacen(from, to, 1));
+            let err = Manifest::parse(&text).unwrap_err().to_string();
+            assert!(err.contains(want), "{to}: {err}");
+        }
+        let many: String = (0..=MAX_SETTINGS)
+            .map(|i| format!("[[settings]]\nkey = \"k{i}\"\nlabel = \"K\"\n"))
+            .collect();
+        let err = Manifest::parse(&format!("{OK}{many}"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("at most 32 settings"), "{err}");
+    }
+
+    #[test]
+    fn checks_setting_values() {
+        let m = Manifest::parse(&format!("{OK}{SETTINGS}")).unwrap();
+        let topic = m.setting("topic").unwrap();
+        assert!(topic.check("alerts").is_ok());
+        assert!(topic.check("").is_err());
+        assert!(topic.check("a\nb").is_err());
+        assert!(topic.check(&"x".repeat(MAX_SETTING_VALUE + 1)).is_err());
+        let server = m.setting("server").unwrap();
+        assert!(server.check("https://ntfy.example.com/path").is_ok());
+        for bad in [
+            "http://ntfy.sh",
+            "ntfy.sh",
+            "https://",
+            "javascript:alert(1)",
+            "https://user:pass@ntfy.sh",
+        ] {
+            assert!(server.check(bad).is_err(), "{bad}");
+        }
+        let priority = m.setting("priority").unwrap();
+        assert!(priority.check("high").is_ok());
+        assert!(priority.check("HIGH").is_err());
+        // Messages name the setting, never the value.
+        let err = m
+            .setting("api_token")
+            .unwrap()
+            .check("tk_\u{7}secret")
+            .unwrap_err();
+        assert!(!err.contains("tk_"), "{err}");
+        assert_eq!(Setting::normalize("  x  "), "x");
     }
 
     #[test]

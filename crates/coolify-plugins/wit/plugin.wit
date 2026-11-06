@@ -3,10 +3,12 @@
 /// A plugin is a component that targets the `plugin` world. Every call runs in a fresh instance, so a plugin
 /// keeps nothing in memory between calls; `storage` is where state lives. Each call is for one team, and
 /// `storage` reads and writes that team's data only, `resources` reads that team's resources only, and
-/// `deploy` deploys that team's applications only. No function takes a team: the host knows it from the call.
+/// `deploy` deploys that team's applications only, and `config` reads that team's settings only. No function
+/// takes a team: the host knows it from the call.
 ///
-/// 0.1.1 added `resources` and `deploy` (ADR 0011). Components built against 0.1.0 load unchanged.
-package coolify-rs:plugin@0.1.1;
+/// 0.1.1 added `resources` and `deploy` (ADR 0011), 0.1.2 added `config` (ADR 0014). Components built against
+/// 0.1.0 and 0.1.1 load unchanged.
+package coolify-rs:plugin@0.1.2;
 
 interface types {
     /// Something coolify-rs announced, as `notifications` would deliver it to the team.
@@ -96,12 +98,24 @@ interface deploy {
     application: func(uuid: string, force: bool) -> result<string, string>;
 }
 
+/// The settings the manifest declares (`[[settings]]`), as the call's team set them under Team → Plugins.
+/// Not a capability, but only a plugin whose manifest declares settings may import it. A plugin reads its own
+/// settings for the call's team and nothing else.
+interface config {
+    /// The team's value of `key`, or the setting's default while the team has not set one. None when the
+    /// setting is unset without a default (including a required one: handle it), or when the manifest
+    /// declares no such key. A secret is returned in clear: only the plugin ever sees it, so never log it or
+    /// put it in a response.
+    get: func(key: string) -> option<string>;
+}
+
 world plugin {
     import log;
     import storage;
     import http;
     import resources;
     import deploy;
+    import config;
 
     use types.{event, caller, request, response};
 

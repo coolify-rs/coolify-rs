@@ -117,6 +117,34 @@ pub mod storage {
     }
 }
 
+/// The team's settings: the `[[settings]]` of the manifest, as the team of the current call set them under
+/// Team → Plugins (docs/PLUGINS.md, "Settings"). Only a plugin whose manifest declares settings may use it;
+/// coolify-rs refuses to load a component that imports it otherwise.
+///
+/// ```ignore
+/// let Some(topic) = coolify_rs_plugin::config::get("topic") else {
+///     return Ok(()); // Not configured for this team yet.
+/// };
+/// let server = coolify_rs_plugin::config::get_or("server", "https://ntfy.sh");
+/// ```
+///
+/// Secrets come back in clear: only the plugin sees them. Never log them or return them from a route.
+pub mod config {
+    /// The team's value of `key`, or the manifest's default; `None` when it is unset without a default
+    /// (a required setting can be unset too) or when the manifest declares no such key.
+    pub use crate::bindings::coolify_rs::plugin::config::get;
+
+    /// The team's value of `key`, or `default` when there is none.
+    pub fn get_or(key: &str, default: &str) -> String {
+        get(key).unwrap_or_else(|| default.to_owned())
+    }
+
+    /// The team's value of `key`, or an error saying the setting is not configured, for `?` in `on_event`.
+    pub fn require(key: &str) -> Result<String, String> {
+        get(key).ok_or_else(|| format!("the setting {key} is not configured for this team"))
+    }
+}
+
 /// Capability `http`: HTTPS requests to the hosts in the manifest.
 pub mod http {
     pub use crate::bindings::coolify_rs::plugin::http::{Outgoing, fetch};

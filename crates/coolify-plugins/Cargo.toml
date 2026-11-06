@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 base64.workspace = true
 chrono.workspace = true
+coolify-compat.workspace = true
 coolify-db.workspace = true
 coolify-domain.workspace = true
 ed25519-dalek.workspace = true

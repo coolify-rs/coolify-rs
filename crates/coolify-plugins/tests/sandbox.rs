@@ -42,6 +42,7 @@ fn manifest(id: &str, caps: Capabilities) -> Manifest {
         source: None,
         api: coolify_plugins::API_VERSION.into(),
         capabilities: caps,
+        settings: Vec::new(),
     }
 }
 

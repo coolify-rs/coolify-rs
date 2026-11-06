@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use std::time::Duration;
 
+use coolify_compat::Encrypter;
 use coolify_db::Db;
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
@@ -21,7 +22,7 @@ use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use crate::PluginError;
 use crate::data::{Actor, DeployRequest, Deployer, ResourceKind, ResourceQuery, ResourceSource};
 use crate::egress::{Egress, Outgoing};
-use crate::manifest::{Capabilities, Manifest};
+use crate::manifest::{Capabilities, Manifest, Setting};
 use crate::store::{self, Installed, NewPlugin};
 
 mod detached;
@@ -37,7 +38,7 @@ mod bindings {
 }
 
 pub use bindings::coolify_rs::plugin::types::{Caller, Event, Request, Response};
-use bindings::coolify_rs::plugin::{deploy, http, log, resources, storage, types};
+use bindings::coolify_rs::plugin::{config, deploy, http, log, resources, storage, types};
 
 /// Resource limits for plugins.
 #[derive(Debug, Clone)]
@@ -126,6 +127,8 @@ struct Inner {
     /// Set for `coolify-rs plugin check`: no database, storage in memory, no network.
     memory: Option<detached::Memory>,
     bridges: RwLock<Bridges>,
+    /// Encrypts and decrypts secret settings (ADR 0014); see [`Host::use_encrypter`].
+    encrypter: RwLock<Option<Arc<Encrypter>>>,
 }
 
 /// What `resources` and `deploy` reach; see [`Host::connect`].
@@ -214,6 +217,9 @@ struct CallCtx {
     bridges: Bridges,
     /// Who called the plugin's route; `None` for events.
     caller: Option<Caller>,
+    /// The manifest's `[[settings]]`: `config.get` answers these keys only.
+    settings: Arc<[Setting]>,
+    encrypter: Option<Arc<Encrypter>>,
 }
 
 impl WasiView for State {
@@ -251,6 +257,7 @@ impl Host {
             loaded: RwLock::new(HashMap::new()),
             memory: None,
             bridges: RwLock::new(Bridges::default()),
+            encrypter: RwLock::new(None),
         }));
         tick(Arc::downgrade(&host.0));
         for p in store::list(&host.0.db).await? {
@@ -284,6 +291,59 @@ impl Host {
             resources: Some(resources),
             deployer: Some(deployer),
         };
+    }
+
+    /// Gives the host coolify-rs's `APP_KEY` encrypter, the one Coolify's encrypted columns use, for secret
+    /// settings (ADR 0014). Until it is called, secret settings can't be saved and read as none.
+    pub fn use_encrypter(&self, encrypter: Encrypter) {
+        *self.0.encrypter.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(encrypter));
+    }
+
+    fn encrypter(&self) -> Option<Arc<Encrypter>> {
+        self.0
+            .encrypter
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// The team's settings of an installed plugin (ADR 0014): every declared setting, values only for those
+    /// that are not secret.
+    pub async fn team_config(
+        &self,
+        id: &str,
+        team_id: i64,
+    ) -> Result<crate::TeamConfig, PluginError> {
+        let p = store::find(&self.0.db, id)
+            .await?
+            .ok_or_else(|| PluginError::NotFound(id.to_owned()))?;
+        crate::team_config::read(&self.0.db, &p.manifest, team_id).await
+    }
+
+    /// Changes some of the team's settings of an installed plugin; see [`crate::team_config::update`].
+    /// Answers the settings as they are afterwards and what changed.
+    pub async fn update_team_config(
+        &self,
+        id: &str,
+        team_id: i64,
+        user_id: Option<i64>,
+        changes: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<(crate::TeamConfig, crate::Changed), crate::UpdateError> {
+        let p = store::find(&self.0.db, id)
+            .await?
+            .ok_or_else(|| PluginError::NotFound(id.to_owned()))?;
+        let encrypter = self.encrypter();
+        let changed = crate::team_config::update(
+            &self.0.db,
+            encrypter.as_deref(),
+            &p.manifest,
+            team_id,
+            user_id,
+            changes,
+        )
+        .await?;
+        let config = crate::team_config::read(&self.0.db, &p.manifest, team_id).await?;
+        Ok((config, changed))
     }
 
     async fn load(&self, installed: Installed) -> Result<(), PluginError> {
@@ -327,7 +387,8 @@ impl Host {
             .imports(engine)
             .map(|(name, _)| name.to_owned())
             .collect();
-        check_imports(&imports, &installed.granted)?;
+        let has_settings = !installed.manifest.settings.is_empty();
+        check_imports(&imports, &installed.granted, has_settings)?;
         let mut linker = Linker::<State>::new(engine);
         let link = |e: wasmtime::Error| PluginError::Engine(format!("{e:#}"));
         wasmtime_wasi::p2::add_to_linker_async(&mut linker).map_err(link)?;
@@ -343,6 +404,9 @@ impl Host {
         }
         if installed.granted.deploy {
             deploy::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s).map_err(link)?;
+        }
+        if has_settings {
+            config::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s).map_err(link)?;
         }
         let pre = linker
             .instantiate_pre(&component)
@@ -405,6 +469,11 @@ impl Host {
             // A version without `deploy` drops the teams' consent, so a later version asking for it again
             // needs each team to grant it again.
             store::clear_deploy_grants(&self.0.db, &manifest.id).await?;
+        }
+        if previous.is_some() {
+            // The teams' settings follow the new version's declarations (ADR 0014).
+            let encrypter = self.encrypter();
+            crate::team_config::reconcile(&self.0.db, encrypter.as_deref(), &manifest).await?;
         }
         self.0
             .loaded
@@ -703,6 +772,8 @@ impl Host {
                     .unwrap_or_else(|e| e.into_inner())
                     .clone(),
                 caller,
+                settings: Arc::from(p.installed.manifest.settings.clone()),
+                encrypter: self.encrypter(),
             },
         };
         let mut store = Store::new(&self.0.engine, state);
@@ -813,8 +884,13 @@ fn tick(host: Weak<Inner>) {
     }
 }
 
-/// Refuses imports outside the grant, naming them, so the admin and the author see what is wrong.
-pub(crate) fn check_imports(imports: &[String], granted: &Capabilities) -> Result<(), PluginError> {
+/// Refuses imports outside the grant, naming them, so the admin and the author see what is wrong. `config`
+/// is not a capability, but only a manifest that declares settings may import it (ADR 0014).
+pub(crate) fn check_imports(
+    imports: &[String],
+    granted: &Capabilities,
+    has_settings: bool,
+) -> Result<(), PluginError> {
     let mut refused = Vec::new();
     for name in imports {
         let (interface, version) = name.split_once('@').unwrap_or((name.as_str(), ""));
@@ -824,7 +900,8 @@ pub(crate) fn check_imports(imports: &[String], granted: &Capabilities) -> Resul
             || (granted.storage && ours("coolify-rs:plugin/storage"))
             || (!granted.http.is_empty() && ours("coolify-rs:plugin/http"))
             || (!granted.resources.is_empty() && ours("coolify-rs:plugin/resources"))
-            || (granted.deploy && ours("coolify-rs:plugin/deploy"));
+            || (granted.deploy && ours("coolify-rs:plugin/deploy"))
+            || (has_settings && ours("coolify-rs:plugin/config"));
         if !ok {
             refused.push(name.clone());
         }
@@ -832,14 +909,41 @@ pub(crate) fn check_imports(imports: &[String], granted: &Capabilities) -> Resul
     if refused.is_empty() {
         Ok(())
     } else {
+        let hint = if refused
+            .iter()
+            .any(|n| n.starts_with("coolify-rs:plugin/config@"))
+        {
+            "; config needs [[settings]] in the manifest"
+        } else {
+            ""
+        };
         Err(PluginError::Capability(format!(
-            "the component imports {} without a grant for it",
+            "the component imports {} without a grant for it{hint}",
             refused.join(", ")
         )))
     }
 }
 
 impl types::Host for State {}
+
+impl config::Host for State {
+    async fn get(&mut self, key: String) -> Option<String> {
+        let c = &self.call;
+        // Only keys the manifest declares; the plugin and team come from the call.
+        let setting = c.settings.iter().find(|s| s.key == key)?;
+        if c.memory.is_some() {
+            // A conformance check has no team settings: defaults only.
+            return setting.default.clone();
+        }
+        let plugin = &*c.plugin;
+        crate::team_config::value(&c.db, c.encrypter.as_deref(), plugin, c.team_id, setting)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(plugin, team = c.team_id, key = %setting.key, error = %e, "plugin setting could not be read");
+                None
+            })
+    }
+}
 
 impl log::Host for State {
     async fn write(&mut self, level: log::Level, message: String) {
@@ -1150,37 +1254,53 @@ mod tests {
             "wasi:cli/environment@0.2.6",
             "wasi:io/streams@0.2.6",
         ]);
-        assert!(check_imports(&base, &none).is_ok());
+        assert!(check_imports(&base, &none, false).is_ok());
 
         let with_storage = [base.clone(), names(&["coolify-rs:plugin/storage@0.1.0"])].concat();
-        let err = check_imports(&with_storage, &none).unwrap_err().to_string();
+        let err = check_imports(&with_storage, &none, false)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("coolify-rs:plugin/storage@0.1.0"), "{err}");
         let granted = Capabilities {
             storage: true,
             ..Default::default()
         };
-        assert!(check_imports(&with_storage, &granted).is_ok());
+        assert!(check_imports(&with_storage, &granted, false).is_ok());
 
         let data = names(&[
             "coolify-rs:plugin/resources@0.1.1",
             "coolify-rs:plugin/deploy@0.1.1",
         ]);
-        let err = check_imports(&data, &granted).unwrap_err().to_string();
+        let err = check_imports(&data, &granted, true)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("resources") && err.contains("deploy"), "{err}");
         let with_data = Capabilities {
             resources: vec!["applications".into()],
             deploy: true,
             ..Default::default()
         };
-        assert!(check_imports(&data, &with_data).is_ok());
+        assert!(check_imports(&data, &with_data, false).is_ok());
+
+        // `config` is not a capability: any grant is enough, but only with settings in the manifest.
+        let config = names(&["coolify-rs:plugin/config@0.1.2"]);
+        let err = check_imports(&config, &with_data, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("coolify-rs:plugin/config@0.1.2") && err.contains("[[settings]]"),
+            "{err}"
+        );
+        assert!(check_imports(&config, &none, true).is_ok());
 
         for bad in [
             "wasi:sockets/tcp@0.2.6",
             "wasi:http/outgoing-handler@0.2.6",
             "coolify-rs:plugin/storage@1.0.0",
+            "coolify-rs:plugin/config@1.0.0",
             "evil:host/everything",
         ] {
-            let err = check_imports(&names(&[bad]), &granted)
+            let err = check_imports(&names(&[bad]), &granted, true)
                 .unwrap_err()
                 .to_string();
             assert!(err.contains(bad), "{bad}: {err}");

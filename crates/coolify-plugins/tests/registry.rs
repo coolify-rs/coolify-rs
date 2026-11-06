@@ -171,6 +171,7 @@ fn grant(caps: &serde_json::Value) -> Vec<String> {
         source: None,
         api: "0.1".into(),
         capabilities: m,
+        settings: Vec::new(),
     }
     .capability_summary()
 }

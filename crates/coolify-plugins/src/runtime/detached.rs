@@ -33,6 +33,7 @@ impl Host {
             loaded: RwLock::new(HashMap::new()),
             memory: Some(Memory::default()),
             bridges: RwLock::new(Bridges::default()),
+            encrypter: RwLock::new(None),
         }));
         tick(Arc::downgrade(&host.0));
         Ok(host)

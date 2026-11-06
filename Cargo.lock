@@ -628,6 +628,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "coolify-compat",
  "coolify-db",
  "coolify-domain",
  "ed25519-dalek",

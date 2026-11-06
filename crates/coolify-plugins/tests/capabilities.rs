@@ -48,6 +48,7 @@ fn manifest(id: &str, caps: Capabilities) -> Manifest {
         source: None,
         api: coolify_plugins::API_VERSION.into(),
         capabilities: caps,
+        settings: Vec::new(),
     }
 }
 
@@ -474,8 +475,74 @@ async fn deploy_consent_needs_the_capability() {
     tdb.drop_db().await;
 }
 
+/// `coolify-rs:plugin@0.1.1` components, built before `config` existed, load and run on the 0.1.2 host, with
+/// `resources` (which 0.1.1 added) answered as before.
+#[tokio::test]
+async fn components_built_for_0_1_1_still_load() {
+    let tdb = TestDb::new("").await;
+    let (host, recorder) = host(&tdb, Limits::default()).await;
+    let id = "test/compat-0-1-1";
+    let caps = Capabilities {
+        events: vec!["deployment.failed".into()],
+        storage: true,
+        routes: true,
+        resources: vec!["applications".into()],
+        ..Default::default()
+    };
+    let wasm = wasm("compat_0_1_1");
+    let imports = imports_of(&wasm);
+    assert!(
+        imports
+            .iter()
+            .any(|i| i == "coolify-rs:plugin/resources@0.1.1"),
+        "{imports:?}"
+    );
+    host.install(manifest(id, caps), &wasm, "file", false, None)
+        .await
+        .unwrap();
+    host.set_team(id, 4, true, None).await.unwrap();
+    host.call_event(
+        id,
+        Event {
+            kind: "deployment.failed".into(),
+            version: 1,
+            team_id: 4,
+            payload: "{}".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let r = host
+        .handle_request(id, caller(4), request("GET", "/", ""))
+        .await
+        .unwrap();
+    let text = String::from_utf8_lossy(&r.body).into_owned();
+    assert!(text.starts_with("4 deployment.failed {"), "{text}");
+    assert_eq!(
+        recorder.reads.lock().unwrap().as_slice(),
+        [(4, ResourceQuery::All(ResourceKind::Applications))]
+    );
+    let (again, _) = self::host(&tdb, Limits::default()).await;
+    assert_eq!(again.loaded_ids(), [id]);
+    tdb.drop_db().await;
+}
+
+/// The component's imports, as the host's check sees them.
+fn imports_of(wasm: &[u8]) -> Vec<String> {
+    let host = Host::detached(Settings::default()).unwrap();
+    let caps = Capabilities {
+        events: vec!["deployment.failed".into()],
+        storage: true,
+        routes: true,
+        resources: vec!["applications".into()],
+        ..Default::default()
+    };
+    host.load_detached(manifest("test/imports", caps), wasm)
+        .unwrap()
+}
+
 /// `coolify-rs:plugin@0.1.0` components, built before `resources` and `deploy` existed, load and run on the
-/// 0.1.1 host: wasmtime resolves `@0.1.0` imports to the `@0.1.1` interfaces.
+/// current host: wasmtime resolves `@0.1.0` imports to the current 0.1.x interfaces.
 #[tokio::test]
 async fn components_built_for_0_1_0_still_load() {
     let tdb = TestDb::new("").await;

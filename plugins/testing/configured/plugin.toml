@@ -1,0 +1,41 @@
+id = "test/configured"
+name = "Configured"
+version = "0.1.0"
+description = "Test plugin: answers the team's settings through the config interface."
+license = "Apache-2.0"
+api = "0.1"
+
+[capabilities]
+events = ["deployment.succeeded"]
+storage = true
+routes = true
+
+[[settings]]
+key = "topic"
+label = "Topic"
+help = "The topic alerts are published to."
+required = true
+
+[[settings]]
+key = "token"
+label = "Access token"
+secret = true
+required = true
+
+[[settings]]
+key = "webhook"
+label = "Webhook URL"
+kind = "url"
+secret = true
+
+[[settings]]
+key = "server"
+label = "Server"
+kind = "url"
+default = "https://ntfy.sh"
+
+[[settings]]
+key = "priority"
+label = "Priority"
+options = ["low", "default", "high"]
+default = "default"
