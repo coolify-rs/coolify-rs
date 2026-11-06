@@ -30,6 +30,7 @@ pub mod services;
 pub mod storages;
 pub mod updates;
 mod validate;
+pub mod validate_new_cloud_server;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
