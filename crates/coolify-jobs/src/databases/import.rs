@@ -102,10 +102,11 @@ check_superuser
 psql -U "$pg_user" -d template1 -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IS NOT NULL AND pid <> pg_backend_pid()" || exit 1
 psql -U "$pg_user" -d template1 -t -c "SELECT datname FROM pg_database WHERE NOT datistemplate" | xargs -I {} dropdb -U "$pg_user" --maintenance-db=template1 --if-exists {} || exit 1
 createdb -U "$pg_user" "$db" || exit 1
+[ "$db" = postgres ] || createdb -U "$pg_user" postgres || exit 1
 if [ "$kind" = archive ]; then
-  stream | pg_restore --exit-on-error -U "$pg_user" -d "$db"
+  stream | pg_restore -U "$pg_user" -d "$db"
 else
-  stream | psql -v ON_ERROR_STOP=1 -U "$pg_user" -d "$db"
+  stream | psql -U "$pg_user" -d "$db"
 fi"#;
 
 const POSTGRES_REPLACE_SQL: &str = r#"
@@ -285,7 +286,13 @@ esac"#
     )
 }
 
-/// `buildPostgresRestoreScanScript`.
+/// `POSTGRES_COPY_DATA_FILTER`: a PostgreSQL SQL dump without the table data of its
+/// `COPY ... FROM stdin` blocks.
+const POSTGRES_COPY_DATA_FILTER: &str =
+    r#"data { if ($0 == "\\.") data = 0; next } { print } /^COPY .* FROM stdin;$/ { data = 1 }"#;
+
+/// `buildPostgresRestoreScanScript`. The table data of `COPY ... FROM stdin` blocks is not
+/// scanned (it is data, not SQL); when awk fails, the scan gets a line that matches.
 fn postgres_scan_script(path: &str) -> String {
     let escaped = quote(path);
     let sep = "([[:space:]]|~|/\\*.*\\*/|--[^~]*~)";
@@ -296,9 +303,16 @@ fn postgres_scan_script(path: &str) -> String {
     let escaped_sql = quote(&sql_pattern);
     let escaped_psql = quote(psql_pattern);
     let contents = format!("{{ gunzip -cf {escaped} 2>/dev/null || cat {escaped}; }}");
-    let scan = |source: &str| {
+    let without_copy_data = |source: &str| {
         format!(
-            "{source} | LC_ALL=C grep -Eiq {escaped_psql} || {source} | tr -d '~' | tr '\\n\\r' '~~' | LC_ALL=C grep -Eiq {escaped_sql}"
+            "{{ {source} | LC_ALL=C awk {} || echo '\\! from program'; }}",
+            quote(POSTGRES_COPY_DATA_FILTER)
+        )
+    };
+    let scan = |source: &str| {
+        let filtered = without_copy_data(source);
+        format!(
+            "{filtered} | LC_ALL=C grep -Eiq {escaped_psql} || {filtered} | tr -d '~' | tr '\\n\\r' '~~' | LC_ALL=C grep -Eiq {escaped_sql}"
         )
     };
     let custom_scan = scan("pg_restore -f - \"$inspect\" 2>/dev/null");
@@ -307,7 +321,8 @@ fn postgres_scan_script(path: &str) -> String {
     let blocked_inspect =
         "echo 'Blocked PostgreSQL restore: unable to inspect custom archive.'; exit 1";
     format!(
-        r#"header=$({contents} | head -c 5)
+        r#"command -v awk >/dev/null 2>&1 || {{ echo 'Blocked PostgreSQL restore: awk is required to scan the backup.'; exit 1; }}
+header=$({contents} | head -c 5)
 tar_magic=$({contents} | head -c 262 | tail -c 5)
 if [ "$header" = 'PGDMP' ] || [ "$tar_magic" = 'ustar' ]; then
   inspect=$(mktemp)
@@ -407,7 +422,28 @@ pub fn contains_postgres_program_execution(sql: &str) -> bool {
     if sql.starts_with("PGDMP") {
         return false;
     }
-    PSQL_META.is_match(sql).unwrap_or(true) || SQL_PROGRAM.is_match(sql).unwrap_or(true)
+    let sql = without_copy_data(sql);
+    PSQL_META.is_match(&sql).unwrap_or(true) || SQL_PROGRAM.is_match(&sql).unwrap_or(true)
+}
+
+/// `withoutCopyData()`: the table data of `COPY ... FROM stdin` blocks is removed, from the line
+/// pg_dump writes (`COPY ... FROM stdin;`) to the line `\.`; rows are data, not SQL.
+fn without_copy_data(sql: &str) -> String {
+    static COPY: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"(?m)^COPY .* FROM stdin;$").unwrap_or_else(|_| unreachable!())
+    });
+    static END: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"(?m)^\\\.$").unwrap_or_else(|_| unreachable!()));
+    let mut kept = String::new();
+    let mut offset = 0;
+    while let Some(m) = COPY.find_at(sql, offset) {
+        kept.push_str(&sql[offset..m.end()]);
+        offset = END
+            .find_at(sql, m.end())
+            .map_or(sql.len(), |e| e.start() + 2);
+    }
+    kept.push_str(&sql[offset..]);
+    kept
 }
 
 /// `contentMatchesExtension`.
@@ -416,9 +452,8 @@ fn content_matches(path: &Path, extension: &str, file_size: u64) -> bool {
         return false;
     };
     let text = |s: &[u8]| !s.is_empty() && !s.contains(&0) && std::str::from_utf8(s).is_ok();
-    let as_str = String::from_utf8_lossy(&sample);
     match extension {
-        "sql" => text(&sample) && !contains_postgres_program_execution(&as_str),
+        "sql" => text(&sample),
         "sql.gz" | "gz" | "tar.gz" | "tgz" | "bson.gz" | "archive.gz" | "db.gz" | "sqlite.gz"
         | "sqlite3.gz" => sample.starts_with(&[0x1f, 0x8b]),
         "zip" => {
@@ -429,10 +464,7 @@ fn content_matches(path: &Path, extension: &str, file_size: u64) -> bool {
         "tar" => sample.get(257..262) == Some(b"ustar"),
         "bz2" => sample.starts_with(b"BZh"),
         "xz" => sample.starts_with(b"\xfd7zXZ\x00"),
-        "dump" | "bak" | "archive" | "dmp" => {
-            sample.starts_with(b"PGDMP")
-                || (text(&sample) && !contains_postgres_program_execution(&as_str))
-        }
+        "dump" | "bak" | "archive" | "dmp" => sample.starts_with(b"PGDMP") || text(&sample),
         "bson" => {
             if sample.len() < 5 {
                 return false;
@@ -766,13 +798,6 @@ impl Jobs {
                 self.start_s3_helper(&s3, &t, &helper, &network).await?;
                 let source_arg = quote(&format!("s3temp/{}/{key}", s3.bucket));
                 commands.push(format!(
-                    "docker exec {} sh -c {}",
-                    quote(&helper),
-                    quote(
-                        r#"mc alias set s3temp "$S3_ENDPOINT" "$S3_ACCESS_KEY" "$S3_SECRET_KEY""#
-                    )
-                ));
-                commands.push(format!(
                     "docker exec {} mc cp {source_arg} /tmp/restore",
                     quote(&helper)
                 ));
@@ -990,6 +1015,11 @@ impl Jobs {
         Ok(out)
     }
 
+    /// `startS3Helper()`: starts the S3 restore helper and sets its `s3temp` mc alias. The S3
+    /// keys reach mc on its stdin, so they are not in the arguments of any process or in the
+    /// helper's environment. Upstream pipes them into a separate ssh process; here they travel
+    /// inside the script (like every command input of coolify-rs) through the shell's builtin
+    /// `echo`. The helper is removed when either step fails.
     async fn start_s3_helper(
         &self,
         s3: &S3Target,
@@ -997,26 +1027,36 @@ impl Jobs {
         helper: &str,
         network: &str,
     ) -> Result<(), ImportError> {
+        use base64::Engine as _;
         let image = quote(&helper_image(self));
         let start = [
             format!("docker rm -f {} 2>/dev/null || true", quote(helper)),
             format!(
-                "docker run -d --network {} --name {} -e S3_ENDPOINT={} -e S3_ACCESS_KEY={} -e S3_SECRET_KEY={} -e {} {image} sleep 86400",
+                "docker run -d --network {} --name {} -e {} {image} sleep 86400",
                 quote(network),
                 quote(helper),
-                quote(&s3.endpoint),
-                quote(&s3.key),
-                quote(&s3.secret),
                 quote(&format!("MC_REGION={}", s3.region)),
             ),
         ];
         let refs: Vec<&str> = start.iter().map(String::as_str).collect();
-        if self
+        let keys = format!("{}\n{}\n", s3.key, s3.secret);
+        let alias = format!(
+            "echo '{}' | base64 -d | docker exec -i {} mc alias set s3temp {} >/dev/null",
+            base64::engine::general_purpose::STANDARD.encode(keys.as_bytes()),
+            quote(helper),
+            quote(&s3.endpoint)
+        );
+        let started = self
             .remote()
             .run(t, &refs, RunOptions::op("database.import"))
             .await
-            .is_err()
-        {
+            .is_ok()
+            && self
+                .remote()
+                .run(t, &[alias.as_str()], RunOptions::op("database.import"))
+                .await
+                .is_ok();
+        if !started {
             let remove = format!("docker rm -f {} 2>/dev/null || true", quote(helper));
             self.remote()
                 .run_quiet(t, &[remove.as_str()], RunOptions::op("database.import"))
@@ -1112,6 +1152,25 @@ mod tests {
         assert!(!contains_postgres_program_execution("SELECT 1;"));
         assert!(!contains_postgres_program_execution(
             "PGDMP anything from program"
+        ));
+    }
+
+    #[test]
+    fn copy_data_is_not_scanned() {
+        let dump = "CREATE TABLE t (a text);\nCOPY public.t (a) FROM stdin;\nhow to program\n\\.\nSELECT 1;\n";
+        assert!(!contains_postgres_program_execution(dump));
+        assert_eq!(
+            without_copy_data(dump),
+            "CREATE TABLE t (a text);\nCOPY public.t (a) FROM stdin;\nSELECT 1;\n"
+        );
+        // SQL after the data block is still scanned.
+        assert!(contains_postgres_program_execution(&format!(
+            "{dump}COPY t FROM PROGRAM 'id';\n"
+        )));
+        let script = postgres_scan_script("/tmp/x.sql");
+        assert!(script.starts_with("command -v awk >/dev/null 2>&1 || { echo 'Blocked PostgreSQL restore: awk is required to scan the backup.'; exit 1; }\n"));
+        assert!(script.contains(
+            r#"{ { gunzip -cf '/tmp/x.sql' 2>/dev/null || cat '/tmp/x.sql'; } | LC_ALL=C awk 'data { if ($0 == "\\.") data = 0; next } { print } /^COPY .* FROM stdin;$/ { data = 1 }' || echo '\! from program'; } | LC_ALL=C grep -Eiq "#
         ));
     }
 
