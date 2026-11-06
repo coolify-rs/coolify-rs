@@ -102,6 +102,27 @@ impl Harness {
         Self::build_with(tdb, None, None, Some((host, allow_unverified))).await
     }
 
+    /// A harness with the plugin host and the plugin registry at `url`. It trusts the development registry
+    /// key and lets downloads reach local addresses, which only tests may do.
+    pub async fn with_plugin_registry(allow_unverified: bool, url: String) -> Self {
+        let tdb = TestDb::new(SEED).await;
+        let settings = coolify_plugins::Settings {
+            egress: coolify_plugins::egress::Egress {
+                allow_local: true,
+                ..Default::default()
+            },
+            registry: coolify_plugins::registry::Config {
+                url,
+                keys: vec![coolify_plugins::registry::signing::development_key()],
+            },
+            ..Default::default()
+        };
+        let host = coolify_plugins::Host::start(tdb.db.clone(), settings)
+            .await
+            .unwrap();
+        Self::build_with(tdb, None, None, Some((host, allow_unverified))).await
+    }
+
     /// A harness that also serves the web UI from `dir`.
     pub async fn with_ui(dir: std::path::PathBuf) -> Self {
         Self::build_with(TestDb::new(SEED).await, Some(dir), None, None).await
