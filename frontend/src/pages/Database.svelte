@@ -47,7 +47,7 @@
 
   let record = $state<DatabaseRecord | null>(null);
   let dbState = $state<DatabaseState | null>(null);
-  let resources = $state<{ label: string; href: string; active: boolean }[]>([]);
+  let resources = $state<{ label: string; href: string; active: boolean; uuid?: string }[]>([]);
   let missing = $state(false);
   let backupEdit = $state<BackupEdit | null>(null);
 
@@ -77,6 +77,8 @@
     const [r, s] = await Promise.all([dbUi.get(db), loadState()]);
     record = r;
     dbState = s;
+    // `name-changed`: the breadcrumb shows a saved rename.
+    page.nameChanged(db, r.name);
   }
 
   async function load() {
@@ -118,11 +120,11 @@
       .resources(uuid, env)
       .then((r) => {
         resources = r.databases
-          .map((d) => ({ label: d.name, href: `/project/${uuid}/environment/${env}/database/${d.uuid}`, active: d.uuid === db }))
+          .map((d) => ({ label: d.name, uuid: d.uuid, href: `/project/${uuid}/environment/${env}/database/${d.uuid}`, active: d.uuid === db }))
           .sort((a, b) => strnatcmp(a.label.toLowerCase(), b.label.toLowerCase()));
       })
       .catch(() => {
-        resources = record ? [{ label: record.name, href: base, active: true }] : [];
+        resources = record ? [{ label: record.name, uuid: db, href: base, active: true }] : [];
       });
   }
 

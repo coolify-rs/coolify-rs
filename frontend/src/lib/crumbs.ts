@@ -1,4 +1,4 @@
-import { page } from './page.svelte';
+import { page, type Switcher } from './page.svelte';
 import { strnatcmp } from './natsort';
 import type { ProjectPageData } from './api';
 
@@ -14,12 +14,13 @@ export function compareEnvironmentNames(a: string, b: string): number {
 
 /** Project (and environment) switchers in the top bar breadcrumb. */
 export function setProjectCrumbs(data: ProjectPageData, envUuid?: string): void {
-  const switchers = [
+  const switchers: Switcher[] = [
     {
       heading: 'Projects',
       title: 'Switch project',
       label: data.project.name,
-      items: data.projects.map((p) => ({ label: p.name, href: `/project/${p.uuid}`, active: p.uuid === data.project.uuid })),
+      uuid: data.project.uuid,
+      items: data.projects.map((p) => ({ label: p.name, uuid: p.uuid, href: `/project/${p.uuid}`, active: p.uuid === data.project.uuid })),
     },
   ];
   const env = envUuid ? data.environments.find((e) => e.uuid === envUuid) : undefined;

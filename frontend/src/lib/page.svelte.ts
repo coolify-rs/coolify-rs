@@ -4,6 +4,8 @@ export interface SwitcherItem {
   label: string;
   href: string;
   active: boolean;
+  /** Lets a rename on the page update the label (`nameOf`). */
+  uuid?: string;
 }
 
 /** A resource switcher in the breadcrumb ("Switch project", "Switch environment"). */
@@ -13,6 +15,7 @@ export interface Switcher {
   /** Button title, e.g. "Switch project". */
   title: string;
   label: string;
+  uuid?: string;
   items: SwitcherItem[];
   /** The status chip after the button (`x-slot:meta`). */
   meta?: { label: string; dot: string };
@@ -70,6 +73,7 @@ export interface ServerTopbar {
 export interface ResourceSwitcher {
   title: string;
   label: string;
+  uuid?: string;
   items: SwitcherItem[];
   /** The storage's status pill. */
   usable?: boolean;
@@ -84,6 +88,18 @@ class PageState {
   sourceConnected = $state<boolean | null>(null);
   /** Sub-items of the current page under its entry in the main sidebar (`#main-nav-active-children`). */
   navChildren = $state<import('svelte').Snippet | null>(null);
+  /** Names saved on the current page, by uuid (the breadcrumb's `renamed`). */
+  renamed = $state<Record<string, string>>({});
+
+  /** The breadcrumb's `nameOf(uuid, name)`: the saved name of a renamed resource. */
+  nameOf(uuid: string | undefined | null, name: string): string {
+    return (uuid && this.renamed[uuid]) ?? name;
+  }
+
+  /** The `name-changed` browser event a component dispatches after it saved a new name. */
+  nameChanged(uuid: string, name: string): void {
+    this.renamed[uuid] = name;
+  }
 }
 
 export const page = new PageState();
