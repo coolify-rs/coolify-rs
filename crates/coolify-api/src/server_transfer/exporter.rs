@@ -693,6 +693,7 @@ impl<'a> Exporter<'a> {
                 "docker_registry_image_tag": p["docker_registry_image_tag"],
                 "domain_port_overrides": p["domain_port_overrides"],
                 "max_restart_count": p["max_restart_count"],
+                "keeps_production_values": p["keeps_production_values"],
                 "persistent_storages": persistent,
             }));
         }
@@ -1317,7 +1318,10 @@ impl<'a> Exporter<'a> {
             s3_out.push(json!({
                 "uuid": s["uuid"], "name": s["name"], "description": s["description"], "region": s["region"],
                 "key": self.dec(s.get("key")), "secret": self.dec(s.get("secret")), "bucket": s["bucket"],
-                "endpoint": s["endpoint"], "is_usable": truthy(s.get("is_usable")),
+                "endpoint": s["endpoint"],
+                // `usesPathStyleEndpoint()`
+                "use_path_style_endpoint": s.get("use_path_style_endpoint").and_then(Value::as_bool).unwrap_or(true),
+                "is_usable": truthy(s.get("is_usable")),
             }));
         }
 

@@ -8,7 +8,7 @@ use coolify_db::servers::{self, ColumnValue, ServerRow};
 use coolify_remote::RunOptions;
 use serde_json::{Value, json};
 
-use super::{Srv, proxy, sentinel, version_compare, versions_data};
+use super::{Srv, log_drain, proxy, sentinel, version_compare, versions_data};
 use crate::Jobs;
 use crate::checks as vchecks;
 use crate::notifications::{self, Notification, TraefikServer, lookup};
@@ -266,14 +266,22 @@ pub async fn server_check(jobs: &Jobs, server_id: i64) -> Result<(), String> {
     }
     let on = |k: &str| srv.info.setting_bool(k) == Some(true);
     if on("is_logdrain_newrelic_enabled")
-        || on("is_logdrain_highlight_enabled")
         || on("is_logdrain_axiom_enabled")
         || on("is_logdrain_custom_enabled")
     {
-        let running = find("coolify-log-drain")
-            .and_then(|c| c.get("State").and_then(Value::as_str))
-            == Some("running");
-        if !running {
+        // `checkLogDrainContainer()`: also restarts a drain made with older files.
+        let found = find("coolify-log-drain");
+        let running = found.and_then(|c| c.get("State").and_then(Value::as_str)) == Some("running");
+        let outdated = || {
+            let labels = found
+                .and_then(|c| c.get("Labels").and_then(Value::as_str))
+                .unwrap_or_default();
+            log_drain::claim_outdated_refresh(
+                srv.str_column("uuid").unwrap_or_default(),
+                log_drain::ps_label(labels, log_drain::CONFIG_VERSION_LABEL),
+            )
+        };
+        if !running || outdated() {
             jobs.spawn_log_drain(server_id, true);
         }
     }

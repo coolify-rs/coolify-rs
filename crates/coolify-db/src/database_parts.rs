@@ -29,6 +29,8 @@ pub static S3_STORAGE: ModelSpec = ModelSpec {
         "updated_at",
         "is_usable",
         "unusable_email_sent",
+        // v4.5.3 (`2026_10_27_142752_add_use_path_style_endpoint_to_s3_storages_table`).
+        "use_path_style_endpoint",
     ],
     hidden: &[],
     timestamps: &["created_at", "updated_at"],
