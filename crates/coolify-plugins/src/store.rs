@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS coolify_rs_plugins.audit (
 /// Creates the schema when missing.
 pub async fn migrate(db: &Db) -> Result<(), PluginError> {
     sqlx::raw_sql(SCHEMA).execute(db.pool()).await?;
-    Ok(())
+    crate::registry::db::migrate(db).await
 }
 
 /// An installed plugin.

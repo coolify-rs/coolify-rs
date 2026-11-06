@@ -111,6 +111,21 @@ impl Db {
         Ok(Self { pool, schema })
     }
 
+    /// A handle that never connects: every query fails, and writes are refused. For tools that run
+    /// without a database, such as `coolify-rs plugin check`. Needs a tokio runtime.
+    pub fn unconnected() -> Self {
+        let opts = PgConnectOptions::new().host("unconnected.invalid").port(1);
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_millis(100))
+            .connect_lazy_with(opts);
+        let schema = schema::SchemaInfo {
+            read_only_reason: Some("there is no database".into()),
+            ..Default::default()
+        };
+        Self { pool, schema }
+    }
+
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }

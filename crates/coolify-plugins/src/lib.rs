@@ -4,6 +4,7 @@
 
 pub mod egress;
 pub mod manifest;
+pub mod registry;
 pub mod runtime;
 pub mod store;
 
@@ -21,6 +22,8 @@ pub enum PluginError {
     Capability(String),
     #[error("plugin {0} is not installed")]
     NotFound(String),
+    #[error("plugin {id} was revoked by the plugin registry: {reason}")]
+    Revoked { id: String, reason: String },
     #[error("plugin engine: {0}")]
     Engine(String),
     #[error("database: {0}")]

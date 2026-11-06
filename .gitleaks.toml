@@ -15,6 +15,8 @@ paths = [
   '''^crates/coolify-compat/src/sshkey\.rs$''',
   '''^crates/coolify-jobs/src/server_ops/certificate\.rs$''',
   '''^crates/coolify-remote/tests/fake_ssh\.rs$''',
+  # The plugin registry's development signing key: public on purpose, never trusted by default.
+  '''^crates/coolify-plugins/tests/fixtures/registry-dev\.key$''',
 ]
 # The UUID of the private key record the differential scripts use (an id, not key material).
 regexes = ['''hv41morfjv9x0av5kakzdmv8''']

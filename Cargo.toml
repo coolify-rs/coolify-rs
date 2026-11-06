@@ -26,6 +26,7 @@ base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
 clap = { version = "4", features = ["derive", "env"] }
+ed25519-dalek = "2"
 hex = "0.4"
 hmac = "0.12"
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
