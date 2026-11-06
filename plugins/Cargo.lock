@@ -24,6 +24,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "deploy-board"
+version = "0.1.0"
+dependencies = [
+ "coolify-rs-plugin",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "deploy-stats"
 version = "0.1.0"
 dependencies = [
