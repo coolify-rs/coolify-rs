@@ -111,8 +111,8 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
   but writes nothing, where upstream leaves a half-made clone.
 - **Cloning an application from the UI** copies its previews without domains; the API clone regenerates them like
   upstream.
-- **Docker cleanup after a stop** skips the old-image cleanup that keeps rollback copies and the Railpack build cache
-  prune.
+- **TCP proxies of service databases** are not started, recreated or removed by the status checks (standalone
+  databases are).
 - **Deployment rows.** `current_process_id` stays empty, and commands upstream feeds on stdin carry their input inside
   the script.
 
