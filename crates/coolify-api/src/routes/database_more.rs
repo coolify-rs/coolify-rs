@@ -865,7 +865,10 @@ pub async fn clone_database(
     let new_uuid = new_public_id();
     let name = match input.str("name").filter(|n| !n.trim().is_empty()) {
         Some(n) => n.to_owned(),
-        None => format!("{}-clone-{new_uuid}", d.str("name").unwrap_or_default()),
+        None => coolify_jobs::notifications::php::clone_resource_name(
+            d.str("name").unwrap_or_default(),
+            &new_uuid,
+        ),
     };
     let now = state.now();
     let morph = d.kind.morph();
