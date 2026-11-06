@@ -45,7 +45,7 @@ jobs:
         env:
           COOLIFY_RS_TEST_SSH: 127.0.0.1:2223
           COOLIFY_RS_TEST_SSH_KEY: ${{ github.workspace }}/compat/testing-host/secrets/id_ed25519
-        run: cargo test --workspace --all-features --locked
+        run: cargo test --workspace --all-features --locked --no-fail-fast
 
   frontend:
     runs-on: ubuntu-24.04

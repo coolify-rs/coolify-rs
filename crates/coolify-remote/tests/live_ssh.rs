@@ -135,6 +135,7 @@ async fn reports_ssh_errors_like_upstream() {
     );
 
     // An unreadable key: the message names it like upstream's key file, not by its temporary path.
+    // The reason after the name is OpenSSH's and depends on its version and crypto library.
     let err = r
         .run(
             &target(&h, port, "garbage", "root"),
@@ -145,7 +146,9 @@ async fn reports_ssh_errors_like_upstream() {
         .err();
     let msg = err.map(|e| e.message).unwrap_or_default();
     assert!(
-        msg.starts_with("Load key \"ssh_key@k1\": invalid format"),
+        ["invalid format", "error in libcrypto"]
+            .iter()
+            .any(|why| msg.starts_with(&format!("Load key \"ssh_key@k1\": {why}"))),
         "{msg}"
     );
 
