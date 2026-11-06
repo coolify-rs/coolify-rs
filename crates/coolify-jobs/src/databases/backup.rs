@@ -959,26 +959,29 @@ impl Jobs {
                 quote(&format!("MC_REGION={}", s3.region)),
                 helper_image(self)
             ),
-            format!(
-                "docker exec {helper} mc alias set{resolve} temporary {} {} {}",
-                quote(&s3.endpoint),
-                quote(&s3.key),
-                quote(&s3.secret)
-            ),
-            format!(
-                "docker exec {helper} mc cp{resolve} {} {destination}",
-                quote(location)
-            ),
         ];
         let refs: Vec<&str> = commands.iter().map(String::as_str).collect();
-        let result = self
-            .remote()
-            .run(
-                &run.target,
-                &refs,
-                RunOptions::op("database.backup").timeout(run.timeout),
-            )
-            .await;
+        let opts = RunOptions::op("database.backup").timeout(run.timeout);
+        let alias = minio_alias_command(&helper, &resolve, s3);
+        let copy = format!(
+            "docker exec {helper} mc cp{resolve} {} {destination}",
+            quote(location)
+        );
+        let result = match self.remote().run(&run.target, &refs, opts).await {
+            Ok(_) => match self
+                .remote()
+                .run(
+                    &run.target,
+                    &[alias.as_str()],
+                    RunOptions::op("database.backup"),
+                )
+                .await
+            {
+                Ok(_) => self.remote().run(&run.target, &[copy.as_str()], opts).await,
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e),
+        };
         let remove = super::proxy::docker_remove_command(&helper);
         let _ = self
             .remote()
@@ -1521,9 +1524,41 @@ pub fn sqlite_file_valid(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
 }
 
+/// `setMinioClientAlias($server, $container, $s3, $resolveOptions)`: the `temporary` mc alias of a
+/// helper container. The S3 keys reach mc on its stdin, never as a process argument. Upstream
+/// pipes them into a separate ssh process; here they travel inside the script, through the
+/// shell's builtin `echo`, like every command input of coolify-rs.
+pub(crate) fn minio_alias_command(container: &str, resolve: &str, s3: &S3Target) -> String {
+    use base64::Engine as _;
+    let keys = format!("{}\n{}\n", s3.key, s3.secret);
+    format!(
+        "echo '{}' | base64 -d | docker exec -i {} mc alias set{resolve} temporary {} >/dev/null",
+        base64::engine::general_purpose::STANDARD.encode(keys.as_bytes()),
+        quote(container),
+        quote(&s3.endpoint)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn s3_keys_are_not_command_arguments() {
+        let s3 = S3Target {
+            endpoint: "https://s3.example.com".into(),
+            key: "AKIA".into(),
+            secret: "s3cr3t".into(),
+            bucket: "b".into(),
+            region: "us-east-1".into(),
+        };
+        let command = minio_alias_command("backup-of-x", " --resolve 'a:443=1.2.3.4'", &s3);
+        assert_eq!(
+            command,
+            "echo 'QUtJQQpzM2NyM3QK' | base64 -d | docker exec -i 'backup-of-x' mc alias set --resolve 'a:443=1.2.3.4' temporary 'https://s3.example.com' >/dev/null"
+        );
+        assert!(!command.contains("s3cr3t"));
+    }
 
     fn exec(id: i64, created: &str, size: i64) -> Record {
         let mut r = Record::new();
