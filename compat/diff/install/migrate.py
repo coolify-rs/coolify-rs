@@ -6,7 +6,7 @@
 One throwaway OrbStack VM: upstream's own installer at the release coolify-rs matches (UP_VERSION, default 4.5.3, from
 .upstream/snapshot-<version>), a deployment on it, the dry-run check, the coolify-rs installer over it, checks and a
 deployment on coolify-rs, then upstream's installer again to go back. The image is coolify-rs/coolify-rs:<tag> in the
-local Docker. Stages: clean up seed dryrun migrate after back delete. Without stages, all run and the VM is deleted at
+local Docker. Stages: clean up user seed dryrun migrate after back delete. Without stages, all run and the VM is deleted at
 the end. The work folder receives the throwaway root password and the image file; `delete` removes them.
 """
 import os
@@ -37,14 +37,14 @@ COUNTS = (
 state = {}
 
 
-def run(*args, timeout=900, env=None):
+def run(*args, timeout=900, env=None, stdin=None):
     print("$", " ".join(str(a) for a in args)[:140], flush=True)
-    p = subprocess.run([str(a) for a in args], capture_output=True, text=True, timeout=timeout, env=env)
+    p = subprocess.run([str(a) for a in args], capture_output=True, text=True, timeout=timeout, env=env, input=stdin)
     return p.returncode, (p.stdout + p.stderr)
 
 
-def vm(*args, timeout=300):
-    return run("orb", "-m", VM, "-u", "root", *args, timeout=timeout)
+def vm(*args, timeout=300, stdin=None):
+    return run("orb", "-m", VM, "-u", "root", *args, timeout=timeout, stdin=stdin)
 
 
 def check(label, ok, detail=""):
@@ -91,11 +91,23 @@ def stage_clean():
 
 def stage_up():
     show("prepare VM", *run(HERE / "vm_prepare.sh", VM))
-    PASSWORD.write_text(secrets.token_urlsafe(24))
-    env = dict(os.environ, UP_SNAPSHOT=str(ROOT / f".upstream/snapshot-{UP_VERSION}"), UP_VERSION=UP_VERSION,
-               ROOT_USER_EMAIL="root@migrate.test", ROOT_USER_PASSWORD=PASSWORD.read_text())
+    env = dict(os.environ, UP_SNAPSHOT=str(ROOT / f".upstream/snapshot-{UP_VERSION}"), UP_VERSION=UP_VERSION)
     show(f"Coolify {UP_VERSION} installer", *run(HERE / "up_install.sh", timeout=1500, env=env), tail=10)
-    check("Coolify is healthy", "healthy" in wait_healthy(f"coolify:{UP_VERSION}"), wait_healthy(f"coolify:{UP_VERSION}"))
+    status = wait_healthy(f"coolify:{UP_VERSION}")
+    check("Coolify is healthy", "healthy" in status, status)
+
+
+def stage_user():
+    # The first user, as RootUserSeeder makes it. Its rfc,dns email and breached-password rules need the network
+    # the VM blocks on purpose, so the seeder's own steps run directly.
+    PASSWORD.write_text(secrets.token_urlsafe(24))
+    # The password goes in on stdin, so it is never in a command line or the log. User 0 joins team 0 by itself.
+    code, out = vm("docker", "exec", "-i", "coolify", "php", "artisan", "tinker", "--execute",
+                   '$p = trim(file_get_contents("php://stdin")); '
+                   '$u = (new App\\Models\\User)->forceFill(["id" => 0, "name" => "Root User", '
+                   '"email" => "root@migrate.test", "password" => Illuminate\\Support\\Facades\\Hash::make($p)]); '
+                   '$u->save(); echo "user " . $u->id . " teams " . $u->teams()->count();', stdin=PASSWORD.read_text())
+    check("first user", "user 0 teams 1" in out, out.strip()[-200:])
 
 
 def stage_seed():
@@ -167,7 +179,7 @@ def stage_delete():
     IMAGE_TAR.unlink(missing_ok=True)
 
 
-ALL = ["clean", "up", "seed", "dryrun", "migrate", "after", "back", "delete"]
+ALL = ["clean", "up", "user", "seed", "dryrun", "migrate", "after", "back", "delete"]
 NEEDS_TUNNEL = {"seed", "after"}
 tunnel = None
 try:
