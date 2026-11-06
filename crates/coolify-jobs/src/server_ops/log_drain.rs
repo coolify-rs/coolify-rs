@@ -264,3 +264,40 @@ impl Jobs {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn axiom_domain_defaults_to_us_east() {
+        assert_eq!(axiom_domain(""), "us-east-1.aws.edge.axiom.co");
+        assert_eq!(axiom_domain("  "), "us-east-1.aws.edge.axiom.co");
+        assert_eq!(
+            axiom_domain(" eu-central-1.aws.edge.axiom.co "),
+            "eu-central-1.aws.edge.axiom.co"
+        );
+    }
+
+    #[test]
+    fn compose_and_readme_carry_the_new_files() {
+        assert!(COMPOSE.contains("image: cr.fluentbit.io/fluent/fluent-bit:5.1\n"));
+        assert!(COMPOSE.contains("      - coolify.logDrainConfigVersion=1\n"));
+        assert_eq!(
+            format!("{CONFIG_VERSION_LABEL}={CONFIG_VERSION}"),
+            "coolify.logDrainConfigVersion=1"
+        );
+        assert!(README_FILES.starts_with("\nFiles:\n- `fluent-bit.conf`"));
+    }
+
+    #[test]
+    fn outdated_drains_are_refreshed_once() {
+        let labels = "coolify.managed=true,coolify.logDrainConfigVersion=1";
+        assert_eq!(ps_label(labels, CONFIG_VERSION_LABEL), Some("1"));
+        assert_eq!(ps_label("coolify.managed=true", CONFIG_VERSION_LABEL), None);
+        assert!(!claim_outdated_refresh("log-drain-current", Some("1")));
+        assert!(claim_outdated_refresh("log-drain-old", None));
+        assert!(!claim_outdated_refresh("log-drain-old", None));
+        assert!(claim_outdated_refresh("log-drain-other", Some("0")));
+    }
+}
