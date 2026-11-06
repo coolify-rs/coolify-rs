@@ -16,6 +16,11 @@ pub struct Egress {
     pub max_body: usize,
     /// Tests only: allow `http` and local addresses.
     pub allow_local: bool,
+    /// Tests only, and only together with `allow_local`: requests to these host names go over plain HTTP to
+    /// the given local address instead of resolving the name, so a test can stand in for a real service
+    /// while the plugin uses the service's real URL. The host name must still be in the manifest, and the
+    /// request keeps it in its `Host` header. Never read from configuration; ignored without `allow_local`.
+    pub test_routes: Vec<(String, SocketAddr)>,
 }
 
 impl Default for Egress {
@@ -24,6 +29,7 @@ impl Default for Egress {
             timeout: Duration::from_secs(10),
             max_body: 1024 * 1024,
             allow_local: false,
+            test_routes: Vec::new(),
         }
     }
 }
@@ -60,7 +66,7 @@ const RESERVED_HEADERS: &[&str] = &[
 
 impl Egress {
     pub async fn fetch(&self, allowed: &[String], req: Outgoing) -> Result<Incoming, String> {
-        let url = reqwest::Url::parse(&req.url).map_err(|e| format!("invalid url: {e}"))?;
+        let mut url = reqwest::Url::parse(&req.url).map_err(|e| format!("invalid url: {e}"))?;
         let local = self.allow_local;
         match url.scheme() {
             "https" => {}
@@ -105,10 +111,23 @@ impl Egress {
             headers.append(name, value);
         }
 
-        let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
-            .await
-            .map_err(|e| format!("cannot resolve {host}: {e}"))?
-            .collect();
+        let route = self
+            .test_routes
+            .iter()
+            .find(|(name, _)| local && *name == host)
+            .map(|(_, addr)| *addr);
+        let addrs: Vec<SocketAddr> = match route {
+            Some(addr) => {
+                url.set_scheme("http")
+                    .and_then(|()| url.set_port(Some(addr.port())))
+                    .map_err(|()| "cannot route the request to its test address".to_owned())?;
+                vec![addr]
+            }
+            None => tokio::net::lookup_host((host.as_str(), port))
+                .await
+                .map_err(|e| format!("cannot resolve {host}: {e}"))?
+                .collect(),
+        };
         if addrs.is_empty() {
             return Err(format!("{host} has no addresses"));
         }
@@ -263,5 +282,68 @@ mod tests {
             .push(("Host".into(), "169.254.169.254".into()));
         let err = egress.fetch(&allowed, with_host).await.err().unwrap();
         assert!(err.contains("cannot be set"), "{err}");
+    }
+
+    /// A local server that answers every connection with `200 hello` and reports the request's head.
+    async fn local_server() -> (SocketAddr, tokio::sync::mpsc::Receiver<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 8192];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let _ = tx
+                    .send(String::from_utf8_lossy(&buf[..n]).into_owned())
+                    .await;
+                let _ = sock
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nhello",
+                    )
+                    .await;
+            }
+        });
+        (addr, rx)
+    }
+
+    #[tokio::test]
+    async fn test_routes_reach_a_local_stand_in_only_with_allow_local() {
+        let (addr, mut seen) = local_server().await;
+        let allowed = vec!["hooks.example.invalid".to_owned()];
+        let req = || Outgoing {
+            method: "POST".into(),
+            url: "https://hooks.example.invalid/v2/enqueue?x=1".into(),
+            headers: vec![("x-key".into(), "k".into())],
+            body: b"{}".to_vec(),
+        };
+        let routed = Egress {
+            allow_local: true,
+            test_routes: vec![("hooks.example.invalid".into(), addr)],
+            ..Egress::default()
+        };
+        let r = routed.fetch(&allowed, req()).await.unwrap();
+        assert_eq!((r.status, r.body.as_slice()), (200, &b"hello"[..]));
+        let head = seen.recv().await.unwrap();
+        assert!(
+            head.starts_with("POST /v2/enqueue?x=1 HTTP/1.1\r\n"),
+            "{head}"
+        );
+        let host_line = format!("host: hooks.example.invalid:{}\r\n", addr.port());
+        assert!(head.to_ascii_lowercase().contains(&host_line), "{head}");
+
+        // The manifest still decides: a routed name that isn't listed is refused.
+        let err = routed.fetch(&[], req()).await.err().unwrap();
+        assert!(err.contains("not in the plugin's manifest"), "{err}");
+
+        // Without allow_local the routes are ignored: the name is resolved as usual (and `.invalid` never
+        // resolves), so nothing reaches the local server.
+        let ignored = Egress {
+            test_routes: vec![("hooks.example.invalid".into(), addr)],
+            ..Egress::default()
+        };
+        let err = ignored.fetch(&allowed, req()).await.err().unwrap();
+        assert!(err.contains("cannot resolve"), "{err}");
+        assert!(seen.try_recv().is_err());
     }
 }

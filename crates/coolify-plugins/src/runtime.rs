@@ -220,7 +220,19 @@ struct CallCtx {
     /// The manifest's `[[settings]]`: `config.get` answers these keys only.
     settings: Arc<[Setting]>,
     encrypter: Option<Arc<Encrypter>>,
+    /// When the call's deadline passes. Each `http` request must finish [`http_reserve`] before it, so a slow
+    /// host makes the request fail and the plugin still has time to handle that, instead of the whole call
+    /// timing out and counting as a failure.
+    deadline: std::time::Instant,
 }
+
+/// Time an `http` request leaves the plugin before its call's deadline: a tenth of the deadline.
+fn http_reserve(deadline: Duration) -> Duration {
+    deadline / 10
+}
+
+/// The shortest `http` request worth starting; with less time left, `fetch` fails at once.
+const MIN_FETCH: Duration = Duration::from_millis(50);
 
 impl WasiView for State {
     fn ctx(&mut self) -> WasiCtxView<'_> {
@@ -774,6 +786,7 @@ impl Host {
                 caller,
                 settings: Arc::from(p.installed.manifest.settings.clone()),
                 encrypter: self.encrypter(),
+                deadline: std::time::Instant::now() + deadline - http_reserve(deadline),
             },
         };
         let mut store = Store::new(&self.0.engine, state);
@@ -1048,18 +1061,33 @@ impl http::Host for State {
         if c.memory.is_some() {
             return Err(detached::NO_NETWORK.into());
         }
-        let r = c
-            .egress
-            .fetch(
-                &c.hosts,
-                Outgoing {
-                    method: request.method,
-                    url: request.url,
-                    headers: request.headers,
-                    body: request.body,
-                },
+        // Bounded by the call's own deadline as well as the egress timeout, so a host that is slow to answer
+        // fails this request rather than the call.
+        let left = c
+            .deadline
+            .saturating_duration_since(std::time::Instant::now());
+        if left < MIN_FETCH {
+            return Err("no time is left in this call for another request".into());
+        }
+        let egress = Egress {
+            timeout: c.egress.timeout.min(left),
+            ..c.egress.clone()
+        };
+        let fetch = egress.fetch(
+            &c.hosts,
+            Outgoing {
+                method: request.method,
+                url: request.url,
+                headers: request.headers,
+                body: request.body,
+            },
+        );
+        let r = tokio::time::timeout(left, fetch).await.map_err(|_| {
+            format!(
+                "the request did not finish within the {} ms left in this call",
+                left.as_millis()
             )
-            .await?;
+        })??;
         Ok(Response {
             status: r.status,
             headers: r.headers,
