@@ -705,6 +705,18 @@ async fn panels_show_the_chain_and_write_through_the_bridge() {
     h.tdb.drop_db().await;
 }
 
+#[test]
+fn the_registry_lists_the_manifest_in_the_repository() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry");
+    let entries = coolify_plugins::registry::source::load(&dir).unwrap();
+    let entry = entries.iter().find(|e| e.id == ID).unwrap();
+    let listed = entry.versions[0].manifest().unwrap();
+    assert_eq!(
+        listed,
+        coolify_plugins::Manifest::parse(&manifest()).unwrap()
+    );
+}
+
 /// The JSON a panel embeds in `<script type="application/json" id="data">`.
 fn panel_data(body: &str) -> Value {
     let start = r#"<script type="application/json" id="data">"#;
