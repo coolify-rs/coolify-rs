@@ -1127,7 +1127,25 @@ pub async fn update(
             ],
         },
     ];
-    fields.extend(general::rules());
+    // `changedCommandRules()`: a command saved before commands were validated stays valid until it
+    // changes (the deployment passes it as one escaped argument, and the field can be hidden).
+    fields.extend(general::rules().into_iter().map(|mut f| {
+        if matches!(
+            f.name,
+            "install_command" | "build_command" | "start_command"
+        ) {
+            let submitted = match m.get(f.name) {
+                Some(Value::String(v)) => Some(v.clone()),
+                Some(Value::Null) => Some(String::new()),
+                Some(Value::Number(n)) => Some(n.to_string()),
+                _ => None,
+            };
+            if submitted.is_some_and(|v| v == a.str(f.name).unwrap_or_default()) {
+                f.rules = vec![Rule::Nullable];
+            }
+        }
+        f
+    }));
     fields.extend(
         [
             "custom_nginx_configuration",
