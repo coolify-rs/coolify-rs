@@ -650,7 +650,7 @@
                 },
                 {
                     "key": "SERVICE_FQDN_APP_3000",
-                    "value": "app-composeparserdiff0000001.apps.example.com/base:3000",
+                    "value": "app-composeparserdiff0000001.apps.example.com:3000",
                     "is_preview": false,
                     "is_required": false,
                     "is_shared": false,
@@ -680,7 +680,7 @@
                 },
                 {
                     "key": "SERVICE_URL_APP_3000",
-                    "value": "https://app-composeparserdiff0000001.apps.example.com/base:3000",
+                    "value": "https://app-composeparserdiff0000001.apps.example.com/base:3000:3000",
                     "is_preview": false,
                     "is_required": false,
                     "is_shared": false,

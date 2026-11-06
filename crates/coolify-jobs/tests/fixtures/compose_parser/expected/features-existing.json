@@ -910,7 +910,7 @@
                 },
                 {
                     "key": "SERVICE_FQDN_BACK_3000",
-                    "value": null,
+                    "value": "back-composeparserdiff0000001.<vm-ip>.sslip.io:3000",
                     "is_preview": false,
                     "is_required": false,
                     "is_shared": false,
@@ -1522,7 +1522,7 @@
                 },
                 {
                     "key": "SERVICE_FQDN_BACK_3000",
-                    "value": null,
+                    "value": "back-composeparserdiff0000001.<vm-ip>.sslip.io:3000",
                     "is_preview": false,
                     "is_required": false,
                     "is_shared": false,

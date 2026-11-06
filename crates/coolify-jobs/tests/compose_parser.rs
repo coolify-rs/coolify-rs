@@ -4,6 +4,9 @@
 //! Rust parser once per recorded parse and compares the returned compose, the application
 //! columns, the environment variables (in insertion order, decrypted), the file storages and the
 //! persistent volumes. Generated secrets are compared by key, length and character class.
+//! The fixtures were recorded at b5823c7; the port-suffixed `SERVICE_URL_*_<port>` and
+//! `SERVICE_FQDN_*_<port>` values were updated by hand for v4.5.3 (1440ea83d,
+//! `syncComposeServiceUrlVariables`), which keeps them in sync with the service domain.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

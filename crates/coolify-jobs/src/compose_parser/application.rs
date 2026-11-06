@@ -470,6 +470,11 @@ impl<'a> Run<'a> {
             self.env_create(key, value, None).await?;
             return Ok(());
         };
+        self.env_set_value(&row, value).await
+    }
+
+    /// `$variable->update(['value' => $value])`.
+    async fn env_set_value(&mut self, row: &EnvRow, value: Option<&str>) -> Result<(), String> {
         let new = value.map(|v| {
             v.trim_matches([' ', '\t', '\n', '\r', '\0', '\x0B'])
                 .to_owned()
@@ -490,6 +495,44 @@ impl<'a> Run<'a> {
         store::env_update(self.db, row.id, &u, self.now)
             .await
             .map_err(Self::db_err)
+    }
+
+    /// `syncComposeServiceUrlVariables($application, $serviceEnvKey, $url, $host)`: the stored
+    /// `SERVICE_URL_`/`SERVICE_FQDN_` variables of a compose service follow its domain; port
+    /// variables (`SERVICE_URL_API_8000`) get the URL or host with their port. `None` clears them.
+    async fn sync_compose_service_url_variables(
+        &mut self,
+        service_env_key: &str,
+        url: Option<&str>,
+        host: Option<&str>,
+    ) -> Result<(), String> {
+        if let Some(url) = url {
+            self.env_update_or_create(&format!("SERVICE_URL_{service_env_key}"), Some(url))
+                .await?;
+            self.env_update_or_create(&format!("SERVICE_FQDN_{service_env_key}"), host)
+                .await?;
+        }
+        let pattern = regex::Regex::new(&format!(
+            r"^SERVICE_(URL|FQDN)_{}(?:_(\d+))?$",
+            regex::escape(service_env_key)
+        ))
+        .map_err(|e| e.to_string())?;
+        let rows = store::env_list(self.db, MORPH, self.app.id, false)
+            .await
+            .map_err(Self::db_err)?;
+        for row in rows {
+            // `where('key', 'LIKE', "SERVICE_URL_{$key}%")->orWhere(... "SERVICE_FQDN_{$key}%")`, then the pattern.
+            let Some(c) = pattern.captures(&row.key) else {
+                continue;
+            };
+            let base = if &c[1] == "URL" { url } else { host };
+            let value = match (base, c.get(2)) {
+                (Some(v), Some(port)) => Some(format!("{v}:{}", port.as_str())),
+                (v, _) => v.map(str::to_owned),
+            };
+            self.env_set_value(&row, value.as_deref()).await?;
+        }
+        Ok(())
     }
 
     /// The stored plaintext for the dirty check (`null` stays null, untrimmed casts compare
@@ -1485,7 +1528,9 @@ pub(crate) async fn application_parser(
         if run.build_pack_is_compose() {
             for (for_service, domain) in &domains_map {
                 let parsed_domain = domains::compose_domain_entry_string(domain);
-                let formatted = php::upper(&service_name).replace(['-', '.'], "_");
+                let env_key = php::upper(&domains::normalize_compose_service_name(
+                    &for_service.as_string(),
+                ));
                 if php::filled_str(parsed_domain.as_deref()) {
                     let first = parsed_domain
                         .unwrap_or_default()
@@ -1498,9 +1543,6 @@ pub(crate) async fn application_parser(
                     let mut without_port = url.clone();
                     without_port.port = None;
                     let url_text = without_port.to_string();
-                    let env_key = php::upper(&domains::normalize_compose_service_name(
-                        &for_service.as_string(),
-                    ));
                     php::put_str(
                         &mut coolify_environments,
                         &format!("SERVICE_URL_{env_key}"),
@@ -1515,22 +1557,11 @@ pub(crate) async fn application_parser(
                     if is_pull_request {
                         continue;
                     }
-                    run.env_update_or_create(&format!("SERVICE_URL_{env_key}"), Some(&url_text))
-                        .await?;
-                    run.env_update_or_create(&format!("SERVICE_FQDN_{env_key}"), Some(&host))
+                    run.sync_compose_service_url_variables(&env_key, Some(&url_text), Some(&host))
                         .await?;
                 } else if !is_pull_request {
-                    for prefix in ["SERVICE_FQDN_", "SERVICE_URL_"] {
-                        store::env_null_values_like(
-                            run.db,
-                            MORPH,
-                            run.app.id,
-                            &format!("{prefix}{formatted}%"),
-                            run.now,
-                        )
-                        .await
-                        .map_err(Run::db_err)?;
-                    }
+                    run.sync_compose_service_url_variables(&env_key, None, None)
+                        .await?;
                 }
             }
         }
