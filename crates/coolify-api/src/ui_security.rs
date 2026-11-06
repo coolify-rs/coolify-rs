@@ -1053,7 +1053,11 @@ async fn verify_with_capabilities(
     metadata: &Map<String, Value>,
 ) -> Result<bool, String> {
     if provider == "cloudflare" {
-        return Ok(coolify_jobs::integrations::cloudflare::validate_token(token, caps).await);
+        use coolify_jobs::integrations::cloudflare;
+        // `catch (ConnectionException)`: `connectionErrorMessage`.
+        return cloudflare::validate_token(token, caps)
+            .await
+            .map_err(|_| cloudflare::connection_error_message(provider));
     }
     verify(db, provider, token, metadata).await
 }
