@@ -43,6 +43,32 @@ export interface InstalledPlugin {
   /** The team allowed the plugin to queue its deployments; on the team page only. */
   deploy_granted_for_team?: boolean;
   panels: { slot: Slot; title: string }[];
+  /** The team's settings of the plugin (ADR 0014); on the team page only. */
+  settings?: PluginSetting[];
+  /** A required setting is unset; on the team page only. */
+  needs_configuration?: boolean;
+}
+
+/** One `[[settings]]` entry of a plugin with the team's state (`GET .../settings`, ADR 0014). */
+export interface PluginSetting {
+  key: string;
+  label: string;
+  help: string | null;
+  kind: 'text' | 'url' | 'select';
+  secret: boolean;
+  required: boolean;
+  options: string[];
+  default: string | null;
+  /** The team set a value. */
+  set: boolean;
+  /** The team's value; never present for a secret. */
+  value?: string | null;
+}
+
+export interface TeamSettings {
+  plugin: string;
+  settings: PluginSetting[];
+  needs_configuration: boolean;
 }
 
 export interface SettingsData {
@@ -153,6 +179,10 @@ export const pluginsUi = {
   /** `grantDeploy` is the team's answer for a plugin holding `deploy`; enabling one without it is refused. */
   setTeam: (id: string, enabled: boolean, grantDeploy?: boolean) =>
     request<InstalledPlugin>('POST', `${path(id)}/team`, { enabled, grant_deploy: grantDeploy }),
+  teamSettings: (id: string) => request<TeamSettings>('GET', `${path(id)}/settings`),
+  /** A partial update: a string sets a setting, null clears it; keys left out stay as they are. */
+  updateTeamSettings: (id: string, changes: Record<string, string | null>) =>
+    request<TeamSettings>('PATCH', `${path(id)}/settings`, changes),
   catalog: () => request<Catalog>('GET', '/ui/plugins/catalog'),
   refreshCatalog: () =>
     request<{ plugins: number; revoked: string[]; pending_updates: string[] }>('POST', '/ui/plugins/catalog/refresh', {}),

@@ -1,12 +1,14 @@
 <script lang="ts">
   // coolify-rs's own (ADR 0010, ADR 0013): Team → Plugins. Owners and admins switch an installed plugin on
   // for their team; members see what is on. A plugin holding `deploy` also needs the team's own answer on
-  // whether it may queue the team's deployments (ADR 0011). Built from the team pages' parts.
+  // whether it may queue the team's deployments (ADR 0011). A plugin with settings has a Configure dialog
+  // (ADR 0014). Built from the team pages' parts.
   import Callout from '../components/Callout.svelte';
   import CapabilityList from '../components/CapabilityList.svelte';
   import Checkbox from '../components/Checkbox.svelte';
   import Empty from '../components/Empty.svelte';
   import Modal from '../components/Modal.svelte';
+  import PluginSettingsModal from '../components/PluginSettingsModal.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
   import TeamLayout from '../components/TeamLayout.svelte';
   import { ApiError } from '../lib/api';
@@ -18,6 +20,8 @@
   let busy = $state<string | null>(null);
   /** A plugin holding `deploy` waiting for the team's answer before it is switched on. */
   let asking = $state<InstalledPlugin | null>(null);
+  /** The plugin whose settings dialog is open. */
+  let configuring = $state<InstalledPlugin | null>(null);
 
   async function load() {
     try {
@@ -79,6 +83,9 @@
                         {#if !p.verified}
                           <span class="table-badge table-badge-warning" title="Installed outside the plugin registry">Unverified</span>
                         {/if}
+                        {#if p.needs_configuration}
+                          <span class="table-badge table-badge-warning" title="A required setting is not set">Needs configuration</span>
+                        {/if}
                         {#if p.deploy && p.enabled_for_team}
                           {#if p.deploy_granted_for_team}
                             <span class="table-badge table-badge-warning">Can deploy</span>
@@ -90,7 +97,10 @@
                       <p class="mt-0.5 text-[12px] text-neutral-500 dark:text-fg-dim">{p.description}</p>
                       <p class="mt-0.5 text-[11px] text-neutral-500 dark:text-fg-faint">{p.id}</p>
                     </div>
-                    <div class="shrink-0">
+                    <div class="flex shrink-0 flex-wrap items-center gap-2">
+                      {#if p.settings?.length}
+                        <button type="button" class="button" onclick={() => (configuring = p)}>{data.can_manage ? 'Configure' : 'Settings'}</button>
+                      {/if}
                       <Checkbox
                         id="team-plugin-{p.id}"
                         label="Enabled for this team"
@@ -132,6 +142,15 @@
     {/if}
   </TeamLayout>
 </div>
+
+{#if configuring && data}
+  <PluginSettingsModal
+    plugin={{ id: configuring.id, name: configuring.name, settings: configuring.settings ?? [] }}
+    canManage={data.can_manage}
+    onclose={() => (configuring = null)}
+    onsaved={load}
+  />
+{/if}
 
 {#if asking}
   <Modal title="Allow {asking.name} to deploy?" subtitle={asking.id} onclose={() => (asking = null)} narrow>
