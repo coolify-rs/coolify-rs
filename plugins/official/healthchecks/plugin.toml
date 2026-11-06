@@ -1,0 +1,51 @@
+id = "coolify-rs/healthchecks"
+name = "Healthchecks.io"
+version = "0.1.0"
+description = "Pings Healthchecks.io for every scheduled task and database or storage backup, so a job that silently stops running raises an alarm."
+license = "Apache-2.0"
+source = "https://github.com/coolify-rs/coolify-rs/tree/main/plugins/official/healthchecks"
+# Version of the plugin interface (crates/coolify-plugins/wit/plugin.wit) the component targets.
+api = "0.1"
+
+[capabilities]
+events = [
+    "scheduled_task.succeeded",
+    "scheduled_task.failed",
+    "backup.succeeded",
+    "backup.succeeded_with_s3_warning",
+    "backup.failed",
+    "backup.missing",
+    "volume_backup.succeeded",
+    "volume_backup.failed",
+    "volume_backup.missing",
+    "volume_backup.recovery_failed",
+]
+# The recent pings the panel shows, and which checks belong to which database (for missing backups).
+storage = true
+routes = true
+http = ["hc-ping.com"]
+
+[[capabilities.ui]]
+slot = "dashboard"
+title = "Healthchecks.io"
+path = "/panel"
+
+[[settings]]
+key = "ping_key"
+label = "Project ping key"
+help = "From the project's Settings → Ping key on Healthchecks.io. Each job pings https://hc-ping.com/<ping key>/<slug>."
+secret = true
+required = true
+
+[[settings]]
+key = "create"
+label = "Create checks automatically"
+help = "yes: the first ping of a job creates its check (?create=1). no: only jobs whose check you created are pinged."
+options = ["yes", "no"]
+default = "yes"
+
+[[settings]]
+key = "slug_prefix"
+label = "Slug prefix"
+help = "Checks are named <prefix>-task-<uuid>, <prefix>-backup-<uuid>-<database> and <prefix>-volume-<resource>-<volume>."
+default = "coolify"

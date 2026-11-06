@@ -123,6 +123,17 @@ impl Harness {
         Self::build_with(tdb, None, None, Some((host, allow_unverified))).await
     }
 
+    /// A harness with the plugin host in development mode (uploads and test events allowed) and these
+    /// settings. With `egress.allow_local` and `egress.test_routes`, plugins reach local stand-ins for the
+    /// services in their manifests, which only tests can arrange.
+    pub async fn with_plugin_settings(settings: coolify_plugins::Settings) -> Self {
+        let tdb = TestDb::new(SEED).await;
+        let host = coolify_plugins::Host::start(tdb.db.clone(), settings)
+            .await
+            .unwrap();
+        Self::build_with(tdb, None, None, Some((host, true))).await
+    }
+
     /// A harness with the plugin host (unverified installs allowed) and remote execution (background jobs).
     #[allow(dead_code)]
     pub async fn with_plugins_and_remote(remote: coolify_remote::Remote) -> Self {

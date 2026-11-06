@@ -1,0 +1,20 @@
+[package]
+name = "alerts"
+description = "First-party coolify-rs plugin: forwards failures to ntfy, Google Chat, PagerDuty and Opsgenie."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The component is the cdylib, built for wasm32-wasip2. The rlib lets `cargo test -p alerts` run the pure
+# modules (events → alerts → requests) natively; the SDK glue in `plugin.rs` only exists on wasm32.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+coolify-rs-plugin.workspace = true
