@@ -1,0 +1,136 @@
+name: release
+
+# A tag v<version> on main publishes the image ghcr.io/coolify-rs/coolify-rs:<version> (and :latest) for amd64
+# and arm64, and a GitHub release whose assets are the installer files. The installer's default address is
+# https://github.com/coolify-rs/coolify-rs/releases/latest/download, so the newest release is what new installs
+# and the Upgrade button get.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/coolify-rs/coolify-rs
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: version
+        name: tag, versions.json, release notes and branch agree
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          listed=$(jq -r '.coolify.v4.version' scripts/install/versions.json)
+          if [ "$version" != "$listed" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match scripts/install/versions.json ($listed)"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::release tags go on main"
+            exit 1
+          fi
+          if [ ! -s "docs/releases/$GITHUB_REF_NAME.md" ]; then
+            echo "::error::docs/releases/$GITHUB_REF_NAME.md is missing"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  image:
+    needs: check
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/coolify-rs/coolify-rs
+            org.opencontainers.image.version=${{ needs.check.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=Apache-2.0
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - name: digest
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "$RUNNER_TEMP/digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.runner }}
+          path: ${{ runner.temp }}/digests/*
+          retention-days: 1
+
+  manifest:
+    needs: [check, image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: multi-arch tags
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create \
+            -t "$IMAGE:${{ needs.check.outputs.version }}" -t "$IMAGE:latest" \
+            $(printf "$IMAGE@sha256:%s " *)
+          docker buildx imagetools inspect "$IMAGE:${{ needs.check.outputs.version }}"
+
+  release:
+    needs: [check, manifest]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: installer files
+        run: |
+          mkdir dist
+          cp scripts/install/install.sh scripts/install/upgrade.sh scripts/install/upgrade-postgres.sh \
+             scripts/install/docker-compose.yml scripts/install/docker-compose.prod.yml \
+             scripts/install/env.production scripts/install/versions.json dist/
+          (cd dist && sha256sum * > SHA256SUMS)
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag \
+            --title "coolify-rs ${{ needs.check.outputs.version }}" \
+            --notes-file "docs/releases/$GITHUB_REF_NAME.md"

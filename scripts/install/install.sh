@@ -3,7 +3,8 @@
 ## Running it again keeps the secrets, the database and the SSH key.
 
 ## Environment variables that can be set:
-## COOLIFY_RS_CDN - Where install.sh, upgrade.sh, the Compose files and versions.json are published (required on the first run)
+## COOLIFY_RS_CDN - Where install.sh, upgrade.sh, the Compose files and versions.json are published (default: the latest GitHub release)
+## COOLIFY_RS_REGISTRY - Registry of the coolify-rs image (default: ghcr.io)
 ## COOLIFY_RS_IMAGE - Image name without registry and tag (default: coolify-rs/coolify-rs)
 ## COOLIFY_RS_PULL - Set to "false" when the coolify-rs image is already on this server and must not be pulled
 ## COOLIFY_RS_IMAGE_FILE - Load the coolify-rs image from this file (docker save) instead of pulling it
@@ -14,7 +15,7 @@
 ## DOCKER_ADDRESS_POOL_SIZE - Custom Docker address pool size (default: 24)
 ## DOCKER_POOL_FORCE_OVERRIDE - Force override Docker address pool configuration, also when Docker must restart with running containers (default: false)
 ## AUTOUPDATE - Set to "false" to disable auto-updates
-## REGISTRY_URL - Custom registry URL for Docker images (default: docker.io)
+## REGISTRY_URL - Custom registry URL for Coolify's helper image (default: docker.io)
 
 set -e # Exit immediately if a command exits with a non-zero status
 ## $1 could be empty, so we need to disable this check
@@ -35,15 +36,14 @@ existing_setting() {
     fi
 }
 CDN="${COOLIFY_RS_CDN:-$(existing_setting COOLIFY_RS_CDN)}"
+CDN="${CDN:-https://github.com/coolify-rs/coolify-rs/releases/latest/download}"
 CDN="${CDN%/}"
+COOLIFY_RS_REGISTRY="${COOLIFY_RS_REGISTRY:-$(existing_setting COOLIFY_RS_REGISTRY)}"
+COOLIFY_RS_REGISTRY="${COOLIFY_RS_REGISTRY:-ghcr.io}"
 COOLIFY_RS_IMAGE="${COOLIFY_RS_IMAGE:-$(existing_setting COOLIFY_RS_IMAGE)}"
 COOLIFY_RS_IMAGE="${COOLIFY_RS_IMAGE:-coolify-rs/coolify-rs}"
 COOLIFY_RS_PULL="${COOLIFY_RS_PULL:-$(existing_setting COOLIFY_RS_PULL)}"
 COOLIFY_RS_PULL="${COOLIFY_RS_PULL:-true}"
-if [ -z "$CDN" ]; then
-    echo "Set COOLIFY_RS_CDN to the address the installation files are published at."
-    exit 1
-fi
 
 if [ $EUID != 0 ]; then
     echo "Please run this script as root or with sudo"
@@ -994,6 +994,7 @@ set_env_var() {
     fi
 }
 set_env_var "COOLIFY_RS_CDN" "$CDN"
+set_env_var "COOLIFY_RS_REGISTRY" "$COOLIFY_RS_REGISTRY"
 set_env_var "COOLIFY_RS_IMAGE" "$COOLIFY_RS_IMAGE"
 set_env_var "COOLIFY_RS_PULL" "$COOLIFY_RS_PULL"
 set_env_var "COOLIFY_RS_VERSIONS_URL" "$CDN/versions.json"
