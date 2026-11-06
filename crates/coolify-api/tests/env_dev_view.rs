@@ -127,5 +127,24 @@ async fn flag_lines_and_quoted_values() {
         "{body}"
     );
     assert!(dev().await.contains("A=2"));
+
+    // The API: `is_literal` has a boolean cast since v4.5.3, so "1" and 1 read back as true;
+    // `is_shown_once` still has none and comes back as it was sent.
+    let path = format!("/api/v1/applications/{app}/envs");
+    for (sent, literal) in [(json!("1"), true), (json!(0), false), (json!(1), true)] {
+        let r = h
+            .call(
+                "PATCH",
+                &path,
+                T,
+                Some(json!({"key": "A", "value": "2", "is_literal": sent, "is_shown_once": "0"})),
+            )
+            .await;
+        assert_eq!(r.status, 201, "{}", r.body);
+        let body = r.json();
+        assert_eq!(body["is_literal"], json!(literal), "{body}");
+        assert_eq!(body["is_shown_once"], json!("0"), "{body}");
+        assert_eq!(flags(&h, &app, "A").await.0, literal);
+    }
     h.finish().await;
 }
