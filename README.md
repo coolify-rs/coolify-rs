@@ -32,8 +32,8 @@ Coolify runs on PHP and Laravel, with a web server, queue workers, a scheduler a
 That is a good stack for building a product quickly. coolify-rs explores what the same product looks like as a single
 Rust service:
 
-- **One process, small footprint.** The API, web UI, job runner and scheduler share one binary, which helps on the
-  small servers many people self-host on.
+- **One process, small footprint.** The API, web UI, job runner and scheduler share one binary that idles in about
+  30 MB, which helps on the small servers many people self-host on.
 - **Safety by construction.** Remote commands are built without shell interpolation, secrets never reach the logs,
   every query is scoped to the team, and SSH host keys are pinned. Where coolify-rs deliberately differs from
   upstream for security, the difference is documented, never silent.
@@ -45,23 +45,22 @@ Rust service:
 
 ## Performance
 
-We measured both against each other on two isolated stacks shaped like a small VPS. Each had 2 CPU cores,
-its own PostgreSQL, its scheduler running and the same data: 113 applications. The full setup and every
-number are in [compat/bench/RESULTS.md](compat/bench/RESULTS.md):
+On a server the size of a small VPS, coolify-rs uses a twelfth of the memory, needs a twentieth of the
+CPU per request and serves 6–9× more API requests:
 
-| | Coolify | coolify-rs |
-|---|---|---|
-| Application memory at idle | 372 MiB (with Redis) | 30 MiB |
-| CPU at idle, whole stack | 3.6% of a core | 0.5% of a core |
-| Startup to healthy | 1.62 s | 0.22 s |
-| Median API response, small endpoints, 1 client | 10–11 ms | 1.2–1.3 ms |
-| CPU per API request, small endpoints | 11–12 ms | about 0.5 ms |
-| Requests per second, small endpoints, 10 clients | 165–178 | 1,155–1,430 |
-| `GET /api/v1/applications` (1.7 MB), 10 clients | 18 req/s, p50 544 ms | 124 req/s, p50 78 ms |
+| | Coolify | coolify-rs | |
+|---|---|---|---|
+| Memory at idle | 372 MiB | 30 MiB | 12× less |
+| CPU per API request | 11–12 ms | 0.5 ms | 23× less |
+| API requests per second, 10 clients | 165–178 | 1,155–1,430 | 6–9× more |
+| Listing 113 applications (1.7 MB), 10 clients | 18 req/s | 124 req/s | 7× more |
+| Median API response, 1 client | 10–11 ms | 1.2–1.3 ms | 8–9× faster |
+| Startup | 1.62 s | 0.22 s | 7× faster |
 
-PostgreSQL itself uses a little more memory with coolify-rs (118 MiB against 83 MiB), because the
-connection pool keeps more connections open. To rerun the comparison, use `compat/bench/stack.sh` and
-`compat/bench/bench.py`.
+Both ran as isolated stacks on 2 CPU cores, each with its own PostgreSQL and the same data, with their
+schedulers running. Coolify's memory includes Redis. PostgreSQL itself uses a little more memory with
+coolify-rs (118 against 83 MiB), because its connection pool keeps more connections open. The setup, every
+endpoint at 1, 10 and 50 clients, and how to rerun it are in [compat/bench/RESULTS.md](compat/bench/RESULTS.md).
 
 ## What it includes
 
