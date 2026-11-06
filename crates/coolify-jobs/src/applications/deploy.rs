@@ -8,6 +8,7 @@ mod build;
 mod commands;
 pub(super) mod compose_pack;
 pub(crate) mod git;
+mod image_config;
 mod preview;
 mod secrets;
 pub(crate) use secrets::remote_redaction_values;
@@ -842,6 +843,16 @@ impl Jobs {
             hint_added: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         run.init_redaction().await;
+        // `__construct`: `validateDockerRegistryImageConfiguration()` runs before the preview's tag
+        // is read; a failure means the job cannot be created (`fail_undispatchable_deployment`).
+        if let Err(message) = image_config::validate_docker_registry_image_configuration(
+            run.app.str("docker_registry_image_name"),
+            run.app.str("docker_registry_image_tag"),
+            run.b.preview_tag.as_deref(),
+        ) {
+            run.fail_undispatchable(message).await;
+            return;
+        }
         if pull_request_id != 0
             && let Err(e) = run.load_preview().await
         {
@@ -2229,6 +2240,37 @@ impl Run {
                 .queue_next_deployment(self.app.id, self.main_server.id)
                 .await;
         }
+    }
+
+    /// `fail_undispatchable_deployment()`: the job could not be created, so it fails without
+    /// running. Only a deployment that is still in progress changes; the team gets the failure
+    /// notification unless the deployment belongs to a multi-server deployment, and the next
+    /// queued deployment starts.
+    async fn fail_undispatchable(&mut self, message: &str) {
+        let prev = apps::transition_status(&self.jobs.0.db, self.queue_id, "failed", now())
+            .await
+            .ok()
+            .flatten();
+        if prev.as_deref() != Some("in_progress") {
+            return;
+        }
+        tracing::warn!(deployment = %self.dep, "Deployment could not be started: {message}");
+        self.log("========================================", "stderr", false)
+            .await;
+        self.log(
+            &format!("Deployment could not be started: {message}"),
+            "stderr",
+            false,
+        )
+        .await;
+        self.log("========================================", "stderr", false)
+            .await;
+        if self.parent_deployment_uuid.is_none() {
+            self.send_deployment_notification(false).await;
+        }
+        self.jobs
+            .queue_next_deployment(self.app.id, self.main_server.id)
+            .await;
     }
 
     /// `sendDeploymentNotification($notificationClass)`.

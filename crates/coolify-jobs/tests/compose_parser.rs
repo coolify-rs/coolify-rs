@@ -862,3 +862,63 @@ async fn public_pull_request_parse_does_not_use_production_values() {
     );
     tdb.drop_db().await;
 }
+
+/// `validateDockerRegistryImageConfiguration()` (here because the reference fixture seeds a whole
+/// application): a deployment whose registry image name does not validate is failed before it
+/// runs, with the `fail_undispatchable_deployment()` log lines, and runs no command.
+#[tokio::test]
+async fn deployment_with_invalid_registry_image_name_fails_before_it_runs() {
+    let enc = Encrypter::new(APP_KEY).unwrap();
+    let (tdb, jobs, app_id, _) = seed_reference(&enc).await;
+    let db = &tdb.db;
+    sqlx::query("UPDATE private_keys SET private_key = $1")
+        .bind(enc.encrypt_string("not a real key"))
+        .execute(db.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE applications SET docker_registry_image_name = 'acme/app;id' WHERE id = $1")
+        .bind(app_id)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    let (server_id, destination_id): (i64, i64) = sqlx::query_as(
+        "SELECT s.id, d.id FROM servers s JOIN standalone_dockers d ON d.server_id = s.id LIMIT 1",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    let queue_id: i64 = sqlx::query_scalar(
+        "INSERT INTO application_deployment_queues (application_id, deployment_uuid, status, server_id, destination_id, logs) \
+         VALUES ($1, 'badimagedeployment', 'in_progress', $2, $3, '[]') RETURNING id",
+    )
+    .bind(app_id.to_string())
+    .bind(server_id)
+    .bind(destination_id.to_string())
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+
+    jobs.run_application_deployment(queue_id).await;
+
+    let (status, logs): (String, Option<String>) =
+        sqlx::query_as("SELECT status, logs FROM application_deployment_queues WHERE id = $1")
+            .bind(queue_id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(status, "failed");
+    let outputs: Vec<String> = serde_json::from_str::<Vec<Value>>(&logs.unwrap())
+        .unwrap()
+        .iter()
+        .map(|e| e["output"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(
+        outputs,
+        [
+            "========================================",
+            "Deployment could not be started: Docker registry image name contains invalid characters.",
+            "========================================",
+        ]
+    );
+    tdb.drop_db().await;
+}
