@@ -95,6 +95,11 @@
       notify.success(r.message);
     } catch (e) {
       if (e instanceof ApiError && e.field('password')) return e.field('password');
+      // It still owns resources in Coolify's tables (ADR 0012): say so and close the modal.
+      if (e instanceof ApiError && e.status === 409) {
+        notify.failure(e.message);
+        return;
+      }
       throw e;
     }
     await refreshAll();

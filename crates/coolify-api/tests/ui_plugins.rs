@@ -455,6 +455,98 @@ async fn panels_are_sandboxed_documents_for_teams_that_enabled_them() {
     h.finish().await;
 }
 
+/// A plugin holding `deploy` (ADR 0011) is switched on for a team only with the team's own answer, which
+/// the team page shows and can change.
+#[tokio::test]
+async fn team_switch_asks_the_team_about_deploy() {
+    const MANIFEST: &str = r#"
+id = "test/deployer"
+name = "Deployer"
+version = "0.1.0"
+description = "Asks for deploy."
+license = "Apache-2.0"
+api = "0.1"
+
+[capabilities]
+events = ["deployment.succeeded"]
+storage = true
+routes = true
+http = ["hooks.example.com"]
+resources = ["projects", "servers", "applications", "services", "databases"]
+deploy = true
+"#;
+    component();
+    let wasm =
+        std::fs::read(plugins_dir().join("target/wasm32-wasip2/release/hostile.wasm")).unwrap();
+    let h = Harness::with_plugins(true).await;
+    let root = Browser::login(&h, "root@example.test").await;
+    let alice = Browser::login(&h, "alice@example.test").await;
+    let upload = json!({"manifest": MANIFEST, "component": base64::engine::general_purpose::STANDARD.encode(wasm)});
+    let r = root.write(&h, "POST", "/ui/plugins", upload.clone()).await;
+    assert_eq!(r.status, 422, "{}", r.body);
+    let mut granted = upload;
+    granted["grant"] = r.json()["capabilities"].clone();
+    let r = root.write(&h, "POST", "/ui/plugins", granted).await;
+    assert_eq!(r.status, 201, "{}", r.body);
+
+    let switch = "/ui/plugins/test/deployer/team";
+    let r = alice
+        .write(&h, "POST", switch, json!({"enabled": true}))
+        .await;
+    assert_eq!(r.status, 422, "{}", r.body);
+    assert_eq!(r.json()["deploy"], true);
+    assert!(
+        r.json()["message"]
+            .as_str()
+            .unwrap()
+            .contains("grant_deploy")
+    );
+    let team = alice.get(&h, "/ui/plugins/team").await.json();
+    assert_eq!(
+        team["plugins"][0]["enabled_for_team"], false,
+        "nothing changed"
+    );
+
+    let r = alice
+        .write(
+            &h,
+            "POST",
+            switch,
+            json!({"enabled": true, "grant_deploy": false}),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["deploy_granted_for_team"], false);
+    let p = &alice.get(&h, "/ui/plugins/team").await.json()["plugins"][0];
+    assert_eq!(
+        (
+            &p["enabled_for_team"],
+            &p["deploy"],
+            &p["deploy_granted_for_team"]
+        ),
+        (&json!(true), &json!(true), &json!(false))
+    );
+
+    let r = alice
+        .write(
+            &h,
+            "POST",
+            switch,
+            json!({"enabled": true, "grant_deploy": true}),
+        )
+        .await;
+    assert_eq!(r.json()["deploy_granted_for_team"], true);
+    assert_eq!(
+        alice.get(&h, "/ui/plugins/team").await.json()["plugins"][0]["deploy_granted_for_team"],
+        true
+    );
+    let r = alice
+        .write(&h, "POST", switch, json!({"enabled": false}))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    h.finish().await;
+}
+
 /// Dashboard, settings, team and session data are byte for byte the same with the plugin system on and
 /// nothing installed as without it, and the navigation endpoint asks the UI to add nothing to them.
 #[tokio::test]

@@ -1,9 +1,12 @@
 <script lang="ts">
   // coolify-rs's own (ADR 0010, ADR 0013): Team → Plugins. Owners and admins switch an installed plugin on
-  // for their team; members see what is on. Built from the team pages' parts.
+  // for their team; members see what is on. A plugin holding `deploy` also needs the team's own answer on
+  // whether it may queue the team's deployments (ADR 0011). Built from the team pages' parts.
+  import Callout from '../components/Callout.svelte';
   import CapabilityList from '../components/CapabilityList.svelte';
   import Checkbox from '../components/Checkbox.svelte';
   import Empty from '../components/Empty.svelte';
+  import Modal from '../components/Modal.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
   import TeamLayout from '../components/TeamLayout.svelte';
   import { ApiError } from '../lib/api';
@@ -13,6 +16,8 @@
 
   let data = $state<TeamData | null>(null);
   let busy = $state<string | null>(null);
+  /** A plugin holding `deploy` waiting for the team's answer before it is switched on. */
+  let asking = $state<InstalledPlugin | null>(null);
 
   async function load() {
     try {
@@ -25,17 +30,33 @@
   }
   load();
 
-  async function toggle(p: InstalledPlugin, enabled: boolean) {
+  async function save(p: InstalledPlugin, enabled: boolean, grantDeploy?: boolean, message?: string) {
     busy = p.id;
     try {
-      await pluginsUi.setTeam(p.id, enabled);
-      notify.success(enabled ? `${p.name} is on for this team.` : `${p.name} is off for this team.`);
+      await pluginsUi.setTeam(p.id, enabled, grantDeploy);
+      notify.success(message ?? (enabled ? `${p.name} is on for this team.` : `${p.name} is off for this team.`));
     } catch (e) {
       notify.failure(e instanceof ApiError ? e.message : String(e));
     } finally {
       busy = null;
       await Promise.all([load(), pluginNav.load()]);
     }
+  }
+
+  function toggle(p: InstalledPlugin, enabled: boolean) {
+    if (enabled && p.deploy) {
+      asking = p;
+      // The checkbox stays off until the team answered.
+      load();
+      return;
+    }
+    save(p, enabled);
+  }
+
+  function answer(grant: boolean) {
+    const p = asking;
+    asking = null;
+    if (p) save(p, true, grant);
   }
 </script>
 
@@ -58,6 +79,13 @@
                         {#if !p.verified}
                           <span class="table-badge table-badge-warning" title="Installed outside the plugin registry">Unverified</span>
                         {/if}
+                        {#if p.deploy && p.enabled_for_team}
+                          {#if p.deploy_granted_for_team}
+                            <span class="table-badge table-badge-warning">Can deploy</span>
+                          {:else}
+                            <span class="table-badge">Deployments not allowed</span>
+                          {/if}
+                        {/if}
                       </div>
                       <p class="mt-0.5 text-[12px] text-neutral-500 dark:text-fg-dim">{p.description}</p>
                       <p class="mt-0.5 text-[11px] text-neutral-500 dark:text-fg-faint">{p.id}</p>
@@ -77,6 +105,24 @@
                     <h5 class="mb-1.5 text-[12px] font-medium text-neutral-700 dark:text-fg-dim">Capabilities</h5>
                     <CapabilityList capabilities={p.capabilities} />
                   </div>
+                  {#if p.deploy && p.enabled_for_team}
+                    <div class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-neutral-200 pt-3 dark:border-white/[0.08]">
+                      <p class="text-[12px] text-neutral-600 dark:text-fg-dim">
+                        {#if p.deploy_granted_for_team}
+                          This plugin may queue deployments of this team's applications.
+                        {:else}
+                          This plugin is on for this team, but may not queue its deployments.
+                        {/if}
+                      </p>
+                      {#if data.can_manage}
+                        {#if p.deploy_granted_for_team}
+                          <button type="button" class="button" disabled={busy === p.id} onclick={() => save(p, true, false, 'Deployments withdrawn.')}>Withdraw deployments</button>
+                        {:else}
+                          <button type="button" class="button" disabled={busy === p.id} onclick={() => (asking = p)}>Allow deployments</button>
+                        {/if}
+                      {/if}
+                    </div>
+                  {/if}
                 </div>
               {/each}
             </div>
@@ -86,3 +132,17 @@
     {/if}
   </TeamLayout>
 </div>
+
+{#if asking}
+  <Modal title="Allow {asking.name} to deploy?" subtitle={asking.id} onclose={() => (asking = null)} narrow>
+    <Callout type="warning" title="Deployments" class="mb-4">
+      This plugin can queue deployments of this team's applications. Allow it only if you expect the plugin to deploy. You can enable it without deployments and allow them later.
+    </Callout>
+    <CapabilityList capabilities={asking.capabilities} />
+    {#snippet footer()}
+      <button type="button" class="button" onclick={() => (asking = null)}>Cancel</button>
+      <button type="button" class="button" onclick={() => answer(false)}>{asking?.enabled_for_team ? 'Keep without deployments' : 'Enable without deployments'}</button>
+      <button type="button" class="button button-highlighted" onclick={() => answer(true)}>{asking?.enabled_for_team ? 'Allow deployments' : 'Enable and allow deployments'}</button>
+    {/snippet}
+  </Modal>
+{/if}

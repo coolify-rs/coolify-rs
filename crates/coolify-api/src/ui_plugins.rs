@@ -464,7 +464,13 @@ async fn uninstall(
     if !host
         .uninstall(&id, Some(ctx.user_id))
         .await
-        .map_err(internal)?
+        .map_err(|e| match e {
+            // It owns rows of Coolify's tables (ADR 0012): they go back first.
+            coolify_plugins::PluginError::Capability(m) => {
+                ApiError::Status(StatusCode::CONFLICT, json!({ "message": m }))
+            }
+            e => internal(e),
+        })?
     {
         return Err(not_found());
     }
@@ -486,7 +492,14 @@ async fn team_page(State(state): State<AppState>, Extension(ctx): Extension<Auth
         let on = coolify_plugins::store::enabled_for_team(host.db(), &p.id, ctx.team_id)
             .await
             .map_err(internal)?;
-        items.push(settings_item(&p, on));
+        let granted = coolify_plugins::store::deploy_grantor(host.db(), &p.id, ctx.team_id)
+            .await
+            .map_err(internal)?
+            .is_some();
+        let mut v = settings_item(&p, on);
+        v["deploy"] = p.granted.deploy.into();
+        v["deploy_granted_for_team"] = granted.into();
+        items.push(v);
     }
     Ok(ok(json!({"plugins": items, "can_manage": ctx.is_team_admin()})).into_response())
 }
@@ -499,16 +512,48 @@ async fn set_team(
 ) -> ApiResult {
     let host = host(&state)?;
     team_admin(&ctx)?;
-    let body: EnabledBody = parse(&body)?;
+    let body: TeamBody = parse(&body)?;
     let id = format!("{publisher}/{name}");
     let p = find(host, &id).await?;
     if body.enabled && !p.enabled {
         return Err(invalid("The plugin is switched off for this instance."));
     }
+    // The team's own consent to `deploy` (ADR 0011), as `POST /api/v1/plugins/.../enable` asks for it.
+    let grant_deploy = if body.enabled && p.granted.deploy {
+        let Some(grant) = body.grant_deploy else {
+            return Err(ApiError::Status(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({
+                    "message": "This plugin can deploy your team's applications. Send grant_deploy: true to allow it, or false to enable the plugin without deployments.",
+                    "capabilities": p.manifest.capability_summary(),
+                    "deploy": true,
+                }),
+            ));
+        };
+        Some(grant)
+    } else {
+        None
+    };
     host.set_team(&id, ctx.team_id, body.enabled, Some(ctx.user_id))
         .await
         .map_err(internal)?;
-    Ok(ok(settings_item(&p, body.enabled)).into_response())
+    if let Some(grant) = grant_deploy {
+        host.set_team_deploy(&id, ctx.team_id, grant, ctx.user_id)
+            .await
+            .map_err(internal)?;
+    }
+    let mut v = settings_item(&p, body.enabled);
+    v["deploy"] = p.granted.deploy.into();
+    v["deploy_granted_for_team"] = grant_deploy.unwrap_or(false).into();
+    Ok(ok(v).into_response())
+}
+
+#[derive(Deserialize)]
+struct TeamBody {
+    enabled: bool,
+    /// Required when enabling a plugin that holds `deploy`.
+    #[serde(default)]
+    grant_deploy: Option<bool>,
 }
 
 // ---- Settings: the registry catalogue ----

@@ -117,7 +117,7 @@ endpoint is the plugin's routes for the session's team, with exactly the respons
   development mode: the first request answers the capability list, a modal shows exactly what will be granted,
   and approving sends it back as the grant. The registry catalogue (ADR 0010 phase 2) is listed when the
   instance has one, with install, update and approval of updates that ask for more.
-- **Team → Plugins**: plugins switched on for the instance, with their capabilities and the team's switch.
+- **Team → Plugins**: plugins switched on for the instance, with their capabilities and the team's switch. For a plugin holding `deploy` (ADR 0011), switching it on opens a dialog that asks whether it may queue the team's deployments, and the page shows and can change that answer.
   Owners and admins change it; members see it.
 - The menus get these entries only when there is something there: Settings → Plugins when a plugin is
   installed, development mode is on or a catalogue exists; Team → Plugins when an installed plugin is switched

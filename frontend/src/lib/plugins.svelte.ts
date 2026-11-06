@@ -38,6 +38,10 @@ export interface InstalledPlugin {
   disabled_reason: string | null;
   capabilities: string[];
   enabled_for_team: boolean;
+  /** Holds `deploy` (ADR 0011); on the team page only. */
+  deploy?: boolean;
+  /** The team allowed the plugin to queue its deployments; on the team page only. */
+  deploy_granted_for_team?: boolean;
   panels: { slot: Slot; title: string }[];
 }
 
@@ -111,7 +115,9 @@ export const pluginsUi = {
   setEnabled: (id: string, enabled: boolean) => request<InstalledPlugin>('PATCH', path(id), { enabled }),
   uninstall: (id: string, password: string) => request<{ message: string }>('DELETE', path(id), { password }),
   team: () => request<TeamData>('GET', '/ui/plugins/team'),
-  setTeam: (id: string, enabled: boolean) => request<InstalledPlugin>('POST', `${path(id)}/team`, { enabled }),
+  /** `grantDeploy` is the team's answer for a plugin holding `deploy`; enabling one without it is refused. */
+  setTeam: (id: string, enabled: boolean, grantDeploy?: boolean) =>
+    request<InstalledPlugin>('POST', `${path(id)}/team`, { enabled, grant_deploy: grantDeploy }),
   catalog: () => request<CatalogEntry[]>('GET', '/ui/plugins/catalog'),
   refreshCatalog: () => request<unknown>('POST', '/ui/plugins/catalog/refresh', {}),
   install: (id: string, grant?: string[], version?: string) => approving('/ui/plugins/catalog/install', { id, version, grant }),

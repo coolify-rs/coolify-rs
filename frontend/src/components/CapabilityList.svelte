@@ -13,6 +13,10 @@
         return 'Answers API requests under its own prefix, for teams that enable it.';
       case 'http':
         return `Sends HTTPS requests to these hosts, and no others: ${rest}.`;
+      case 'resources':
+        return `Reads the team's ${rest} (without secrets), for teams that enable it.`;
+      case 'deploy':
+        return "Queues deployments of the team's applications, only for teams that allow it when enabling the plugin.";
       case 'ui':
         return `Shows panels in the web interface: ${rest}.`;
       default:
