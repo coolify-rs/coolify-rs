@@ -110,7 +110,8 @@ impl Manifest {
         Ok(m)
     }
 
-    fn validate(&self) -> Result<(), PluginError> {
+    /// Checks every field; [`Manifest::parse`] does this already.
+    pub fn validate(&self) -> Result<(), PluginError> {
         let bad = |msg: String| Err(PluginError::Manifest(msg));
         if !ID.is_match(&self.id) {
             return bad(format!(
@@ -210,6 +211,15 @@ impl Manifest {
             out.push(format!("ui: {}", slots.join(", ")));
         }
         out
+    }
+}
+
+/// Whether `id` is a valid plugin id (`publisher/name`).
+pub(crate) fn check_id(id: &str) -> Result<(), String> {
+    if ID.is_match(id) {
+        Ok(())
+    } else {
+        Err("the id must be publisher/name in lowercase letters, digits and dashes".into())
     }
 }
 

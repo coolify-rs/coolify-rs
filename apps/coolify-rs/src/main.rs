@@ -24,6 +24,8 @@ use std::path::PathBuf;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::{DefaultOnFailure, DefaultOnResponse, TraceLayer};
 
+mod plugin_cli;
+
 /// glibc's malloc keeps freed memory in per-thread arenas, so after a burst of large responses the
 /// process stayed at its peak. mimalloc returns it to the system.
 #[global_allocator]
@@ -61,6 +63,11 @@ enum Cmd {
     /// `dns:release-orphaned-records`: release managed DNS records no live resource references.
     #[command(name = "dns:release-orphaned-records")]
     ReleaseOrphanedDnsRecords,
+    /// Plugin tools: conformance check and the plugin registry's keys and index (no database needed).
+    Plugin {
+        #[command(subcommand)]
+        cmd: plugin_cli::PluginCmd,
+    },
     /// Whether Coolify can take this database back: rows owned by provider plugins and values Coolify does
     /// not accept (ADR 0012). Exits 0 when portable, 1 when not, 2 when the check could not run.
     CheckPortable {
@@ -269,13 +276,34 @@ async fn shutdown_signal() {
 
 /// Starts the plugin host (ADR 0010) and routes Coolify's notifications to it as plugin events.
 /// `COOLIFY_RS_PLUGINS=off` switches plugins off; so does read-only mode, which writes nothing.
+/// The plugin registry is refreshed daily unless `COOLIFY_RS_PLUGIN_REGISTRY=off`.
 async fn start_plugins(db: &Db) -> Option<coolify_plugins::Host> {
     if env("COOLIFY_RS_PLUGINS").is_some_and(|v| v == "off") || db.ensure_writable().is_err() {
         return None;
     }
-    match coolify_plugins::Host::start(db.clone(), coolify_plugins::Settings::default()).await {
+    let registry = match coolify_plugins::registry::Config::from_values(
+        env("COOLIFY_RS_PLUGIN_REGISTRY_URL").as_deref(),
+        env("COOLIFY_RS_PLUGIN_REGISTRY_KEYS").as_deref(),
+        env("COOLIFY_RS_ALLOW_UNVERIFIED_PLUGINS").is_some_and(|v| v == "true"),
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "plugin registry settings are invalid; using the defaults");
+            coolify_plugins::registry::Config::default()
+        }
+    };
+    let settings = coolify_plugins::Settings {
+        registry,
+        ..coolify_plugins::Settings::default()
+    };
+    match coolify_plugins::Host::start(db.clone(), settings).await {
         Ok(host) => {
             tracing::info!(loaded = ?host.loaded_ids(), "plugins enabled");
+            if env("COOLIFY_RS_PLUGIN_REGISTRY").is_some_and(|v| v == "off") {
+                tracing::info!("plugin registry refresh is off (COOLIFY_RS_PLUGIN_REGISTRY)");
+            } else {
+                coolify_plugins::registry::spawn_daily_refresh(host.clone());
+            }
             coolify_jobs::notifications::plugin_events::set_event_sink(Box::new(PluginSink(
                 host.clone(),
             )));
@@ -374,6 +402,9 @@ fn ssh_keys_dir(cfg: &Config) -> PathBuf {
 
 async fn run() -> Result<()> {
     let cli = Cli::parse();
+    if let Some(Cmd::Plugin { cmd }) = cli.cmd {
+        return plugin_cli::run(cmd).await;
+    }
     if matches!(cli.cmd, Some(Cmd::Healthcheck)) {
         return healthcheck().await;
     }
@@ -423,7 +454,9 @@ async fn run() -> Result<()> {
         None
     };
     match cli.cmd.unwrap_or(Cmd::Serve) {
-        Cmd::Healthcheck | Cmd::CreateSchema | Cmd::CheckPortable { .. } => Ok(()),
+        Cmd::Healthcheck | Cmd::CreateSchema | Cmd::Plugin { .. } | Cmd::CheckPortable { .. } => {
+            Ok(())
+        }
         Cmd::ServerJob { job, server_uuid } => {
             let remote = Remote::new(cfg.remote.clone()).context("remote execution")?;
             let jobs = coolify_jobs::Jobs::new(db.clone(), remote, cfg.encrypter.clone());

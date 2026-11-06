@@ -194,6 +194,40 @@ Human review is tiered by risk:
   capability approval.
 - This is for plugin authors and private in-house plugins.
 
+**What phase 2 settled.** These points were left open above and are now decided:
+
+- **Signature file.**
+  - `index.json.sig` is a small JSON document, `{algorithm, key_id, signature}`. The signature covers
+    the exact bytes of `index.json`.
+  - Each key has a `not_after` date. The key is valid through that day (UTC) and refused after it, as is
+    any key coolify-rs doesn't know.
+  - The production key is added by the registry maintainers. `coolify-rs-dev-insecure`, whose secret
+    half is committed for tests, is never trusted by default.
+- **Rollback.** coolify-rs refuses an index whose `generated_at` is older than the one it already holds
+  from the same URL. Otherwise an old signed index could bring back revoked plugins and yanked versions.
+- **Forward compatibility.** A version whose manifest this coolify-rs can't run (a newer interface or an
+  unknown capability) doesn't invalidate the index. It is listed as incompatible and never installed,
+  so older instances still receive revocations.
+- **Pending updates.**
+  - "Installed but stays on the old version" works like this: the version is recorded in
+    `coolify_rs_plugins.pending_updates` with its hash and manifest, and the old version keeps running.
+  - On approval, the component is downloaded and checked against the index again, then installed.
+  - Approving means sending the new capability list as `grant`, as for a first install.
+- **Revocation.** A revoked plugin is switched off with the registry's reason as `disabled_reason`, and
+  the switch is audited. While the plugin stays revoked, it can't be switched back on, reinstalled,
+  uploaded or updated.
+- **Downloads.** The index and the components are fetched under the `http` capability's rules, with the
+  component size limit.
+- **Turning refresh off.** `COOLIFY_RS_PLUGIN_REGISTRY=off` stops the daily refresh.
+  `COOLIFY_RS_PLUGIN_REGISTRY_URL` points at another registry. Extra keys
+  (`COOLIFY_RS_PLUGIN_REGISTRY_KEYS`) are trusted only in development mode, which is how a private
+  registry works.
+- **Review rules.**
+  - Published versions are immutable apart from `yanked`.
+  - Plugins and versions are never removed.
+  - Lifting a revocation takes two maintainers.
+  - The publisher name `catalog` is reserved, because it would collide with `/api/v1/plugins/catalog/...`.
+
 ### 8. Keeping parity checked
 
 - **Plugins off.** The existing comparison suites run with no plugin installed.

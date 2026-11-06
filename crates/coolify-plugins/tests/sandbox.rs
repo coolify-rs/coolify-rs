@@ -88,9 +88,16 @@ fn get(path: &str) -> Request {
 }
 
 async fn host(db: &TestDb, limits: Limits, egress: Egress) -> Host {
-    Host::start(db.db.clone(), Settings { limits, egress })
-        .await
-        .unwrap_or_else(|e| panic!("start: {e}"))
+    Host::start(
+        db.db.clone(),
+        Settings {
+            limits,
+            egress,
+            ..Settings::default()
+        },
+    )
+    .await
+    .unwrap_or_else(|e| panic!("start: {e}"))
 }
 
 fn body(r: &coolify_plugins::Response) -> serde_json::Value {

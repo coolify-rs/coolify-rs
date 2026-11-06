@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS coolify_rs_plugins.owned_resources (
 pub async fn migrate(db: &Db) -> Result<(), PluginError> {
     sqlx::raw_sql(SCHEMA).execute(db.pool()).await?;
     sqlx::raw_sql(SCHEMA_0011).execute(db.pool()).await?;
-    Ok(())
+    crate::registry::db::migrate(db).await
 }
 
 /// An installed plugin.

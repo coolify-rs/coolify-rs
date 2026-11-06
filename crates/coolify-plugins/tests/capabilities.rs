@@ -124,6 +124,7 @@ async fn host(db: &TestDb, limits: Limits) -> (Host, Arc<Recorder>) {
         Settings {
             limits,
             egress: Egress::default(),
+            ..Settings::default()
         },
     )
     .await

@@ -24,6 +24,9 @@ use crate::egress::{Egress, Outgoing};
 use crate::manifest::{Capabilities, Manifest};
 use crate::store::{self, Installed, NewPlugin};
 
+mod detached;
+pub use detached::Probe;
+
 mod bindings {
     wasmtime::component::bindgen!({
         world: "plugin",
@@ -80,6 +83,8 @@ impl Default for Limits {
 pub struct Settings {
     pub limits: Limits,
     pub egress: Egress,
+    /// Where the plugin registry is and which keys sign it.
+    pub registry: crate::registry::Config,
 }
 
 /// Why a call did not complete.
@@ -118,6 +123,8 @@ struct Inner {
     db: Db,
     settings: Settings,
     loaded: RwLock<HashMap<String, Arc<Loaded>>>,
+    /// Set for `coolify-rs plugin check`: no database, storage in memory, no network.
+    memory: Option<detached::Memory>,
     bridges: RwLock<Bridges>,
 }
 
@@ -139,8 +146,58 @@ struct Loaded {
 struct State {
     wasi: WasiCtx,
     table: ResourceTable,
-    limits: StoreLimits,
+    limits: Limiter,
     call: CallCtx,
+}
+
+/// The store's limits, remembering the largest linear memory the call reached.
+struct Limiter {
+    inner: StoreLimits,
+    peak_memory: usize,
+}
+
+impl wasmtime::ResourceLimiter for Limiter {
+    fn memory_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        let ok = self.inner.memory_growing(current, desired, maximum)?;
+        if ok {
+            self.peak_memory = self.peak_memory.max(desired);
+        }
+        Ok(ok)
+    }
+
+    fn memory_grow_failed(&mut self, error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.inner.memory_grow_failed(error)
+    }
+
+    fn table_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        self.inner.table_growing(current, desired, maximum)
+    }
+
+    fn table_grow_failed(&mut self, error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.inner.table_grow_failed(error)
+    }
+
+    fn instances(&self) -> usize {
+        self.inner.instances()
+    }
+
+    fn tables(&self) -> usize {
+        self.inner.tables()
+    }
+
+    fn memories(&self) -> usize {
+        self.inner.memories()
+    }
 }
 
 #[derive(Clone)]
@@ -151,6 +208,7 @@ struct CallCtx {
     egress: Egress,
     hosts: Arc<[String]>,
     limits: Limits,
+    memory: Option<detached::Memory>,
     /// Granted resource kinds.
     kinds: Arc<[ResourceKind]>,
     bridges: Bridges,
@@ -186,16 +244,12 @@ impl Host {
     /// switched off with the reason, so one broken plugin never stops coolify-rs from starting.
     pub async fn start(db: Db, settings: Settings) -> Result<Host, PluginError> {
         store::migrate(&db).await?;
-        let mut config = Config::new();
-        config.epoch_interruption(true);
-        config.wasm_component_model(true);
-        config.max_wasm_stack(1024 * 1024);
-        let engine = Engine::new(&config).map_err(|e| PluginError::Engine(e.to_string()))?;
         let host = Host(Arc::new(Inner {
-            engine,
+            engine: engine()?,
             db,
             settings,
             loaded: RwLock::new(HashMap::new()),
+            memory: None,
             bridges: RwLock::new(Bridges::default()),
         }));
         tick(Arc::downgrade(&host.0));
@@ -217,6 +271,10 @@ impl Host {
 
     pub fn limits(&self) -> &Limits {
         &self.0.settings.limits
+    }
+
+    pub fn settings(&self) -> &Settings {
+        &self.0.settings
     }
 
     /// Connects `resources` and `deploy` to the REST API's queries and deploy path (ADR 0011). Until it is
@@ -242,7 +300,7 @@ impl Host {
         Ok(())
     }
 
-    fn unload(&self, id: &str) {
+    pub(crate) fn unload(&self, id: &str) {
         self.0
             .loaded
             .write()
@@ -314,6 +372,7 @@ impl Host {
                 self.0.settings.limits.max_component
             )));
         }
+        crate::registry::ensure_not_revoked(&self.0.db, &manifest.id).await?;
         let sha256 = hex::encode(Sha256::digest(component));
         let previous = store::find(&self.0.db, &manifest.id).await?;
         let installed = Installed {
@@ -416,6 +475,7 @@ impl Host {
             .await?
             .ok_or_else(|| PluginError::NotFound(id.to_owned()))?;
         if enabled {
+            crate::registry::ensure_not_revoked(&self.0.db, id).await?;
             store::set_enabled(&self.0.db, id, true, None).await?;
             self.load(Installed {
                 enabled: true,
@@ -572,7 +632,7 @@ impl Host {
         let p = self
             .get(id)
             .ok_or_else(|| CallError::Unavailable(id.to_owned()))?;
-        if !store::enabled_for_team(&self.0.db, id, team_id).await? {
+        if self.0.memory.is_none() && !store::enabled_for_team(&self.0.db, id, team_id).await? {
             return Err(CallError::NotEnabledForTeam(id.to_owned()));
         }
         Ok(p)
@@ -587,12 +647,22 @@ impl Host {
         deadline: Duration,
         f: impl AsyncFnOnce(&mut Store<State>, &bindings::Plugin) -> wasmtime::Result<R>,
     ) -> Result<R, CallError> {
+        self.call_measured(p, team_id, caller, deadline, f).await.0
+    }
+
+    /// [`Host::call`], also returning how long it took and the largest memory it reached.
+    async fn call_measured<R>(
+        &self,
+        p: &Loaded,
+        team_id: i64,
+        caller: Option<Caller>,
+        deadline: Duration,
+        f: impl AsyncFnOnce(&mut Store<State>, &bindings::Plugin) -> wasmtime::Result<R>,
+    ) -> (Result<R, CallError>, Duration, usize) {
         let id = p.installed.id.clone();
-        let _permit = p
-            .permits
-            .acquire()
-            .await
-            .map_err(|_| CallError::Unavailable(id.clone()))?;
+        let Ok(_permit) = p.permits.acquire().await else {
+            return (Err(CallError::Unavailable(id)), Duration::ZERO, 0);
+        };
         let limits = &self.0.settings.limits;
         let mut wasi = WasiCtxBuilder::new();
         wasi.allow_tcp(false)
@@ -601,13 +671,16 @@ impl Host {
         let state = State {
             wasi: wasi.build(),
             table: ResourceTable::new(),
-            limits: StoreLimitsBuilder::new()
-                .memory_size(limits.memory)
-                .instances(16)
-                .tables(32)
-                .memories(4)
-                .trap_on_grow_failure(true)
-                .build(),
+            limits: Limiter {
+                inner: StoreLimitsBuilder::new()
+                    .memory_size(limits.memory)
+                    .instances(16)
+                    .tables(32)
+                    .memories(4)
+                    .trap_on_grow_failure(true)
+                    .build(),
+                peak_memory: 0,
+            },
             call: CallCtx {
                 plugin: Arc::from(id.as_str()),
                 team_id,
@@ -615,6 +688,7 @@ impl Host {
                 egress: self.0.settings.egress.clone(),
                 hosts: Arc::from(p.installed.granted.http.clone()),
                 limits: limits.clone(),
+                memory: self.0.memory.clone(),
                 kinds: p
                     .installed
                     .granted
@@ -640,7 +714,11 @@ impl Host {
             let plugin = p.pre.instantiate_async(&mut store).await?;
             f(&mut store, &plugin).await
         };
-        let outcome = match tokio::time::timeout(deadline, run).await {
+        let started = std::time::Instant::now();
+        let timed = tokio::time::timeout(deadline, run).await;
+        let elapsed = started.elapsed();
+        let peak_memory = store.data().limits.peak_memory;
+        let outcome = match timed {
             Ok(Ok(r)) => Ok(r),
             Ok(Err(e)) => {
                 let interrupted = e
@@ -656,6 +734,7 @@ impl Host {
         };
         match &outcome {
             Ok(_) => p.failures.store(0, Ordering::Relaxed),
+            Err(_) if self.0.memory.is_some() => {}
             Err(e) => {
                 let n = p.failures.fetch_add(1, Ordering::Relaxed) + 1;
                 if n >= limits.max_failures {
@@ -663,7 +742,7 @@ impl Host {
                 }
             }
         }
-        outcome
+        (outcome, elapsed, peak_memory)
     }
 
     async fn auto_disable(&self, id: &str, failures: u32, last: &CallError) {
@@ -702,6 +781,15 @@ impl Host {
         ids.sort();
         ids
     }
+}
+
+/// The engine every plugin runs on.
+fn engine() -> Result<Engine, PluginError> {
+    let mut config = Config::new();
+    config.epoch_interruption(true);
+    config.wasm_component_model(true);
+    config.max_wasm_stack(1024 * 1024);
+    Engine::new(&config).map_err(|e| PluginError::Engine(e.to_string()))
 }
 
 /// Advances the engine's epoch every `TICK` until the host is dropped. This is a plain thread, not a
@@ -771,6 +859,9 @@ impl storage::Host for State {
     async fn get(&mut self, key: String) -> Result<Option<Vec<u8>>, String> {
         let c = &self.call;
         check_key(&key, &c.limits)?;
+        if let Some(m) = &c.memory {
+            return Ok(detached::get(m, c.team_id, &key));
+        }
         store::kv_get(&c.db, &c.plugin, c.team_id, &key)
             .await
             .map_err(|e| storage_error(&c.plugin, e))
@@ -784,6 +875,9 @@ impl storage::Host for State {
                 "values are limited to {} bytes",
                 c.limits.max_value
             ));
+        }
+        if let Some(m) = &c.memory {
+            return detached::set(m, c.team_id, key, value, c.limits.storage_quota);
         }
         let stored = store::kv_set(
             &c.db,
@@ -808,6 +902,10 @@ impl storage::Host for State {
     async fn delete(&mut self, key: String) -> Result<(), String> {
         let c = &self.call;
         check_key(&key, &c.limits)?;
+        if let Some(m) = &c.memory {
+            detached::delete(m, c.team_id, &key);
+            return Ok(());
+        }
         store::kv_delete(&c.db, &c.plugin, c.team_id, &key)
             .await
             .map_err(|e| storage_error(&c.plugin, e))
@@ -817,6 +915,9 @@ impl storage::Host for State {
         let c = &self.call;
         if prefix.len() > c.limits.max_key {
             return Err(format!("keys are limited to {} bytes", c.limits.max_key));
+        }
+        if let Some(m) = &c.memory {
+            return Ok(detached::keys(m, c.team_id, &prefix));
         }
         store::kv_keys(&c.db, &c.plugin, c.team_id, &prefix)
             .await
@@ -840,6 +941,9 @@ fn storage_error(plugin: &str, e: PluginError) -> String {
 impl http::Host for State {
     async fn fetch(&mut self, request: http::Outgoing) -> Result<Response, String> {
         let c = &self.call;
+        if c.memory.is_some() {
+            return Err(detached::NO_NETWORK.into());
+        }
         let r = c
             .egress
             .fetch(
