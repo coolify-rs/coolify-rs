@@ -4,12 +4,12 @@
 [[versions]]
 version = "0.1.0"
 source = "https://github.com/coolify-rs/coolify-rs"
-commit = "50c3156446dc2062c2cbf31387f2b84bad80f685"
+commit = "b6af3f06152cc145612b44699883cb9606e9022d"
 toolchain = "rust 1.99.1, target wasm32-wasip2"
 builder = "docker.io/library/rust:1.99.1-slim-bookworm@sha256:f2c004e3d2d8b547e8cf7ffbc29205385f4e71d23e53e4e383065db5e9f822cd"
 # PLACEHOLDER from a local (macOS) build of the commit. The builder image's build will differ: replace this
 # with the hash the first CI rebuild prints, and publish that build at `url`, before this entry is merged.
-sha256 = "da5ac15d1a6f98bc6135f77c480a06f1ab15a9ead09c06264fbaaf0da45077ec"
+sha256 = "e31f2f4c97cd6e7fef29647ec02b5efc1fb5b390dfbfe17bd902163feac2bfdd"
 url = "https://github.com/coolify-rs/coolify-rs/releases/download/delivery-metrics-v0.1.0/delivery_metrics.wasm"
 
 [versions.build]
