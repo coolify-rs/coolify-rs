@@ -331,14 +331,15 @@ async fn member_roles_and_removal() {
             .await
             .unwrap();
     assert_eq!(role, "admin");
-    // A role change revokes the member's tokens for this team.
+    // A promotion keeps the member's tokens for this team (4.5.3); a demotion revokes them
+    // (tests/permissions_4_5_3.rs).
     let tokens: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM personal_access_tokens WHERE tokenable_id = 2 AND team_id = '1'",
     )
     .fetch_one(h.tdb.db.pool())
     .await
     .unwrap();
-    assert_eq!(tokens, 0);
+    assert_eq!(tokens, 2);
 
     // An admin cannot act on an owner.
     let bob = Ui::login(&h, "bob@example.test").await;
