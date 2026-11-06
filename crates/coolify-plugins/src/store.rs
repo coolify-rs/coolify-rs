@@ -52,9 +52,27 @@ CREATE TABLE IF NOT EXISTS coolify_rs_plugins.audit (
 );
 ";
 
+/// Additions of ADR 0011 and 0012: a team's consent to `deploy`, and the rows of Coolify's tables a provider
+/// plugin wrote values into that Coolify does not know. `owned_resources` has no foreign key to `plugins`:
+/// uninstalling a provider plugin leaves its values in Coolify's tables, so the record of them must stay.
+const SCHEMA_0011: &str = "
+ALTER TABLE coolify_rs_plugins.team_plugins ADD COLUMN IF NOT EXISTS deploy_granted_by bigint;
+ALTER TABLE coolify_rs_plugins.team_plugins ADD COLUMN IF NOT EXISTS deploy_granted_at timestamptz;
+CREATE INDEX IF NOT EXISTS audit_team_action ON coolify_rs_plugins.audit (team_id, action, at);
+CREATE TABLE IF NOT EXISTS coolify_rs_plugins.owned_resources (
+    table_name text NOT NULL,
+    row_id bigint NOT NULL,
+    plugin_id text NOT NULL,
+    note text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (table_name, row_id)
+);
+";
+
 /// Creates the schema when missing.
 pub async fn migrate(db: &Db) -> Result<(), PluginError> {
     sqlx::raw_sql(SCHEMA).execute(db.pool()).await?;
+    sqlx::raw_sql(SCHEMA_0011).execute(db.pool()).await?;
     Ok(())
 }
 
@@ -344,4 +362,164 @@ pub async fn kv_keys(
     .bind(prefix)
     .fetch_all(db.pool())
     .await?)
+}
+
+// A team's consent to `deploy` (ADR 0011).
+
+/// Records who on the team granted `deploy` to the plugin, or withdraws it with `None`. Only for a team that
+/// enabled the plugin; returns whether there was one.
+pub async fn set_team_deploy(
+    db: &Db,
+    id: &str,
+    team_id: i64,
+    granted_by: Option<i64>,
+) -> Result<bool, PluginError> {
+    let n = sqlx::query(
+        "UPDATE coolify_rs_plugins.team_plugins SET deploy_granted_by = $3, \
+         deploy_granted_at = CASE WHEN $3::bigint IS NULL THEN NULL ELSE now() END \
+         WHERE plugin_id = $1 AND team_id = $2",
+    )
+    .bind(id)
+    .bind(team_id)
+    .bind(granted_by)
+    .execute(db.pool())
+    .await?
+    .rows_affected();
+    Ok(n > 0)
+}
+
+/// Withdraws every team's consent to `deploy` for the plugin.
+pub async fn clear_deploy_grants(db: &Db, id: &str) -> Result<(), PluginError> {
+    sqlx::query(
+        "UPDATE coolify_rs_plugins.team_plugins SET deploy_granted_by = NULL, deploy_granted_at = NULL \
+         WHERE plugin_id = $1 AND deploy_granted_by IS NOT NULL",
+    )
+    .bind(id)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
+/// The team member who granted `deploy` to the plugin for the team, if anyone did.
+pub async fn deploy_grantor(db: &Db, id: &str, team_id: i64) -> Result<Option<i64>, PluginError> {
+    Ok(sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT deploy_granted_by FROM coolify_rs_plugins.team_plugins WHERE plugin_id = $1 AND team_id = $2",
+    )
+    .bind(id)
+    .bind(team_id)
+    .fetch_optional(db.pool())
+    .await?
+    .flatten())
+}
+
+/// Takes one of the team's plugin deployments for the window, written to the audit log as `deploy` with
+/// `detail`, or `None` when the team already had `limit` in the last `window_secs` seconds. The audit log
+/// is the counter, so the limit holds across restarts and across every plugin of the team.
+pub async fn reserve_deploy(
+    db: &Db,
+    plugin_id: &str,
+    team_id: i64,
+    user_id: Option<i64>,
+    limit: u32,
+    window_secs: f64,
+    detail: Value,
+) -> Result<Option<i64>, PluginError> {
+    let mut tx = db.pool().begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('coolify_rs_plugins.deploy', $1))")
+        .bind(team_id)
+        .execute(&mut *tx)
+        .await?;
+    let used: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM coolify_rs_plugins.audit WHERE team_id = $1 AND action = 'deploy' \
+         AND at > now() - make_interval(secs => $2)",
+    )
+    .bind(team_id)
+    .bind(window_secs)
+    .fetch_one(&mut *tx)
+    .await?;
+    if used >= i64::from(limit) {
+        return Ok(None);
+    }
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO coolify_rs_plugins.audit (plugin_id, team_id, user_id, action, detail) \
+         VALUES ($1, $2, $3, 'deploy', $4) RETURNING id",
+    )
+    .bind(plugin_id)
+    .bind(team_id)
+    .bind(user_id)
+    .bind(&detail)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Some(id))
+}
+
+/// Adds the outcome to an audit row written by [`reserve_deploy`].
+pub async fn audit_outcome(db: &Db, audit_id: i64, outcome: Value) -> Result<(), PluginError> {
+    sqlx::query("UPDATE coolify_rs_plugins.audit SET detail = detail || $2 WHERE id = $1")
+        .bind(audit_id)
+        .bind(outcome)
+        .execute(db.pool())
+        .await?;
+    Ok(())
+}
+
+// Rows of Coolify's tables holding a value only a provider plugin understands (ADR 0012).
+
+/// A row of one of Coolify's tables that a provider plugin owns.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Owned {
+    pub table: String,
+    pub row_id: i64,
+    pub plugin_id: String,
+    pub note: String,
+}
+
+/// Marks a row of Coolify's `table` as owned by `plugin_id`.
+pub async fn mark_owned(
+    db: &Db,
+    table: &str,
+    row_id: i64,
+    plugin_id: &str,
+    note: &str,
+) -> Result<(), PluginError> {
+    sqlx::query(
+        "INSERT INTO coolify_rs_plugins.owned_resources (table_name, row_id, plugin_id, note) \
+         VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (table_name, row_id) DO UPDATE SET plugin_id = $3, note = $4",
+    )
+    .bind(table)
+    .bind(row_id)
+    .bind(plugin_id)
+    .bind(note)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
+/// Every plugin-owned row, or none when the plugin schema was never created.
+pub async fn owned(db: &Db) -> Result<Vec<Owned>, PluginError> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT to_regclass('coolify_rs_plugins.owned_resources') IS NOT NULL")
+            .fetch_one(db.pool())
+            .await?;
+    if !exists {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query(
+        "SELECT table_name, row_id, plugin_id, note FROM coolify_rs_plugins.owned_resources \
+         ORDER BY table_name, row_id",
+    )
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter()
+        .map(|r| {
+            Ok(Owned {
+                table: r.try_get("table_name")?,
+                row_id: r.try_get("row_id")?,
+                plugin_id: r.try_get("plugin_id")?,
+                note: r.try_get("note")?,
+            })
+        })
+        .collect()
 }

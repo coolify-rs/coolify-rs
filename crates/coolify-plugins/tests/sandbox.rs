@@ -51,6 +51,11 @@ fn hostile_caps() -> Capabilities {
         storage: true,
         routes: true,
         http: vec!["localhost".into()],
+        resources: coolify_plugins::manifest::RESOURCE_KINDS
+            .iter()
+            .map(|k| (*k).to_owned())
+            .collect(),
+        deploy: true,
     }
 }
 
@@ -187,8 +192,12 @@ async fn refuses_components_that_import_more_than_granted() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(err.contains("coolify-rs:plugin/storage@0.1.0"), "{err}");
-    assert!(err.contains("coolify-rs:plugin/http@0.1.0"), "{err}");
+    for interface in ["storage", "http", "resources", "deploy"] {
+        assert!(
+            err.contains(&format!("coolify-rs:plugin/{interface}@0.1.")),
+            "{err}"
+        );
+    }
     assert!(
         coolify_plugins::store::find(host.db(), "test/hostile")
             .await

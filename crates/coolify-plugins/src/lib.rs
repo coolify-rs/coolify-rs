@@ -2,11 +2,14 @@
 //! API routes, with only the capabilities an admin granted. docs/decisions/0010-plugins.md explains the
 //! design; `wit/plugin.wit` is the interface.
 
+pub mod data;
 pub mod egress;
 pub mod manifest;
+pub mod portable;
 pub mod runtime;
 pub mod store;
 
+pub use data::{Actor, DeployRequest, Deployer, ResourceKind, ResourceQuery, ResourceSource};
 pub use manifest::{API_VERSION, Capabilities, Manifest};
 pub use runtime::{CallError, Caller, Event, Host, Limits, Request, Response, Settings};
 pub use store::Installed;

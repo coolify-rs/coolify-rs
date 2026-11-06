@@ -1,0 +1,13 @@
+id = "coolify-rs/inventory"
+name = "Inventory"
+version = "0.1.0"
+description = "Lists the team's applications with their status and domains."
+license = "Apache-2.0"
+source = "https://github.com/coolify-rs/coolify-rs/tree/main/plugins/examples/inventory"
+# Version of the plugin interface (crates/coolify-plugins/wit/plugin.wit) the component targets.
+api = "0.1"
+
+[capabilities]
+routes = true
+# Read-only, as the API shows them to a token without read:sensitive (docs/decisions/0011).
+resources = ["applications"]

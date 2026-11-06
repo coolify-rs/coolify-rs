@@ -8,6 +8,8 @@
 //!   list as `grant`, so a client cannot grant what it never showed.
 //! - `PATCH` and `DELETE /api/v1/plugins/{publisher}/{name}`: switch on or off, uninstall (instance admins).
 //! - `POST /api/v1/plugins/{publisher}/{name}/enable` and `/disable`: for the token's team (team admins).
+//!   Enabling a plugin that holds `deploy` needs the team's own answer as `{"grant_deploy": true}` (the
+//!   plugin may queue the team's deployments) or `false` (enabled without them), ADR 0011.
 //! - `POST /api/v1/plugins/{publisher}/{name}/test-event`: deliver one event to the plugin for the token's
 //!   team and report how it went (development mode only, team admins), so authors can try a plugin without
 //!   a real deployment.
@@ -182,7 +184,18 @@ async fn show(
     let on = coolify_plugins::store::enabled_for_team(host.db(), &id, ctx.team_id)
         .await
         .map_err(internal)?;
-    Ok(ok(present(&p, on)).into_response())
+    let mut v = present(&p, on);
+    v["deploy_granted_for_team"] = deploy_granted(host, &id, ctx.team_id).await?.into();
+    Ok(ok(v).into_response())
+}
+
+async fn deploy_granted(host: &Host, id: &str, team_id: i64) -> Result<bool, ApiError> {
+    Ok(
+        coolify_plugins::store::deploy_grantor(host.db(), id, team_id)
+            .await
+            .map_err(internal)?
+            .is_some(),
+    )
 }
 
 #[derive(Deserialize)]
@@ -283,14 +296,25 @@ async fn uninstall(
     if !host
         .uninstall(&id, Some(ctx.user_id))
         .await
-        .map_err(internal)?
+        .map_err(|e| match e {
+            coolify_plugins::PluginError::Capability(m) => {
+                ApiError::Status(StatusCode::CONFLICT, json!({"message": m}))
+            }
+            e => internal(e),
+        })?
     {
         return Err(not_found());
     }
     Ok(ok(json!({"message": "Plugin uninstalled."})).into_response())
 }
 
-async fn set_team(state: &AppState, ctx: &AuthCtx, id: &str, enabled: bool) -> ApiResult {
+async fn set_team(
+    state: &AppState,
+    ctx: &AuthCtx,
+    id: &str,
+    enabled: bool,
+    body: &[u8],
+) -> ApiResult {
     if !ctx.is_team_admin() {
         return Err(ApiError::Status(
             StatusCode::FORBIDDEN,
@@ -299,18 +323,60 @@ async fn set_team(state: &AppState, ctx: &AuthCtx, id: &str, enabled: bool) -> A
     }
     let host = host(state)?;
     let p = find(host, id).await?;
+    // The team's own consent to `deploy` (ADR 0011): the instance admin's grant is not the team's.
+    let grant_deploy = if enabled && p.granted.deploy {
+        let Some(grant) = enable_body(body)?.grant_deploy else {
+            return Err(ApiError::Status(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({
+                    "message": "This plugin can deploy your team's applications. Send grant_deploy: true to allow it, or false to enable the plugin without deployments.",
+                    "capabilities": p.manifest.capability_summary(),
+                }),
+            ));
+        };
+        Some(grant)
+    } else {
+        None
+    };
     host.set_team(id, ctx.team_id, enabled, Some(ctx.user_id))
         .await
         .map_err(internal)?;
-    Ok(ok(present(&p, enabled)).into_response())
+    if let Some(grant) = grant_deploy {
+        host.set_team_deploy(id, ctx.team_id, grant, ctx.user_id)
+            .await
+            .map_err(internal)?;
+    }
+    let mut v = present(&p, enabled);
+    v["deploy_granted_for_team"] = grant_deploy.unwrap_or(false).into();
+    Ok(ok(v).into_response())
+}
+
+#[derive(Default, Deserialize)]
+struct EnableBody {
+    #[serde(default)]
+    grant_deploy: Option<bool>,
+}
+
+/// The optional body of `enable`; no body is an empty one.
+fn enable_body(body: &[u8]) -> Result<EnableBody, ApiError> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(EnableBody::default());
+    }
+    serde_json::from_slice(body).map_err(|_| {
+        ApiError::Status(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"message": "The body must be a JSON object, such as {\"grant_deploy\": true}."}),
+        )
+    })
 }
 
 async fn enable(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
     Path((publisher, name)): Path<(String, String)>,
+    body: Bytes,
 ) -> ApiResult {
-    set_team(&state, &ctx, &format!("{publisher}/{name}"), true).await
+    set_team(&state, &ctx, &format!("{publisher}/{name}"), true, &body).await
 }
 
 async fn disable(
@@ -318,7 +384,7 @@ async fn disable(
     Extension(ctx): Extension<AuthCtx>,
     Path((publisher, name)): Path<(String, String)>,
 ) -> ApiResult {
-    set_team(&state, &ctx, &format!("{publisher}/{name}"), false).await
+    set_team(&state, &ctx, &format!("{publisher}/{name}"), false, &[]).await
 }
 
 #[derive(Deserialize)]

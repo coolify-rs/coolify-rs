@@ -19,6 +19,7 @@ use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::PluginError;
+use crate::data::{Actor, DeployRequest, Deployer, ResourceKind, ResourceQuery, ResourceSource};
 use crate::egress::{Egress, Outgoing};
 use crate::manifest::{Capabilities, Manifest};
 use crate::store::{self, Installed, NewPlugin};
@@ -33,7 +34,7 @@ mod bindings {
 }
 
 pub use bindings::coolify_rs::plugin::types::{Caller, Event, Request, Response};
-use bindings::coolify_rs::plugin::{http, log, storage, types};
+use bindings::coolify_rs::plugin::{deploy, http, log, resources, storage, types};
 
 /// Resource limits for plugins.
 #[derive(Debug, Clone)]
@@ -52,6 +53,9 @@ pub struct Limits {
     pub max_failures: u32,
     /// Calls of one plugin running at once.
     pub concurrency: usize,
+    /// Deployments all plugins together may queue for one team in `deploy_window` (ADR 0011).
+    pub deploy_limit: u32,
+    pub deploy_window: Duration,
 }
 
 impl Default for Limits {
@@ -66,6 +70,8 @@ impl Default for Limits {
             max_component: 20 * 1024 * 1024,
             max_failures: 5,
             concurrency: 4,
+            deploy_limit: 20,
+            deploy_window: Duration::from_secs(600),
         }
     }
 }
@@ -112,6 +118,14 @@ struct Inner {
     db: Db,
     settings: Settings,
     loaded: RwLock<HashMap<String, Arc<Loaded>>>,
+    bridges: RwLock<Bridges>,
+}
+
+/// What `resources` and `deploy` reach; see [`Host::connect`].
+#[derive(Clone, Default)]
+struct Bridges {
+    resources: Option<Arc<dyn ResourceSource>>,
+    deployer: Option<Arc<dyn Deployer>>,
 }
 
 struct Loaded {
@@ -137,6 +151,11 @@ struct CallCtx {
     egress: Egress,
     hosts: Arc<[String]>,
     limits: Limits,
+    /// Granted resource kinds.
+    kinds: Arc<[ResourceKind]>,
+    bridges: Bridges,
+    /// Who called the plugin's route; `None` for events.
+    caller: Option<Caller>,
 }
 
 impl WasiView for State {
@@ -177,6 +196,7 @@ impl Host {
             db,
             settings,
             loaded: RwLock::new(HashMap::new()),
+            bridges: RwLock::new(Bridges::default()),
         }));
         tick(Arc::downgrade(&host.0));
         for p in store::list(&host.0.db).await? {
@@ -197,6 +217,15 @@ impl Host {
 
     pub fn limits(&self) -> &Limits {
         &self.0.settings.limits
+    }
+
+    /// Connects `resources` and `deploy` to the REST API's queries and deploy path (ADR 0011). Until it is
+    /// called, plugins holding those capabilities load and run, and their calls to them fail.
+    pub fn connect(&self, resources: Arc<dyn ResourceSource>, deployer: Arc<dyn Deployer>) {
+        *self.0.bridges.write().unwrap_or_else(|e| e.into_inner()) = Bridges {
+            resources: Some(resources),
+            deployer: Some(deployer),
+        };
     }
 
     async fn load(&self, installed: Installed) -> Result<(), PluginError> {
@@ -250,6 +279,12 @@ impl Host {
         }
         if !installed.granted.http.is_empty() {
             http::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s).map_err(link)?;
+        }
+        if !installed.granted.resources.is_empty() {
+            resources::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s).map_err(link)?;
+        }
+        if installed.granted.deploy {
+            deploy::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s).map_err(link)?;
         }
         let pre = linker
             .instantiate_pre(&component)
@@ -307,6 +342,11 @@ impl Host {
             },
         )
         .await?;
+        if !manifest.capabilities.deploy {
+            // A version without `deploy` drops the teams' consent, so a later version asking for it again
+            // needs each team to grant it again.
+            store::clear_deploy_grants(&self.0.db, &manifest.id).await?;
+        }
         self.0
             .loaded
             .write()
@@ -336,7 +376,19 @@ impl Host {
         Ok(installed)
     }
 
+    /// Uninstalls a plugin with its data. Refused while it owns rows of Coolify's tables (ADR 0012): they
+    /// must be handed back first.
     pub async fn uninstall(&self, id: &str, user_id: Option<i64>) -> Result<bool, PluginError> {
+        let owned = store::owned(&self.0.db)
+            .await?
+            .into_iter()
+            .filter(|o| o.plugin_id == id)
+            .count();
+        if owned > 0 {
+            return Err(PluginError::Capability(format!(
+                "plugin {id} owns {owned} rows of Coolify's tables; hand them back before uninstalling it"
+            )));
+        }
         self.unload(id);
         let removed = store::delete(&self.0.db, id).await?;
         if removed {
@@ -407,6 +459,45 @@ impl Host {
         .await
     }
 
+    /// Records a team's answer to a plugin holding `deploy` (ADR 0011): `granted` lets the plugin queue the
+    /// team's deployments, on the authority of `user_id` for events. The plugin must be enabled for the team.
+    pub async fn set_team_deploy(
+        &self,
+        id: &str,
+        team_id: i64,
+        granted: bool,
+        user_id: i64,
+    ) -> Result<(), PluginError> {
+        let p = store::find(&self.0.db, id)
+            .await?
+            .ok_or_else(|| PluginError::NotFound(id.to_owned()))?;
+        if granted && !p.granted.deploy {
+            return Err(PluginError::Capability(format!(
+                "plugin {id} does not hold the deploy capability"
+            )));
+        }
+        let by = granted.then_some(user_id);
+        if !store::set_team_deploy(&self.0.db, id, team_id, by).await? {
+            return Err(PluginError::Capability(format!(
+                "plugin {id} is not enabled for team {team_id}"
+            )));
+        }
+        let action = if granted {
+            "team_deploy_granted"
+        } else {
+            "team_deploy_withdrawn"
+        };
+        store::audit(
+            &self.0.db,
+            id,
+            Some(team_id),
+            Some(user_id),
+            action,
+            serde_json::json!({}),
+        )
+        .await
+    }
+
     /// Offers an event to every plugin enabled for the team that subscribed to its kind. Returns at once;
     /// plugins run on their own tasks and never delay the caller.
     pub fn dispatch(&self, team_id: i64, kind: &str, payload: serde_json::Value) {
@@ -450,7 +541,7 @@ impl Host {
         }
         let deadline = self.0.settings.limits.event_deadline;
         let result = self
-            .call(&p, event.team_id, deadline, async |store, plugin| {
+            .call(&p, event.team_id, None, deadline, async |store, plugin| {
                 plugin.call_on_event(store, &event).await
             })
             .await?;
@@ -470,7 +561,8 @@ impl Host {
         }
         let deadline = self.0.settings.limits.request_deadline;
         let team_id = caller.team_id;
-        self.call(&p, team_id, deadline, async |store, plugin| {
+        let who = caller.clone();
+        self.call(&p, team_id, Some(who), deadline, async |store, plugin| {
             plugin.call_handle_request(store, &caller, &request).await
         })
         .await
@@ -491,6 +583,7 @@ impl Host {
         &self,
         p: &Loaded,
         team_id: i64,
+        caller: Option<Caller>,
         deadline: Duration,
         f: impl AsyncFnOnce(&mut Store<State>, &bindings::Plugin) -> wasmtime::Result<R>,
     ) -> Result<R, CallError> {
@@ -522,6 +615,20 @@ impl Host {
                 egress: self.0.settings.egress.clone(),
                 hosts: Arc::from(p.installed.granted.http.clone()),
                 limits: limits.clone(),
+                kinds: p
+                    .installed
+                    .granted
+                    .resources
+                    .iter()
+                    .filter_map(|k| ResourceKind::parse(k))
+                    .collect(),
+                bridges: self
+                    .0
+                    .bridges
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+                caller,
             },
         };
         let mut store = Store::new(&self.0.engine, state);
@@ -627,7 +734,9 @@ pub(crate) fn check_imports(imports: &[String], granted: &Capabilities) -> Resul
         let ok = ALWAYS.iter().any(|i| ours(i))
             || WASI.iter().any(|w| interface.starts_with(w))
             || (granted.storage && ours("coolify-rs:plugin/storage"))
-            || (!granted.http.is_empty() && ours("coolify-rs:plugin/http"));
+            || (!granted.http.is_empty() && ours("coolify-rs:plugin/http"))
+            || (!granted.resources.is_empty() && ours("coolify-rs:plugin/resources"))
+            || (granted.deploy && ours("coolify-rs:plugin/deploy"));
         if !ok {
             refused.push(name.clone());
         }
@@ -751,6 +860,175 @@ impl http::Host for State {
     }
 }
 
+/// Largest answer `resources` passes to a plugin.
+const MAX_READ: usize = 16 * 1024 * 1024;
+
+/// Uuids as Coolify makes them (cuid2, or older UUIDs). Anything else is not found, without a query.
+fn plausible_uuid(uuid: &str) -> bool {
+    !uuid.is_empty()
+        && uuid.len() <= 64
+        && uuid
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+impl From<resources::Kind> for ResourceKind {
+    fn from(k: resources::Kind) -> Self {
+        match k {
+            resources::Kind::Projects => Self::Projects,
+            resources::Kind::Servers => Self::Servers,
+            resources::Kind::Applications => Self::Applications,
+            resources::Kind::Services => Self::Services,
+            resources::Kind::Databases => Self::Databases,
+        }
+    }
+}
+
+impl CallCtx {
+    fn granted(&self, kind: ResourceKind) -> Result<(), String> {
+        if self.kinds.contains(&kind) {
+            Ok(())
+        } else {
+            Err(format!(
+                "the plugin was not granted resources: {}",
+                kind.as_str()
+            ))
+        }
+    }
+
+    /// One read through the API's queries, for the call's team: the team never comes from the plugin.
+    async fn read(&self, query: ResourceQuery) -> Result<Option<String>, String> {
+        let source = self
+            .bridges
+            .resources
+            .clone()
+            .ok_or("resources are unavailable on this instance")?;
+        let out = source.read(self.team_id, &query).await?;
+        if out.as_ref().is_some_and(|s| s.len() > MAX_READ) {
+            return Err(format!("the answer is over {MAX_READ} bytes"));
+        }
+        Ok(out)
+    }
+}
+
+impl resources::Host for State {
+    async fn all(&mut self, kind: resources::Kind) -> Result<String, String> {
+        let kind = ResourceKind::from(kind);
+        self.call.granted(kind)?;
+        self.call
+            .read(ResourceQuery::All(kind))
+            .await?
+            .ok_or_else(|| format!("{} are unavailable", kind.as_str()))
+    }
+
+    async fn get(&mut self, kind: resources::Kind, uuid: String) -> Result<Option<String>, String> {
+        let kind = ResourceKind::from(kind);
+        self.call.granted(kind)?;
+        if !plausible_uuid(&uuid) {
+            return Ok(None);
+        }
+        self.call.read(ResourceQuery::One(kind, uuid)).await
+    }
+
+    async fn environments(&mut self, project_uuid: String) -> Result<Option<String>, String> {
+        self.call.granted(ResourceKind::Projects)?;
+        if !plausible_uuid(&project_uuid) {
+            return Ok(None);
+        }
+        self.call
+            .read(ResourceQuery::Environments(project_uuid))
+            .await
+    }
+}
+
+impl deploy::Host for State {
+    async fn application(&mut self, uuid: String, force: bool) -> Result<String, String> {
+        let c = &self.call;
+        let plugin = &*c.plugin;
+        let failed = |e: PluginError| {
+            tracing::warn!(plugin, error = %e, "plugin deploy failed");
+            "deployments are unavailable".to_owned()
+        };
+        if !plausible_uuid(&uuid) {
+            return Err("Application not found.".into());
+        }
+        let deployer = c
+            .bridges
+            .deployer
+            .clone()
+            .ok_or("deployments are unavailable on this instance")?;
+        let Some(grantor) = store::deploy_grantor(&c.db, plugin, c.team_id)
+            .await
+            .map_err(failed)?
+        else {
+            return Err("the team has not granted deploy to this plugin".into());
+        };
+        let actor = match &c.caller {
+            Some(k) => Actor::Caller {
+                user_id: k.user_id,
+                abilities: k.abilities.clone(),
+            },
+            None => Actor::Grantor { user_id: grantor },
+        };
+        let (user_id, on_behalf_of) = match &actor {
+            Actor::Caller { user_id, .. } => (*user_id, "caller"),
+            Actor::Grantor { user_id } => (*user_id, "grantor"),
+        };
+        let limits = &c.limits;
+        let reserved = store::reserve_deploy(
+            &c.db,
+            plugin,
+            c.team_id,
+            Some(user_id),
+            limits.deploy_limit,
+            limits.deploy_window.as_secs_f64(),
+            serde_json::json!({
+                "application_uuid": uuid,
+                "force": force,
+                "on_behalf_of": on_behalf_of,
+            }),
+        )
+        .await
+        .map_err(failed)?;
+        let Some(audit_id) = reserved else {
+            tracing::warn!(plugin, team = c.team_id, application = %uuid, "plugin deploy refused: rate limit");
+            return Err(format!(
+                "the team's plugins may queue at most {} deployments in {} seconds",
+                limits.deploy_limit,
+                limits.deploy_window.as_secs()
+            ));
+        };
+        let request = DeployRequest {
+            plugin: plugin.to_owned(),
+            team_id: c.team_id,
+            actor,
+            uuid,
+            force,
+        };
+        let result = deployer.deploy(&request).await;
+        tracing::info!(
+            target: "audit",
+            plugin,
+            team = c.team_id,
+            user = user_id,
+            application = %request.uuid,
+            ok = result.is_ok(),
+            "plugin deploy"
+        );
+        let outcome = match &result {
+            Ok(body) => serde_json::json!({
+                "ok": true,
+                "answer": serde_json::from_str::<serde_json::Value>(body).unwrap_or_default(),
+            }),
+            Err(e) => serde_json::json!({"ok": false, "error": e}),
+        };
+        if let Err(e) = store::audit_outcome(&c.db, audit_id, outcome).await {
+            tracing::error!(plugin, error = %e, "could not record the outcome of a plugin deploy");
+        }
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -778,6 +1056,19 @@ mod tests {
             ..Default::default()
         };
         assert!(check_imports(&with_storage, &granted).is_ok());
+
+        let data = names(&[
+            "coolify-rs:plugin/resources@0.1.1",
+            "coolify-rs:plugin/deploy@0.1.1",
+        ]);
+        let err = check_imports(&data, &granted).unwrap_err().to_string();
+        assert!(err.contains("resources") && err.contains("deploy"), "{err}");
+        let with_data = Capabilities {
+            resources: vec!["applications".into()],
+            deploy: true,
+            ..Default::default()
+        };
+        assert!(check_imports(&data, &with_data).is_ok());
 
         for bad in [
             "wasi:sockets/tcp@0.2.6",
