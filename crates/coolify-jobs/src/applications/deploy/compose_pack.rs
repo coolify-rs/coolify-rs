@@ -251,6 +251,11 @@ impl Run {
                     self.app.str("docker_compose_location").unwrap_or_default()
                 )));
             }
+            // One sync of the file storages with the server, which loads the files that come from
+            // the repository. A preview uses its own copies of the files.
+            if !self.b.is_preview() {
+                self.jobs.spawn_application_files_from_server(self.app.id);
+            }
             for w in parsed.warnings.clone() {
                 self.log(&format!("Warning: {w}"), "stderr", false).await;
             }
@@ -370,12 +375,14 @@ impl Run {
             )
             .await
             .map_err(|e| Fail::new(e.to_string()))?;
+            // On the server the application runs on (`$this->mainServer`), at the paths of this
+            // deployment (`forPullRequest()`).
             self.jobs
-                .delete_storage_on(&owner, &file, self.server.id)
+                .delete_storage_on(&owner, &file, self.main_server.id)
                 .await
                 .map_err(Fail::new)?;
             self.jobs
-                .save_storage_on(&owner, &file, self.server.id)
+                .save_storage_on(&owner, &file, self.main_server.id)
                 .await
                 .map_err(Fail::new)?;
         }

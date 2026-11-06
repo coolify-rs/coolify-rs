@@ -94,8 +94,6 @@ impl ServerInfo {
 /// One run of the parser: the application model as loaded (and changed in memory), its server
 /// and the database.
 pub struct Run<'a> {
-    /// The parser walked a volume of the compose file: upstream then dispatches `ServerFilesFromServerJob`.
-    pub saw_volume: bool,
     db: &'a Db,
     enc: &'a Encrypter,
     now: NaiveDateTime,
@@ -181,7 +179,6 @@ impl<'a> Run<'a> {
             docker_compose_raw: app.str("docker_compose_raw").map(str::to_owned),
         };
         Ok(Run {
-            saw_volume: false,
             db,
             enc,
             now,
@@ -1133,6 +1130,9 @@ pub(crate) async fn application_parser(
                         &main_directory,
                         found.as_ref().map(|f| f.fs_path.as_str()),
                     )?;
+                    // The file storage keeps the path of the application; a preview deployment adds
+                    // the suffix (`LocalFileVolume::forPullRequest()`).
+                    let stored_source = source.clone();
                     if is_pull_request && found.as_ref().is_none_or(|f| f.is_preview_suffix_enabled)
                     {
                         source = volumes::add_preview_deployment_suffix(&source, pull_request_id);
@@ -1150,7 +1150,7 @@ pub(crate) async fn application_parser(
                                 store::file_volume_update(
                                     run.db,
                                     f.id,
-                                    &source,
+                                    &stored_source,
                                     &target,
                                     content_change,
                                     is_directory,
@@ -1164,7 +1164,7 @@ pub(crate) async fn application_parser(
                                     run.db,
                                     MORPH,
                                     run.app.id,
-                                    &source,
+                                    &stored_source,
                                     &target,
                                     content_enc.as_deref(),
                                     is_directory,
@@ -1268,7 +1268,6 @@ pub(crate) async fn application_parser(
                     },
                 );
             }
-            run.saw_volume = true;
             php::put(&mut volumes_parsed, index.clone(), volume);
         }
 

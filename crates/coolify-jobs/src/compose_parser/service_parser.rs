@@ -200,12 +200,11 @@ impl ServerInfo {
     }
 }
 
-/// What a parse leaves to do on the server: `ServerFilesFromServerJob` for each sub-resource with a
-/// volume, in dispatch order (`dispatch(new ServerFilesFromServerJob($originalResource))`), and
-/// `ServerStorageSaveJob` for the file volumes it created.
+/// What a parse leaves to do on the server: `ServerStorageSaveJob` for the file volumes it created.
+/// The parse does not sync file storages with the server; a start or deployment of the service does
+/// (`StartService::queueFileStorageSync`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParseEffects {
-    pub files_from_server: Vec<(SubKind, i64)>,
     pub new_file_volumes: Vec<i64>,
 }
 
@@ -1724,8 +1723,6 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
                     )),
                 );
             }
-            let effect = (saved.kind, saved.id);
-            run.effects.files_from_server.push(effect);
             php::put(&mut volumes_parsed, index.clone(), volume);
         }
 

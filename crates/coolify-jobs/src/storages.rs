@@ -284,7 +284,11 @@ pub fn resolved_fs_path(fs_path: &str, workdir: &str) -> String {
 /// `LocalFileVolume::isOutsideResourceDirectory()`: a path that cannot be resolved counts as outside.
 pub fn is_outside_resource_directory(fs_path: &str, base_directories: &[String]) -> bool {
     let first = base_directories.first().map_or("", String::as_str);
-    let Ok(path) = normalize_unix_path(&resolved_fs_path(fs_path, first)) else {
+    outside_resource_directories(&resolved_fs_path(fs_path, first), base_directories)
+}
+
+fn outside_resource_directories(resolved: &str, base_directories: &[String]) -> bool {
+    let Ok(path) = normalize_unix_path(resolved) else {
         return true;
     };
     let Ok(directories) = base_directories
@@ -350,6 +354,9 @@ pub struct FileStorage {
     pub is_based_on_git: bool,
     pub chmod: Option<String>,
     pub chown: Option<String>,
+    pub is_preview_suffix_enabled: bool,
+    /// The pull request whose preview this copy writes (`forPullRequest()`); never saved.
+    pub preview_pull_request_id: i64,
 }
 
 impl std::fmt::Debug for FileStorage {
@@ -382,7 +389,40 @@ impl FileStorage {
             is_based_on_git: flag("is_based_on_git"),
             chmod: text("chmod"),
             chown: text("chown"),
+            is_preview_suffix_enabled: r
+                .get("is_preview_suffix_enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            preview_pull_request_id: 0,
         })
+    }
+
+    /// `forPullRequest($pullRequestId)`: a copy that uses the path of the preview of a pull
+    /// request, as the Compose parser mounts it (`<path>-pr-<id>` unless the suffix is off for this
+    /// storage). The row keeps the path of the application.
+    #[must_use]
+    pub fn for_pull_request(&self, pull_request_id: i64) -> Self {
+        let mut copy = self.clone();
+        copy.preview_pull_request_id = if pull_request_id != 0 && self.is_preview_suffix_enabled {
+            pull_request_id
+        } else {
+            0
+        };
+        copy
+    }
+
+    /// `resolvedFsPath($workdir)`, with the preview suffix of [`Self::for_pull_request`].
+    pub fn resolved_path(&self, workdir: &str) -> String {
+        crate::compose_parser::volumes::add_preview_deployment_suffix(
+            &resolved_fs_path(&self.fs_path, workdir),
+            self.preview_pull_request_id,
+        )
+    }
+
+    /// `isOutsideResourceDirectory()`: a path that cannot be resolved counts as outside.
+    pub fn is_outside_resource_directory(&self, base_directories: &[String]) -> bool {
+        let first = base_directories.first().map_or("", String::as_str);
+        outside_resource_directories(&self.resolved_path(first), base_directories)
     }
 
     /// `hasContentToWrite()`.
@@ -400,7 +440,7 @@ impl FileStorage {
 /// `contentPathOnServer()`.
 pub fn content_path_on_server(owner: &StorageOwner, file: &FileStorage) -> Result<String, String> {
     if is_admin_controlled_compose_mount(owner, file) {
-        return Ok(resolved_fs_path(&file.fs_path, &owner.workdir));
+        return Ok(file.resolved_path(&owner.workdir));
     }
     host_path_and_resource_directory(owner, file).map(|(path, _)| path)
 }
@@ -486,7 +526,7 @@ fn host_path_and_resource_directory(
     let first = owner.base_directories.first().map_or("", String::as_str);
     let path = resolve_host_path(
         &owner.base_directories,
-        &resolved_fs_path(&file.fs_path, first),
+        &file.resolved_path(first),
         "storage path",
     )?;
     let directories = owner
@@ -757,7 +797,7 @@ impl Jobs {
         let (_, target) = self.storage_server(server_id).await?;
         let workdir = owner.workdir.as_str();
         let mut commands: Vec<String> = Vec::new();
-        let mut path = resolved_fs_path(&file.fs_path, workdir);
+        let mut path = file.resolved_path(workdir);
         if !is_admin_controlled_compose_mount(owner, file) {
             let (host_path, directory) = host_path_and_resource_directory(owner, file)?;
             match directory {
@@ -774,7 +814,7 @@ impl Jobs {
             }
             path = host_path;
         }
-        let outside = is_outside_resource_directory(&file.fs_path, &owner.base_directories);
+        let outside = file.is_outside_resource_directory(&owner.base_directories);
 
         if file.is_directory {
             validate_shell_safe_path(&path, "storage path")?;
@@ -798,36 +838,37 @@ impl Jobs {
         }
         validate_shell_safe_path(&path, "storage path")?;
         let escaped = quote(&path);
-        let is_file = self
-            .storage_run(
-                &target,
-                &[format!("test -f {escaped} && echo OK || echo NOK")],
-            )
-            .await?;
-        let is_dir = self
-            .storage_run(
-                &target,
-                &[format!("test -d {escaped} && echo OK || echo NOK")],
-            )
-            .await?;
+        let state = self.remote_file_state(&target, &path).await;
+        if state == "unknown" {
+            return Err(format!(
+                "Coolify cannot check the file {path} on the server."
+            ));
+        }
+        if state == "other" && !file.is_directory {
+            return Err(format!(
+                "A symbolic link or a special file is at {path} on the server. Coolify did not write the file."
+            ));
+        }
+        let is_file = state == "file";
+        let is_dir = state == "directory" || state == "empty-directory";
         let mut replaces_empty_directory = false;
-        if is_file == "OK" && file.is_directory {
+        if is_file && file.is_directory {
             let content = self.read_for_mismatch(&target, &escaped).await;
             self.save_file_state(file, Some(&content), false).await?;
             return Err("The following file is a file on the server, but you are trying to mark it as a directory. Please delete the file on the server or mark it as directory.".into());
-        } else if is_dir == "OK" && !file.is_directory {
+        } else if is_dir && !file.is_directory {
             if matches!(path.as_str(), "/" | "." | ".." | "") {
                 self.save_file_state(file, None, true).await?;
                 return Err("The following file is a directory on the server, but you are trying to mark it as a file. <br><br>Please delete the directory on the server or mark it as directory.".into());
             }
-            if outside || self.remote_file_state(&target, &path).await != "empty-directory" {
+            if outside || state != "empty-directory" {
                 return Err(format!(
                     "The following file is a directory on the server, but you are trying to mark it as a file: {path}<br><br>Please delete the directory on the server or mark it as directory."
                 ));
             }
             replaces_empty_directory = true;
         }
-        if (is_dir == "NOK" || replaces_empty_directory) && !file.is_directory {
+        if (!is_dir || replaces_empty_directory) && !file.is_directory {
             if replaces_empty_directory {
                 commands.push(format!("rmdir {escaped}"));
             }
@@ -852,7 +893,7 @@ impl Jobs {
             if let Some(chmod) = file.chmod.as_deref().filter(|c| !c.is_empty() && *c != "0") {
                 commands.push(format!("chmod -- {} {escaped}", quote(chmod)));
             }
-        } else if is_dir == "NOK" && file.is_directory {
+        } else if !is_dir && file.is_directory {
             commands.push(format!("mkdir -p {escaped} > /dev/null 2>&1 || true"));
         }
         self.storage_run(&target, &commands).await.map(|_| ())
@@ -914,8 +955,7 @@ impl Jobs {
                 let owner = StorageOwner::for_application(db, &app)
                     .await
                     .map_err(|e| e.to_string())?;
-                if file.is_host_file
-                    || is_outside_resource_directory(&file.fs_path, &owner.base_directories)
+                if file.is_host_file || file.is_outside_resource_directory(&owner.base_directories)
                 {
                     return Ok(());
                 }
@@ -937,8 +977,8 @@ impl Jobs {
         server_id: i64,
     ) -> Result<(), String> {
         let workdir = owner.workdir.as_str();
-        let mut path = resolved_fs_path(&file.fs_path, workdir);
-        if is_outside_resource_directory(&file.fs_path, &owner.base_directories) {
+        let mut path = file.resolved_path(workdir);
+        if file.is_outside_resource_directory(&owner.base_directories) {
             return Ok(());
         }
         let (_, target) = self.storage_server(server_id).await?;
@@ -1028,6 +1068,41 @@ mod tests {
         assert!(resolve_host_path(&dirs, "/", "c").is_err());
         assert!(is_outside_resource_directory("/opt/x", &dirs));
         assert!(!is_outside_resource_directory("./x", &dirs));
+    }
+
+    #[test]
+    fn preview_copies_use_the_pull_request_path() {
+        let dirs = ["/data/coolify/applications/u".to_owned()];
+        let file = FileStorage {
+            id: 1,
+            fs_path: "./config/app.conf".into(),
+            mount_path: Some("/etc/app.conf".into()),
+            content: None,
+            is_directory: false,
+            is_host_file: false,
+            is_based_on_git: false,
+            chmod: None,
+            chown: None,
+            is_preview_suffix_enabled: true,
+            preview_pull_request_id: 0,
+        };
+        assert_eq!(
+            file.resolved_path(&dirs[0]),
+            "/data/coolify/applications/u/config/app.conf"
+        );
+        let preview = file.for_pull_request(7);
+        assert_eq!(preview.fs_path, file.fs_path);
+        assert_eq!(
+            preview.resolved_path(&dirs[0]),
+            "/data/coolify/applications/u/config/app.conf-pr-7"
+        );
+        assert!(!preview.is_outside_resource_directory(&dirs));
+        let off = FileStorage {
+            is_preview_suffix_enabled: false,
+            ..file.clone()
+        };
+        assert_eq!(off.for_pull_request(7).preview_pull_request_id, 0);
+        assert_eq!(file.for_pull_request(0).preview_pull_request_id, 0);
     }
 
     #[test]
