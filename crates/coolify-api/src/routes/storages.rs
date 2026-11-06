@@ -123,6 +123,11 @@ pub fn file_storage(state: &AppState, r: &Record) -> Result<FileStorage, ApiErro
         is_based_on_git: flag(r, "is_based_on_git"),
         chmod: str_of(r, "chmod").map(str::to_owned),
         chown: str_of(r, "chown").map(str::to_owned),
+        is_preview_suffix_enabled: r
+            .get("is_preview_suffix_enabled")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true),
+        preview_pull_request_id: 0,
     })
 }
 

@@ -207,7 +207,7 @@ async fn clone_to(
                 .await?
                 .ok_or(super::NOT_FOUND)?;
             let new_uuid = new_public_id();
-            let name = coolify_jobs::clone_volume_data::clone_resource_name(&res.name, &new_uuid);
+            let name = coolify_jobs::notifications::php::clone_resource_name(&res.name, &new_uuid);
             clone_database(
                 &state,
                 &source,
@@ -225,7 +225,7 @@ async fn clone_to(
                 .await?
                 .ok_or(super::NOT_FOUND)?;
             let new_uuid = new_public_id();
-            let name = coolify_jobs::clone_volume_data::clone_resource_name(&res.name, &new_uuid);
+            let name = coolify_jobs::notifications::php::clone_resource_name(&res.name, &new_uuid);
             clone_service(
                 &state,
                 &source,
@@ -705,7 +705,7 @@ async fn clone_me_page(
         "can_update": ctx.is_team_admin(),
         "project_name": p.name,
         "environment_name": e.name,
-        "new_name": slug(&coolify_jobs::clone_volume_data::clone_resource_name(&p.name, &new_public_id())),
+        "new_name": slug(&coolify_jobs::notifications::php::clone_resource_name(&p.name, &new_public_id())),
         "servers": server_list,
         "applications": by_name(applications.iter().map(|a| row_json(&a.raw)).collect()),
         "databases": by_name(databases.iter().map(|d| row_json(&d.raw)).collect()),

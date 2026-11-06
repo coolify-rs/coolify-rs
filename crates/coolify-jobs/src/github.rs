@@ -1,6 +1,7 @@
 //! GitHub App access for private repositories: `generateGithubToken()`,
 //! `generateGithubInstallationToken()` and `githubApi()` (bootstrap/helpers/github.php).
 
+use crate::git_http::SendRetry as _;
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -18,6 +19,47 @@ use serde_json::Value;
 use sha2::Sha256;
 
 use crate::git_http;
+
+/// `sshGitUrlToHttps()`.
+pub fn ssh_git_url_to_https(url: &str) -> Option<String> {
+    if let Some(rest) = url.strip_prefix("ssh://") {
+        let (authority, path) = rest.split_once('/')?;
+        let host = authority.rsplit('@').next()?;
+        let host = match host.strip_prefix('[') {
+            Some(h) => format!("[{}", h.split_once(']').map(|x| x.0).unwrap_or(h)) + "]",
+            None => host.split(':').next().unwrap_or(host).to_owned(),
+        };
+        let path = path.trim_start_matches('/');
+        return (!host.is_empty() && !path.is_empty()).then(|| format!("https://{host}/{path}"));
+    }
+    let re = regex::Regex::new(
+        r"^(?<user>[A-Za-z0-9._-]+)@(?<host>\[[0-9A-Fa-f:.]+\]|[^:\[\]]+):(?:(?<port>\d+)/)?(?<path>.+)$",
+    )
+    .unwrap_or_else(|_| unreachable!());
+    let c = re.captures(url)?;
+    let host = c["host"].trim();
+    let path = c["path"].trim_start_matches('/');
+    (!host.is_empty() && !path.is_empty()).then(|| format!("https://{host}/{path}"))
+}
+
+/// `gitRepositorySlug()`: the `owner/repo` that the GitHub API takes, also for SSH repository URLs.
+pub fn git_repository_slug(repository: &str) -> String {
+    if repository.is_empty() {
+        return String::new();
+    }
+    let slug = match ssh_git_url_to_https(repository) {
+        Some(https) => crate::applications::domains::UrlParts::parse(&https)
+            .and_then(|p| p.path)
+            .unwrap_or_default(),
+        None if repository.starts_with("http") || repository.contains("github.com") => repository
+            .replace("https://", "")
+            .replace("http://", "")
+            .replace("github.com/", ""),
+        None => repository.to_owned(),
+    };
+    let slug = slug.trim_matches('/');
+    slug.strip_suffix(".git").unwrap_or(slug).to_owned()
+}
 
 fn field<'a>(source: &'a Record, k: &str) -> Option<&'a str> {
     source.get(k).and_then(Value::as_str)
@@ -66,7 +108,7 @@ pub fn app_jwt(private_key_pem: &str, app_id: &str) -> Result<String, String> {
 async fn assert_clock_in_sync(http: &reqwest::Client, api_url: &str) -> Result<(), String> {
     let response = http
         .get(format!("{api_url}/zen"))
-        .send()
+        .send_retry()
         .await
         .map_err(|e| e.to_string())?;
     let Some(date) = response
@@ -128,7 +170,7 @@ pub async fn installation_token(
             .post(&url)
             .header("Authorization", format!("Bearer {jwt}"))
             .header("Accept", "application/vnd.github.machine-man-preview+json")
-            .send()
+            .send_retry()
             .await;
         let retry = match &r {
             Err(e) => e.is_connect() || e.is_timeout(),
@@ -161,7 +203,9 @@ pub async fn installation_token(
             .and_then(Value::as_str)
             .map_or_else(|| format!("HTTP {}", status.as_u16()), str::to_owned);
         if error == "Not Found" {
-            error = "Repository not found. Is it moved or deleted?".into();
+            error = format!(
+                "GitHub App installation {installation} was not found. Install the GitHub App again or update its installation ID."
+            );
         }
         return Err(format!(
             "Failed to get installation token for {name} with error: {error}"
@@ -187,7 +231,7 @@ pub async fn repository_id(
         .header("X-GitHub-Api-Version", "2022-11-28")
         .header("Accept", "application/vnd.github.v3+json")
         .header("Authorization", format!("Bearer {token}"))
-        .send()
+        .send_retry()
         .await
         .map_err(|e| e.to_string())?;
     let status = response.status();
@@ -238,7 +282,7 @@ pub async fn repository_access(
             .header("X-GitHub-Api-Version", "2022-11-28")
             .header("Accept", "application/vnd.github.v3+json")
             .header("Authorization", format!("Bearer {token}"))
-            .send()
+            .send_retry()
             .await;
         match r {
             Ok(resp) if resp.status().is_success() || attempt == 3 => {
@@ -328,8 +372,18 @@ pub async fn repository_page(
         &[("per_page", "100"), ("page", page_text.as_str())],
     )
     .await?;
+    if status != 200 {
+        let error = body
+            .get("message")
+            .and_then(Value::as_str)
+            .map_or_else(|| format!("HTTP {status}"), str::to_owned);
+        return Err(format!(
+            "Failed to load repositories for {} with error: {error}",
+            field(source, "name").unwrap_or_default()
+        ));
+    }
     let total = body.get("total_count").and_then(Value::as_i64).unwrap_or(0);
-    if status != 200 || total == 0 {
+    if total == 0 {
         return Ok(serde_json::json!({"total_count": 0, "repositories": []}));
     }
     Ok(serde_json::json!({"total_count": total, "repositories": body.get("repositories")}))
@@ -353,7 +407,7 @@ pub async fn api(
     if let Some(d) = data {
         request = request.json(d);
     }
-    let response = request.send().await.map_err(|e| e.to_string())?;
+    let response = request.send_retry().await.map_err(|e| e.to_string())?;
     let status = response.status().as_u16();
     Ok((status, response.json().await.unwrap_or(Value::Null)))
 }
@@ -390,7 +444,7 @@ pub async fn pull_requests(
         let token = installation_token(db, enc, Some(source)).await?;
         authed(http.get(&url), &token)
     };
-    let response = request.send().await.map_err(|e| e.to_string())?;
+    let response = request.send_retry().await.map_err(|e| e.to_string())?;
     let header = |name: &str| {
         response
             .headers()
@@ -522,7 +576,7 @@ pub async fn app_info(db: &Db, source: &Record, jwt: &str) -> Result<(u16, Value
         .get(format!("{api}/app"))
         .header("Authorization", format!("Bearer {jwt}"))
         .header("Accept", "application/vnd.github+json")
-        .send()
+        .send_retry()
         .await
         .map_err(|e| e.to_string())?;
     let status = response.status().as_u16();
@@ -559,7 +613,7 @@ pub async fn app_slug(db: &Db, enc: &Encrypter, source: &Record) -> Result<Optio
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .header("Authorization", format!("Bearer {jwt}"))
-        .send()
+        .send_retry()
         .await
         .map_err(|e| e.to_string())?;
     let ok = response.status().is_success();
@@ -584,7 +638,7 @@ pub async fn manifest_conversion(db: &Db, api_url: &str, code: &str) -> Result<V
     let response = http
         .post(format!("{api_url}/app-manifests/{code}/conversions"))
         .header("Accept", "application/vnd.github+json")
-        .send()
+        .send_retry()
         .await
         .map_err(|e| e.to_string())?;
     if !response.status().is_success() {
@@ -617,7 +671,7 @@ pub async fn installation_verification_error(
         http.get(format!("{api}/app/installations/{installation_id}"))
             .header("Authorization", format!("Bearer {jwt}"))
             .header("Accept", "application/vnd.github+json")
-            .send()
+            .send_retry()
             .await
             .map_err(|e| e.to_string())
     }

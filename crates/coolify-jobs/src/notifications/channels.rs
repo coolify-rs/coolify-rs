@@ -1,6 +1,7 @@
 //! `Team::getEnabledChannels`, the channels of `app/Notifications/Channels` and the jobs they
 //! dispatch (`SendMessageToDiscordJob`, ...), with `HandlesNotificationResponse`.
 
+use crate::git_http::SendRetry as _;
 use std::net::IpAddr;
 use std::time::Duration;
 
@@ -311,7 +312,7 @@ async fn post_json(
         .post(url)
         .header("Content-Type", "application/json")
         .body(php_json::encode(payload))
-        .send()
+        .send_retry()
         .await?;
     let status = response.status().as_u16();
     let body = response.text().await.unwrap_or_default();
@@ -883,7 +884,7 @@ async fn resend_send(api_key: &str, body: &Value) -> Result<(), ResendFailure> {
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .body(php_json::encode(body))
-        .send()
+        .send_retry()
         .await
         .map_err(|_| ResendFailure::Transport)?;
     let status = response.status().as_u16();

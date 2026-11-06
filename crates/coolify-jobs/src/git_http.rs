@@ -60,7 +60,7 @@ pub async fn client(db: Option<&Db>, url: &str, timeout: Duration) -> Result<Cli
 pub async fn retry(build: impl Fn() -> RequestBuilder) -> Result<Response, String> {
     let mut attempt = 1;
     loop {
-        match build().send().await {
+        match build().send_retry().await {
             Ok(r) if r.status().is_success() || attempt == 3 => return Ok(r),
             Err(e) if attempt == 3 => return Err(e.to_string()),
             _ => {}
@@ -102,4 +102,100 @@ pub fn oauth_url_parts(html: &str) -> (String, String, String) {
     };
     let prefix = if prefix == "/" { String::new() } else { prefix };
     (scheme.to_owned(), authority.to_owned(), prefix)
+}
+
+/// The methods `RetryHttpConnectionFailures` sends again: a POST or PATCH can reach the server
+/// before the failure.
+const RETRIED_METHODS: [reqwest::Method; 5] = [
+    reqwest::Method::GET,
+    reqwest::Method::HEAD,
+    reqwest::Method::OPTIONS,
+    reqwest::Method::PUT,
+    reqwest::Method::DELETE,
+];
+
+/// `RetryHttpConnectionFailures`, the middleware upstream puts on every HTTP call: an idempotent
+/// request is sent once more, half a second later, after a connection failure (DNS included). A
+/// request that timed out after it was sent is not a connection failure and is not sent again.
+pub trait SendRetry {
+    fn send_retry(self) -> impl std::future::Future<Output = reqwest::Result<Response>> + Send;
+}
+
+impl SendRetry for RequestBuilder {
+    fn send_retry(self) -> impl std::future::Future<Output = reqwest::Result<Response>> + Send {
+        send_with_connect_retry(self)
+    }
+}
+
+async fn send_with_connect_retry(request: RequestBuilder) -> reqwest::Result<Response> {
+    let again = request.try_clone();
+    let method = again
+        .as_ref()
+        .and_then(RequestBuilder::try_clone)
+        .and_then(|r| r.build().ok())
+        .map(|r| r.method().clone());
+    match request.send().await {
+        Err(e) if e.is_connect() && method.is_some_and(|m| RETRIED_METHODS.contains(&m)) => {
+            match again {
+                Some(again) => {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    again.send().await
+                }
+                None => Err(e),
+            }
+        }
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A port with nothing listening on it.
+    fn closed_port() -> u16 {
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|_| unreachable!());
+        listener.local_addr().map(|a| a.port()).unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn connection_failures_of_idempotent_requests_are_sent_again() {
+        let url = format!("http://127.0.0.1:{}/", closed_port());
+        let client = Client::new();
+        let started = std::time::Instant::now();
+        assert!(client.get(&url).send_retry().await.is_err());
+        assert!(started.elapsed() >= Duration::from_millis(500));
+        let started = std::time::Instant::now();
+        assert!(client.post(&url).send_retry().await.is_err());
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[tokio::test]
+    async fn requests_that_timed_out_after_sending_are_not_sent_again() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap_or_else(|_| unreachable!());
+        let port = listener.local_addr().map(|a| a.port()).unwrap_or_default();
+        let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = accepted.clone();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                held.push(stream);
+            }
+        });
+        let client = Client::builder()
+            .timeout(Duration::from_millis(200))
+            .build()
+            .unwrap_or_else(|_| unreachable!());
+        let result = client
+            .get(format!("http://127.0.0.1:{port}/"))
+            .send_retry()
+            .await;
+        assert!(result.is_err_and(|e| e.is_timeout()));
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
 }

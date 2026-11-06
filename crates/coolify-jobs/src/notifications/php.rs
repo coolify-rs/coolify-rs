@@ -147,6 +147,20 @@ pub fn str_limit_end(s: &str, limit: usize, end: &str) -> String {
     )
 }
 
+/// `clone_resource_name($name, $uuid)`: the source name without the `-clone-<id>` suffixes of
+/// earlier clones, then a new suffix, so the name stays within the 255 characters of the column.
+pub fn clone_resource_name(name: &str, uuid: &str) -> String {
+    static EARLIER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)(-clone-[a-z0-9]{7,})+$").unwrap_or_else(|_| unreachable!())
+    });
+    let suffix = format!("-clone-{uuid}");
+    let base = EARLIER.replace(name, "");
+    format!(
+        "{}{suffix}",
+        str_limit_end(&base, 255usize.saturating_sub(suffix.len()), "")
+    )
+}
+
 /// `Symfony\Component\HttpFoundation\Response::$statusTexts`, 4xx part.
 pub fn client_status_text(status: u16) -> &'static str {
     match status {
@@ -186,6 +200,28 @@ pub fn client_status_text(status: u16) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clone_names_replace_earlier_suffixes() {
+        let uuid = "abcdefghijklmnopqrstuvwx";
+        assert_eq!(
+            clone_resource_name("db", uuid),
+            "db-clone-abcdefghijklmnopqrstuvwx"
+        );
+        assert_eq!(
+            clone_resource_name("db-clone-q1w2e3r4t5y6u7i8o9p0a1s2-clone-zzzzzzz", uuid),
+            "db-clone-abcdefghijklmnopqrstuvwx"
+        );
+        // A short `-clone-x` is part of the name.
+        assert_eq!(
+            clone_resource_name("my-clone-x", uuid),
+            "my-clone-x-clone-abcdefghijklmnopqrstuvwx"
+        );
+        let long = "a".repeat(300);
+        let name = clone_resource_name(&long, uuid);
+        assert_eq!(name.len(), 255);
+        assert!(name.ends_with("-clone-abcdefghijklmnopqrstuvwx"));
+    }
 
     #[test]
     fn escapes_like_blade() {

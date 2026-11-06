@@ -523,12 +523,13 @@ async fn load_prs(
             "Loading pull requests is only supported for GitHub App sources.",
         ));
     };
-    let repository = a.str("git_repository").unwrap_or_default();
+    let repository =
+        coolify_jobs::github::git_repository_slug(a.str("git_repository").unwrap_or_default());
     match coolify_jobs::github::pull_requests(
         &state.db,
         state.encrypter.as_ref(),
         &source,
-        repository,
+        &repository,
     )
     .await
     {

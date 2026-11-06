@@ -741,10 +741,12 @@ impl Run {
             "{prefix}DOCKER_CONFIG=/root/.docker docker buildx build --builder coolify-railpack {} --network host --build-arg BUILDKIT_SYNTAX=\"{frontend}\" {cache}{secrets} -f /artifacts/railpack-plan.json --progress plain --load -t {image} {}",
             self.b.add_hosts, self.workdir
         );
-        let locked = format!(
-            "exec 9>/root/.docker/buildx/coolify-railpack.lock; if flock -s 9; then :; else exit $?; fi; ({}); status=$?; if flock -n -x 9; then DOCKER_CONFIG=/root/.docker docker buildx stop coolify-railpack >/dev/null 2>&1; fi; exit $status",
+        // `railpackBuilderLockedScript(railpackBuilderBootstrapScript().'; ('...')')`.
+        let locked = crate::server_ops::cleanup::railpack_locked_script(&format!(
+            "{}; ({})",
+            crate::server_ops::cleanup::railpack_bootstrap_script(),
             self.wrap(&buildx)
-        );
+        ));
         format!(
             "DOCKER_CONFIG=/root/.docker docker buildx create --name coolify-railpack --driver docker-container 2>/dev/null || true\n{locked}"
         )
@@ -1034,7 +1036,7 @@ impl Run {
                 &self.jobs.0.db,
                 &source.row,
                 &token,
-                &self.b.repository,
+                &crate::github::git_repository_slug(&self.b.repository),
             )
             .await
             .map_err(Fail::new)?;

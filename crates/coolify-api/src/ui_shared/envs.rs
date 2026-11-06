@@ -889,6 +889,12 @@ pub(crate) async fn create_model(
         && re::by_key(&state.db, &res.morph, res.id, true, n.key)
             .await?
             .is_none()
+        && coolify_db::environment_variables::application_copies_to_preview(
+            state.db.pool(),
+            res.id,
+            n.key,
+        )
+        .await?
     {
         let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
         let value = match n.value_encrypted {

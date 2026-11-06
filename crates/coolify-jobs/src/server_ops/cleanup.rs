@@ -15,6 +15,24 @@ use crate::notifications::{self, Notification, lookup};
 const REMOTE_COMMANDS_DEADLINE: u64 = 540;
 /// `CleanupDocker::STOP_CLEANUP_COOLDOWN`.
 const STOP_CLEANUP_COOLDOWN: u64 = 3600;
+/// `CleanupDocker::BUILD_CACHE_KEPT_LOG_COMMAND`: the cleanup log entry of a skipped build cache prune.
+const BUILD_CACHE_KEPT_LOG_COMMAND: &str = "docker builder prune, docker buildx prune";
+
+/// `CleanupDocker::buildCacheKeptReason`.
+fn build_cache_kept_reason(log: &[Value]) -> Option<&str> {
+    log.iter()
+        .find(|e| e.get("command").and_then(Value::as_str) == Some(BUILD_CACHE_KEPT_LOG_COMMAND))
+        .and_then(|e| e.get("output"))
+        .and_then(Value::as_str)
+}
+
+/// `DockerCleanupJob::withBuildCacheKeptReason`.
+fn with_build_cache_kept_reason(message: String, log: &[Value]) -> String {
+    match build_cache_kept_reason(log) {
+        Some(reason) if !reason.is_empty() => format!("{message} {reason}"),
+        _ => message,
+    }
+}
 pub(crate) const OVERLAP_LOCK_SECONDS: u64 = 660;
 
 /// `preg_replace('/([.\\\\+*?\[\]^$(){}|])/', '\\\\$1', $v)`.
@@ -64,12 +82,27 @@ fn image_prune_command(repos: &[String], helper: &str) -> String {
     )
 }
 
-/// `railpackBuilderHelperCommand` with `railpackBuilderLockedScript`.
-fn railpack_prune_command(helper_image: &str) -> String {
-    let command = "docker buildx inspect --bootstrap coolify-railpack >/dev/null 2>&1; docker buildx prune --builder coolify-railpack -af";
-    let script = format!(
+/// `railpackBuilderLockedScript`: run a command that uses the Railpack builder, then stop the
+/// builder when no other process uses it.
+pub(crate) fn railpack_locked_script(command: &str) -> String {
+    format!(
         "exec 9>/root/.docker/buildx/coolify-railpack.lock; if flock -s 9; then :; else exit $?; fi; {command}; status=$?; if flock -n -x 9; then DOCKER_CONFIG=/root/.docker docker buildx stop coolify-railpack >/dev/null 2>&1; fi; exit $status"
-    );
+    )
+}
+
+/// `railpackBuilderBootstrapScript`: start the Railpack builder and wait until buildkitd accepts
+/// connections, one process at a time (buildx only waits for buildkitd when it starts the builder
+/// itself). Runs inside `railpack_locked_script`.
+pub(crate) fn railpack_bootstrap_script() -> &'static str {
+    "exec 8>/root/.docker/buildx/coolify-railpack-bootstrap.lock; flock -x 8; DOCKER_CONFIG=/root/.docker docker buildx inspect --bootstrap coolify-railpack >/dev/null 2>&1; flock -u 8"
+}
+
+/// `railpackBuilderHelperCommand(..., railpackBuilderBootstrapScript().'; docker buildx prune ...')`.
+pub(crate) fn railpack_prune_command(helper_image: &str) -> String {
+    let script = railpack_locked_script(&format!(
+        "{}; docker buildx prune --builder coolify-railpack -af",
+        railpack_bootstrap_script()
+    ));
     format!(
         "docker run --rm -v $HOME/.docker/buildx:/root/.docker/buildx -v /var/run/docker.sock:/var/run/docker.sock {helper_image} bash -c '{script}' 2>/dev/null || true"
     )
@@ -227,10 +260,13 @@ impl Cleanup<'_> {
 }
 
 /// `CleanupDocker::handle`.
+/// `CleanupDocker::handle` without `onlyAboveThreshold`. Unless `prune_build_cache_during_deployment`
+/// (a manual cleanup), the build caches are kept while a deployment is active on the server.
 pub async fn cleanup_docker(
     srv: &Srv,
     volumes: bool,
     networks: bool,
+    prune_build_cache_during_deployment: bool,
 ) -> Result<Vec<Value>, String> {
     let c = Cleanup {
         srv,
@@ -260,10 +296,27 @@ pub async fn cleanup_docker(
     let mut commands = vec![
         container_prune_command(),
         image_prune_command(&repos, &helper),
-        "docker builder prune -af".to_string(),
-        railpack_prune_command(&helper_image),
-        coolify_image_cleanup_command(&helper),
     ];
+    let active = if prune_build_cache_during_deployment {
+        None
+    } else {
+        let timeout = srv.setting_int("dynamic_timeout").unwrap_or(3600);
+        ops::active_deployment(srv.db(), srv.id(), timeout, Jobs::now())
+            .await
+            .map_err(|e| e.to_string())?
+    };
+    match active {
+        None => {
+            commands.push("docker builder prune -af".to_string());
+            // The prune fails on a stopped builder, so start it first.
+            commands.push(railpack_prune_command(&helper_image));
+        }
+        Some(uuid) => log.push(json!({
+            "command": BUILD_CACHE_KEPT_LOG_COMMAND,
+            "output": format!("Skipped: the build cache was not pruned because deployment {uuid} is queued or running on this server."),
+        })),
+    }
+    commands.push(coolify_image_cleanup_command(&helper));
     if volumes {
         commands.push("docker volume prune -af".to_string());
     }
@@ -279,11 +332,43 @@ pub async fn cleanup_docker(
         }
     }
     MARKS.put(
-        format!("docker-cleanup-last-run-{}", srv.row.uuid),
+        last_run_key(&srv.row.uuid),
         "1".into(),
         Duration::from_secs(STOP_CLEANUP_COOLDOWN),
     );
     Ok(log)
+}
+
+/// `CleanupDocker::lastRunCacheKey`.
+pub(crate) fn last_run_key(server_uuid: &str) -> String {
+    format!("docker-cleanup-last-run-{server_uuid}")
+}
+
+/// The queued `CleanupDocker::handle($server, false, false, onlyAboveThreshold: true)` of
+/// `dispatchAfterStop`: it cleans only at or above the server's cleanup threshold, and is dropped
+/// while another cleanup of the server runs (`WithoutOverlapping(...)->dontRelease()`).
+pub(crate) async fn cleanup_docker_above_threshold(
+    jobs: &Jobs,
+    server_id: i64,
+) -> Result<(), String> {
+    let srv = Srv::load(jobs, server_id).await?;
+    let lock = format!("docker-cleanup-{}", srv.row.uuid);
+    if !MARKS.add(lock.clone(), Duration::from_secs(OVERLAP_LOCK_SECONDS)) {
+        return Ok(());
+    }
+    let result = async {
+        let usage = disk_usage(&srv).await;
+        let threshold = srv.setting_int("docker_cleanup_threshold").unwrap_or(80);
+        if let Some(u) = usage.as_deref().and_then(|u| u.trim().parse::<i64>().ok())
+            && u < threshold
+        {
+            return Ok(());
+        }
+        cleanup_docker(&srv, false, false, false).await.map(|_| ())
+    }
+    .await;
+    MARKS.forget(&lock);
+    result
 }
 
 async fn disk_usage(srv: &Srv) -> Option<String> {
@@ -357,38 +442,41 @@ async fn run_job(srv: &Srv, manual: bool, volumes: bool, networks: bool) -> Resu
         }
     };
     let inner = async {
-        if !manual {
-            let timeout = srv.setting_int("dynamic_timeout").unwrap_or(3600);
-            if let Some(uuid) = ops::active_deployment(db, srv.id(), timeout, now())
-                .await
-                .map_err(|e| e.to_string())?
-            {
-                let message = format!(
-                    "Docker cleanup skipped: deployment {uuid} is queued or running on this server. The next scheduled cleanup runs as usual."
-                );
-                write(
-                    db,
-                    id,
-                    CleanupUpdate {
-                        status: Some("success"),
-                        message: Some(&message),
-                        ..CleanupUpdate::default()
-                    },
-                )
-                .await;
-                return Ok::<(), String>(());
-            }
-        }
         let before = disk_usage(srv).await;
         let forced = srv.info.setting_bool("force_docker_cleanup") == Some(true);
         if manual || forced {
-            let log = cleanup_docker(srv, volumes, networks).await?;
+            let log = cleanup_docker(srv, volumes, networks, manual).await?;
             let after = disk_usage(srv).await;
-            let message = format!(
-                "{} Docker cleanup job executed successfully. Disk usage before: {}%, Disk usage after: {}%.",
-                if manual { "Manual" } else { "Forced" },
-                before.as_deref().unwrap_or_default(),
-                after.as_deref().unwrap_or_default()
+            let message = with_build_cache_kept_reason(
+                format!(
+                    "{} Docker cleanup job executed successfully. Disk usage before: {}%, Disk usage after: {}%.",
+                    if manual { "Manual" } else { "Forced" },
+                    before.as_deref().unwrap_or_default(),
+                    after.as_deref().unwrap_or_default()
+                ),
+                &log,
+            );
+            let text = coolify_compat::php_json::encode(&Value::Array(log));
+            write(
+                db,
+                id,
+                CleanupUpdate {
+                    status: Some("success"),
+                    message: Some(&message),
+                    cleanup_log: Some(&text),
+                    ..CleanupUpdate::default()
+                },
+            )
+            .await;
+            notify(message, true).await;
+            return Ok::<(), String>(());
+        }
+        if before.as_deref().is_none_or(str::is_empty) {
+            let log = cleanup_docker(srv, volumes, networks, manual).await?;
+            let message = with_build_cache_kept_reason(
+                "Docker cleanup job executed successfully, but no disk usage could be determined."
+                    .to_owned(),
+                &log,
             );
             let text = coolify_compat::php_json::encode(&Value::Array(log));
             write(
@@ -405,41 +493,25 @@ async fn run_job(srv: &Srv, manual: bool, volumes: bool, networks: bool) -> Resu
             notify(message, true).await;
             return Ok(());
         }
-        if before.as_deref().is_none_or(str::is_empty) {
-            let log = cleanup_docker(srv, volumes, networks).await?;
-            let text = coolify_compat::php_json::encode(&Value::Array(log));
-            let message =
-                "Docker cleanup job executed successfully, but no disk usage could be determined.";
-            write(
-                db,
-                id,
-                CleanupUpdate {
-                    status: Some("success"),
-                    message: Some(message),
-                    cleanup_log: Some(&text),
-                    ..CleanupUpdate::default()
-                },
-            )
-            .await;
-            notify(message.to_owned(), true).await;
-            return Ok(());
-        }
         let threshold = srv.setting_int("docker_cleanup_threshold").unwrap_or(80);
         if usage_int(before.as_deref()) >= threshold {
-            let log = cleanup_docker(srv, volumes, networks).await?;
+            let log = cleanup_docker(srv, volumes, networks, manual).await?;
             let after = disk_usage(srv).await;
             let saved = usage_int(before.as_deref()) - usage_int(after.as_deref());
             let b = before.as_deref().unwrap_or_default();
             let a = after.as_deref().unwrap_or_default();
-            let message = if saved > 0 {
-                format!(
-                    "Saved {saved}% disk space. Disk usage before: {b}%, Disk usage after: {a}%."
-                )
-            } else {
-                format!(
-                    "Docker cleanup job executed successfully, but no disk space was saved. Disk usage before: {b}%, Disk usage after: {a}%."
-                )
-            };
+            let message = with_build_cache_kept_reason(
+                if saved > 0 {
+                    format!(
+                        "Saved {saved}% disk space. Disk usage before: {b}%, Disk usage after: {a}%."
+                    )
+                } else {
+                    format!(
+                        "Docker cleanup job executed successfully, but no disk space was saved. Disk usage before: {b}%, Disk usage after: {a}%."
+                    )
+                },
+                &log,
+            );
             let text = coolify_compat::php_json::encode(&Value::Array(log));
             write(
                 db,
@@ -524,5 +596,30 @@ mod tests {
     fn prune_commands() {
         assert!(image_prune_command(&["a.b".into()], "1.0.19").contains(r"'^(a\.b)[_:@].+'"));
         assert!(coolify_image_cleanup_command("1.0.19").contains(r"coolify-helper:1\.0\.19$"));
+    }
+
+    #[test]
+    fn railpack_prune_bootstraps_under_its_own_lock() {
+        // `railpackBuilderHelperCommand(..., railpackBuilderBootstrapScript().'; docker buildx prune ...')`
+        assert_eq!(
+            railpack_prune_command("ghcr.io/coollabsio/coolify-helper:1.0.13"),
+            "docker run --rm -v $HOME/.docker/buildx:/root/.docker/buildx -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/coollabsio/coolify-helper:1.0.13 bash -c 'exec 9>/root/.docker/buildx/coolify-railpack.lock; if flock -s 9; then :; else exit $?; fi; exec 8>/root/.docker/buildx/coolify-railpack-bootstrap.lock; flock -x 8; DOCKER_CONFIG=/root/.docker docker buildx inspect --bootstrap coolify-railpack >/dev/null 2>&1; flock -u 8; docker buildx prune --builder coolify-railpack -af; status=$?; if flock -n -x 9; then DOCKER_CONFIG=/root/.docker docker buildx stop coolify-railpack >/dev/null 2>&1; fi; exit $status' 2>/dev/null || true"
+        );
+    }
+
+    #[test]
+    fn build_cache_kept_reason_is_appended() {
+        let log = vec![
+            json!({"command": "docker image prune -f", "output": "x"}),
+            json!({"command": BUILD_CACHE_KEPT_LOG_COMMAND, "output": "Skipped: the build cache was not pruned because deployment abc is queued or running on this server."}),
+        ];
+        assert_eq!(
+            with_build_cache_kept_reason("Saved 3% disk space.".into(), &log),
+            "Saved 3% disk space. Skipped: the build cache was not pruned because deployment abc is queued or running on this server."
+        );
+        assert_eq!(
+            with_build_cache_kept_reason("Saved 3% disk space.".into(), &log[..1]),
+            "Saved 3% disk space."
+        );
     }
 }

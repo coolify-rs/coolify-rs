@@ -106,11 +106,30 @@ pub async fn application_parser_at(
             "Compose parsing versions before 3 (parseDockerComposeFile) are not ported.".into(),
         );
     }
-    let parsed = application::application_parser(&mut run, pull_request_id, commit).await;
-    // `dispatch(new ServerFilesFromServerJob($originalResource))`, once per volume upstream.
-    if run.saw_volume {
-        let jobs = jobs.clone();
+    // The parse never syncs the file storages with the server: a Compose deployment queues that
+    // (`ServerFilesFromServerJob`, `Jobs::spawn_application_files_from_server`).
+    application::application_parser(&mut run, pull_request_id, commit).await
+}
+
+impl Jobs {
+    /// `ServerFilesFromServerJob::dispatch($application)`: one queued sync per application
+    /// (`ShouldBeUniqueUntilProcessing`).
+    pub fn spawn_application_files_from_server(&self, app_id: i64) {
+        static QUEUED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<i64>>> =
+            std::sync::LazyLock::new(Default::default);
+        if !QUEUED
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(app_id)
+        {
+            return;
+        }
+        let jobs = self.clone();
         tokio::spawn(async move {
+            QUEUED
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&app_id);
             if let Err(e) =
                 crate::services::storage::application_files_from_server(&jobs, app_id).await
             {
@@ -118,7 +137,6 @@ pub async fn application_parser_at(
             }
         });
     }
-    parsed
 }
 
 /// `Application::loadComposeFile($isInit)`: reads the compose file from the branch tip on the

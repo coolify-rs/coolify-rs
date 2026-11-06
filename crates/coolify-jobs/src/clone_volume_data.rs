@@ -114,20 +114,7 @@ fn copy_failed_message(name: &str) -> String {
     )
 }
 
-/// `clone_resource_name($name, $uuid)`: the name of a clone. Earlier clone suffixes are dropped, so
-/// a clone of a clone does not grow, and the name fits in 255 characters.
-pub fn clone_resource_name(name: &str, uuid: &str) -> String {
-    static SUFFIXES: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"(?i)(-clone-[a-z0-9]{7,})+$").unwrap_or_else(|_| unreachable!())
-    });
-    let suffix = format!("-clone-{uuid}");
-    let base = SUFFIXES.replace(name, "");
-    let limit = 255usize.saturating_sub(suffix.len());
-    format!(
-        "{}{suffix}",
-        crate::notifications::php::str_limit_end(&base, limit, "")
-    )
-}
+pub use crate::notifications::php::clone_resource_name;
 
 /// `remove_iip($e->getMessage())`.
 fn remove_iip(text: &str) -> String {

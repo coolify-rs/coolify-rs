@@ -7,7 +7,7 @@
 mod build;
 mod commands;
 pub(super) mod compose_pack;
-mod git;
+pub(crate) mod git;
 mod preview;
 mod secrets;
 pub(crate) use secrets::remote_redaction_values;
@@ -1641,8 +1641,11 @@ impl Run {
         Ok(())
     }
 
-    /// `save_runtime_environment_variables()`.
-    async fn save_runtime_environment(&mut self) -> Step {
+    /// `generate_runtime_environment_variables()`: the runtime `.env` lines and a warning for the
+    /// deployment log. Uses (and clears) the Docker Compose part in `self.b.compose_env`.
+    pub(super) async fn runtime_environment_lines(
+        &mut self,
+    ) -> Result<(Vec<String>, Option<String>), Fail> {
         // Server variables come from the server the application runs on, not its build server.
         let mut variables: Vec<Var> = if self.main_server.id == self.server.id {
             self.variables().await?
@@ -1705,6 +1708,12 @@ impl Run {
                 production_values,
             },
         );
+        Ok((envs, warning))
+    }
+
+    /// `save_runtime_environment_variables()`.
+    async fn save_runtime_environment(&mut self) -> Step {
+        let (envs, warning) = self.runtime_environment_lines().await?;
         if let Some(w) = warning {
             self.log(&w, "stderr", false).await;
         }
@@ -2445,7 +2454,23 @@ impl Run {
         Ok(())
     }
 
-    /// `$this->application->fileStorages` and the owner the storage helpers take.
+    /// `previewFileStoragePullRequestId()`: only the current Compose parser mounts the `-pr-<id>`
+    /// copies in a preview; other build packs and the legacy parser mount the application's paths.
+    fn preview_file_storage_pull_request_id(&self) -> i64 {
+        let version = self
+            .app
+            .str("compose_parsing_version")
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
+        if self.app.str("build_pack") == Some("dockercompose") && version >= 3 {
+            self.b.pull_request_id
+        } else {
+            0
+        }
+    }
+
+    /// `$this->application->fileStorages`, each `forPullRequest(previewFileStoragePullRequestId())`
+    /// (the paths this deployment writes), and the owner the storage helpers take.
     pub(super) async fn file_storages(&self) -> Result<(Vec<FileStorage>, StorageOwner), Fail> {
         let db = self.jobs.0.db.clone();
         let enc = self
@@ -2462,9 +2487,10 @@ impl Run {
         )
         .await
         .map_err(|e| Fail::new(e.to_string()))?;
+        let pr = self.preview_file_storage_pull_request_id();
         let files = rows
             .iter()
-            .map(|r| FileStorage::from_record(r, &enc))
+            .map(|r| FileStorage::from_record(r, &enc).map(|f| f.for_pull_request(pr)))
             .collect::<Result<Vec<_>, _>>()
             .map_err(Fail::new)?;
         let owner = StorageOwner::for_application(&db, &self.app)

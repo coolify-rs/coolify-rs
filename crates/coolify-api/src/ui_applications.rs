@@ -33,9 +33,8 @@ static IMAGE_NAME: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(
     regex::Regex::new(r"\A(?:(?:(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?|\[[0-9a-f:.]+\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*)(?:@sha256)?\z")
         .unwrap_or_else(|_| unreachable!())
 });
-static IMAGE_TAG: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"\A[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\z").unwrap_or_else(|_| unreachable!())
-});
+/// `ValidationPatterns::DOCKER_IMAGE_TAG_PATTERN` (`$VAR` references allowed; `max:128` checks the length).
+use crate::routes::applications::DOCKER_IMAGE_TAG as IMAGE_TAG;
 static SHA256: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"(?i)^[a-f0-9]{64}$").unwrap_or_else(|_| unreachable!())
 });
@@ -73,8 +72,9 @@ fn parse_reference(reference: &str) -> (String, String, bool) {
     {
         return (c[1].to_owned(), c[2].to_owned(), true);
     }
+    // The tag starts at the first colon after the last slash (a `${VAR:-default}` tag has more).
     let slash = reference.rfind('/').map_or(0, |i| i + 1);
-    match reference[slash..].rfind(':') {
+    match reference[slash..].find(':') {
         Some(i) => {
             let tag = reference[slash + i + 1..].to_owned();
             let hash = tag.len() == 64 && tag.chars().all(|c| c.is_ascii_hexdigit());
@@ -1128,7 +1128,25 @@ pub async fn update(
             ],
         },
     ];
-    fields.extend(general::rules());
+    // `changedCommandRules()`: a command saved before commands were validated stays valid until it
+    // changes (the deployment passes it as one escaped argument, and the field can be hidden).
+    fields.extend(general::rules().into_iter().map(|mut f| {
+        if matches!(
+            f.name,
+            "install_command" | "build_command" | "start_command"
+        ) {
+            let submitted = match m.get(f.name) {
+                Some(Value::String(v)) => Some(v.clone()),
+                Some(Value::Null) => Some(String::new()),
+                Some(Value::Number(n)) => Some(n.to_string()),
+                _ => None,
+            };
+            if submitted.is_some_and(|v| v == a.str(f.name).unwrap_or_default()) {
+                f.rules = vec![Rule::Nullable];
+            }
+        }
+        f
+    }));
     fields.extend(
         [
             "custom_nginx_configuration",

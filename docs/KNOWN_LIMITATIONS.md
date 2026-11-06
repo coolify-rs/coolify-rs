@@ -117,8 +117,8 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
   upstream.
 - **Clone volume data** (`CloneVolumeDataWithSourceStopped`) runs its stop, copies and start in the process, not on a
   queue: a restart of coolify-rs during the copy leaves the source stopped. Checked against a scripted `ssh` only.
-- **Docker cleanup after a stop** skips the old-image cleanup that keeps rollback copies and the Railpack build cache
-  prune.
+- **TCP proxies of service databases** are not started, recreated or removed by the status checks (standalone
+  databases are).
 - **Deployment rows.** `current_process_id` stays empty, and commands upstream feeds on stdin carry their input inside
   the script.
 

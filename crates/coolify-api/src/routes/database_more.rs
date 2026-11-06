@@ -865,7 +865,7 @@ pub async fn clone_database(
     let new_uuid = new_public_id();
     let name = match input.str("name").filter(|n| !n.trim().is_empty()) {
         Some(n) => n.to_owned(),
-        None => coolify_jobs::clone_volume_data::clone_resource_name(
+        None => coolify_jobs::notifications::php::clone_resource_name(
             d.str("name").unwrap_or_default(),
             &new_uuid,
         ),

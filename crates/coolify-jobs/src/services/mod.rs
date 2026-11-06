@@ -109,8 +109,8 @@ impl Jobs {
             .unwrap_or_else(|_| "coolify".to_owned())
     }
 
-    /// `$service->parse()` and the jobs it dispatches (`ServerStorageSaveJob`,
-    /// `ServerFilesFromServerJob`), which run in the background as upstream's queue does.
+    /// `$service->parse()` and the jobs it dispatches (`ServerStorageSaveJob`), which run in the
+    /// background as upstream's queue does.
     pub async fn parse_service(&self, service_id: i64) -> Result<ParsedCompose, String> {
         let (parsed, effects) = self.parse_service_inline(service_id).await?;
         let jobs = self.clone();
@@ -186,17 +186,36 @@ impl Jobs {
                 let _ = storage::save_storage_on_server(self, &s, &target, *id).await;
             }
         }
-        let mut seen: Vec<(SubKind, i64)> = Vec::new();
-        for pair in &effects.files_from_server {
-            if !seen.contains(pair) {
-                seen.push(*pair);
-                // Deleted in the meantime: do not create its directory again.
-                if !matches!(svc::find_by_id(&self.0.db, service_id).await, Ok(Some(_))) {
-                    return;
+    }
+
+    /// `StartService::queueFileStorageSync($service)`: one `ServerFilesFromServerJob` for each
+    /// application and database of the service that has file storages.
+    fn queue_file_storage_sync(&self, service_id: i64) {
+        let jobs = self.clone();
+        tokio::spawn(async move {
+            let db = &jobs.0.db;
+            let Ok(Some(s)) = svc::find_by_id(db, service_id).await else {
+                return;
+            };
+            let Ok(server) = jobs.service_server(&s).await else {
+                return;
+            };
+            let Ok(target) = server.target(&jobs).await else {
+                return;
+            };
+            for kind in [SubKind::Application, SubKind::Database] {
+                for sub in svc::subs(db, kind, s.id).await.unwrap_or_default() {
+                    if svc::file_storages(db, kind, sub.id)
+                        .await
+                        .is_ok_and(|rows| !rows.is_empty())
+                        && let Err(e) =
+                            storage::files_from_server(&jobs, &s, &target, kind, sub.id, true).await
+                    {
+                        tracing::warn!(service = %s.uuid, error = %e, "ServerFilesFromServerJob failed");
+                    }
                 }
-                let _ = storage::files_from_server(self, &s, &target, pair.0, pair.1, true).await;
             }
-        }
+        });
     }
 
     /// `updateCompose($resource)`.
@@ -502,6 +521,7 @@ impl Jobs {
         let server = self.service_server(&s).await?;
         let target = server.target(self).await?;
         self.run_parse_effects(service_id, effects).await;
+        self.queue_file_storage_sync(service_id);
         if let Some(enc) = self.0.encrypter.as_ref() {
             // ensureRemoteSecretsResolvable(): before stopping, so the service keeps running.
             vars::load_for(&self.0.db, enc, &owner(&s), s.server_id()).await?;
@@ -886,6 +906,7 @@ impl Jobs {
         let server = self.service_server(&s).await?;
         let target = server.target(self).await?;
         self.run_parse_effects(service_id, effects).await;
+        self.queue_file_storage_sync(service_id);
         self.save_compose_configs(&s, &target).await?;
         self.save_configuration_hash(&s).await;
         let dir = workdir(&s.uuid);

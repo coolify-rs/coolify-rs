@@ -11,6 +11,83 @@ use serde_json::Value;
 use crate::records::{Record, parse_row};
 use crate::{Db, DbError, DbResult};
 
+/// `EnvironmentVariable::GENERATED_MAGIC_VARIABLE_COMMANDS`: magic variable commands
+/// (`SERVICE_<COMMAND>_<NAME>`) whose value `generateEnvValue()` generates.
+pub const GENERATED_MAGIC_VARIABLE_COMMANDS: [&str; 19] = [
+    "PASSWORD",
+    "PASSWORD_64",
+    "PASSWORDWITHSYMBOLS",
+    "PASSWORDWITHSYMBOLS_64",
+    "BASE64",
+    "BASE64_32",
+    "BASE64_64",
+    "BASE64_128",
+    "REALBASE64",
+    "REALBASE64_32",
+    "REALBASE64_64",
+    "REALBASE64_128",
+    "HEX_32",
+    "HEX_64",
+    "HEX_128",
+    "USER",
+    "LOWERCASEUSER",
+    "SUPABASEANON",
+    "SUPABASESERVICE",
+];
+
+/// `parseCommandFromMagicEnvVariable($key)->value()`.
+pub fn parse_command_from_magic_env_variable(key: &str) -> String {
+    // `Str::after()` / `Str::before()` / `Str::beforeLast()`: the whole string when not found.
+    let after = |s: &str, search: &str| {
+        s.split_once(search)
+            .map_or_else(|| s.to_owned(), |(_, a)| a.to_owned())
+    };
+    let before = |s: &str, search: &str| {
+        s.split_once(search)
+            .map_or_else(|| s.to_owned(), |(b, _)| b.to_owned())
+    };
+    let before_last = |s: &str, search: &str| {
+        s.rfind(search)
+            .map_or_else(|| s.to_owned(), |p| s[..p].to_owned())
+    };
+    let count = key.matches('_').count();
+    let fqdn_or_url = key.starts_with("SERVICE_FQDN") || key.starts_with("SERVICE_URL");
+    match count {
+        2 => before_last(&after(key, "SERVICE_"), "_"),
+        3 if fqdn_or_url => before(&after(key, "SERVICE_"), "_"),
+        3 => before_last(&after(key, "SERVICE_"), "_"),
+        _ => String::new(),
+    }
+}
+
+/// `EnvironmentVariable::isGeneratedMagicVariable()`.
+pub fn is_generated_magic_variable(key: &str) -> bool {
+    key.starts_with("SERVICE_")
+        && GENERATED_MAGIC_VARIABLE_COMMANDS
+            .contains(&parse_command_from_magic_env_variable(key).as_str())
+}
+
+/// The check of the `created` hook of `EnvironmentVariable` before it copies a new production
+/// variable of an application to the preview: `Application::find($id)` exists and is not a
+/// `dockercompose` application with a generated magic variable (a compose preview generates its
+/// own magic secrets on the first pull request parse).
+pub async fn application_copies_to_preview<'e, E>(
+    executor: E,
+    application_id: i64,
+    key: &str,
+) -> DbResult<bool>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let build_pack: Option<String> = sqlx::query_scalar(
+        "SELECT build_pack FROM applications WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(application_id)
+    .fetch_optional(executor)
+    .await?;
+    Ok(build_pack.is_some_and(|b| !(b == "dockercompose" && is_generated_magic_variable(key))))
+}
+
 /// A variable a create helper adds (`EnvironmentVariable::create([...])`).
 #[derive(Debug, Clone)]
 pub struct NewVariable {
@@ -338,8 +415,9 @@ async fn insert_resource_variable(
 }
 
 /// `EnvironmentVariable::create(...)` with the model's `created` hook: a non-preview variable of
-/// an application also gets a preview copy unless one with the key exists. `preview_value_encrypted`
-/// is the copy's own `encrypt($value)`. Returns the row of the created variable.
+/// an application also gets a preview copy unless one with the key exists (or
+/// [`application_copies_to_preview`] says no). `preview_value_encrypted` is the copy's own
+/// `encrypt($value)`. Returns the row of the created variable.
 pub async fn create_on_resource(
     db: &Db,
     (resource_type, resource_id): (&str, i64),
@@ -355,6 +433,7 @@ pub async fn create_on_resource(
         && first_by_key(db, resource_type, resource_id, &v.key, true)
             .await?
             .is_none()
+        && application_copies_to_preview(db.pool(), resource_id, &v.key).await?
     {
         let copy = NewResourceVariable {
             is_preview: true,
@@ -461,4 +540,45 @@ pub async fn force_delete(db: &Db, id: i64) -> DbResult<()> {
         .execute(db.pool())
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_magic_variables() {
+        for key in [
+            "SERVICE_PASSWORD_DB",
+            "SERVICE_PASSWORD_64_DB",
+            "SERVICE_PASSWORDWITHSYMBOLS_APP",
+            "SERVICE_BASE64_64_WEB",
+            "SERVICE_REALBASE64_APP",
+            "SERVICE_HEX_32_WEB",
+            "SERVICE_USER_ADMIN",
+            "SERVICE_LOWERCASEUSER_BACK",
+            "SERVICE_SUPABASEANON_KONG",
+        ] {
+            assert!(is_generated_magic_variable(key), "{key}");
+        }
+        for key in [
+            "SERVICE_URL_WEB",
+            "SERVICE_FQDN_WEB_3000",
+            "SERVICE_URL_MY_APP_80",
+            "SERVICE_NAME_DB",
+            "PASSWORD_DB",
+            "SERVICE_PASSWORD",
+            "SERVICE_PASSWORD_MY_LONG_NAME",
+        ] {
+            assert!(!is_generated_magic_variable(key), "{key}");
+        }
+        assert_eq!(
+            parse_command_from_magic_env_variable("SERVICE_FQDN_API_8080"),
+            "FQDN"
+        );
+        assert_eq!(
+            parse_command_from_magic_env_variable("SERVICE_HEX_64_X"),
+            "HEX_64"
+        );
+    }
 }

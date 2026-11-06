@@ -1976,7 +1976,7 @@ pub async fn clone_service(
     let new_uuid = coolify_domain::new_public_id();
     let name = match input.str("name").filter(|n| !n.is_empty()) {
         Some(n) => strip_tags(Some(n)),
-        None => coolify_jobs::clone_volume_data::clone_resource_name(s.name(), &new_uuid),
+        None => coolify_jobs::notifications::php::clone_resource_name(s.name(), &new_uuid),
     };
     let now = state.now();
     let new_id = svc::replicate(

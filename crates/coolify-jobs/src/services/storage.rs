@@ -374,7 +374,15 @@ async fn test_path(jobs: &Jobs, t: &Target, flag: &str, escaped: &str) -> Result
 
 /// `LocalFileVolume::remoteFileStates($paths, $server)`.
 async fn remote_file_states(jobs: &Jobs, t: &Target, paths: &[String]) -> Vec<String> {
-    let args = paths.iter().map(|p| quote(p)).collect::<Vec<_>>().join(" ");
+    let args: Vec<String> = paths.iter().map(|p| quote(p)).collect();
+    remote_file_states_of(jobs, t, &args).await
+}
+
+/// `LocalFileVolume::remoteFileStates($paths, $server, $quote)`: the paths already made shell
+/// arguments (`filesystemVolumeShellArgument`).
+async fn remote_file_states_of(jobs: &Jobs, t: &Target, args: &[String]) -> Vec<String> {
+    let paths = args;
+    let args = args.join(" ");
     let c = format!("sh -c {} sh {args}", quote(FILE_STATE_SCRIPT));
     let out = jobs
         .remote()
@@ -494,8 +502,21 @@ pub async fn save_storage_on_server(
     }
     validate::validate_shell_safe_path(&path, "storage path")?;
     let escaped = quote(&path);
-    let is_file = test_path(jobs, t, "-f", &escaped).await?;
-    let is_dir = test_path(jobs, t, "-d", &escaped).await?;
+    let state = remote_file_states(jobs, t, std::slice::from_ref(&path))
+        .await
+        .swap_remove(0);
+    if state == "unknown" {
+        return Err(format!(
+            "Coolify cannot check the file {path} on the server."
+        ));
+    }
+    if state == "other" && !f.is_directory {
+        return Err(format!(
+            "A symbolic link or a special file is at {path} on the server. Coolify did not write the file."
+        ));
+    }
+    let is_file = state == "file";
+    let is_dir = state == "directory" || state == "empty-directory";
     let mut replaces_empty = false;
     if is_file && f.is_directory {
         let content = run(jobs, t, &format!("head -c 5242881 {escaped}"))
@@ -513,8 +534,7 @@ pub async fn save_storage_on_server(
             set_file_content(jobs, id, f.content.as_deref(), true).await?;
             return Err("The following file is a directory on the server, but you are trying to mark it as a file. <br><br>Please delete the directory on the server or mark it as directory.".into());
         }
-        let states = remote_file_states(jobs, t, std::slice::from_ref(&path)).await;
-        if outside || states.first().map(String::as_str) != Some("empty-directory") {
+        if outside || state != "empty-directory" {
             return Err(format!(
                 "The following file is a directory on the server, but you are trying to mark it as a file: {path}<br><br>Please delete the directory on the server or mark it as directory."
             ));
@@ -654,46 +674,101 @@ pub async fn files_from_server(
     is_init: bool,
 ) -> Result<(), String> {
     let dir = workdir(&s.uuid);
-    run(
-        jobs,
-        t,
-        &format!("mkdir -p -- {} > /dev/null 2>&1 || true", quote(&dir)),
-    )
-    .await?;
+    if is_init {
+        run(
+            jobs,
+            t,
+            &format!("mkdir -p -- {} > /dev/null 2>&1 || true", quote(&dir)),
+        )
+        .await?;
+    }
     let rows = svc::file_storages(&jobs.0.db, kind, sub_id)
         .await
         .map_err(|e| e.to_string())?;
-    for r in &rows {
-        let f = file_row(jobs, r);
-        let trimmed = f.fs_path.trim();
-        let location = if trimmed.starts_with('$') {
-            trimmed.to_owned()
-        } else {
-            resolved_fs_path(&f.fs_path, &dir)
-        };
-        let escaped = shell_argument(&location)?;
-        let is_file = test_path(jobs, t, "-f", &escaped).await?;
-        let is_dir = test_path(jobs, t, "-d", &escaped).await?;
-        let outside = is_outside_resource_directory(&f.fs_path, &dir);
-        let has_content = f
+    sync_file_volumes(jobs, t, &dir, &rows, is_init, SyncOwner::Service(s)).await
+}
+
+/// Whose file storages [`sync_file_volumes`] checks (`saveStorageOnServer()` differs).
+enum SyncOwner<'a> {
+    Service(&'a ServiceRow),
+    Application {
+        owner: &'a crate::storages::StorageOwner,
+        server_id: i64,
+    },
+}
+
+/// The loop of `getFilesystemVolumesFromServer()`: one remote command gets the state of every file
+/// storage path; a symbolic link to a directory, a special file or a failed check changes nothing.
+async fn sync_file_volumes(
+    jobs: &Jobs,
+    t: &Target,
+    dir: &str,
+    rows: &[serde_json::Map<String, Value>],
+    is_init: bool,
+    who: SyncOwner<'_>,
+) -> Result<(), String> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let files: Vec<FileRow> = rows.iter().map(|r| file_row(jobs, r)).collect();
+    // A relative path is inside the resource directory; a persisted Compose expression
+    // (`${VAR:-/path}`) stays as it is.
+    let locations: Vec<String> = files
+        .iter()
+        .map(|f| {
+            let trimmed = f.fs_path.trim();
+            if trimmed.starts_with('$') {
+                trimmed.to_owned()
+            } else {
+                resolved_fs_path(&f.fs_path, dir)
+            }
+        })
+        .collect();
+    let escaped: Vec<String> = locations
+        .iter()
+        .map(|l| shell_argument(l))
+        .collect::<Result<_, _>>()?;
+    let states = remote_file_states_of(jobs, t, &escaped).await;
+    let (op, server_id) = match &who {
+        SyncOwner::Service(s) => ("service.storage", s.server_id()),
+        SyncOwner::Application { server_id, .. } => ("application.storage", Some(*server_id)),
+    };
+    for (i, f) in files.iter().enumerate() {
+        let (r, escaped, state) = (&rows[i], &escaped[i], states[i].as_str());
+        if state == "other" || state == "unknown" {
+            continue;
+        }
+        let outside = is_outside_resource_directory(&f.fs_path, dir);
+        let is_dir = state == "directory" || state == "empty-directory";
+        let filled = f.content.as_deref().is_some_and(|c| !c.trim().is_empty());
+        let truthy = f
             .content
             .as_deref()
             .is_some_and(|c| !c.is_empty() && c != "0");
-        if is_file {
+        if state == "file" {
             set_is_directory(jobs, f.id, false).await?;
             if f.is_based_on_git {
-                load_into_row(jobs, r, f.id, &dir, s.server_id()).await;
+                load_into_row(jobs, r, f.id, dir, server_id).await;
             }
-        } else if is_dir && !f.is_directory && has_content {
-            if !outside {
-                let states = remote_file_states(jobs, t, std::slice::from_ref(&location)).await;
-                if states.first().map(String::as_str) == Some("empty-directory") {
-                    let _ = save_storage_on_server(jobs, s, t, f.id).await;
+        } else if is_dir && !f.is_directory && filled {
+            // Docker leaves an empty directory when it starts before the file exists: replace it.
+            if !outside && state == "empty-directory" {
+                match &who {
+                    SyncOwner::Service(s) => {
+                        let _ = save_storage_on_server(jobs, s, t, f.id).await;
+                    }
+                    SyncOwner::Application { owner, .. } => {
+                        if let Some(enc) = jobs.0.encrypter.as_ref()
+                            && let Ok(file) = crate::storages::FileStorage::from_record(r, enc)
+                        {
+                            let _ = jobs.save_storage_on_server(owner, &file).await;
+                        }
+                    }
                 }
             }
         } else if is_dir {
             set_file_content(jobs, f.id, None, true).await?;
-        } else if !f.is_directory && is_init && has_content {
+        } else if state == "missing" && !f.is_directory && is_init && truthy {
             if outside {
                 continue;
             }
@@ -703,15 +778,11 @@ pub async fn files_from_server(
             let mkdir = format!("mkdir -p -- \"$(dirname -- {escaped})\"");
             let write = format!("echo '{encoded}' | base64 -d | tee -- {escaped}");
             jobs.remote()
-                .run(
-                    t,
-                    &[mkdir.as_str(), write.as_str()],
-                    RunOptions::op("service.storage"),
-                )
+                .run(t, &[mkdir.as_str(), write.as_str()], RunOptions::op(op))
                 .await
                 .map_err(|e| e.message)?;
-        } else if is_init {
-            // Missing: a directory, also a file flag without content.
+        } else if state == "missing" && is_init && (f.is_directory || f.content.is_none()) {
+            // A directory, or a file flag without content: created as a directory.
             set_file_content(jobs, f.id, None, true).await?;
             if !outside {
                 run(jobs, t, &format!("mkdir -p -- {escaped}")).await?;
@@ -741,8 +812,9 @@ async fn load_into_row(
     }
 }
 
-/// `getFilesystemVolumesFromServer($application, isInit: true)`: the job `applicationParser()`
-/// dispatches for each volume. It runs beside the deployment that parsed, as upstream's queue does.
+/// `getFilesystemVolumesFromServer($application, isInit: true)`: the `ServerFilesFromServerJob` a
+/// Docker Compose deployment of the application queues. It runs beside the deployment, as
+/// upstream's queue does.
 pub async fn application_files_from_server(jobs: &Jobs, app_id: i64) -> Result<(), String> {
     let db = &jobs.0.db;
     let a = coolify_db::applications::find_by_id(db, app_id)
@@ -774,65 +846,18 @@ pub async fn application_files_from_server(jobs: &Jobs, app_id: i64) -> Result<(
     )
     .await
     .map_err(|e| e.to_string())?;
-    for r in &rows {
-        let f = file_row(jobs, r);
-        let trimmed = f.fs_path.trim();
-        let location = if trimmed.starts_with('$') {
-            trimmed.to_owned()
-        } else {
-            resolved_fs_path(&f.fs_path, &dir)
-        };
-        let escaped = shell_argument(&location)?;
-        let is_file = test_path(jobs, &t, "-f", &escaped).await?;
-        let is_dir = test_path(jobs, &t, "-d", &escaped).await?;
-        let outside = is_outside_resource_directory(&f.fs_path, &dir);
-        let has_content = f
-            .content
-            .as_deref()
-            .is_some_and(|c| !c.is_empty() && c != "0");
-        if is_file {
-            set_is_directory(jobs, f.id, false).await?;
-            if f.is_based_on_git {
-                load_into_row(jobs, r, f.id, &dir, Some(server_id)).await;
-            }
-        } else if is_dir && !f.is_directory && has_content {
-            if !outside {
-                let states = remote_file_states(jobs, &t, std::slice::from_ref(&location)).await;
-                if states.first().map(String::as_str) == Some("empty-directory")
-                    && let Some(enc) = jobs.0.encrypter.as_ref()
-                    && let Ok(file) = crate::storages::FileStorage::from_record(r, enc)
-                {
-                    let _ = jobs.save_storage_on_server(&owner, &file).await;
-                }
-            }
-        } else if is_dir {
-            set_file_content(jobs, f.id, None, true).await?;
-        } else if !f.is_directory && has_content {
-            if outside {
-                continue;
-            }
-            set_is_directory(jobs, f.id, false).await?;
-            let encoded = base64::engine::general_purpose::STANDARD
-                .encode(f.content.as_deref().unwrap_or_default());
-            let mkdir = format!("mkdir -p -- \"$(dirname -- {escaped})\"");
-            let write = format!("echo '{encoded}' | base64 -d | tee -- {escaped}");
-            jobs.remote()
-                .run(
-                    &t,
-                    &[mkdir.as_str(), write.as_str()],
-                    RunOptions::op("application.storage"),
-                )
-                .await
-                .map_err(|e| e.message)?;
-        } else {
-            // Missing: a directory, also a file flag without content.
-            set_file_content(jobs, f.id, None, true).await?;
-            if !outside {
-                run(jobs, &t, &format!("mkdir -p -- {escaped}")).await?;
-            }
-        }
-    }
-    Ok(())
+    sync_file_volumes(
+        jobs,
+        &t,
+        &dir,
+        &rows,
+        true,
+        SyncOwner::Application {
+            owner: &owner,
+            server_id,
+        },
+    )
+    .await
 }
 
 /// `filesystemVolumeShellArgument($path)`.

@@ -220,14 +220,7 @@ pub fn parse_service_environment_variable(key: &str) -> ServiceVariable {
 
 /// `parseCommandFromMagicEnvVariable($key)`.
 pub fn parse_command_from_magic_env_variable(key: &str) -> String {
-    let count = key.matches('_').count();
-    let fqdn_or_url = key.starts_with("SERVICE_FQDN") || key.starts_with("SERVICE_URL");
-    match count {
-        2 => php::before_last(&php::after(key, "SERVICE_"), "_"),
-        3 if fqdn_or_url => php::before(&php::after(key, "SERVICE_"), "_"),
-        3 => php::before_last(&php::after(key, "SERVICE_"), "_"),
-        _ => String::new(),
-    }
+    coolify_db::environment_variables::parse_command_from_magic_env_variable(key)
 }
 
 /// `generateEnvValue($command, $resource)`. `jwt_secret` is the value of `SERVICE_PASSWORD_JWT`

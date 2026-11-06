@@ -513,7 +513,7 @@ impl Jobs {
         )
         .await;
         if docker_cleanup {
-            self.spawn_cleanup_after_stop(server.clone());
+            self.spawn_cleanup_after_stop(server.id, server.uuid.clone());
         }
         // The row was read before the stop; a public database loses its proxy too.
         let public = dbs::find_in_team(&self.0.db, d.team_id, &d.uuid)
@@ -953,6 +953,42 @@ impl Jobs {
             crate::applications::status::Snapshot::POLLED,
         )
         .await;
+        self.check_database_proxies(&databases, &containers).await;
+    }
+
+    /// The TCP proxy part of `GetContainersStatus` (not Swarm): a public database gets its proxy
+    /// (again when an older version started it with an older configuration), a private one loses it.
+    async fn check_database_proxies(&self, databases: &[DatabaseRow], containers: &[Value]) {
+        for c in containers {
+            let uuid = c
+                .pointer("/Config/Labels/coolify.databaseUuid")
+                .and_then(Value::as_str);
+            let Some(d) = uuid.and_then(|u| databases.iter().find(|d| d.uuid == u)) else {
+                continue;
+            };
+            let name = format!("/{}-proxy", d.uuid);
+            let found = containers
+                .iter()
+                .find(|p| p.get("Name").and_then(Value::as_str) == Some(name.as_str()));
+            let result = if d.bool("is_public") {
+                match found {
+                    None => self.start_database_proxy(d).await,
+                    Some(p)
+                        if proxy::claim_outdated_refresh(&d.uuid, p.pointer("/Config/Labels")) =>
+                    {
+                        self.start_database_proxy(d).await
+                    }
+                    Some(_) => Ok(()),
+                }
+            } else if found.is_some() {
+                self.stop_database_proxy(d).await
+            } else {
+                Ok(())
+            };
+            if let Err(e) = result {
+                tracing::warn!(database = %d.uuid, error = %e, "TCP proxy check failed");
+            }
+        }
     }
 
     /// The database part of `GetContainersStatus` and `PushServerUpdateJob`.
