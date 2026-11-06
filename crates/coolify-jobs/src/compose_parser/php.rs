@@ -913,6 +913,21 @@ mod tests {
         );
         assert_eq!(version_compare("4.0.0-beta.420.6", "4.0.0-beta.420.7"), -1);
         assert_eq!(version_compare("4.0.0", "4.0.0-beta.1"), 1);
+        assert_eq!(version_compare("4.5.3", "4.0.0-beta.420.7"), 1);
+    }
+
+    /// Release builds report `COOLIFY_VERSION=4.5.3-rs.N`. Expected values are PHP 8's
+    /// `version_compare` output: `rs` is not a special form, so it sorts below `dev`.
+    #[test]
+    fn release_versions_compare_like_php() {
+        assert_eq!(version_compare("4.5.3-rs.1", "4.0.0-beta.420.7"), 1);
+        assert_eq!(version_compare("4.5.3-rs.2", "4.5.3-rs.1"), 1);
+        assert_eq!(version_compare("4.5.3-rs.10", "4.5.3-rs.9"), 1);
+        assert_eq!(version_compare("4.5.4-rs.1", "4.5.3-rs.9"), 1);
+        assert_eq!(version_compare("4.5.3-rs.1", "4.5.2"), 1);
+        assert_eq!(version_compare("4.5.3-rs.1", "4.5.3-rs.1"), 0);
+        assert_eq!(version_compare("4.5.3-rs.1", "4.5.3"), -1);
+        assert_eq!(version_compare("4.5.3", "4.5.3-rs.1"), 1);
     }
 
     #[test]

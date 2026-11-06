@@ -383,7 +383,9 @@ pub fn helper_version(stored: Option<&str>) -> String {
     }
 }
 
-/// PHP `version_compare` for dotted numeric versions (the only shapes used here).
+/// PHP `version_compare` for dotted numeric versions. A word part counts as 0, so release builds
+/// (`4.5.3-rs.N`) order by N and sort after upstream's `4.5.3`, unlike PHP, which puts any word
+/// below `dev`: an rs build is never offered upstream's release of the same number as an upgrade.
 pub fn version_compare(a: &str, b: &str) -> std::cmp::Ordering {
     let parts = |s: &str| {
         s.split(['.', '-', '+'])

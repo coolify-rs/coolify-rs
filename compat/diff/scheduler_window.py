@@ -141,8 +141,8 @@ def main():
 
         # The database: the schema, the fixtures, the key of the test server (still encrypted).
         run(["docker", "exec", DEV_PG, "createdb", "-U", "coolify_rs", db], check=True)
-        dev_sql(db, (ROOT / "compat/baseline/upstream-main-b5823c7-schema.sql").read_text())
-        dev_sql(db, "SET search_path TO public;\n" + (ROOT / "compat/baseline/upstream-main-b5823c7-migrations.sql").read_text())
+        dev_sql(db, (ROOT / "compat/baseline/upstream-4.5.3-schema.sql").read_text())
+        dev_sql(db, "SET search_path TO public;\n" + (ROOT / "compat/baseline/upstream-4.5.3-migrations.sql").read_text())
         ip, user, port = ref_sql(f"SELECT ip, \"user\", port FROM servers WHERE uuid = '{REF_SERVER}'").split("|")
         key = ref_sql(f"SELECT k.private_key FROM private_keys k JOIN servers s ON s.private_key_id = k.id WHERE s.uuid = '{REF_SERVER}'")
         app_key = run(["docker", "exec", REF_APP, "printenv", "APP_KEY"]).stdout.strip()

@@ -1,5 +1,5 @@
 //! Model specs of the standalone database tables other than PostgreSQL,
-//! generated from compat/baseline/upstream-main-b5823c7-schema.sql and the
+//! generated from compat/baseline/upstream-4.5.3-schema.sql and the
 //! models' `$hidden` and `$casts` (see the PostgreSQL spec in records.rs).
 
 use crate::records::ModelSpec;

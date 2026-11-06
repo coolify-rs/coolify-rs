@@ -100,7 +100,7 @@ impl Jobs {
             .version
             .get()
             .cloned()
-            .unwrap_or_else(|| "4.5.1".into())
+            .unwrap_or_else(|| "4.5.3".into())
     }
 
     pub fn encrypter(&self) -> Option<&Encrypter> {

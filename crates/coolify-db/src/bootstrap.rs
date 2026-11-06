@@ -8,12 +8,11 @@ use sqlx::{Connection, PgConnection};
 
 use crate::{DbError, DbResult};
 
-/// `pg_dump --schema-only` of upstream's schema at the compatibility baseline.
-pub const SCHEMA_SQL: &str =
-    include_str!("../../../compat/baseline/upstream-main-b5823c7-schema.sql");
+/// `pg_dump --schema-only` of upstream's schema at the compatibility baseline (Coolify v4.5.3).
+pub const SCHEMA_SQL: &str = include_str!("../../../compat/baseline/upstream-4.5.3-schema.sql");
 /// The `migrations` rows and sequence value at the compatibility baseline.
 pub const MIGRATIONS_SQL: &str =
-    include_str!("../../../compat/baseline/upstream-main-b5823c7-migrations.sql");
+    include_str!("../../../compat/baseline/upstream-4.5.3-migrations.sql");
 
 /// [`SCHEMA_SQL`] with its `CHECK ... IN` constraints as upstream's migrations write them.
 ///
@@ -121,10 +120,80 @@ pub struct Migration {
     pub sql: &'static str,
 }
 
-/// Schema changes after the baseline, oldest first. A release that changes the schema adds its
-/// entry here and its name to `compat/baseline/supported-migrations.txt`. Upgrades apply them at
-/// startup, after `upgrade.sh` has taken its backup.
-pub const MIGRATIONS: &[Migration] = &[];
+/// Upstream's migrations since an earlier baseline, and schema changes of later coolify-rs
+/// releases, oldest first. A release that changes the schema adds its entry here and its name to
+/// `compat/baseline/supported-migrations.txt`. Upgrades apply them at startup, after `upgrade.sh`
+/// has taken its backup, as `php artisan migrate` applies upstream's. Entries the `migrations`
+/// table already lists (a database created at the current baseline) are skipped.
+///
+/// The first five bring a database created at upstream `main` @ b5823c7 (the baseline of earlier
+/// coolify-rs builds) to v4.5.3. Their SQL is what Laravel's Postgres grammar runs for the PHP.
+pub const MIGRATIONS: &[Migration] = &[
+    // `$table->boolean('use_path_style_endpoint')->default(true)`
+    Migration {
+        name: "2026_10_27_142752_add_use_path_style_endpoint_to_s3_storages_table",
+        sql: "ALTER TABLE public.s3_storages \
+              ADD COLUMN use_path_style_endpoint boolean NOT NULL DEFAULT '1'",
+    },
+    // `$table->string('logdrain_axiom_domain')->nullable()->default('us-east-1.aws.edge.axiom.co')`
+    Migration {
+        name: "2026_10_27_155023_add_logdrain_axiom_domain_to_server_settings_table",
+        sql: "ALTER TABLE public.server_settings \
+              ADD COLUMN logdrain_axiom_domain varchar(255) NULL DEFAULT 'us-east-1.aws.edge.axiom.co'",
+    },
+    // Drops both columns when they exist. Its `StopLogDrain::dispatch` for the servers that had
+    // the drain enabled uses [`highlight_log_drain_servers`], read before this runs.
+    Migration {
+        name: "2026_10_27_160258_remove_highlight_log_drain_from_server_settings_table",
+        sql: "ALTER TABLE public.server_settings \
+              DROP COLUMN IF EXISTS is_logdrain_highlight_enabled, \
+              DROP COLUMN IF EXISTS logdrain_highlight_project_id",
+    },
+    // The column, then `DB::table('application_previews')->update(['keeps_production_values' => true])`:
+    // previews from before the upgrade keep the production values they used.
+    Migration {
+        name: "2026_10_28_103619_add_keeps_production_values_to_application_previews_table",
+        sql: "ALTER TABLE public.application_previews \
+              ADD COLUMN keeps_production_values boolean NOT NULL DEFAULT '0'; \
+              UPDATE public.application_previews SET keeps_production_values = true",
+    },
+    // A data change only; the query builder does not touch `updated_at`.
+    Migration {
+        name: "2026_10_28_124421_keep_dockerfile_healthcheck_for_existing_applications",
+        sql: "UPDATE public.applications SET health_check_enabled = false \
+              WHERE custom_healthcheck_found = true AND health_check_enabled = true",
+    },
+];
+
+/// The servers `2026_10_27_160258_remove_highlight_log_drain_from_server_settings_table` stops the
+/// log drain of (`StopLogDrain::dispatch`), read before [`MIGRATIONS`] drops the column: servers
+/// with `is_logdrain_highlight_enabled` that are not transferred away (`isTransferredAway`).
+/// Empty when the column does not exist (the migration ran, or the database is newer).
+pub async fn highlight_log_drain_servers(url: &str) -> DbResult<Vec<i64>> {
+    let mut conn = PgConnection::connect(url).await?;
+    let has_column: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'public' AND table_name = 'server_settings' \
+           AND column_name = 'is_logdrain_highlight_enabled')",
+    )
+    .fetch_one(&mut conn)
+    .await?;
+    let ids = if has_column {
+        sqlx::query_scalar(
+            "SELECT s.id FROM public.servers s \
+             JOIN public.server_settings ss ON ss.server_id = s.id \
+             WHERE ss.is_logdrain_highlight_enabled = true \
+               AND (s.server_metadata::jsonb #>> '{transfer,status}') IS DISTINCT FROM 'transferred' \
+             ORDER BY s.id",
+        )
+        .fetch_all(&mut conn)
+        .await?
+    } else {
+        Vec::new()
+    };
+    conn.close().await.ok();
+    Ok(ids)
+}
 
 /// Runs the entries of `migrations` the `migrations` table does not list, each in a transaction
 /// with its row, under one new batch number as `php artisan migrate` does. Returns the names run.

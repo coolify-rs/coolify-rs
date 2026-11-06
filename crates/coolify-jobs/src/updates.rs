@@ -337,6 +337,43 @@ mod tests {
             .unwrap_or_else(|_| Utc.timestamp_opt(0, 0).unwrap())
     }
 
+    /// Release builds report `COOLIFY_VERSION=4.5.3-rs.N`; the update check compares them with
+    /// the feed's latest version and the upgrade status with the target version.
+    #[test]
+    fn release_versions_compare() {
+        assert_eq!(
+            version_compare("4.5.3-rs.2", "4.5.3-rs.1"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            version_compare("4.5.3-rs.10", "4.5.3-rs.9"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            version_compare("4.5.4-rs.1", "4.5.3-rs.9"),
+            Ordering::Greater
+        );
+        assert_eq!(version_compare("4.5.3-rs.1", "4.5.3-rs.1"), Ordering::Equal);
+        assert_eq!(version_compare("4.5.3-rs.1", "4.5.4-rs.1"), Ordering::Less);
+        // Upstream's own release number never offers an rs build of it as an upgrade.
+        assert_ne!(version_compare("4.5.3", "4.5.3-rs.1"), Ordering::Greater);
+        let now = at("2026-11-01T10:10:00+00:00");
+        let done = status_from_file(
+            "6|Done|2026-11-01T10:09:00+00:00",
+            "4.5.3-rs.2",
+            "4.5.3-rs.2",
+            now,
+        );
+        assert_ne!(done["status"], "in_progress");
+        let waiting = status_from_file(
+            "6|Done|2026-11-01T10:09:00+00:00",
+            "4.5.3-rs.1",
+            "4.5.3-rs.2",
+            now,
+        );
+        assert_eq!(waiting["status"], "in_progress");
+    }
+
     #[test]
     fn running_lock() {
         let now = at("2026-11-01T10:10:00+00:00");
