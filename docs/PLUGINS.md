@@ -5,7 +5,7 @@ own data and serve its own API routes, and it can do only what its manifest asks
 [ADR 0010](decisions/0010-plugins.md) explains the design and the security model.
 
 The interface is [`crates/coolify-plugins/wit/plugin.wit`](../crates/coolify-plugins/wit/plugin.wit)
-(`coolify-rs:plugin@0.1.0`). Any language that can build a WebAssembly component can implement it. This
+(`coolify-rs:plugin@0.1.1`; components built for 0.1.0 load unchanged). Any language that can build a WebAssembly component can implement it. This
 guide uses Rust and the SDK in [`plugins/sdk-rust`](../plugins/sdk-rust).
 
 ## A plugin in Rust
@@ -60,6 +60,8 @@ events = ["deployment.succeeded", "deployment.failed"]
 storage = true
 routes = true
 http = ["hooks.slack.com"]
+resources = ["applications"]      # read-only; ADR 0011
+deploy = true                     # each team must also grant it; ADR 0011
 ```
 
 Ask for the least you need. The admin sees the list, reviewers check every entry, and coolify-rs refuses to
@@ -71,7 +73,12 @@ load a component that imports an interface its manifest did not ask for.
 | `storage` | A key-value store per team. Keys are up to 256 bytes and values up to 1 MiB, with 10 MiB per team |
 | `routes` | Calls to `handle-request` for requests to `/api/v1/ext/<publisher>/<name>/...` |
 | `http` | HTTPS requests to the listed hosts and no others |
+| `resources` | Read the call's team's resources of the listed kinds (`projects`, `servers`, `applications`, `services`, `databases`), as the REST API shows them to a token with `read` and without `read:sensitive`, so no secrets |
+| `deploy` | Queue deployments of the call's team's applications through the same code path as `POST /api/v1/deploy`. Each team must also grant it when enabling the plugin, and a team's plugins together may queue at most 20 deployments in 10 minutes |
 | `ui` | Panels in the web interface, each a `GET` route of the plugin (needs `routes`; see [UI panels](#ui-panels)) |
+
+[ADR 0011](decisions/0011-plugin-resource-and-deploy-capabilities.md) explains `resources` and `deploy`.
+Plugins cannot run commands on servers.
 
 Logging (`coolify_rs_plugin::log`) is always available.
 
@@ -94,6 +101,40 @@ Logging (`coolify_rs_plugin::log`) is always available.
   - A route's response can set only `content-type`, `cache-control`, `etag` and `last-modified`.
   - JSON, plain text and CSV are served as they are. Any other content type becomes a download, so a
     plugin cannot serve pages that run in the browser.
+
+## Reading resources and deploying
+
+[`plugins/examples/inventory`](../plugins/examples/inventory) lists the caller's team's applications:
+
+```rust
+use coolify_rs_plugin::{Caller, Plugin, Request, Response, resources};
+
+struct Inventory;
+
+impl Plugin for Inventory {
+    fn handle_request(_caller: Caller, _request: Request) -> Response {
+        match resources::applications() {
+            Ok(apps) => Response::json(200, &serde_json::Value::Array(apps)),
+            Err(e) => Response::json(502, &serde_json::json!({ "message": e })),
+        }
+    }
+}
+
+coolify_rs_plugin::export!(Inventory);
+```
+
+- **Always the call's team.** No function takes a team. coolify-rs answers for the team of the event or of
+  the token that called the route, so a plugin cannot reach another team's resources even when it knows
+  their uuids: they are simply not found.
+- **The API's answers.** `resources::list(kind)` and `resources::find(kind, uuid)` return what
+  `GET /api/v1/<kind>` and `GET /api/v1/<kind>/<uuid>` return to a `read` token of the team, byte for byte,
+  and `resources::environments(project_uuid)` what `GET /api/v1/projects/<uuid>/environments` returns.
+  Passwords, private keys, webhook secrets and the other fields that need `read:sensitive` are never there.
+- **Deploying.** `deploy::queue(uuid, force)` queues a deployment of one of the team's applications and
+  returns the API's answer (`{"deployments": [...]}`). From a route, it runs with the caller's token: if
+  the caller could not deploy the application through the API, neither can the plugin. From an event, it
+  runs on the authority of the team admin who granted `deploy`, checked again on every deployment. Every
+  deployment, refused or not, is written to the plugin audit log with the plugin's id.
 
 ## Events
 
@@ -278,13 +319,23 @@ Each team then turns it on for itself:
 curl -X POST https://coolify.example.com/api/v1/plugins/acme/deploy-stats/enable -H "Authorization: Bearer $TOKEN"
 ```
 
+A plugin holding `deploy` also needs the team's own answer, because the instance admin's approval does not
+speak for the team: `{"grant_deploy": true}` lets it queue the team's deployments, `{"grant_deploy": false}`
+enables it without them. Without either, enabling fails with the plugin's capabilities. Disabling forgets
+the answer, and so does an update that drops `deploy`.
+
+```bash
+curl -X POST https://coolify.example.com/api/v1/plugins/acme/auto-redeploy/enable -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"grant_deploy": true}'
+```
+
 | Endpoint | Who can call it |
 |---|---|
 | `GET /api/v1/plugins`, `GET /api/v1/plugins/{publisher}/{name}` | Any token with `read` |
 | `POST /api/v1/plugins` | Owners and admins of the root team, with `write` |
 | `PATCH /api/v1/plugins/{publisher}/{name}` with `{"enabled": false}` | Owners and admins of the root team: switches the plugin off for everyone |
 | `DELETE /api/v1/plugins/{publisher}/{name}` | Owners and admins of the root team: uninstalls the plugin and deletes its data |
-| `POST /api/v1/plugins/{publisher}/{name}/enable`, `/disable` | Team owners and admins, for their own team |
+| `POST /api/v1/plugins/{publisher}/{name}/enable`, `/disable` | Team owners and admins, for their own team; `enable` takes `{"grant_deploy": true\|false}` for a plugin holding `deploy` |
 | `POST /api/v1/plugins/{publisher}/{name}/test-event` with `{"kind": ..., "payload": {...}}` | Team owners and admins, in development mode only: delivers one event to the plugin for their team and reports whether it succeeded |
 | `/api/v1/ext/{publisher}/{name}/...` | Any token with `read`, for a team that enabled the plugin |
 
@@ -296,10 +347,12 @@ admins are owners and admins of the root team, whichever team they are working i
 | `GET /ui/plugins/nav` | Any signed-in user: the menu entries and the panels of their team |
 | `GET /ui/plugins`, `POST /ui/plugins`, `PATCH` and `DELETE /ui/plugins/{publisher}/{name}` | Instance admins; installing from files needs development mode, uninstalling the password step |
 | `GET /ui/plugins/catalog`, `POST /ui/plugins/catalog/refresh`, `POST /ui/plugins/catalog/install`, `POST /ui/plugins/{publisher}/{name}/update` | Instance admins, when the instance has the registry catalogue |
-| `GET /ui/plugins/team`, `POST /ui/plugins/{publisher}/{name}/team` | Any team member reads; team owners and admins switch |
+| `GET /ui/plugins/team`, `POST /ui/plugins/{publisher}/{name}/team` | Any team member reads; team owners and admins switch with `{"enabled": ...}`. Enabling a plugin that holds `deploy` also needs `"grant_deploy": true` or `false`, as `/enable` does; the page asks the team admin in a dialog and shows whether deployments are allowed |
 | `GET /ui/plugins/{publisher}/{name}/panels/{slot}` | Team members, for a team that enabled the plugin, loaded by a frame of the page |
 | `/ui/ext/{publisher}/{name}/...` | Team members, for a team that enabled the plugin; writes need the CSRF token |
 
 `COOLIFY_RS_PLUGINS=off` switches the plugin system off entirely. Plugin data lives in the
 `coolify_rs_plugins` PostgreSQL schema, which Coolify never reads, so a database with plugins can still be
-handed back to Coolify.
+handed back to Coolify. `coolify-rs check-portable` (with `--json` for scripts) confirms it: it exits 0 when
+Coolify can take the database back, and 1 with the rows to fix when it cannot
+([ADR 0012](decisions/0012-provider-plugins-and-portability.md)).

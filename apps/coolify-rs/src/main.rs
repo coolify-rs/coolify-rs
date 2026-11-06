@@ -61,6 +61,13 @@ enum Cmd {
     /// `dns:release-orphaned-records`: release managed DNS records no live resource references.
     #[command(name = "dns:release-orphaned-records")]
     ReleaseOrphanedDnsRecords,
+    /// Whether Coolify can take this database back: rows owned by provider plugins and values Coolify does
+    /// not accept (ADR 0012). Exits 0 when portable, 1 when not, 2 when the check could not run.
+    CheckPortable {
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -326,6 +333,40 @@ async fn healthcheck() -> Result<()> {
     Ok(())
 }
 
+/// `check-portable`. Reads only, and logs nothing, so `--json` output can be piped.
+async fn check_portable(json: bool) -> Result<()> {
+    let report = async {
+        let db = Db::connect(&DbConfig {
+            url: database_url()?,
+            max_connections: 2,
+            acquire_timeout: Duration::from_secs(5),
+            allow_unknown_schema: false,
+        })
+        .await
+        .context("connecting to the Coolify database")?;
+        coolify_plugins::portable::check(&db)
+            .await
+            .context("checking the database")
+    }
+    .await;
+    let report = match report {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("check-portable: {e:#}");
+            std::process::exit(2);
+        }
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print!("{}", report.human());
+    }
+    if !report.portable {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 /// The folder the installer's key is in, inside the container.
 fn ssh_keys_dir(cfg: &Config) -> PathBuf {
     cfg.remote.data_dir.join("ssh").join("keys")
@@ -335,6 +376,9 @@ async fn run() -> Result<()> {
     let cli = Cli::parse();
     if matches!(cli.cmd, Some(Cmd::Healthcheck)) {
         return healthcheck().await;
+    }
+    if let Some(Cmd::CheckPortable { json }) = cli.cmd {
+        return check_portable(json).await;
     }
     let cfg = Config::from_env()?;
     init_tracing(cfg.json_logs);
@@ -379,7 +423,7 @@ async fn run() -> Result<()> {
         None
     };
     match cli.cmd.unwrap_or(Cmd::Serve) {
-        Cmd::Healthcheck | Cmd::CreateSchema => Ok(()),
+        Cmd::Healthcheck | Cmd::CreateSchema | Cmd::CheckPortable { .. } => Ok(()),
         Cmd::ServerJob { job, server_uuid } => {
             let remote = Remote::new(cfg.remote.clone()).context("remote execution")?;
             let jobs = coolify_jobs::Jobs::new(db.clone(), remote, cfg.encrypter.clone());

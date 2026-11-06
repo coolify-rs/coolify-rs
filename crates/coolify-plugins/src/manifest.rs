@@ -45,11 +45,28 @@ pub struct Capabilities {
     /// Host names the plugin may send HTTPS requests to. Exact names, no wildcards or addresses.
     #[serde(default)]
     pub http: Vec<String>,
+    /// Resource kinds of the team the plugin may read (`RESOURCE_KINDS`), as the API shows them to a token
+    /// without `read:sensitive` (ADR 0011).
+    #[serde(default)]
+    pub resources: Vec<String>,
+    /// Queue deployments of the team's applications. Each team must also grant it when enabling the plugin
+    /// (ADR 0011).
+    #[serde(default)]
+    pub deploy: bool,
     /// Panels the web UI shows in its slots (ADR 0013). Each is a page of the plugin's own routes, so
     /// `ui` needs `routes`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ui: Vec<Panel>,
 }
+
+/// What `resources` can list, in the order of the WIT `kind` enum. `projects` includes their environments.
+pub const RESOURCE_KINDS: &[&str] = &[
+    "projects",
+    "servers",
+    "applications",
+    "services",
+    "databases",
+];
 
 /// Where the web UI can show a plugin's panel.
 pub const UI_SLOTS: &[&str] = &["dashboard", "application", "server", "settings"];
@@ -146,6 +163,17 @@ impl Manifest {
                 ));
             }
         }
+        for (i, kind) in caps.resources.iter().enumerate() {
+            if !RESOURCE_KINDS.contains(&kind.as_str()) {
+                return bad(format!(
+                    "unknown resource kind {kind:?}; the kinds are {}",
+                    RESOURCE_KINDS.join(", ")
+                ));
+            }
+            if caps.resources[..i].contains(kind) {
+                return bad(format!("resource kind {kind:?} is listed twice"));
+            }
+        }
         validate_ui(caps)?;
         Ok(())
     }
@@ -165,6 +193,12 @@ impl Manifest {
         }
         if !caps.http.is_empty() {
             out.push(format!("http: {}", caps.http.join(", ")));
+        }
+        if !caps.resources.is_empty() {
+            out.push(format!("resources: {}", caps.resources.join(", ")));
+        }
+        if caps.deploy {
+            out.push("deploy".into());
         }
         if !caps.ui.is_empty() {
             let mut slots: Vec<&str> = Vec::new();
@@ -186,6 +220,11 @@ impl Capabilities {
             || (self.storage && !granted.storage)
             || (self.routes && !granted.routes)
             || self.http.iter().any(|h| !granted.http.contains(h))
+            || self
+                .resources
+                .iter()
+                .any(|k| !granted.resources.contains(k))
+            || (self.deploy && !granted.deploy)
             || self.ui.iter().any(|p| !granted.ui.contains(p))
     }
 
@@ -256,6 +295,8 @@ api = "0.1"
 events = ["deployment.succeeded"]
 storage = true
 http = ["hooks.example.com"]
+resources = ["applications", "servers"]
+deploy = true
 "#;
 
     #[test]
@@ -267,7 +308,9 @@ http = ["hooks.example.com"]
             [
                 "events: deployment.succeeded",
                 "storage",
-                "http: hooks.example.com"
+                "http: hooks.example.com",
+                "resources: applications, servers",
+                "deploy"
             ]
         );
     }
@@ -300,6 +343,9 @@ http = ["hooks.example.com"]
                 "storage = true\nshell = true",
                 "unknown field",
             ),
+            ("\"servers\"]", "\"secrets\"]", "unknown resource kind"),
+            ("\"servers\"]", "\"applications\"]", "listed twice"),
+            ("deploy = true", "deploy = \"yes\"", "invalid type"),
         ];
         for (from, to, want) in cases {
             let text = OK.replacen(from, to, 1);
@@ -318,6 +364,16 @@ http = ["hooks.example.com"]
         let mut fewer = old.clone();
         fewer.storage = false;
         assert!(!fewer.exceeds(&old));
+
+        let mut wider = old.clone();
+        wider.resources.push("databases".into());
+        assert!(wider.exceeds(&old));
+        let no_deploy = Capabilities {
+            deploy: false,
+            ..old.clone()
+        };
+        assert!(old.exceeds(&no_deploy));
+        assert!(!no_deploy.exceeds(&old));
 
         let ui = Manifest::parse(&format!("{OK}{UI}")).unwrap().capabilities;
         let mut moved = ui.clone();
@@ -362,6 +418,8 @@ path = "/panels/failures"
                 "storage",
                 "routes",
                 "http: hooks.example.com",
+                "resources: applications, servers",
+                "deploy",
                 "ui: dashboard, application"
             ]
         );

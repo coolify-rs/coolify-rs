@@ -694,6 +694,7 @@ dependencies = [
  "coolify-remote",
  "mimalloc",
  "serde_json",
+ "sqlx",
  "tokio",
  "tower",
  "tower-http",
