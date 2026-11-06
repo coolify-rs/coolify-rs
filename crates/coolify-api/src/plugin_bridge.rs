@@ -26,11 +26,15 @@ use crate::response::ApiResult;
 use crate::routes::{applications, databases, projects, servers, services};
 use crate::state::{AppState, Inner};
 
-/// Connects the state's plugin host, if it has one, to the API.
+/// Connects the state's plugin host, if it has one, to the API, and gives it the `APP_KEY` encrypter for
+/// plugins' secret settings (ADR 0014).
 pub(crate) fn connect(state: &AppState) {
     if let Some(host) = &state.plugins {
         let bridge = Arc::new(Bridge(state.downgrade()));
         host.connect(bridge.clone(), bridge);
+        if let Some(e) = &state.encrypter {
+            host.use_encrypter(e.clone());
+        }
     }
 }
 

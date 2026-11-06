@@ -13,6 +13,9 @@
 //! - `POST /api/v1/plugins/{publisher}/{name}/test-event`: deliver one event to the plugin for the token's
 //!   team and report how it went (development mode only, team admins), so authors can try a plugin without
 //!   a real deployment.
+//! - `GET` and `PATCH /api/v1/plugins/{publisher}/{name}/settings`: the token's team's settings of the plugin
+//!   (ADR 0014). Any member reads them, with secrets only as `set`; owners and admins change them. Changes
+//!   are audited by key, never by value.
 //! - `/api/v1/ext/{publisher}/{name}/...`: the plugin's own routes, any method.
 //!
 //! A plugin route never sees the caller's token or cookies. Its response can't set cookies or headers of
@@ -86,6 +89,16 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route(
             "/api/v1/plugins/{publisher}/{name}/test-event",
             post(test_event).route_layer(write()),
+        )
+        .route(
+            "/api/v1/plugins/{publisher}/{name}/settings",
+            get(settings).route_layer(read()),
+        )
+        .route(
+            "/api/v1/plugins/{publisher}/{name}/settings",
+            axum::routing::patch(update_settings)
+                .route_layer(write())
+                .layer(DefaultBodyLimit::max(256 * 1024)),
         )
         .route(
             "/api/v1/ext/{publisher}/{name}",
@@ -385,6 +398,85 @@ async fn disable(
     Path((publisher, name)): Path<(String, String)>,
 ) -> ApiResult {
     set_team(&state, &ctx, &format!("{publisher}/{name}"), false, &[]).await
+}
+
+// ---- Per-team settings (ADR 0014) ----
+
+/// `{"plugin", "settings": [...], "needs_configuration"}`. Each setting carries its declaration and `set`;
+/// only settings that are not secret carry `value`.
+pub(crate) fn settings_body(id: &str, config: &coolify_plugins::TeamConfig) -> Value {
+    let v = config.to_json();
+    json!({
+        "plugin": id,
+        "settings": v["settings"],
+        "needs_configuration": v["needs_configuration"],
+    })
+}
+
+/// The team's settings of an installed plugin, for any member of the team.
+pub(crate) async fn team_settings(host: &Host, id: &str, team_id: i64) -> Result<Value, ApiError> {
+    match host.team_config(id, team_id).await {
+        Ok(c) => Ok(settings_body(id, &c)),
+        Err(coolify_plugins::PluginError::NotFound(_)) => Err(not_found()),
+        Err(e) => Err(internal(e)),
+    }
+}
+
+/// A partial update of the team's settings from a JSON object of `key: string | null` (null or a blank
+/// string clears). Team owners and admins only. Invalid input answers 422 `Validation failed.` with the
+/// errors by key, and changes nothing.
+pub(crate) async fn patch_team_settings(
+    host: &Host,
+    ctx: &AuthCtx,
+    id: &str,
+    body: &[u8],
+) -> Result<Value, ApiError> {
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Status(
+            StatusCode::FORBIDDEN,
+            json!({"message": "Only team owners and admins can change plugin settings."}),
+        ));
+    }
+    let Ok(Value::Object(changes)) = serde_json::from_slice::<Value>(body) else {
+        return Err(ApiError::Status(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"message": "The body must be a JSON object of settings, such as {\"topic\": \"alerts\"}."}),
+        ));
+    };
+    match host
+        .update_team_config(id, ctx.team_id, Some(ctx.user_id), &changes)
+        .await
+    {
+        Ok((config, _)) => Ok(settings_body(id, &config)),
+        Err(coolify_plugins::UpdateError::Invalid(errors)) => Err(ApiError::Validation(
+            errors.into_iter().map(|(k, m)| (k, json!([m]))).collect(),
+        )),
+        Err(coolify_plugins::UpdateError::Store(coolify_plugins::PluginError::NotFound(_))) => {
+            Err(not_found())
+        }
+        Err(coolify_plugins::UpdateError::Store(e)) => Err(internal(e)),
+    }
+}
+
+async fn settings(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path((publisher, name)): Path<(String, String)>,
+) -> ApiResult {
+    let host = host(&state)?;
+    let v = team_settings(host, &format!("{publisher}/{name}"), ctx.team_id).await?;
+    Ok(ok(v).into_response())
+}
+
+async fn update_settings(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path((publisher, name)): Path<(String, String)>,
+    body: Bytes,
+) -> ApiResult {
+    let host = host(&state)?;
+    let v = patch_team_settings(host, &ctx, &format!("{publisher}/{name}"), &body).await?;
+    Ok(ok(v).into_response())
 }
 
 #[derive(Deserialize)]

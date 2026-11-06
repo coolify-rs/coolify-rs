@@ -14,7 +14,12 @@
 //!   session's team. 404 when plugins are switched off, so the UI adds nothing.
 //! - `GET`, `POST /ui/plugins`: the settings page; install an upload (`{manifest, component, grant}`).
 //! - `PATCH`, `DELETE /ui/plugins/{publisher}/{name}`: instance-wide switch; uninstall (password step).
-//! - `GET /ui/plugins/team`, `POST /ui/plugins/{publisher}/{name}/team`: the team page and its switch.
+//! - `GET /ui/plugins/team`, `POST /ui/plugins/{publisher}/{name}/team`: the team page and its switch. Each
+//!   plugin on the page carries its `settings` (as `GET .../settings` answers them) and
+//!   `needs_configuration`.
+//! - `GET`, `PATCH /ui/plugins/{publisher}/{name}/settings`: the session's team's settings of a plugin, as
+//!   the bearer API's `.../settings` (ADR 0014): members read them without secrets, owners and admins change
+//!   them.
 //! - `GET /ui/plugins/catalog`, `POST /ui/plugins/catalog/refresh`, `POST /ui/plugins/catalog/install`,
 //!   `POST /ui/plugins/{publisher}/{name}/update`: the registry catalogue, with the catalogue API's calls and answers.
 //! - `GET /ui/plugins/{publisher}/{name}/panels/{slot}?panel=&resource=`: one panel's document, for a
@@ -39,7 +44,7 @@ use serde_json::{Value, json};
 use crate::auth::AuthCtx;
 use crate::response::{ApiError, ApiResult, created, ok};
 use crate::routes::plugin_registry::registry_error;
-use crate::routes::plugins::{call, find, host, internal, not_found, present};
+use crate::routes::plugins::{call, find, host, internal, not_found, patch_team_settings, present};
 use crate::state::AppState;
 
 pub fn routes(state: AppState) -> Router<AppState> {
@@ -61,6 +66,12 @@ pub fn routes(state: AppState) -> Router<AppState> {
             axum::routing::patch(set_enabled).delete(uninstall),
         )
         .route("/ui/plugins/{publisher}/{name}/team", post(set_team))
+        .route(
+            "/ui/plugins/{publisher}/{name}/settings",
+            get(team_settings)
+                .patch(update_team_settings)
+                .layer(DefaultBodyLimit::max(256 * 1024)),
+        )
         .route(
             "/ui/plugins/{publisher}/{name}/update",
             post(catalog_update),
@@ -496,12 +507,41 @@ async fn team_page(State(state): State<AppState>, Extension(ctx): Extension<Auth
             .await
             .map_err(internal)?
             .is_some();
+        let config = host
+            .team_config(&p.id, ctx.team_id)
+            .await
+            .map_err(internal)?;
         let mut v = settings_item(&p, on);
         v["deploy"] = p.granted.deploy.into();
         v["deploy_granted_for_team"] = granted.into();
+        v["settings"] = config.to_json()["settings"].take();
+        v["needs_configuration"] = config.needs_configuration().into();
         items.push(v);
     }
     Ok(ok(json!({"plugins": items, "can_manage": ctx.is_team_admin()})).into_response())
+}
+
+async fn team_settings(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path((publisher, name)): Path<(String, String)>,
+) -> ApiResult {
+    let host = host(&state)?;
+    let v =
+        crate::routes::plugins::team_settings(host, &format!("{publisher}/{name}"), ctx.team_id)
+            .await?;
+    Ok(ok(v).into_response())
+}
+
+async fn update_team_settings(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path((publisher, name)): Path<(String, String)>,
+    body: Bytes,
+) -> ApiResult {
+    let host = host(&state)?;
+    let v = patch_team_settings(host, &ctx, &format!("{publisher}/{name}"), &body).await?;
+    Ok(ok(v).into_response())
 }
 
 async fn set_team(
