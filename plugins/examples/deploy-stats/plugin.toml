@@ -1,0 +1,13 @@
+id = "coolify-rs/deploy-stats"
+name = "Deploy stats"
+version = "0.1.0"
+description = "Counts successful and failed deployments per team and serves the totals."
+license = "Apache-2.0"
+source = "https://github.com/coolify-rs/coolify-rs/tree/main/plugins/examples/deploy-stats"
+# Version of the plugin interface (crates/coolify-plugins/wit/plugin.wit) the component targets.
+api = "0.1"
+
+[capabilities]
+events = ["deployment.succeeded", "deployment.failed"]
+storage = true
+routes = true

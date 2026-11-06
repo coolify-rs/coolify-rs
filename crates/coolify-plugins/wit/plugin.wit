@@ -1,0 +1,85 @@
+/// The interface between coolify-rs and a plugin. docs/decisions/0010-plugins.md explains the design.
+///
+/// A plugin is a component that targets the `plugin` world. Every call runs in a fresh instance, so a plugin
+/// keeps nothing in memory between calls; `storage` is where state lives. Each call is for one team, and
+/// `storage` reads and writes that team's data only.
+package coolify-rs:plugin@0.1.0;
+
+interface types {
+    /// Something coolify-rs announced, as `notifications` would deliver it to the team.
+    record event {
+        /// A stable name such as `deployment.succeeded`; docs/PLUGINS.md lists them.
+        kind: string,
+        /// Version of the payload's shape for this kind.
+        version: u32,
+        /// The team the event belongs to.
+        team-id: s64,
+        /// JSON object with the event's data.
+        payload: string,
+    }
+
+    /// Who is calling a plugin route: the API token's team and abilities, already authenticated.
+    record caller {
+        team-id: s64,
+        user-id: s64,
+        abilities: list<string>,
+    }
+
+    /// A request to one of the plugin's routes. `path` is relative to the plugin's prefix and starts with `/`.
+    record request {
+        method: string,
+        path: string,
+        query: string,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    record response {
+        status: u16,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+}
+
+/// Always granted. Lines go to coolify-rs's log, tagged with the plugin.
+interface log {
+    enum level { debug, info, warn, error }
+    write: func(level: level, message: string);
+}
+
+/// Capability `storage`: key-value data of the plugin, kept per team, with a quota.
+interface storage {
+    get: func(key: string) -> result<option<list<u8>>, string>;
+    set: func(key: string, value: list<u8>) -> result<_, string>;
+    delete: func(key: string) -> result<_, string>;
+    /// Keys starting with `prefix`, sorted, at most 1000.
+    keys: func(prefix: string) -> result<list<string>, string>;
+}
+
+/// Capability `http`: HTTPS requests to the hosts the manifest lists, and no others.
+interface http {
+    use types.{response};
+
+    record outgoing {
+        method: string,
+        url: string,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    fetch: func(request: outgoing) -> result<response, string>;
+}
+
+world plugin {
+    import log;
+    import storage;
+    import http;
+
+    use types.{event, caller, request, response};
+
+    /// Capability `events`: called for each subscribed event of a team that enabled the plugin.
+    export on-event: func(event: event) -> result<_, string>;
+
+    /// Capability `routes`: called for requests under the plugin's API prefix.
+    export handle-request: func(caller: caller, request: request) -> response;
+}

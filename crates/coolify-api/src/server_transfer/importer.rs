@@ -2887,10 +2887,8 @@ fn runner_config_problem(payload: &Value) -> Option<String> {
         }
         _ => return Some("The labels field must be an array.".into()),
     }
-    for (key, label, min, max) in [("max_runners", "max runners", 1, 32)] {
-        if let Some(p) = int_problem(payload, key, label, min, max) {
-            return Some(p);
-        }
+    if let Some(p) = int_problem(payload, "max_runners", "max runners", 1, 32) {
+        return Some(p);
     }
     if blank(dg(payload, "docker_mode")) {
         return Some("The docker mode field is required.".into());

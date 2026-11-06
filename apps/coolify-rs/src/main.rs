@@ -260,6 +260,35 @@ async fn shutdown_signal() {
     tracing::info!("shutdown signal received, draining connections");
 }
 
+/// Starts the plugin host (ADR 0010) and routes Coolify's notifications to it as plugin events.
+/// `COOLIFY_RS_PLUGINS=off` switches plugins off; so does read-only mode, which writes nothing.
+async fn start_plugins(db: &Db) -> Option<coolify_plugins::Host> {
+    if env("COOLIFY_RS_PLUGINS").is_some_and(|v| v == "off") || db.ensure_writable().is_err() {
+        return None;
+    }
+    match coolify_plugins::Host::start(db.clone(), coolify_plugins::Settings::default()).await {
+        Ok(host) => {
+            tracing::info!(loaded = ?host.loaded_ids(), "plugins enabled");
+            coolify_jobs::notifications::plugin_events::set_event_sink(Box::new(PluginSink(
+                host.clone(),
+            )));
+            Some(host)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "plugins are switched off: the plugin host did not start");
+            None
+        }
+    }
+}
+
+struct PluginSink(coolify_plugins::Host);
+
+impl coolify_jobs::notifications::plugin_events::EventSink for PluginSink {
+    fn emit(&self, team_id: i64, kind: &'static str, payload: serde_json::Value) {
+        self.0.dispatch(team_id, kind, payload);
+    }
+}
+
 fn main() -> Result<()> {
     // The deployment job is a deep chain of large futures; an unoptimized build overflows the
     // default 2 MiB worker stack while polling it.
@@ -428,6 +457,7 @@ async fn run() -> Result<()> {
                     None
                 }
             };
+            let plugins = start_plugins(&db).await;
             let state = AppState::with_options(
                 db,
                 cfg.version,
@@ -438,6 +468,9 @@ async fn run() -> Result<()> {
                     secure_cookies: cfg.secure_cookies,
                     session_idle: cfg.session_idle,
                     remote,
+                    plugins,
+                    allow_unverified_plugins: env("COOLIFY_RS_ALLOW_UNVERIFIED_PLUGINS")
+                        .is_some_and(|v| v == "true"),
                 },
             );
             if seeded.is_some()

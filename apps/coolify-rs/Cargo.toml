@@ -15,6 +15,7 @@ coolify-api.workspace = true
 coolify-compat.workspace = true
 coolify-db.workspace = true
 coolify-jobs.workspace = true
+coolify-plugins.workspace = true
 coolify-remote.workspace = true
 mimalloc = "0.1"
 serde_json.workspace = true

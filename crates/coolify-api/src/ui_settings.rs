@@ -1825,6 +1825,7 @@ async fn email_action(
             Ok::<_, ApiError>(())
         }
     };
+    #[allow(clippy::needless_late_init)] // the arms return early with their own responses
     let message: Option<&str>;
     match body.action.as_str() {
         "submit" => {

@@ -5,7 +5,7 @@ members = ["crates/*", "apps/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.99"
 license = "Apache-2.0"
 repository = "https://github.com/coolify-rs/coolify-rs" # provisional
 publish = false
@@ -18,6 +18,7 @@ coolify-api = { path = "crates/coolify-api" }
 coolify-port = { path = "crates/coolify-port" }
 coolify-remote = { path = "crates/coolify-remote" }
 coolify-jobs = { path = "crates/coolify-jobs" }
+coolify-plugins = { path = "crates/coolify-plugins" }
 
 anyhow = "1"
 axum = { version = "0.8", features = ["multipart", "ws"] }
@@ -58,6 +59,8 @@ zeroize = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 http-body-util = "0.1"
 reqwest = { version = "0.12.9", default-features = false, features = ["rustls-tls", "json"] }
+wasmtime = "50"
+wasmtime-wasi = "50"
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1", "tokio1-rustls", "ring", "webpki-roots"] }
 pulldown-cmark = { version = "0.13", default-features = false }
 
@@ -70,6 +73,8 @@ unwrap_used = "warn"
 expect_used = "warn"
 dbg_macro = "warn"
 todo = "warn"
+# Handlers return axum's `Response` as the error to short-circuit; boxing it buys nothing.
+result_large_err = "allow"
 
 [profile.release]
 lto = "thin"

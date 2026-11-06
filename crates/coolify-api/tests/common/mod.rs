@@ -89,24 +89,35 @@ impl Harness {
     }
 
     async fn build(tdb: TestDb) -> Self {
-        Self::build_with(tdb, None, None).await
+        Self::build_with(tdb, None, None, None).await
+    }
+
+    /// A harness with the plugin host running; `allow_unverified` is `COOLIFY_RS_ALLOW_UNVERIFIED_PLUGINS`.
+    pub async fn with_plugins(allow_unverified: bool) -> Self {
+        let tdb = TestDb::new(SEED).await;
+        let host =
+            coolify_plugins::Host::start(tdb.db.clone(), coolify_plugins::Settings::default())
+                .await
+                .unwrap();
+        Self::build_with(tdb, None, None, Some((host, allow_unverified))).await
     }
 
     /// A harness that also serves the web UI from `dir`.
     pub async fn with_ui(dir: std::path::PathBuf) -> Self {
-        Self::build_with(TestDb::new(SEED).await, Some(dir), None).await
+        Self::build_with(TestDb::new(SEED).await, Some(dir), None, None).await
     }
 
     /// A harness with remote execution (background jobs) enabled.
     #[allow(dead_code)]
     pub async fn with_remote(remote: coolify_remote::Remote) -> Self {
-        Self::build_with(TestDb::new(SEED).await, None, Some(remote)).await
+        Self::build_with(TestDb::new(SEED).await, None, Some(remote), None).await
     }
 
     async fn build_with(
         tdb: TestDb,
         ui_dir: Option<std::path::PathBuf>,
         remote: Option<coolify_remote::Remote>,
+        plugins: Option<(coolify_plugins::Host, bool)>,
     ) -> Self {
         let mut tokens = Vec::new();
         for (i, (name, user, team, abilities, expires)) in TOKENS.iter().enumerate() {
@@ -134,6 +145,8 @@ impl Harness {
                 encrypter: Some(Encrypter::new(APP_KEY).unwrap()),
                 ui_dir,
                 remote,
+                allow_unverified_plugins: plugins.as_ref().is_some_and(|(_, a)| *a),
+                plugins: plugins.map(|(h, _)| h),
                 ..Options::default()
             },
         );

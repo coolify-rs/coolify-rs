@@ -526,6 +526,7 @@ pub async fn create_storage(
         is_host_file,
         ..Default::default()
     };
+    #[allow(clippy::needless_late_init)] // the branches return early with validation errors
     let order: &[&str];
     let mut remote_check_ran = false;
     if is_directory {
@@ -536,12 +537,12 @@ pub async fn create_storage(
             )]));
         }
         let fail = |m: String| validation(&[("fs_path", m)]);
-        let fs_path = resolve_host_path(dirs, fs_str, "storage source path").map_err(&fail)?;
+        let fs_path = resolve_host_path(dirs, fs_str, "storage source path").map_err(fail)?;
         let mount_path =
-            validate_file_mount_path(mount, "storage destination path").map_err(&fail)?;
+            validate_file_mount_path(mount, "storage destination path").map_err(fail)?;
         check_host_path(state, ctx, resource, &fs_path, true)
             .await?
-            .map_err(&fail)?;
+            .map_err(fail)?;
         remote_check_ran = !is_outside_resource_directory(&fs_path, dirs);
         new.fs_path = fs_path;
         new.mount_path = mount_path;
@@ -561,9 +562,9 @@ pub async fn create_storage(
         }
         let fail = |m: String| validation(&[("mount_path", m)]);
         new.fs_path =
-            validate_host_file_mount_path(fs_str, "host file source path").map_err(&fail)?;
+            validate_host_file_mount_path(fs_str, "host file source path").map_err(fail)?;
         new.mount_path =
-            validate_file_mount_path(mount, "host file destination path").map_err(&fail)?;
+            validate_file_mount_path(mount, "host file destination path").map_err(fail)?;
         order = &[
             "fs_path",
             "mount_path",
@@ -577,10 +578,10 @@ pub async fn create_storage(
         if input.filled("fs_path") {
             let fail = |m: String| validation(&[("fs_path", m)]);
             let fs_path =
-                resolve_host_path(dirs, fs_str, "file storage source path").map_err(&fail)?;
+                resolve_host_path(dirs, fs_str, "file storage source path").map_err(fail)?;
             check_host_path(state, ctx, resource, &fs_path, false)
                 .await?
-                .map_err(&fail)?;
+                .map_err(fail)?;
             remote_check_ran = true;
             new.fs_path = fs_path;
         } else {

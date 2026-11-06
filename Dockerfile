@@ -8,7 +8,7 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run check && npm run build
 
-FROM rust:1.95.0-slim-bookworm AS build
+FROM rust:1.99.1-slim-bookworm AS build
 WORKDIR /src
 COPY . .
 RUN cargo build --release --locked -p coolify-rs \

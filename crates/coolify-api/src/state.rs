@@ -31,6 +31,10 @@ pub struct Inner {
     pub secure_cookies: bool,
     /// Background work on servers; `None` when remote execution is not configured.
     pub jobs: Option<coolify_jobs::Jobs>,
+    /// Plugins (ADR 0010); `None` when plugins are switched off.
+    pub plugins: Option<coolify_plugins::Host>,
+    /// `COOLIFY_RS_ALLOW_UNVERIFIED_PLUGINS`: admins may install plugins that are not from the registry.
+    pub allow_unverified_plugins: bool,
 }
 
 /// Optional settings; `Default` is suitable for tests.
@@ -41,6 +45,8 @@ pub struct Options {
     pub secure_cookies: bool,
     pub session_idle: Duration,
     pub remote: Option<coolify_remote::Remote>,
+    pub plugins: Option<coolify_plugins::Host>,
+    pub allow_unverified_plugins: bool,
 }
 
 impl Default for Options {
@@ -52,6 +58,8 @@ impl Default for Options {
             // Upstream SESSION_LIFETIME default: 10080 minutes.
             session_idle: Duration::from_secs(10080 * 60),
             remote: None,
+            plugins: None,
+            allow_unverified_plugins: false,
         }
     }
 }
@@ -88,6 +96,8 @@ impl AppState {
             sessions: SessionStore::new(o.session_idle),
             ui_dir: o.ui_dir,
             secure_cookies: o.secure_cookies,
+            plugins: o.plugins,
+            allow_unverified_plugins: o.allow_unverified_plugins,
         }))
     }
 

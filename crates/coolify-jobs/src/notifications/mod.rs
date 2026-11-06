@@ -26,6 +26,7 @@ pub mod lookup;
 mod markdown;
 mod messages;
 mod php;
+pub mod plugin_events;
 mod tracking;
 mod views;
 
@@ -291,6 +292,7 @@ pub async fn deliver(
     team_id: i64,
     notification: Notification,
 ) {
+    plugin_events::emit(team_id, &notification);
     if let Some(t) = notification.throttle() {
         let before = Utc::now() - chrono::Duration::minutes(t.minutes);
         match claim_throttle(

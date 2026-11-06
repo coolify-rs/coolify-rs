@@ -849,7 +849,7 @@ impl Run {
             if !defined("COOLIFY_BRANCH") {
                 out.put(
                     "COOLIFY_BRANCH",
-                    Some(self.b.branch.clone()).filter(|_| !self.b.branch.is_empty()),
+                    (!self.b.branch.is_empty()).then(|| self.b.branch.clone()),
                 );
             }
             if !defined("COOLIFY_RESOURCE_UUID") {

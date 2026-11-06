@@ -1,4 +1,5 @@
 /target
+/plugins/target
 /.upstream
 /compat/reference/secrets
 /.migration-runs/

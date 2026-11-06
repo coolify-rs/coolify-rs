@@ -737,7 +737,7 @@ async fn smtp_send_with_cc(
     };
     let host = settings
         .secret("smtp_host")
-        .map_err(&fail)?
+        .map_err(fail)?
         .unwrap_or_default();
     let host = host
         .trim_start_matches('[')
@@ -768,11 +768,11 @@ async fn smtp_send_with_cc(
     }
     let username = settings
         .secret("smtp_username")
-        .map_err(&fail)?
+        .map_err(fail)?
         .unwrap_or_default();
     let password = settings
         .secret("smtp_password")
-        .map_err(&fail)?
+        .map_err(fail)?
         .unwrap_or_default();
 
     // Symfony leaves `"` in the header unescaped (`Notif "E2E" <a@b.c>`), which mail clients read

@@ -16,7 +16,7 @@ Next: servers read endpoints + UI, then the rest of milestone 2 (IMPLEMENTATION_
 | Previous baseline | `v4.5.0` = `5ca69705d681da46028ea15a8a39d90a4ebcce89` (older-database test only) |
 | Upstream analysed up to | `b5823c77…` (`migration/state.json` → `last_analyzed`) |
 | Upstream integrated up to | `b5823c77…` (`last_integrated`, via run `run-5ca69705d-b5823c777`) |
-| Toolchain | Rust 1.95.0 (pinned) |
+| Toolchain | Rust 1.99.1 (pinned) |
 
 ## Implemented and verified
 

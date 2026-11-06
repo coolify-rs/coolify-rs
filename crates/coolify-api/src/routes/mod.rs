@@ -21,6 +21,7 @@ pub mod instance_email;
 pub mod integration_tokens;
 pub mod misc;
 pub mod notifications;
+pub mod plugins;
 pub mod private_keys;
 pub mod projects;
 pub mod resource_tags;
@@ -3621,6 +3622,7 @@ pub fn router(state: AppState) -> Router {
         router = router.route(&format!("/{uri}"), mr.fallback(crate::fallback::fallback));
     }
     router
+        .merge(plugins::routes(state.clone()))
         .merge(crate::session::routes())
         .merge(crate::ui::routes(state.clone()))
         .merge(crate::webhooks::routes())
