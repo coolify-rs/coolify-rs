@@ -408,8 +408,6 @@ struct Target<'a> {
     source: Option<(i64, &'a str)>,
     /// `true` for the deploy key form, `generate_random_name($uuid)`.
     random_name: bool,
-    /// The deploy key form sets `base_directory` for Docker Compose only.
-    base_directory_always: bool,
 }
 
 /// The common part of `submit()`.
@@ -507,12 +505,10 @@ async fn create_application(
         columns.push(("source_id", ColumnValue::Int(id)));
         columns.push(("source_type", ColumnValue::Text(Some(morph.to_owned()))));
     }
-    if t.base_directory_always {
-        columns.push((
-            "base_directory",
-            ColumnValue::Text(Some(base_directory_value(base.as_deref()))),
-        ));
-    }
+    columns.push((
+        "base_directory",
+        ColumnValue::Text(Some(base_directory_value(base.as_deref()))),
+    ));
     if matches!(build_pack.as_str(), "dockerfile" | "dockerimage") {
         columns.push(("health_check_enabled", ColumnValue::Bool(false)));
     }
@@ -524,12 +520,6 @@ async fn create_application(
             "docker_compose_location",
             ColumnValue::Text(Some(compose_location_value(compose_location.as_deref()))),
         ));
-        if !t.base_directory_always {
-            columns.push((
-                "base_directory",
-                ColumnValue::Text(Some(base_directory_value(base.as_deref()))),
-            ));
-        }
     }
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     for k in [
@@ -662,7 +652,7 @@ fn invalid_repository(m: &Map<String, Value>) -> Option<String> {
             return Some("The docker compose location field format is invalid.".into());
         }
     }
-    None
+    super::public_git::base_directory_rule(m, "base directory")
 }
 
 /// `GithubPrivateRepository::submit()`, `GitlabPrivateRepository::submit()` and
@@ -724,7 +714,6 @@ pub async fn create(
             private_key_id: None,
             source: Some((source_id, p.morph())),
             random_name: false,
-            base_directory_always: true,
         },
     )
     .await
@@ -802,6 +791,9 @@ async fn create_deploy_key(state: &AppState, ctx: &AuthCtx, m: &Map<String, Valu
     if s(m, "build_pack").is_empty() {
         errors.push(("build_pack", "The Build pack field is required.".into()));
     }
+    if let Some(msg) = super::public_git::base_directory_rule(m, "Base directory") {
+        errors.push(("base_directory", msg));
+    }
     if let Some(c) = m
         .get("docker_compose_location")
         .and_then(Value::as_str)
@@ -832,7 +824,6 @@ async fn create_deploy_key(state: &AppState, ctx: &AuthCtx, m: &Map<String, Valu
             private_key_id: Some(key),
             source: source.map(|id| (id, r"App\Models\GithubApp")),
             random_name: true,
-            base_directory_always: false,
         },
     )
     .await

@@ -132,7 +132,19 @@ pub(super) async fn destination(
     ctx: &AuthCtx,
     uuid: &str,
 ) -> Result<Option<(i64, i64)>, ApiError> {
-    Ok(coolify_db::databases::team_destination(&state.db, ctx.team_id, uuid).await?)
+    let Some((destination_id, server_id)) =
+        coolify_db::databases::team_destination(&state.db, ctx.team_id, uuid).await?
+    else {
+        return Ok(None);
+    };
+    // `$destination->server?->canHostResources()`: a build server cannot deploy.
+    let server = servers::find_by_id(&state.db, server_id).await?;
+    if server.is_none_or(|s| {
+        crate::routes::servers::effective_role_is_build(&s.settings.unwrap_or_default())
+    }) {
+        return Ok(None);
+    }
+    Ok(Some((destination_id, server_id)))
 }
 
 /// `applyDetectionResult()`'s input, as the page applies it.
@@ -445,6 +457,28 @@ static ENV_KEY: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| 
     regex::Regex::new(r"(?i)^[A-Z_][A-Z0-9_]*$").unwrap_or_else(|_| unreachable!())
 });
 
+/// `ValidationPatterns::DIRECTORY_PATH_PATTERN`.
+static DIRECTORY_PATH: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^/([a-zA-Z0-9._\-/~@+]*)?$").unwrap_or_else(|_| unreachable!())
+});
+
+/// `ValidationPatterns::directoryPathRules()` (`nullable|string|max:255|regex`) for `base_directory`.
+pub(super) fn base_directory_rule(m: &Map<String, Value>, attribute: &str) -> Option<String> {
+    let v = m
+        .get("base_directory")
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())?;
+    if v.chars().count() > 255 {
+        Some(format!(
+            "The {attribute} field must not be greater than 255 characters."
+        ))
+    } else if !DIRECTORY_PATH.is_match(v) {
+        Some(format!("The {attribute} field format is invalid."))
+    } else {
+        None
+    }
+}
+
 /// The `baseDirectory` mutator, then the `saving` hook's trim (which runs the mutator again).
 pub(super) fn base_directory_value(v: Option<&str>) -> String {
     let set = |v: &str| format!("/{}", v.trim_start_matches('/'));
@@ -542,6 +576,9 @@ pub async fn create(
     }
     if build_pack.is_empty() {
         errors.push(("build_pack", "The build pack field is required.".into()));
+    }
+    if let Some(msg) = base_directory_rule(&m, "base directory") {
+        errors.push(("base_directory", msg));
     }
     if let Some(c) = compose_location.as_deref().filter(|c| !c.is_empty()) {
         if c.chars().count() > 255 {
