@@ -1890,6 +1890,36 @@ pub async fn migrate(
     Err(ApiError::Abort(StatusCode::NOT_FOUND, ""))
 }
 
+/// `$targetVolumesByMount` of `clone_service()`: the volumes of a cloned service part pair up with
+/// the source's by mount path, as `(source volume, target volume id, target volume)`.
+pub(crate) async fn volume_pairs(
+    state: &AppState,
+    kind: SubKind,
+    source_id: i64,
+    target_id: i64,
+) -> Result<Vec<(String, i64, String)>, ApiError> {
+    let targets = svc::persistent_storages(&state.db, kind, target_id).await?;
+    let mut pairs = Vec::new();
+    for volume in svc::persistent_storages(&state.db, kind, source_id).await? {
+        let mount = volume.get("mount_path").and_then(Value::as_str);
+        let target = targets
+            .iter()
+            .find(|t| t.get("mount_path").and_then(Value::as_str) == mount);
+        if let (Some(name), Some(target)) = (volume.get("name").and_then(Value::as_str), target) {
+            pairs.push((
+                name.to_owned(),
+                target.get("id").and_then(Value::as_i64).unwrap_or_default(),
+                target
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+            ));
+        }
+    }
+    Ok(pairs)
+}
+
 /// `POST /services/{uuid}/clone` (`clone_by_uuid`, `clone_service()`).
 pub async fn clone_service(
     State(state): State<AppState>,
@@ -1946,7 +1976,7 @@ pub async fn clone_service(
     let new_uuid = coolify_domain::new_public_id();
     let name = match input.str("name").filter(|n| !n.is_empty()) {
         Some(n) => strip_tags(Some(n)),
-        None => format!("{}-clone-{new_uuid}", s.name()),
+        None => coolify_jobs::clone_volume_data::clone_resource_name(s.name(), &new_uuid),
     };
     let now = state.now();
     let new_id = svc::replicate(
@@ -1969,38 +1999,15 @@ pub async fn clone_service(
             if !clone_volumes {
                 continue;
             }
-            // `$targetVolumesByMount`: the volumes pair up by mount path.
-            let targets = svc::persistent_storages(&state.db, kind, sub.id).await?;
-            for volume in svc::persistent_storages(&state.db, kind, source.id).await? {
-                let mount = volume.get("mount_path").and_then(Value::as_str);
-                let target = targets
-                    .iter()
-                    .find(|t| t.get("mount_path").and_then(Value::as_str) == mount);
-                if let (Some(name), Some(target)) =
-                    (volume.get("name").and_then(Value::as_str), target)
-                {
-                    pending.push((
-                        name.to_owned(),
-                        target.get("id").and_then(Value::as_i64).unwrap_or_default(),
-                        target
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned(),
-                    ));
-                }
-            }
+            pending.extend(volume_pairs(&state, kind, source.id, sub.id).await?);
         }
     }
     if !pending.is_empty()
         && let Some(source_server) = server_of(&state, &s).await?
     {
-        jobs_of(&state)?.spawn_service_volume_clones(
-            s.clone(),
-            source_server.id,
-            server_id,
-            pending,
-        );
+        jobs_of(&state)?
+            .spawn_service_volume_clones(s.clone(), source_server.id, server_id, pending)
+            .await;
     }
     tracing::info!(target: "audit", event = "api.service.cloned", team_id = ctx.team_id, source_uuid = %s.uuid, service_uuid = %new_uuid, "service cloned");
     Ok(created(json!({"uuid": new_uuid, "message": "Service cloned."})).into_response())

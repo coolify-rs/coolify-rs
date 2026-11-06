@@ -443,29 +443,31 @@ impl Jobs {
         )))
     }
 
-    /// The Bus chain of `clone_by_uuid`: stop once, clone all volumes (`VolumeCloneJob`), start once.
-    pub fn spawn_volume_clones(
+    /// `clone_by_uuid`: `CloneVolumeDataWithSourceStopped::run($database, $volumeJobs)`.
+    pub async fn spawn_volume_clones(
         &self,
         d: DatabaseRow,
         target_server_id: i64,
         clones: Vec<(String, String)>,
     ) {
-        let jobs = self.clone();
-        tokio::spawn(async move {
-            let Ok(server) = jobs.server_for(&d).await else {
-                return;
-            };
-            jobs.stop_database(&d, &server, true).await;
-            for (source, target) in clones {
-                if let Err(e) = jobs
-                    .clone_volume_data(server.id, target_server_id, &source, None, &target)
-                    .await
-                {
-                    tracing::warn!(database = %d.uuid, error = %e, "volume clone failed");
-                }
-            }
-            jobs.start_database(&d, None).await;
-        });
+        let Some(source_server) = d.server_id() else {
+            return;
+        };
+        let copies = clones
+            .into_iter()
+            .map(|(source, target)| crate::clone_volume_data::VolumeCopy {
+                source_server,
+                target_server: target_server_id,
+                source_volume: source,
+                volume_id: None,
+                target_volume: target,
+            })
+            .collect();
+        self.clone_volume_data_with_source_stopped(
+            crate::clone_volume_data::CloneSource::Database(d),
+            copies,
+        )
+        .await;
     }
 
     /// `StopDatabase::handle`.
@@ -578,7 +580,7 @@ impl Jobs {
     }
 
     /// `StartDatabase::queueStart` + `DatabaseStartJob` + `StartPostgresql`.
-    async fn start_database(&self, d: &DatabaseRow, user_id: Option<i64>) {
+    pub(crate) async fn start_database(&self, d: &DatabaseRow, user_id: Option<i64>) {
         let server = match self.server_for(d).await {
             Ok(s) => s,
             Err(e) => {

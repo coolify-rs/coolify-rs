@@ -74,6 +74,10 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/ui/auth/verify/resend", post(resend_verification))
         .route("/ui/auth/email-verify", post(email_verify))
         .route("/ui/auth/two-factor-required", get(two_factor_required))
+        .route(
+            "/ui/auth/two-factor-required/switch-team",
+            post(two_factor_switch_team),
+        )
         .route("/ui/auth/confirm-password/state", get(confirm_state))
         .route(
             "/ui/auth/passkeys/confirm/options",
@@ -754,15 +758,22 @@ async fn two_factor_required(
     if confirmed && status != Some("two-factor-authentication-confirmed") {
         return Ok(ok(json!({"redirect": "/"})).into_response());
     }
-    let team_name = users::memberships(&state.db, user.id)
-        .await?
-        .into_iter()
+    let memberships = users::memberships(&state.db, user.id).await?;
+    let team_name = memberships
+        .iter()
         .find(|m| m.team_id == session.team_id)
-        .map(|m| m.team_name);
+        .map(|m| m.team_name.clone());
+    // `teams()->where('is_two_factor_required', false)->get()`.
+    let without: Vec<Value> = memberships
+        .iter()
+        .filter(|m| !m.two_factor_required)
+        .map(|m| json!({"id": m.team_id, "name": m.team_name}))
+        .collect();
     let mut out = json!({
         "team_name": team_name,
         "confirmed": confirmed,
         "code_error": flash.errors.then_some("The provided two factor authentication code was invalid."),
+        "teams_without_two_factor": without,
     });
     if confirmed {
         out["recovery_codes"] = decrypted(&state, user.two_factor_recovery_codes.as_deref())
@@ -775,6 +786,31 @@ async fn two_factor_required(
         out["url"] = json!(url);
     }
     Ok(ok(out).into_response())
+}
+
+/// `POST /two-factor-required/switch-team`: a member without 2FA can leave a team that requires
+/// it, but only for a team that does not.
+async fn two_factor_switch_team(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionUser>,
+    body: axum::body::Bytes,
+) -> ApiResult {
+    let input: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    // `$request->integer('team_id')`.
+    let wanted = match input.get("team_id") {
+        Some(Value::Number(n)) => n.as_i64(),
+        Some(Value::String(s)) => s.trim().parse::<i64>().ok(),
+        _ => None,
+    };
+    let team = users::memberships(&state.db, session.user_id)
+        .await?
+        .into_iter()
+        .find(|m| Some(m.team_id) == wanted && !m.two_factor_required);
+    let Some(team) = team else {
+        return Ok(ok(json!({"redirect": "/two-factor-required"})).into_response());
+    };
+    session::activate_team(&state, &session.id, session.user_id, team.team_id).await?;
+    Ok(ok(json!({"redirect": "/"})).into_response())
 }
 
 // ---- Passkeys ----

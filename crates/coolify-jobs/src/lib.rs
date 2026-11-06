@@ -6,6 +6,7 @@
 
 pub mod applications;
 pub mod checks;
+pub mod clone_volume_data;
 pub mod cloud;
 pub mod compose_parser;
 pub mod databases;

@@ -453,7 +453,8 @@ pub async fn state(
         }).and_then(|p| p.get("type").and_then(Value::as_str).map(str::to_owned)),
         // `$application->additional_servers()->exists()`.
         "has_additional_servers": !coolify_db::application_ops::additional_networks(&state.db, fresh.id).await?.is_empty(),
-        "custom_labels": labels_text,
+        // `syncData()`: commands and configuration only for who can update.
+        "custom_labels": if ctx.is_team_admin() { labels_text } else { None },
         "server_ip": server.as_ref().and_then(|s| s.record.get("ip")).cloned().unwrap_or(Value::Null),
         "server_id": server.as_ref().map(|s| s.id),
         "is_swarm": a.str("destination_type") == Some(r"App\Models\SwarmDocker") || server.as_ref().is_some_and(|s| coolify_jobs::server::ServerInfo::from_row(s).is_swarm()),

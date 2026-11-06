@@ -28,6 +28,7 @@ export interface TwoFactorRequiredData {
   qr_svg?: string;
   secret?: string;
   url?: string;
+  teams_without_two_factor: { id: number; name: string }[];
 }
 
 export interface OauthProvider {
@@ -71,6 +72,8 @@ export const authUi = {
   resendVerification: () => request<Message>('POST', '/ui/auth/verify/resend', {}),
   emailVerify: (path: string, query: string) => request<Message>('POST', '/ui/auth/email-verify', { path, query }),
   twoFactorRequired: () => request<TwoFactorRequiredData>('GET', '/ui/auth/two-factor-required'),
+  twoFactorSwitchTeam: (teamId: number) =>
+    request<{ redirect: string }>('POST', '/ui/auth/two-factor-required/switch-team', { team_id: teamId }),
   confirmState: () => request<{ can_confirm_with_passkey: boolean }>('GET', '/ui/auth/confirm-password/state'),
   skipBoarding: () => request<Message>('POST', '/ui/onboarding/skip', {}),
   oauthSettings: () => request<OauthSettings>('GET', '/ui/settings/oauth'),
