@@ -1,8 +1,9 @@
 services:
   # Placeholder for "soketi" overrides in a docker-compose.custom.yml carried over from an upstream
   # installation. Without this entry, such an override is an incomplete service and every upgrade fails.
+  # It uses the coolify-rs image, so install and upgrade do not pull another image.
   soketi:
-    image: busybox:1.37
+    image: "${COOLIFY_RS_REGISTRY:-ghcr.io}/${COOLIFY_RS_IMAGE:-coolify-rs/coolify-rs}:${LATEST_IMAGE:-latest}"
     deploy:
       replicas: 0
   coolify:
