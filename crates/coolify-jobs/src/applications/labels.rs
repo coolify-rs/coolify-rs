@@ -29,7 +29,7 @@ pub struct LabelInput {
     pub traffic_analytics: bool,
     /// The `is_http_basic_auth_*` arguments, when enabled with a username and a password.
     pub basic_auth: Option<BasicAuth>,
-    /// The preview branch of `generateLabelsApplication`: no retries and no redirect direction.
+    /// The preview branch of `generateLabelsApplication`: no redirect direction.
     pub preview: bool,
 }
 
@@ -354,14 +354,6 @@ pub fn traefik(input: &LabelInput, domains: &[String], escape_redirect: bool) ->
     } else {
         "false"
     };
-    // is_retry_enabled
-    let mut from_labels: Vec<String> = Vec::new();
-    if !input.preview {
-        labels.push(format!(
-            "traefik.http.middlewares.retry-{u}.retry.attempts=5"
-        ));
-        from_labels.push(format!("retry-{u}"));
-    }
     for (i, domain) in domains.iter().enumerate() {
         let Some(url) = UrlParts::parse(domain) else {
             continue;
@@ -430,7 +422,6 @@ pub fn traefik(input: &LabelInput, domains: &[String], escape_redirect: bool) ->
             if noindex {
                 m.push(noindex_name.clone());
             }
-            m.extend(from_labels.iter().cloned());
             m
         };
         if url.scheme == "https" {
@@ -564,11 +555,6 @@ pub fn caddy(input: &LabelInput, domains: &[String]) -> Vec<String> {
                 "caddy_{i}.{handle}.{i}_reverse_proxy={{{{upstreams}}}}"
             )),
         }
-        if !input.preview {
-            labels.push(format!(
-                "caddy_{i}.{handle}.{i}_reverse_proxy.lb_try_duration=5s"
-            ));
-        }
         labels.push(format!("caddy_{i}.{handle}={path}*"));
         if input.gzip {
             labels.push(format!("caddy_{i}.encode=zstd gzip"));
@@ -691,17 +677,16 @@ mod tests {
         let expected = "traefik.enable=true
 traefik.http.middlewares.gzip-sse.compress.excludedcontenttypes=text/event-stream
 traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
-traefik.http.middlewares.retry-vwk8s4gc0cw8kkw4ow8sgcc0.retry.attempts=5
 traefik.http.routers.http-0-vwk8s4gc0cw8kkw4ow8sgcc0.entryPoints=http
 traefik.http.routers.http-0-vwk8s4gc0cw8kkw4ow8sgcc0.middlewares=redirect-to-https
 traefik.http.routers.http-0-vwk8s4gc0cw8kkw4ow8sgcc0.rule=Host(`app.example.com`) && PathPrefix(`/`)
 traefik.http.routers.http-0-vwk8s4gc0cw8kkw4ow8sgcc0.service=http-0-vwk8s4gc0cw8kkw4ow8sgcc0
 traefik.http.routers.http-1-vwk8s4gc0cw8kkw4ow8sgcc0.entryPoints=http
-traefik.http.routers.http-1-vwk8s4gc0cw8kkw4ow8sgcc0.middlewares=gzip-sse,retry-vwk8s4gc0cw8kkw4ow8sgcc0
+traefik.http.routers.http-1-vwk8s4gc0cw8kkw4ow8sgcc0.middlewares=gzip-sse
 traefik.http.routers.http-1-vwk8s4gc0cw8kkw4ow8sgcc0.rule=Host(`api.example.com`) && PathPrefix(`/`)
 traefik.http.routers.http-1-vwk8s4gc0cw8kkw4ow8sgcc0.service=http-1-vwk8s4gc0cw8kkw4ow8sgcc0
 traefik.http.routers.https-0-vwk8s4gc0cw8kkw4ow8sgcc0.entryPoints=https
-traefik.http.routers.https-0-vwk8s4gc0cw8kkw4ow8sgcc0.middlewares=gzip-sse,retry-vwk8s4gc0cw8kkw4ow8sgcc0
+traefik.http.routers.https-0-vwk8s4gc0cw8kkw4ow8sgcc0.middlewares=gzip-sse
 traefik.http.routers.https-0-vwk8s4gc0cw8kkw4ow8sgcc0.rule=Host(`app.example.com`) && PathPrefix(`/`)
 traefik.http.routers.https-0-vwk8s4gc0cw8kkw4ow8sgcc0.service=https-0-vwk8s4gc0cw8kkw4ow8sgcc0
 traefik.http.routers.https-0-vwk8s4gc0cw8kkw4ow8sgcc0.tls.certresolver=letsencrypt
@@ -710,14 +695,12 @@ traefik.http.services.http-0-vwk8s4gc0cw8kkw4ow8sgcc0.loadbalancer.server.port=8
 traefik.http.services.http-1-vwk8s4gc0cw8kkw4ow8sgcc0.loadbalancer.server.port=80
 traefik.http.services.https-0-vwk8s4gc0cw8kkw4ow8sgcc0.loadbalancer.server.port=80
 caddy_0.encode=zstd gzip
-caddy_0.handle_path.0_reverse_proxy.lb_try_duration=5s
 caddy_0.handle_path.0_reverse_proxy={{upstreams 80}}
 caddy_0.handle_path=/*
 caddy_0.header=-Server
 caddy_0.try_files={path} /index.html /index.php
 caddy_0=https://app.example.com
 caddy_1.encode=zstd gzip
-caddy_1.handle_path.1_reverse_proxy.lb_try_duration=5s
 caddy_1.handle_path.1_reverse_proxy={{upstreams 80}}
 caddy_1.handle_path=/*
 caddy_1.header=-Server
