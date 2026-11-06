@@ -46,8 +46,9 @@
     page.resourceSwitcher = {
       title: 'S3 Storage',
       label: d.name,
+      uuid: d.uuid,
       usable,
-      items: d.storages.map((s) => ({ label: s.name, href: `/storages/${s.uuid}`, active: s.uuid === d.uuid })),
+      items: d.storages.map((s) => ({ label: s.name, uuid: s.uuid, href: `/storages/${s.uuid}`, active: s.uuid === d.uuid })),
     };
   }
 

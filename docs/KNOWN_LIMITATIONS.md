@@ -75,6 +75,8 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
   path, get `200` with the app shell where upstream answers `302`. The browser ends up on the same page.
 - **Servers list** has no Patches column (for example "5 security updates").
 - **Server page after linking a cloud provider** shows no provider status badge, refresh or power controls.
+- **Connection retries**: upstream sends every idempotent outgoing HTTP request once more after a connection failure
+  (`RetryHttpConnectionFailures`, global 10 s connect and 30 s timeouts). coolify-rs does this for Cloudflare only.
 - **"Configuration changed" warning** on application, database and service pages has no list of the changes.
 - **Remembered list or canvas view** is read in the browser, so a list page shows for an instant before it switches to
   the canvas.

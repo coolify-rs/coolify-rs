@@ -15,7 +15,7 @@ use reqwest::{Client, Method, Response};
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
-use super::provider_urls::{hosted, hosted_client};
+use super::provider_urls::hosted;
 use crate::server_ops::{Srv, tunnel};
 
 pub const NO_PUBLIC_ADDRESS_MESSAGE: &str =
@@ -30,6 +30,54 @@ fn api() -> String {
     format!(
         "{}/client/v4",
         hosted("cloudflare", "https://api.cloudflare.com")
+    )
+}
+
+/// `Http::withToken()` under the global options of `AppServiceProvider::configureHttpClient`:
+/// a 10 second connect timeout and a 30 second timeout.
+fn cloudflare_client() -> Result<Client, String> {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .user_agent("coolify-rs")
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// `RetryHttpConnectionFailures`: an idempotent request is sent once more, after half a second,
+/// when the connection failed. A request that timed out after it was sent is not sent again.
+trait SendRetrying {
+    async fn send_retrying(self) -> reqwest::Result<Response>;
+}
+
+impl SendRetrying for reqwest::RequestBuilder {
+    async fn send_retrying(self) -> reqwest::Result<Response> {
+        let (client, request) = self.build_split();
+        let request = request?;
+        let again = matches!(
+            *request.method(),
+            Method::GET | Method::HEAD | Method::OPTIONS | Method::PUT | Method::DELETE
+        )
+        .then(|| request.try_clone())
+        .flatten();
+        match client.execute(request).await {
+            Err(e) if e.is_connect() => match again {
+                Some(again) => {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    client.execute(again).await
+                }
+                None => Err(e),
+            },
+            other => other,
+        }
+    }
+}
+
+/// `IntegrationTokenValidator::connectionErrorMessage`.
+pub fn connection_error_message(provider: &str) -> String {
+    format!(
+        "Could not connect to the {} API. Check the network connection of Coolify and try again.",
+        super::secret_managers::provider_name(provider)
     )
 }
 
@@ -51,58 +99,67 @@ fn request(client: &Client, method: Method, url: String, token: &str) -> reqwest
         .header("accept", "application/json")
 }
 
-/// `CloudflareTokenValidator::validate`.
-pub async fn validate_token(token: &str, capabilities: &[String]) -> bool {
-    let Ok(client) = hosted_client(10) else {
-        return false;
+/// A request that never got an answer (`ConnectionException`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionFailed;
+
+/// `CloudflareTokenValidator::validate`. A connection failure is not caught there: it reaches
+/// the form, which shows `connectionErrorMessage`.
+pub async fn validate_token(
+    token: &str,
+    capabilities: &[String],
+) -> Result<bool, ConnectionFailed> {
+    let Ok(client) = cloudflare_client() else {
+        return Ok(false);
     };
     let base = api();
     let get = |url: String| request(&client, Method::GET, url, token);
-    let Ok(verification) = get(format!("{base}/user/tokens/verify")).send().await else {
-        return false;
-    };
+    let verification = get(format!("{base}/user/tokens/verify"))
+        .send_retrying()
+        .await
+        .map_err(|_| ConnectionFailed)?;
     let (status, body) = parse(verification).await;
     if !ok(status) || body.pointer("/result/status").and_then(Value::as_str) != Some("active") {
-        return false;
+        return Ok(false);
     }
     if !capabilities.iter().any(|c| c == "dns") {
-        return true;
+        return Ok(true);
     }
-    let Ok(zones) = get(format!("{base}/zones"))
+    let zones = get(format!("{base}/zones"))
         .query(&[("per_page", 1)])
-        .send()
+        .send_retrying()
         .await
-    else {
-        return false;
-    };
+        .map_err(|_| ConnectionFailed)?;
     let (status, zones) = parse(zones).await;
     let Some(zone_id) = zones.pointer("/result/0/id").and_then(Value::as_str) else {
-        return false;
+        return Ok(false);
     };
     if !ok(status) {
-        return false;
+        return Ok(false);
     }
     let records = get(format!("{base}/zones/{zone_id}/dns_records"))
         .query(&[("per_page", 1)])
-        .send()
-        .await;
-    if !records.is_ok_and(|r| r.status().is_success()) {
-        return false;
+        .send_retrying()
+        .await
+        .map_err(|_| ConnectionFailed)?;
+    if !records.status().is_success() {
+        return Ok(false);
     }
     if capabilities.iter().any(|c| c == "tunnel") {
         let Some(account) = zones
             .pointer("/result/0/account/id")
             .and_then(Value::as_str)
         else {
-            return false;
+            return Ok(false);
         };
         return get(format!("{base}/accounts/{account}/cfd_tunnel"))
             .query(&[("per_page", "1"), ("is_deleted", "false")])
-            .send()
+            .send_retrying()
             .await
-            .is_ok_and(|r| r.status().is_success());
+            .map(|r| r.status().is_success())
+            .map_err(|_| ConnectionFailed);
     }
-    true
+    Ok(true)
 }
 
 /// `CloudflareDnsProvider::missingPermissionMessage`.
@@ -121,14 +178,14 @@ pub async fn sync_zones(
     token: &str,
     now: NaiveDateTime,
 ) -> Result<usize, String> {
-    let client = hosted_client(10)?;
+    let client = cloudflare_client()?;
     let base = api();
     let mut zones: Vec<SyncedZone> = Vec::new();
     let mut page = 1i64;
     loop {
         let response = request(&client, Method::GET, format!("{base}/zones"), token)
             .query(&[("page", page), ("per_page", 50)])
-            .send()
+            .send_retrying()
             .await
             .map_err(|e| e.to_string())?;
         let (status, body) = parse(response).await;
@@ -456,7 +513,7 @@ impl Dns<'_> {
     ) -> Result<Vec<Remote>, DnsError> {
         let hostname = normalize(hostname);
         let token = self.token(&zone.token_encrypted)?;
-        let client = hosted_client(10).map_err(DnsError::Other)?;
+        let client = cloudflare_client().map_err(DnsError::Other)?;
         let mut query: Vec<(&str, String)> = Vec::new();
         if let Some(k) = kind {
             query.push(("type", k.to_owned()));
@@ -470,7 +527,7 @@ impl Dns<'_> {
             &token,
         )
         .query(&query)
-        .send()
+        .send_retrying()
         .await
         .map_err(|e| DnsError::Other(e.to_string()))?;
         let (status, body) = parse(response).await;
@@ -626,7 +683,7 @@ impl Dns<'_> {
             .unwrap_or(Value::Null);
         let proxied = proxied
             .unwrap_or_else(|| metadata.get("proxied_dns").and_then(Value::as_bool) == Some(true));
-        let client = hosted_client(10).map_err(DnsError::Other)?;
+        let client = cloudflare_client().map_err(DnsError::Other)?;
         let response = request(
             &client,
             Method::POST,
@@ -641,7 +698,7 @@ impl Dns<'_> {
             "proxied": proxied,
             "comment": ownership_comment(&uuid),
         }))
-        .send()
+        .send_retrying()
         .await
         .map_err(|e| DnsError::Other(e.to_string()))?;
         let (status, body) = parse(response).await;
@@ -723,7 +780,7 @@ impl Dns<'_> {
             changes.insert("proxied".into(), json!(true));
         }
         let token = self.token(&zone.token_encrypted)?;
-        let client = hosted_client(10).map_err(DnsError::Other)?;
+        let client = cloudflare_client().map_err(DnsError::Other)?;
         let response = request(
             &client,
             Method::PATCH,
@@ -736,7 +793,7 @@ impl Dns<'_> {
             &token,
         )
         .json(&Value::Object(changes))
-        .send()
+        .send_retrying()
         .await
         .map_err(|e| DnsError::Other(e.to_string()))?;
         let status = response.status().as_u16();
@@ -775,7 +832,7 @@ impl Dns<'_> {
         let Ok(token) = self.token(&zone.token_encrypted) else {
             return Deletion::Failed;
         };
-        let Ok(client) = hosted_client(10) else {
+        let Ok(client) = cloudflare_client() else {
             return Deletion::Failed;
         };
         let url = format!(
@@ -785,7 +842,7 @@ impl Dns<'_> {
             record.provider_record_id
         );
         let Ok(response) = request(&client, Method::GET, url.clone(), &token)
-            .send()
+            .send_retrying()
             .await
         else {
             return Deletion::Failed;
@@ -807,7 +864,10 @@ impl Dns<'_> {
         {
             return Deletion::ChangedExternally;
         }
-        let Ok(deleted) = request(&client, Method::DELETE, url, &token).send().await else {
+        let Ok(deleted) = request(&client, Method::DELETE, url, &token)
+            .send_retrying()
+            .await
+        else {
             return Deletion::Failed;
         };
         let status = deleted.status().as_u16();
@@ -846,7 +906,7 @@ impl Dns<'_> {
         let Ok(token) = self.token(&zone.token_encrypted) else {
             return false;
         };
-        let Ok(client) = hosted_client(10) else {
+        let Ok(client) = cloudflare_client() else {
             return false;
         };
         let url = format!(
@@ -856,7 +916,7 @@ impl Dns<'_> {
             record.provider_record_id
         );
         let Ok(response) = request(&client, Method::GET, url.clone(), &token)
-            .send()
+            .send_retrying()
             .await
         else {
             return false;
@@ -875,7 +935,7 @@ impl Dns<'_> {
         }
         let patched = request(&client, Method::PATCH, url, &token)
             .json(&json!({"comment": ownership_comment(&record.uuid)}))
-            .send()
+            .send_retrying()
             .await;
         if !patched.is_ok_and(|r| r.status().is_success()) {
             return false;
@@ -904,7 +964,8 @@ impl Dns<'_> {
         let Ok(_guard) = hostname_lock(record.team_id, &record.name).await else {
             return false;
         };
-        let (Ok(token), Ok(client)) = (self.token(&zone.token_encrypted), hosted_client(10)) else {
+        let (Ok(token), Ok(client)) = (self.token(&zone.token_encrypted), cloudflare_client())
+        else {
             return false;
         };
         let url = format!(
@@ -913,7 +974,10 @@ impl Dns<'_> {
             zone.provider_zone_id,
             record.provider_record_id
         );
-        let Ok(response) = request(&client, Method::GET, url, &token).send().await else {
+        let Ok(response) = request(&client, Method::GET, url, &token)
+            .send_retrying()
+            .await
+        else {
             return false;
         };
         let (_, body) = parse(response).await;
@@ -1439,7 +1503,7 @@ async fn tunnel_request(
         builder = builder.json(b);
     }
     let response = builder
-        .send()
+        .send_retrying()
         .await
         .map_err(|e| DnsError::Other(e.to_string()))?;
     let (status, value) = parse(response).await;
@@ -1603,7 +1667,7 @@ pub async fn tunnel_set_up(
                 zone.name
             ))
         })?;
-    let client = hosted_client(15).map_err(DnsError::Other)?;
+    let client = cloudflare_client().map_err(DnsError::Other)?;
     let (tunnel_id, tunnel_token, created) =
         find_or_create_tunnel(&client, token, &account, &tunnel_name(&uuid)).await?;
     let resource = DnsResource {
@@ -1660,7 +1724,7 @@ pub async fn tunnel_set_up(
                 format!("{}/accounts/{account}/cfd_tunnel/{tunnel_id}", api()),
                 token,
             )
-            .send()
+            .send_retrying()
             .await;
         }
         return Err(e);
@@ -1689,7 +1753,7 @@ async fn delete_stopped_tunnel(
 ) -> Option<String> {
     let did_not_respond =
         || format!("Cloudflare did not respond. Delete the tunnel {name} in Cloudflare.");
-    let Ok(client) = hosted_client(15) else {
+    let Ok(client) = cloudflare_client() else {
         return Some(did_not_respond());
     };
     let path = format!("{}/accounts/{account}/cfd_tunnel/{tunnel_id}", api());
@@ -1700,14 +1764,14 @@ async fn delete_stopped_tunnel(
             format!("{path}/connections"),
             token,
         )
-        .send()
+        .send_retrying()
         .await
         .is_err()
         {
             return Some(did_not_respond());
         }
         let Ok(response) = request(&client, Method::DELETE, path.clone(), token)
-            .send()
+            .send_retrying()
             .await
         else {
             return Some(did_not_respond());
@@ -1781,6 +1845,33 @@ pub async fn tunnel_tear_down(dns: &Dns<'_>, srv: &Srv) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn only_idempotent_requests_are_sent_again_after_a_connection_failure() {
+        // Nothing listens on the discard port: every attempt is refused.
+        let client = cloudflare_client().unwrap();
+        let started = std::time::Instant::now();
+        let e = client
+            .get("http://127.0.0.1:9/zones")
+            .send_retrying()
+            .await
+            .unwrap_err();
+        assert!(e.is_connect());
+        assert!(started.elapsed() >= Duration::from_millis(500));
+        let started = std::time::Instant::now();
+        assert!(
+            client
+                .post("http://127.0.0.1:9/zones")
+                .send_retrying()
+                .await
+                .is_err()
+        );
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert_eq!(
+            connection_error_message("cloudflare"),
+            "Could not connect to the Cloudflare API. Check the network connection of Coolify and try again."
+        );
+    }
 
     #[test]
     fn public_addresses() {

@@ -6,9 +6,11 @@
   import Reicon from './Reicon.svelte';
   import DatabaseStatusSummary from './DatabaseStatusSummary.svelte';
   import { link } from '../lib/router.svelte';
+  import { page } from '../lib/page.svelte';
 
   let {
     label,
+    uuid = undefined,
     items,
     status,
     healthcheckUrl,
@@ -19,7 +21,8 @@
     statusTitle?: string;
     containerName?: string;
     label: string;
-    items: { label: string; href: string; active: boolean }[];
+    uuid?: string;
+    items: { label: string; href: string; active: boolean; uuid?: string }[];
     status: string;
     healthcheckUrl: string;
     restartLimit?: number | null;
@@ -30,7 +33,7 @@
   let root: HTMLDivElement | undefined = $state();
   let input: HTMLInputElement | undefined = $state();
 
-  const shown = $derived(items.filter((i) => i.label.toLowerCase().includes(search.toLowerCase())));
+  const shown = $derived(items.filter((i) => page.nameOf(i.uuid, i.label).toLowerCase().includes(search.toLowerCase())));
 </script>
 
 <svelte:window
@@ -54,7 +57,7 @@
         title="Switch resource"
         class="flex h-8 min-w-0 items-center gap-1.5 rounded-md px-2 opacity-70 transition-[background-color,opacity] hover:bg-neutral-100 hover:opacity-100 dark:hover:bg-white/[0.05]"
       >
-        <span class="min-w-0 truncate font-semibold text-black dark:text-fg">{label}</span>
+        <span class="min-w-0 truncate font-semibold text-black dark:text-fg">{page.nameOf(uuid, label)}</span>
         <svg class="size-4 shrink-0 text-neutral-400 dark:text-fg-faint" viewBox="0 0 24 24" fill="none">
           <path d="M8 9l4-4 4 4M8 15l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
@@ -86,7 +89,7 @@
             onclick={() => (open = false)}
             class="listbox-option {item.active ? 'bg-neutral-100 font-medium text-black dark:bg-white/[0.07] dark:text-fg' : ''}"
           >
-            <span class="min-w-0 flex-1 truncate">{item.label}</span>
+            <span class="min-w-0 flex-1 truncate">{page.nameOf(item.uuid, item.label)}</span>
           </a>
         {/each}
       </div>

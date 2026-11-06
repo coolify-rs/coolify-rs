@@ -10,6 +10,7 @@
   import Modal from '../components/Modal.svelte';
   import Dropdown from '../components/Dropdown.svelte';
   import FormInput from '../components/FormInput.svelte';
+  import Callout from '../components/Callout.svelte';
   import FormTextarea from '../components/FormTextarea.svelte';
   import Listbox from '../components/Listbox.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
@@ -91,7 +92,14 @@
       const r = await sharedVariablesUi.bulk(scope, devText);
       if (r.message) notify.success(r.message);
     } catch (e) {
-      notify.failure(e instanceof ApiError ? e.message : String(e));
+      const message = e instanceof ApiError ? e.message : String(e);
+      notify.failure(message);
+      // `submit()` returns before `refreshEnvs()` when a "# coolify:" line does not parse
+      // (`parseEnvDevView` names the line): the edited text stays.
+      if (/^Line \d+: /.test(message)) {
+        saving = false;
+        return;
+      }
     } finally {
       saving = false;
     }
@@ -257,13 +265,17 @@
               </div>
             {/if}
             <form
-              class="p-4"
+              class="flex flex-col gap-4 p-4"
               onsubmit={(e) => {
                 e.preventDefault();
                 saveBulk();
               }}
             >
               <UnsavedBar dirty={devText !== savedDev} {saving} onsave={saveBulk} onreset={() => (devText = savedDev)} />
+              <Callout type="info" title="Note">
+                To make a variable literal, put <code class="font-mono"># coolify: literal</code> directly above
+                its line. Without this line, the flag does not change.
+              </Callout>
               <FormTextarea rows={20} id="variables" monospace label={variablesLabel} disabled={!data.can_update} bind:value={devText} />
             </form>
           {/if}

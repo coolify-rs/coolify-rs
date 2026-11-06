@@ -162,12 +162,29 @@ macro_rules! list_route {
             let provider = Provider::from_name($provider).ok_or(ApiError::Internal)?;
             let client = Client::new(provider, &token);
             let call = $call;
-            Ok(match call(client).await {
-                Ok(v) => ok(v).into_response(),
-                Err(_) => failed(format!("Failed to fetch {} {}.", $label, $resource)),
-            })
+            Ok(list_answer(
+                $provider,
+                call(client).await,
+                &format!("Failed to fetch {} {}.", $label, $resource),
+            ))
         }
     };
+}
+
+/// The answer of a list endpoint. Only `HetznerController` turns a `CloudProviderApiException`
+/// into a 502; the Vultr and DigitalOcean list endpoints answer 500 for every failure.
+fn list_answer(provider: &str, r: Result<Value, CloudError>, generic: &str) -> Response {
+    match r {
+        Ok(v) => ok(v).into_response(),
+        Err(CloudError::Provider(p)) if provider == "hetzner" => {
+            json_status(StatusCode::BAD_GATEWAY, p.json_body(generic))
+        }
+        Err(e) => {
+            // `report($e)`.
+            tracing::error!(error = %e, "cloud provider request failed");
+            failed(generic.to_string())
+        }
+    }
 }
 
 fn arr(v: Result<Vec<Value>, CloudError>) -> Result<Value, CloudError> {
@@ -181,13 +198,49 @@ list_route!(
     |c: Client| async move { arr(c.hetzner_locations().await) },
     "locations"
 );
-list_route!(
-    hetzner_server_types,
-    "hetzner",
-    "Hetzner",
-    |c: Client| async move { arr(c.hetzner_server_types().await) },
-    "server types"
-);
+
+/// `HetznerController::serverTypes`: `?location=` keeps the types that can be ordered there.
+pub async fn hetzner_server_types(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> ApiResult {
+    let input = lenient_json(&headers, &uri, &body);
+    let mut errors = Map::new();
+    token_rule_errors(&input, &mut errors);
+    // `'location' => 'nullable|string'`.
+    if input
+        .get("location")
+        .is_some_and(|v| !v.is_null() && !v.is_string())
+    {
+        errors.insert(
+            "location".into(),
+            json!(["The location field must be a string."]),
+        );
+    }
+    if !errors.is_empty() {
+        return Err(ApiError::Validation(errors));
+    }
+    let token = match provider_token(&state, &ctx, &input, "hetzner", "Hetzner").await {
+        Ok((_, t)) => t,
+        Err(r) => return Ok(r),
+    };
+    // `$request->query('location')`: only the query string counts here.
+    // (After `TrimStrings` and `ConvertEmptyStringsToNull`.)
+    let location = crate::input::query_param(&uri, "location")
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty());
+    let client = Client::new(Provider::Hetzner, &token);
+    Ok(list_answer(
+        "hetzner",
+        arr(client
+            .hetzner_server_types(location.as_deref(), false)
+            .await),
+        "Failed to fetch Hetzner server types.",
+    ))
+}
 list_route!(
     hetzner_ssh_keys,
     "hetzner",
@@ -627,19 +680,38 @@ fn current_ip(row: Option<coolify_db::servers::ServerRow>) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn spawn_validation(state: &AppState, c: &Created, team_id: i64) {
-    if let Some(jobs) = &state.jobs {
-        jobs.spawn_validation(c.id, team_id, c.uuid.clone(), coolify_jobs::Wording::Api);
-    }
-}
-
+/// The `RateLimitException`, `CloudProviderApiException` and `\Throwable` answers of a create.
 fn provider_error(e: CloudError, generic: &str) -> Response {
     match e {
         CloudError::RateLimit(r) => rate_limit(r),
+        CloudError::Provider(p) => json_status(StatusCode::BAD_GATEWAY, p.json_body(generic)),
         CloudError::Api(m, _) => {
             tracing::error!(error = %m, "cloud provider request failed");
             failed(generic.to_string())
         }
+    }
+}
+
+const INSTANT_VALIDATE_REASON: &str = "Missing required permissions: deploy. Instant validation installs Docker and starts the proxy on the new server, so it needs a token with the deploy permission.";
+
+/// `instant_validate`: as given, else true for a token with the deploy permission; a true value
+/// needs that permission.
+fn instant_validate(input: &Input, ctx: &AuthCtx) -> Result<bool, ApiError> {
+    let wanted = if input.filled("instant_validate") {
+        input_bool(input, "instant_validate")
+    } else {
+        deploy_forbidden(ctx, INSTANT_VALIDATE_REASON).is_ok()
+    };
+    if wanted {
+        deploy_forbidden(ctx, INSTANT_VALIDATE_REASON)?;
+    }
+    Ok(wanted)
+}
+
+/// `ValidateNewCloudServerJob::dispatch($server)`.
+fn spawn_new_server_validation(state: &AppState, c: &Created) {
+    if let Some(jobs) = &state.jobs {
+        jobs.spawn_validate_new_cloud_server(c.id);
     }
 }
 
@@ -704,6 +776,7 @@ pub async fn hetzner_create_server(
     if not_empty(&input, "cloud_init_script") || not_empty(&input, "hetzner_ssh_key_ids") {
         deploy_forbidden(&ctx, DEPLOY_REASON)?;
     }
+    let validate_now = instant_validate(&input, &ctx)?;
     let name = server_name(&input);
     let v4 = bool_or(&input, "enable_ipv4", true);
     let v6 = bool_or(&input, "enable_ipv6", true);
@@ -827,11 +900,21 @@ pub async fn hetzner_create_server(
     } else {
         None
     };
+    let server_id = created.get("id").cloned().unwrap_or(Value::Null);
+    // The `catch` blocks delete the server at Hetzner when it could not be tracked.
+    let delete_untracked = || async {
+        if let Some(id) = server_id.as_i64()
+            && let Err(e) = client.hetzner_delete_server(id).await
+        {
+            tracing::error!(error = %e, "deleting the untracked Hetzner server failed");
+        }
+    };
     let Some(ip) = ip.filter(|i| !i.is_empty()) else {
+        tracing::error!("No public IP address available. Enable at least one of IPv4 or IPv6.");
+        delete_untracked().await;
         return Ok(failed(GENERIC.to_string()));
     };
-    let server_id = created.get("id").cloned().unwrap_or(Value::Null);
-    let c = create_row(
+    let c = match create_row(
         &state,
         &ctx,
         peer,
@@ -853,9 +936,25 @@ pub async fn hetzner_create_server(
                 "hetzner_server_id",
                 C::Int(server_id.as_i64().unwrap_or_default()),
             ),
+            (
+                "hetzner_server_status",
+                C::Text(
+                    created
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                ),
+            ),
         ],
     )
-    .await?;
+    .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            delete_untracked().await;
+            return Err(e);
+        }
+    };
     if bool_or(&input, "enable_backups", false)
         && let Err(e) = client
             .hetzner_enable_backup(server_id.as_i64().unwrap_or_default())
@@ -863,8 +962,8 @@ pub async fn hetzner_create_server(
     {
         tracing::warn!(error = %e, "enabling Hetzner backups failed");
     }
-    if bool_or(&input, "instant_validate", false) {
-        spawn_validation(&state, &c, ctx.team_id);
+    if validate_now {
+        spawn_new_server_validation(&state, &c);
     }
     Ok(json_status(
         StatusCode::CREATED,
@@ -918,6 +1017,7 @@ pub async fn vultr_create_server(
     if not_empty(&input, "cloud_init_script") || not_empty(&input, "vultr_ssh_key_ids") {
         deploy_forbidden(&ctx, DEPLOY_REASON)?;
     }
+    let validate_now = instant_validate(&input, &ctx)?;
     let name = server_name(&input);
     let v6_value = input
         .get("enable_ipv6")
@@ -1062,8 +1162,8 @@ pub async fn vultr_create_server(
         )
         .await?;
     }
-    if bool_or(&input, "instant_validate", false) {
-        spawn_validation(&state, &c, ctx.team_id);
+    if validate_now {
+        spawn_new_server_validation(&state, &c);
     }
     let fresh = servers::find_by_id(&state.db, c.id).await?;
     Ok(json_status(
@@ -1122,6 +1222,7 @@ pub async fn digitalocean_create_server(
     let name = server_name(&input);
     let v6 = bool_or(&input, "enable_ipv6", true);
     let monitoring = bool_or(&input, "monitoring", true);
+    let validate_now = instant_validate(&input, &ctx)?;
     let (token_row, token) =
         match provider_token(&state, &ctx, &input, "digitalocean", "DigitalOcean").await {
             Ok(t) => t,
@@ -1246,8 +1347,8 @@ pub async fn digitalocean_create_server(
         )
         .await?;
     }
-    if bool_or(&input, "instant_validate", false) {
-        spawn_validation(&state, &c, ctx.team_id);
+    if validate_now {
+        spawn_new_server_validation(&state, &c);
     }
     let fresh = servers::find_by_id(&state.db, c.id).await?;
     Ok(json_status(
@@ -1317,6 +1418,7 @@ pub async fn hostinger_create_server(
     if input.filled("post_install_script_id") || !public_keys.is_empty() {
         deploy_forbidden(&ctx, DEPLOY_REASON_HOSTINGER)?;
     }
+    let validate_now = instant_validate(&input, &ctx)?;
     let (token_row, token) =
         match provider_token(&state, &ctx, &input, "hostinger", "Hostinger").await {
             Ok(t) => t,
@@ -1426,8 +1528,8 @@ pub async fn hostinger_create_server(
     let fresh = servers::find_by_id(&state.db, c.id).await?;
     let ip = current_ip(fresh);
     let placeholder = ip.as_str() == Some("1.2.3.4");
-    if bool_or(&input, "instant_validate", false) && !placeholder {
-        spawn_validation(&state, &c, ctx.team_id);
+    if validate_now {
+        spawn_new_server_validation(&state, &c);
     }
     Ok(json_status(
         StatusCode::CREATED,

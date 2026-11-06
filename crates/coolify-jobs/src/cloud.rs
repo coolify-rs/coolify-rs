@@ -15,6 +15,17 @@ use serde_json::{Map, Value, json};
 
 use crate::Jobs;
 
+/// Replaces `COOLIFY_RS_CLOUD_API_BASE` for this process (tests aim it at a local fake).
+static API_BASE: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// Sends every provider request of this process to `base` (a local fake), like
+/// `COOLIFY_RS_CLOUD_API_BASE`.
+pub fn set_api_base(base: &str) {
+    if let Ok(mut b) = API_BASE.write() {
+        *b = Some(base.trim_end_matches('/').to_string());
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
     Hetzner,
@@ -35,7 +46,11 @@ impl Provider {
     }
 
     fn base(self) -> String {
-        let over = std::env::var("COOLIFY_RS_CLOUD_API_BASE").ok();
+        let over = API_BASE
+            .read()
+            .ok()
+            .and_then(|b| b.clone())
+            .or_else(|| std::env::var("COOLIFY_RS_CLOUD_API_BASE").ok());
         match (self, over.as_deref()) {
             (Self::Hetzner, Some(b)) => format!("{b}/hetzner/v1"),
             (Self::Vultr, Some(b)) => format!("{b}/vultr/v2"),
@@ -63,8 +78,21 @@ impl Provider {
 pub enum CloudError {
     /// `RateLimitException`.
     RateLimit(Option<i64>),
-    /// `\Exception` with the message and code.
+    /// `\Exception` with the message and code: a connection failure, or a Hostinger error.
     Api(String, u16),
+    /// `CloudProviderApiException`: an error response from Hetzner, DigitalOcean or Vultr.
+    Provider(ProviderApiError),
+}
+
+impl CloudError {
+    /// The HTTP status of a rejected request (0 for a connection failure).
+    pub fn status(&self) -> u16 {
+        match self {
+            Self::RateLimit(_) => 429,
+            Self::Api(_, s) => *s,
+            Self::Provider(p) => p.status,
+        }
+    }
 }
 
 impl std::fmt::Display for CloudError {
@@ -72,7 +100,114 @@ impl std::fmt::Display for CloudError {
         match self {
             Self::RateLimit(_) => f.write_str("Rate limit exceeded. Please try again later."),
             Self::Api(m, _) => f.write_str(m),
+            Self::Provider(p) => f.write_str(&p.message),
         }
+    }
+}
+
+/// `CloudProviderApiException`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderApiError {
+    pub provider: &'static str,
+    /// `"{provider} API error: {providerMessage}"`.
+    pub message: String,
+    pub status: u16,
+    /// Only a value that looks like an identifier is kept.
+    pub error_code: Option<String>,
+    pub invalid_fields: Vec<String>,
+}
+
+impl ProviderApiError {
+    pub fn new(
+        provider: &'static str,
+        provider_message: &str,
+        status: u16,
+        error_code: Option<&Value>,
+        invalid_fields: &[Value],
+    ) -> Self {
+        // `preg_match('/^[a-z_]{1,64}$/')` after `strtolower`.
+        let error_code = error_code
+            .and_then(Value::as_str)
+            .map(str::to_lowercase)
+            .filter(|c| {
+                (1..=64).contains(&c.len())
+                    && c.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+            });
+        // `preg_match('/^[a-z0-9_.\[\]]{1,64}$/i')`.
+        let invalid_fields = invalid_fields
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|n| {
+                (1..=64).contains(&n.len())
+                    && n.bytes().all(|b| {
+                        b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'[' | b']')
+                    })
+            })
+            .map(str::to_string)
+            .collect();
+        Self {
+            provider,
+            message: format!("{provider} API error: {provider_message}"),
+            status,
+            error_code,
+            invalid_fields,
+        }
+    }
+
+    /// `safeMessage()`: built only from the status, the error code and field names, never from
+    /// the provider's free-text message.
+    pub fn safe_message(&self) -> String {
+        let p = self.provider;
+        match (self.error_code.as_deref(), self.status) {
+            (Some("resource_limit_exceeded"), _) => format!(
+                "Your {p} account has reached a resource limit, for example the server limit. Remove unused resources or ask {p} for a higher limit."
+            ),
+            (Some("resource_unavailable"), _) => "The selected server type, image, or location is not available now. Select a different location or server type.".to_string(),
+            (Some("uniqueness_error"), _) => format!(
+                "A resource with the same name already exists in your {p} account, for example a server or an SSH key. Use a different name."
+            ),
+            (Some("maintenance"), _) | (_, 423) | (_, 500..) => {
+                format!("{p} cannot process the request now. Try again later.")
+            }
+            (_, 401) => format!(
+                "The {p} API token is invalid or expired. Update the cloud provider token in Coolify."
+            ),
+            (_, 403) => format!(
+                "The {p} API token does not have permission for this request. Use a token with read and write access."
+            ),
+            (_, 404) => format!(
+                "{p} could not find a requested resource, for example the location, server type, image, or SSH key."
+            ),
+            (_, 409) => format!(
+                "{p} rejected the request because of a conflict with an existing resource."
+            ),
+            (_, 422) => {
+                let mut m = format!(
+                    "{p} rejected the request as invalid. Check the selected values and your account limits."
+                );
+                if !self.invalid_fields.is_empty() {
+                    m.push_str(&format!(
+                        " Invalid fields: {}.",
+                        self.invalid_fields.join(", ")
+                    ));
+                }
+                m
+            }
+            (code, status) => format!(
+                "{p} returned HTTP {status}{}.",
+                code.map(|c| format!(" (error code: {c})"))
+                    .unwrap_or_default()
+            ),
+        }
+    }
+
+    /// `toJsonResponse()`: the body of the 502 answer.
+    pub fn json_body(&self, failure_message: &str) -> Value {
+        json!({
+            "message": format!("{failure_message} {}", self.safe_message()),
+            "provider_status": self.status,
+            "provider_error_code": self.error_code,
+        })
     }
 }
 
@@ -82,8 +217,8 @@ pub struct Client {
     provider: Provider,
     token: String,
     http: reqwest::Client,
-    /// Status and body of the last rejected response, as a `RequestException` carries them.
-    failure: std::sync::Arc<std::sync::Mutex<Option<(u16, String)>>>,
+    /// Replaces the provider's base URL (tests).
+    base: Option<String>,
 }
 
 impl Client {
@@ -96,13 +231,16 @@ impl Client {
                 .connect_timeout(Duration::from_secs(10))
                 .build()
                 .unwrap_or_default(),
-            failure: Default::default(),
+            base: None,
         }
     }
 
-    /// Status and body of the last rejected response.
-    pub fn last_failure(&self) -> Option<(u16, String)> {
-        self.failure.lock().ok().and_then(|f| f.clone())
+    /// A client that sends its requests to `base` instead of the provider (a local fake).
+    pub fn with_base(provider: Provider, token: &str, base: &str) -> Self {
+        Self {
+            base: Some(base.trim_end_matches('/').to_string()),
+            ..Self::new(provider, token)
+        }
     }
 
     fn attempts(&self, method: &Method) -> u32 {
@@ -114,6 +252,23 @@ impl Client {
         }
     }
 
+    /// The `when` callback of `Http::retry`: whether a failed attempt is sent again.
+    /// `status` is None for a connection failure.
+    fn retries(&self, method: &Method, status: Option<StatusCode>) -> bool {
+        match self.provider {
+            // Only GET is retried, and only on a server error or a connection failure.
+            Provider::Hostinger => status.is_none_or(|s| s.is_server_error()),
+            // A POST that failed with a 5xx or a timeout can still have created the resource,
+            // so only idempotent requests are sent again; client errors are not retried.
+            Provider::Hetzner => {
+                status == Some(StatusCode::TOO_MANY_REQUESTS)
+                    || (status.is_none_or(|s| s.as_u16() >= 500)
+                        && (*method == Method::GET || *method == Method::DELETE))
+            }
+            Provider::Vultr | Provider::DigitalOcean => true,
+        }
+    }
+
     /// `request($method, $endpoint, $data)`: query string for GET, JSON otherwise.
     async fn request(
         &self,
@@ -121,7 +276,8 @@ impl Client {
         endpoint: &str,
         data: Option<&Value>,
     ) -> Result<Value, CloudError> {
-        let url = format!("{}{endpoint}", self.provider.base());
+        let base = self.base.clone().unwrap_or_else(|| self.provider.base());
+        let url = format!("{base}{endpoint}");
         let attempts = self.attempts(&method);
         let mut last: Option<(StatusCode, Value, reqwest::header::HeaderMap)> = None;
         let mut transport: Option<String> = None;
@@ -161,16 +317,7 @@ impl Client {
                     let headers = r.headers().clone();
                     let bytes = r.bytes().await.unwrap_or_default();
                     let body = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
-                    if !status.is_success()
-                        && let Ok(mut f) = self.failure.lock()
-                    {
-                        *f = Some((
-                            status.as_u16(),
-                            String::from_utf8_lossy(&bytes).into_owned(),
-                        ));
-                    }
-                    let retryable = !status.is_success()
-                        && (self.provider != Provider::Hostinger || status.is_server_error());
+                    let retryable = !status.is_success() && self.retries(&method, Some(status));
                     last = Some((status, body, headers));
                     transport = None;
                     if !retryable {
@@ -179,6 +326,9 @@ impl Client {
                 }
                 Err(e) => {
                     transport = Some(e.to_string());
+                    if !self.retries(&method, None) {
+                        break;
+                    }
                 }
             }
             if attempt < attempts {
@@ -211,17 +361,50 @@ impl Client {
             return Err(CloudError::RateLimit(retry));
         }
         let text = |p: &str| body.pointer(p).and_then(Value::as_str).map(str::to_string);
-        let message = match self.provider {
-            Provider::Hetzner => text("/error/message"),
-            Provider::Vultr => text("/error"),
-            Provider::DigitalOcean => text("/message"),
-            Provider::Hostinger => text("/message").or_else(|| text("/error")),
-        }
-        .unwrap_or_else(|| "Unknown error".to_string());
-        Err(CloudError::Api(
-            format!("{} API error: {message}", self.provider.label()),
-            status.as_u16(),
-        ))
+        let unknown = || "Unknown error".to_string();
+        let label = self.provider.label();
+        let status = status.as_u16();
+        Err(match self.provider {
+            Provider::Hetzner => CloudError::Provider(ProviderApiError::new(
+                label,
+                &text("/error/message").unwrap_or_else(unknown),
+                status,
+                body.pointer("/error/code"),
+                &body
+                    .pointer("/error/details/fields")
+                    .and_then(Value::as_array)
+                    .map(|fields| {
+                        fields
+                            .iter()
+                            .map(|f| f.get("name").cloned().unwrap_or(Value::Null))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+            )),
+            Provider::Vultr => CloudError::Provider(ProviderApiError::new(
+                label,
+                &text("/error").unwrap_or_else(unknown),
+                status,
+                None,
+                &[],
+            )),
+            Provider::DigitalOcean => CloudError::Provider(ProviderApiError::new(
+                label,
+                &text("/message").unwrap_or_else(unknown),
+                status,
+                body.get("id"),
+                &[],
+            )),
+            Provider::Hostinger => CloudError::Api(
+                format!(
+                    "{label} API error: {}",
+                    text("/message")
+                        .or_else(|| text("/error"))
+                        .unwrap_or_else(unknown)
+                ),
+                status,
+            ),
+        })
     }
 
     async fn get(&self, endpoint: &str, data: Option<Value>) -> Result<Value, CloudError> {
@@ -321,12 +504,18 @@ impl Client {
         self.paged("/images", "images", &[("type", "system")]).await
     }
 
-    pub async fn hetzner_server_types(&self) -> Result<Vec<Value>, CloudError> {
+    /// `getServerTypes($location, $includeOutOfStock)`: the types that can be ordered now.
+    pub async fn hetzner_server_types(
+        &self,
+        location: Option<&str>,
+        include_out_of_stock: bool,
+    ) -> Result<Vec<Value>, CloudError> {
         let types = self.paged("/server_types", "server_types", &[]).await?;
-        Ok(types
-            .into_iter()
-            .filter(|t| t.get("deprecated") != Some(&Value::Bool(true)))
-            .collect())
+        Ok(filter_hetzner_server_types(
+            types,
+            location,
+            include_out_of_stock,
+        ))
     }
 
     pub async fn hetzner_ssh_keys(&self) -> Result<Vec<Value>, CloudError> {
@@ -775,6 +964,53 @@ impl Client {
     }
 }
 
+/// The filter of `HetznerService::getServerTypes`: deprecated types are removed, each type keeps
+/// only the locations where it is not deprecated and (unless `include_out_of_stock`) in stock,
+/// and a type is kept when it has such a location (or that location is `location`).
+pub fn filter_hetzner_server_types(
+    types: Vec<Value>,
+    location: Option<&str>,
+    include_out_of_stock: bool,
+) -> Vec<Value> {
+    // PHP `empty()`.
+    let empty = |v: Option<&Value>| match v {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => true,
+        Some(Value::String(s)) => s.is_empty() || s == "0",
+        Some(Value::Number(n)) => n.as_f64() == Some(0.0),
+        Some(Value::Array(a)) => a.is_empty(),
+        Some(Value::Object(o)) => o.is_empty(),
+        Some(Value::Bool(true)) => false,
+    };
+    types
+        .into_iter()
+        .filter(|t| t.get("deprecated") != Some(&Value::Bool(true)))
+        .filter_map(|mut t| {
+            let locations: Vec<Value> = t
+                .get("locations")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|l| {
+                    empty(l.get("deprecation"))
+                        && (include_out_of_stock
+                            || l.get("available").is_none_or(Value::is_null)
+                            || l.get("available") == Some(&Value::Bool(true)))
+                })
+                .collect();
+            let keep = match location {
+                None => !locations.is_empty(),
+                Some(name) => locations
+                    .iter()
+                    .any(|l| l.get("name").and_then(Value::as_str) == Some(name)),
+            };
+            let obj = t.as_object_mut()?;
+            obj.insert("locations".into(), Value::Array(locations));
+            keep.then_some(t)
+        })
+        .collect()
+}
+
 /// PHP `rawurlencode`.
 fn rawurlencode(s: &str) -> String {
     let mut out = String::new();
@@ -936,7 +1172,7 @@ pub async fn refresh_state(jobs: &Jobs, row: &ServerRow) -> Result<Option<String
         };
         let c = Client::new(Provider::Vultr, &t);
         return match c.vultr_get_instance(id).await {
-            Err(CloudError::Api(_, 404)) => {
+            Err(e) if e.status() == 404 => {
                 persist(
                     jobs,
                     row,
@@ -970,7 +1206,7 @@ pub async fn refresh_state(jobs: &Jobs, row: &ServerRow) -> Result<Option<String
         let _ = provider;
         let c = Client::new(Provider::DigitalOcean, &t);
         return match c.do_get_droplet(id).await {
-            Err(CloudError::Api(_, 404)) => {
+            Err(e) if e.status() == 404 => {
                 persist(
                     jobs,
                     row,
@@ -1042,9 +1278,63 @@ pub async fn refresh_state(jobs: &Jobs, row: &ServerRow) -> Result<Option<String
     Ok(None)
 }
 
+/// `Server::refreshCloudProviderState`: the status of the linked cloud server, chosen by the
+/// provider of the server's token.
+pub async fn refresh_cloud_provider_state(
+    jobs: &Jobs,
+    row: &ServerRow,
+) -> Result<Option<String>, String> {
+    let Some((provider, _)) = server_token(jobs, row).await? else {
+        return Ok(None);
+    };
+    let column = match provider.as_str() {
+        "hetzner" => "hetzner_server_id",
+        "vultr" => "vultr_instance_id",
+        "digitalocean" => "digitalocean_droplet_id",
+        "hostinger" => "hostinger_virtual_machine_id",
+        _ => return Ok(None),
+    };
+    let linked = match row.record.get(column) {
+        None | Some(Value::Null) => false,
+        Some(Value::String(s)) => !s.is_empty() && s != "0",
+        Some(Value::Number(n)) => n.as_i64() != Some(0),
+        Some(_) => true,
+    };
+    if !linked {
+        return Ok(None);
+    }
+    refresh_state(jobs, row).await
+}
+
 /// `ValidateServer`'s provider checks: the stopping error, stored by the caller in `validation_logs`.
 pub async fn validation_block(jobs: &Jobs, row: &ServerRow) -> Result<Option<String>, String> {
     let r = &row.record;
+    if r.get("hetzner_server_id").is_some_and(|v| !v.is_null()) {
+        // The provider API can be down or the token revoked; the SSH checks still decide.
+        let status = match refresh_state(jobs, row).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(server_id = row.id, error = %e, "Could not refresh the Hetzner server status before validation");
+                None
+            }
+        };
+        match status.as_deref() {
+            Some("off") => {
+                return Ok(Some(
+                    "Hetzner server is off. Power it on before validating.".to_string(),
+                ));
+            }
+            Some(
+                s @ ("initializing" | "starting" | "stopping" | "deleting" | "rebuilding"
+                | "migrating"),
+            ) => {
+                return Ok(Some(format!(
+                    "Hetzner server is {s}. Wait until it is running, then validate."
+                )));
+            }
+            _ => {}
+        }
+    }
     if r.get("vultr_instance_id").is_some_and(|v| !v.is_null()) {
         let status = refresh_state(jobs, row).await?;
         return Ok(match status.as_deref() {
@@ -1234,4 +1524,213 @@ pub async fn delete_from_providers(
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A provider stand-in that answers every request with `status` and `body`, counting requests.
+    async fn fake(status: &'static str, body: &'static str) -> (String, Arc<AtomicUsize>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                counter.fetch_add(1, Ordering::SeqCst);
+                let mut buf = vec![0u8; 8192];
+                let _ = sock.read(&mut buf).await;
+                let resp = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+        (format!("http://{addr}"), hits)
+    }
+
+    #[tokio::test]
+    async fn a_rejected_hetzner_post_is_a_provider_error_and_not_sent_again() {
+        let (base, hits) = fake(
+            "422 Unprocessable Entity",
+            r#"{"error":{"code":"INVALID_INPUT","message":"invalid input in field 'name'","details":{"fields":[{"name":"name"},{"name":"bad field!"}]}}}"#,
+        )
+        .await;
+        let c = Client::with_base(Provider::Hetzner, "t", &base);
+        let Err(CloudError::Provider(e)) = c.hetzner_create_server(&json!({})).await else {
+            panic!("expected a provider error");
+        };
+        assert_eq!(
+            e.message,
+            "Hetzner API error: invalid input in field 'name'"
+        );
+        assert_eq!(e.status, 422);
+        assert_eq!(e.error_code.as_deref(), Some("invalid_input"));
+        assert_eq!(e.invalid_fields, vec!["name".to_string()]);
+        assert_eq!(
+            e.safe_message(),
+            "Hetzner rejected the request as invalid. Check the selected values and your account limits. Invalid fields: name."
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn hetzner_retries_only_server_errors_of_idempotent_requests() {
+        let (base, hits) = fake("503 Service Unavailable", r#"{"error":{"message":"down"}}"#).await;
+        let c = Client::with_base(Provider::Hetzner, "t", &base);
+        let e = c.hetzner_get_server(1).await.unwrap_err();
+        assert_eq!(e.status(), 503);
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
+        let e = c.hetzner_create_server(&json!({})).await.unwrap_err();
+        assert_eq!(e.status(), 503);
+        assert_eq!(hits.load(Ordering::SeqCst), 4);
+
+        let (base, hits) = fake(
+            "403 Forbidden",
+            r#"{"error":{"code":"forbidden","message":"no"}}"#,
+        )
+        .await;
+        let c = Client::with_base(Provider::Hetzner, "t", &base);
+        let Err(CloudError::Provider(e)) = c.hetzner_get_server(1).await else {
+            panic!("expected a provider error");
+        };
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            e.json_body("Failed to fetch Hetzner locations."),
+            json!({
+                "message": "Failed to fetch Hetzner locations. The Hetzner API token does not have permission for this request. Use a token with read and write access.",
+                "provider_status": 403,
+                "provider_error_code": "forbidden",
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn droplet_and_vultr_errors_keep_their_codes_and_retries() {
+        let (base, hits) = fake(
+            "422 Unprocessable Entity",
+            r#"{"id":"unprocessable_entity","message":"You specified an invalid size."}"#,
+        )
+        .await;
+        let c = Client::with_base(Provider::DigitalOcean, "t", &base);
+        let Err(CloudError::Provider(e)) = c.do_create_droplet(&json!({})).await else {
+            panic!("expected a provider error");
+        };
+        assert_eq!(
+            e.message,
+            "DigitalOcean API error: You specified an invalid size."
+        );
+        assert_eq!(e.error_code.as_deref(), Some("unprocessable_entity"));
+        // `Http::retry(3)` without a `when` callback sends every failed request again.
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
+
+        let (base, _) = fake("401 Unauthorized", r#"{"error":"Invalid API token."}"#).await;
+        let c = Client::with_base(Provider::Vultr, "t", &base);
+        let Err(CloudError::Provider(e)) = c.vultr_regions().await else {
+            panic!("expected a provider error");
+        };
+        assert_eq!(e.message, "Vultr API error: Invalid API token.");
+        assert_eq!(e.error_code, None);
+        assert_eq!(
+            e.safe_message(),
+            "The Vultr API token is invalid or expired. Update the cloud provider token in Coolify."
+        );
+    }
+
+    #[test]
+    fn safe_messages_follow_the_code_then_the_status() {
+        let m = |code: Option<&str>, status: u16| {
+            ProviderApiError::new("Hetzner", "x", status, code.map(|c| json!(c)).as_ref(), &[])
+                .safe_message()
+        };
+        assert_eq!(
+            m(Some("resource_limit_exceeded"), 403),
+            "Your Hetzner account has reached a resource limit, for example the server limit. Remove unused resources or ask Hetzner for a higher limit."
+        );
+        assert_eq!(
+            m(Some("resource_unavailable"), 412),
+            "The selected server type, image, or location is not available now. Select a different location or server type."
+        );
+        assert_eq!(
+            m(Some("uniqueness_error"), 409),
+            "A resource with the same name already exists in your Hetzner account, for example a server or an SSH key. Use a different name."
+        );
+        assert_eq!(
+            m(None, 502),
+            "Hetzner cannot process the request now. Try again later."
+        );
+        assert_eq!(
+            m(Some("maintenance"), 400),
+            "Hetzner cannot process the request now. Try again later."
+        );
+        assert_eq!(
+            m(None, 404),
+            "Hetzner could not find a requested resource, for example the location, server type, image, or SSH key."
+        );
+        assert_eq!(
+            m(None, 409),
+            "Hetzner rejected the request because of a conflict with an existing resource."
+        );
+        assert_eq!(
+            m(Some("conflict"), 412),
+            "Hetzner returned HTTP 412 (error code: conflict)."
+        );
+        assert_eq!(m(None, 418), "Hetzner returned HTTP 418.");
+        // Codes that do not look like identifiers are dropped.
+        assert_eq!(m(Some("<script>"), 418), "Hetzner returned HTTP 418.");
+    }
+
+    #[test]
+    fn server_types_keep_orderable_locations() {
+        let types = vec![
+            json!({"name": "old", "deprecated": true, "locations": [{"name": "nbg1"}]}),
+            json!({"name": "cx22", "locations": [
+                {"name": "nbg1", "available": true},
+                {"name": "fsn1", "available": false},
+                {"name": "hel1", "deprecation": {"announced": "2026-01-01"}},
+            ]}),
+            json!({"name": "gone", "locations": [{"name": "fsn1", "available": false}]}),
+        ];
+        let names = |v: &[Value]| {
+            v.iter()
+                .map(|t| {
+                    let locations: Vec<&str> = t["locations"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|l| l["name"].as_str().unwrap())
+                        .collect();
+                    format!("{}:{}", t["name"].as_str().unwrap(), locations.join(","))
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&filter_hetzner_server_types(types.clone(), None, false)),
+            vec!["cx22:nbg1"]
+        );
+        assert_eq!(
+            names(&filter_hetzner_server_types(
+                types.clone(),
+                Some("fsn1"),
+                false
+            )),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            names(&filter_hetzner_server_types(types.clone(), None, true)),
+            vec!["cx22:nbg1,fsn1", "gone:fsn1"]
+        );
+        assert_eq!(
+            names(&filter_hetzner_server_types(types, Some("nbg1"), false)),
+            vec!["cx22:nbg1"]
+        );
+    }
 }

@@ -174,7 +174,7 @@
         <p class="mt-3 text-xs leading-5 text-neutral-500 dark:text-fg-dim">While live, ranges up to one hour refresh every five seconds. Longer ranges refresh every minute.</p>
       </SettingsSection>
 
-      <SettingsSection id="cpu-metrics-section" title="CPU usage" description="Percentage of available CPU capacity used by the application container.">
+      <SettingsSection id="cpu-metrics-section" title="CPU usage" description="CPU usage of the container, as in docker stats. 100% means one CPU core is fully busy, so a container that uses more than one core can go above 100%. The maximum is the number of cores × 100%.">
         {#snippet actions()}
           <div id="{chartId}-cpu-legend" class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs"></div>
         {/snippet}

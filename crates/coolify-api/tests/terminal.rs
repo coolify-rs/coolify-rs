@@ -302,11 +302,8 @@ async fn a_session_runs_the_command_of_the_server() {
     );
 
     // Single use.
+    // A rejected token is told by the close code alone, without a text message first.
     send(&mut ws, json!({"terminalToken": t})).await;
-    assert_eq!(
-        next(&mut ws).await,
-        "Unauthorized: Terminal token was rejected"
-    );
     assert_eq!(
         next(&mut ws).await,
         "close:4403:Unauthorized: Terminal token was rejected"
@@ -317,12 +314,11 @@ async fn a_session_runs_the_command_of_the_server() {
 #[tokio::test]
 async fn tokens_belong_to_the_user_and_team_that_got_them() {
     let f = fixture().await;
-    let refused = "Unauthorized: Terminal token was rejected";
+    let refused = "close:4403:Unauthorized: Terminal token was rejected";
 
     // Malformed.
     let mut ws = open(&f, Some(&f.alice.0), None).await;
     send(&mut ws, json!({"terminalToken": "docker exec -it x sh"})).await;
-    assert_eq!(next(&mut ws).await, "Unauthorized: Invalid terminal token");
     assert_eq!(
         next(&mut ws).await,
         "close:4403:Unauthorized: Invalid terminal token"

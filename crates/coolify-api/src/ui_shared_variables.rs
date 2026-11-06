@@ -21,6 +21,7 @@ use crate::auth::AuthCtx;
 use crate::response::{ApiError, ApiResult, PhpJson, ok};
 use crate::state::AppState;
 use crate::ui_notifications::{toast_error, unauthorized};
+use crate::ui_shared::dev_view;
 
 const BUILT_IN: &[&str] = &["COOLIFY_SERVER_UUID", "COOLIFY_SERVER_NAME"];
 
@@ -131,17 +132,23 @@ fn dev_view(state: &AppState, ctx: &AuthCtx, rows: &[Record]) -> Result<String, 
         .collect();
     sorted.sort_by_key(|r| text(r, "key").unwrap_or_default().to_owned());
     let mut lines = Vec::new();
+    let can_view = ctx.is_team_admin();
     for r in sorted {
-        let key = text(r, "key").unwrap_or_default();
-        lines.push(if !ctx.is_team_admin() {
-            format!("{key}=(Hidden, only admins can view)")
-        } else if flag(r, "is_shown_once") {
-            format!("{key}=(Locked Secret, delete and add again to change)")
-        } else if flag(r, "is_multiline") {
-            format!("{key}=(Multiline environment variable, edit in normal view)")
-        } else {
-            format!("{key}={}", decrypt(state, r)?.unwrap_or_default())
-        });
+        // `formatEnvVariableForDevView`.
+        let value = if can_view { decrypt(state, r)? } else { None };
+        let flags = [("literal", flag(r, "is_literal"))];
+        let v = dev_view::DevVariable {
+            key: text(r, "key").unwrap_or_default(),
+            value: value.as_deref(),
+            is_shown_once: flag(r, "is_shown_once"),
+            is_multiline: flag(r, "is_multiline"),
+            flags: &flags,
+        };
+        lines.push(dev_view::format_variable(
+            &v,
+            can_view,
+            dev_view::SHARED_FLAGS,
+        ));
     }
     Ok(lines.join("\n"))
 }
@@ -345,21 +352,19 @@ async fn bulk(
         .get("variables")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    // `parseEnvFormatToArray`: a later line wins, at the place of the first.
-    let mut parsed: Vec<(String, String)> = Vec::new();
-    for (k, v) in coolify_jobs::applications::detect::parse_env_format(contents) {
-        match parsed.iter_mut().find(|(x, _)| *x == k) {
-            Some(slot) => slot.1 = v,
-            None => parsed.push((k, v)),
-        }
-    }
+    // `parseEnvDevView`, before the save, so that an invalid "# coolify:" line changes nothing.
+    let parsed = match dev_view::parse(contents, dev_view::SHARED_FLAGS) {
+        Ok(p) => p,
+        Err(m) => return Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, m)),
+    };
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let pattern = key_pattern()?;
     let rows = sv::list(&state.db, ctx.team_id, res.scope).await?;
-    let wanted: HashSet<&str> = parsed.iter().map(|(k, _)| k.as_str()).collect();
+    let wanted: HashSet<&str> = parsed.iter().map(|p| p.key.as_str()).collect();
     // The model's `key` mutator refuses an invalid key; the transaction leaves everything as it was.
-    if parsed.iter().any(|(k, _)| {
-        !rows.iter().any(|r| text(r, "key") == Some(k)) && !pattern.is_match(k.trim())
+    if parsed.iter().any(|p| {
+        !rows.iter().any(|r| text(r, "key") == Some(p.key.as_str()))
+            && !pattern.is_match(p.key.trim())
     }) {
         return Ok(toast_error(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -379,22 +384,40 @@ async fn bulk(
             changed = true;
         }
     }
-    for (key, plain) in &parsed {
+    for p in &parsed {
+        let (key, plain) = (&p.key, &p.value);
         match rows.iter().find(|r| text(r, "key") == Some(key)) {
             Some(r) => {
-                if flag(r, "is_shown_once") || flag(r, "is_multiline") {
+                let current = decrypt(&state, r)?;
+                // A value the view could not show is not overwritten by its placeholder.
+                if flag(r, "is_shown_once")
+                    || flag(r, "is_multiline")
+                    || dev_view::format_value(current.as_deref()).is_none()
+                {
                     continue;
                 }
-                if decrypt(&state, r)?.as_deref() != Some(plain.as_str()) {
+                let mut columns: Vec<(&'static str, C)> = Vec::new();
+                let mut fields: Vec<&str> = Vec::new();
+                let mut audit_changes = Map::new();
+                if current.as_deref() != Some(plain.as_str()) {
+                    columns.push(("value", C::Text(Some(enc.encrypt_string(plain)))));
+                    fields.push("value");
+                }
+                // `$found->fill($data['settings'])`.
+                if let Some(literal) = p.setting("is_literal")
+                    && literal != flag(r, "is_literal")
+                {
+                    columns.push(("is_literal", C::Bool(literal)));
+                    fields.push("is_literal");
+                    audit_changes.insert(
+                        "is_literal".into(),
+                        json!({"old": flag(r, "is_literal"), "new": literal}),
+                    );
+                }
+                if !columns.is_empty() {
                     let id = r.get("id").and_then(Value::as_i64).unwrap_or(0);
-                    let cipher = enc.encrypt_string(plain);
-                    coolify_db::server_ops::update_shared_env(
-                        &state.db,
-                        id,
-                        &[("value", C::Text(Some(cipher)))],
-                        state.now(),
-                    )
-                    .await?;
+                    coolify_db::server_ops::update_shared_env(&state.db, id, &columns, state.now())
+                        .await?;
                     crate::audit::mutation(
                         &state,
                         &ctx,
@@ -405,9 +428,9 @@ async fn bulk(
                             "team_id": ctx.team_id,
                             "shared_environment_variable_uuid": null,
                             "shared_environment_variable_name": key,
-                            "changed_fields": ["value"],
+                            "changed_fields": fields,
                         }),
-                        json!({}),
+                        Value::Object(audit_changes),
                     )
                     .await;
                     changed = true;
@@ -420,7 +443,7 @@ async fn bulk(
                     team_id: ctx.team_id,
                     key,
                     value_encrypted: Some(&cipher),
-                    is_literal: false,
+                    is_literal: p.setting("is_literal").unwrap_or(false),
                     is_multiline: false,
                     is_shown_once: false,
                     comment: None,

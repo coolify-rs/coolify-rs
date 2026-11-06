@@ -22,6 +22,7 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use super::dev_view::{self, Parsed};
 use super::{Class, Res, find};
 use crate::audit::Meta;
 use crate::auth::AuthCtx;
@@ -729,6 +730,25 @@ pub(crate) const ADDED_FIELDS: &[&str] = &[
     "id",
     "version",
 ];
+/// `BULK_FIELDS` with the flags a `# coolify:` line set: `is_runtime` and `is_buildtime` have
+/// defaults in `$attributes`, so they keep their place at the start and count only when they
+/// change; `is_literal` is set by `fill()` after `is_multiline`.
+fn bulk_fields(settings: &[(String, bool)]) -> Vec<&'static str> {
+    let mut fields: Vec<&'static str> = Vec::new();
+    for (column, default) in [("is_runtime", true), ("is_buildtime", true)] {
+        if settings.iter().any(|(a, v)| a == column && *v != default) {
+            fields.push(column);
+        }
+    }
+    for field in BULK_FIELDS {
+        fields.push(field);
+        if *field == "is_multiline" && settings.iter().any(|(a, _)| a == "is_literal") {
+            fields.push("is_literal");
+        }
+    }
+    fields
+}
+
 const BULK_FIELDS: &[&str] = &[
     "key",
     "value",
@@ -769,6 +789,8 @@ fn version_changes(n: &NewEnv<'_>, fields: &[&str]) -> Value {
             "key" => json!(n.key),
             "is_multiline" => json!(n.is_multiline),
             "is_literal" => json!(n.is_literal),
+            "is_runtime" => json!(n.is_runtime),
+            "is_buildtime" => json!(n.is_buildtime),
             "is_required" => json!(n.is_required),
             "is_shown_once" => json!(n.is_shown_once),
             "comment" => json!(n.comment),
@@ -1078,15 +1100,21 @@ fn format_dev(state: &AppState, rows: &[Record], hide: bool) -> Result<String, A
         if is_protected(key) {
             continue;
         }
-        lines.push(if hide {
-            format!("{key}=(Hidden, only admins can view)")
-        } else if flag(r, "is_shown_once") {
-            format!("{key}=(Locked Secret, delete and add again to change)")
-        } else if flag(r, "is_multiline") {
-            format!("{key}=(Multiline environment variable, edit in normal view)")
-        } else {
-            format!("{key}={}", plain(state, r)?.unwrap_or_default())
-        });
+        // `formatEnvVariableForDevView`.
+        let value = if hide { None } else { plain(state, r)? };
+        let flags = [
+            ("literal", flag(r, "is_literal")),
+            ("buildtime", flag(r, "is_buildtime")),
+            ("runtime", flag(r, "is_runtime")),
+        ];
+        let v = dev_view::DevVariable {
+            key,
+            value: value.as_deref(),
+            is_shown_once: flag(r, "is_shown_once"),
+            is_multiline: flag(r, "is_multiline"),
+            flags: &flags,
+        };
+        lines.push(dev_view::format_variable(&v, !hide, dev_view::ENV_FLAGS));
     }
     Ok(lines.join("\n"))
 }
@@ -1158,21 +1186,20 @@ pub fn parse_env_format(contents: &str) -> Vec<(String, String, Option<String>)>
 }
 
 /// `normalizeEnvironmentVariables`.
-fn normalize(
-    parsed: Vec<(String, String, Option<String>)>,
-) -> Result<Vec<(String, String, Option<String>)>, String> {
-    let mut out: Vec<(String, String, Option<String>)> = Vec::new();
-    for (key, value, comment) in parsed {
-        let k = key.trim().to_owned();
+fn normalize(parsed: Vec<Parsed>) -> Result<Vec<Parsed>, String> {
+    let mut out: Vec<Parsed> = Vec::new();
+    for mut p in parsed {
+        let k = p.key.trim().to_owned();
         if !KEY_PATTERN.is_match(&k) {
             return Err(KEY_MESSAGE.to_owned());
         }
-        if out.iter().any(|(x, _, _)| *x == k) {
+        if out.iter().any(|x| x.key == k) {
             return Err(format!(
                 "Duplicate environment variable key after normalization: {k}."
             ));
         }
-        out.push((k, value, comment));
+        p.key = k;
+        out.push(p);
     }
     Ok(out)
 }
@@ -1182,14 +1209,14 @@ async fn delete_removed(
     state: &AppState,
     res: &Res,
     is_preview: bool,
-    variables: &[(String, String, Option<String>)],
+    variables: &[Parsed],
 ) -> Result<Result<usize, String>, ApiError> {
     let rows = re::scoped(&state.db, &res.morph, res.id, is_preview, false).await?;
     let doomed: Vec<&Record> = rows
         .iter()
         .filter(|r| {
             let key = text(r, "key").unwrap_or_default();
-            !variables.iter().any(|(k, _, _)| k == key) && !is_protected(key)
+            !variables.iter().any(|v| v.key == key) && !is_protected(key)
         })
         .collect();
     if doomed.is_empty() {
@@ -1215,20 +1242,25 @@ async fn update_or_create(
     meta: &Meta,
     res: &Res,
     is_preview: bool,
-    variables: &[(String, String, Option<String>)],
+    variables: &[Parsed],
 ) -> Result<usize, ApiError> {
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let mut count = 0;
-    for (key, value, comment) in variables {
+    for parsed in variables {
+        let (key, value, comment) = (&parsed.key, &parsed.value, &parsed.comment);
         if is_magic(key) {
             continue;
         }
         match re::by_key(&state.db, &res.morph, res.id, is_preview, key).await? {
             Some(found) => {
-                if flag(&found, "is_shown_once") || flag(&found, "is_multiline") {
+                let current = plain(state, &found)?;
+                // A value the view could not show is not overwritten by its placeholder.
+                if flag(&found, "is_shown_once")
+                    || flag(&found, "is_multiline")
+                    || dev_view::format_value(current.as_deref()).is_none()
+                {
                     continue;
                 }
-                let current = plain(state, &found)?;
                 let trimmed = value.trim();
                 let mut values: Vec<(&'static str, C)> = Vec::new();
                 let mut changed: Vec<&str> = Vec::new();
@@ -1248,6 +1280,23 @@ async fn update_or_create(
                         "comment".into(),
                         json!({"old": found.get("comment"), "new": c}),
                     );
+                }
+                // `$found->fill($data['settings'])`: flags change only when a "# coolify:" line sets them.
+                for (attribute, new) in &parsed.settings {
+                    let column = match attribute.as_str() {
+                        "is_literal" => "is_literal",
+                        "is_buildtime" => "is_buildtime",
+                        "is_runtime" => "is_runtime",
+                        _ => continue,
+                    };
+                    if *new != flag(&found, column) {
+                        values.push((column, C::Bool(*new)));
+                        changed.push(column);
+                        changes.insert(
+                            column.into(),
+                            json!({"old": flag(&found, column), "new": new}),
+                        );
+                    }
                 }
                 let shared = is_shared_reference(Some(trimmed));
                 if shared != flag(&found, "is_shared") && !values.is_empty() {
@@ -1294,9 +1343,9 @@ async fn update_or_create(
                     value_encrypted: Some(&cipher),
                     comment: comment.as_deref(),
                     is_multiline: false,
-                    is_literal: false,
-                    is_runtime: true,
-                    is_buildtime: true,
+                    is_literal: parsed.setting("is_literal").unwrap_or(false),
+                    is_runtime: parsed.setting("is_runtime").unwrap_or(true),
+                    is_buildtime: parsed.setting("is_buildtime").unwrap_or(true),
                     is_required: false,
                     is_shown_once: false,
                     is_preview,
@@ -1304,7 +1353,8 @@ async fn update_or_create(
                     order: None,
                     version: &state.version,
                 };
-                create_model(state, ctx, meta, res, &n, BULK_FIELDS).await?;
+                let fields = bulk_fields(&parsed.settings);
+                create_model(state, ctx, meta, res, &n, &fields).await?;
                 count += 1;
             }
         }
@@ -1317,10 +1367,10 @@ async fn update_order(
     state: &AppState,
     res: &Res,
     is_preview: bool,
-    variables: &[(String, String, Option<String>)],
+    variables: &[Parsed],
 ) -> Result<(), ApiError> {
-    for (i, (key, _, _)) in variables.iter().enumerate() {
-        if let Some(found) = re::by_key(&state.db, &res.morph, res.id, is_preview, key).await? {
+    for (i, v) in variables.iter().enumerate() {
+        if let Some(found) = re::by_key(&state.db, &res.morph, res.id, is_preview, &v.key).await? {
             re::set_order(&state.db, row_id(&found), i as i64 + 1, state.now()).await?;
         }
     }
@@ -1343,7 +1393,8 @@ async fn bulk(
         .get("variables")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let variables = match normalize(parse_env_format(contents)) {
+    // Parsed before the save, so that an invalid "# coolify:" line changes nothing.
+    let variables = match dev_view::parse(contents, dev_view::ENV_FLAGS).and_then(normalize) {
         Ok(v) => v,
         Err(m) => return Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, m)),
     };
@@ -1353,9 +1404,14 @@ async fn bulk(
             .get("variables_preview")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        match normalize(parse_env_format(contents)) {
+        match dev_view::parse(contents, dev_view::ENV_FLAGS).and_then(normalize) {
             Ok(v) => v,
-            Err(m) => return Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, m)),
+            Err(m) => {
+                return Ok(toast_error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!("Preview deployments: {m}"),
+                ));
+            }
         }
     } else {
         Vec::new()

@@ -67,8 +67,9 @@
             heading: 'Destinations',
             title: 'Destinations',
             label: d.name,
+            uuid: d.uuid,
             meta: { label: d.is_swarm ? 'Deprecated' : 'Docker', dot: d.is_swarm ? 'bg-warning' : 'bg-[#3fb950]' },
-            items: [...l.destinations].sort((a, b) => a.name.localeCompare(b.name)).map((x) => ({ label: x.name, href: `/destination/${x.uuid}`, active: x.uuid === d.uuid })),
+            items: [...l.destinations].sort((a, b) => a.name.localeCompare(b.name)).map((x) => ({ label: x.name, uuid: x.uuid, href: `/destination/${x.uuid}`, active: x.uuid === d.uuid })),
           },
         ];
       });
@@ -85,6 +86,7 @@
     try {
       await patch(`/destination-list/${encodeURIComponent(uuid)}`, { name });
       saved = name;
+      page.nameChanged(uuid, name);
       notify.success('Destination saved.');
     } catch (e) {
       error = failure(e);

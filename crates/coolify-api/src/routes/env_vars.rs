@@ -215,12 +215,12 @@ pub async fn present_variable(
             m.shift_remove(k);
         }
     }
-    if let Some(input) = request {
-        for k in ["is_literal", "is_shown_once"] {
-            if let Some(v) = input.get(k) {
-                m.insert(k.into(), v.clone());
-            }
-        }
+    // `is_shown_once` has no cast: the saved model serializes it as it was sent. `is_literal`
+    // has had the `boolean` cast since v4.5.3, so it reads back as the stored boolean.
+    if let Some(input) = request
+        && let Some(v) = input.get("is_shown_once")
+    {
+        m.insert("is_shown_once".into(), v.clone());
     }
     m.insert(
         "is_shared".into(),
@@ -400,8 +400,8 @@ async fn save_variable(state: &AppState, row: &Record, input: &Input) -> Result<
             dirty.push(("preserve_compose_null", ColumnValue::Bool(false)));
         }
     }
-    // Cast to boolean: compared after the cast.
-    for k in ["is_multiline", "is_runtime", "is_buildtime"] {
+    // Cast to boolean: compared after the cast (`is_literal` since v4.5.3).
+    for k in ["is_multiline", "is_literal", "is_runtime", "is_buildtime"] {
         if let Some(v) = input.get(k)
             && php_truthy(v) != flag(row, k)
         {
@@ -409,12 +409,10 @@ async fn save_variable(state: &AppState, row: &Record, input: &Input) -> Result<
         }
     }
     // No cast: only an identical boolean is clean.
-    for k in ["is_literal", "is_shown_once"] {
-        if let Some(v) = input.get(k)
-            && v.as_bool() != Some(flag(row, k))
-        {
-            dirty.push((k, ColumnValue::Bool(php_truthy(v))));
-        }
+    if let Some(v) = input.get("is_shown_once")
+        && v.as_bool() != Some(flag(row, "is_shown_once"))
+    {
+        dirty.push(("is_shown_once", ColumnValue::Bool(php_truthy(v))));
     }
     if input.has("comment") {
         let comment = input.str("comment");

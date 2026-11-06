@@ -41,8 +41,15 @@
     if (form.keys.length) privateKey = String(form.keys[0].id);
   }
 
-  /** `getAvailableServerTypesProperty`. */
-  const availableServerTypes = $derived(location ? d.server_types.filter((t) => t.locations?.some((l: Item) => l.name === location)) : d.server_types);
+  /** `isServerTypeOutOfStock`. */
+  const outOfStock = (t: Item) => (t.locations ?? []).find((l: Item) => l.name === location)?.available === false;
+
+  /** `getAvailableServerTypesProperty`: none before a location is chosen, in-stock types first. */
+  const availableServerTypes = $derived.by(() => {
+    if (!location) return [];
+    const types = d.server_types.filter((t) => t.locations?.some((l: Item) => l.name === location)).map((t): Item => ({ ...t, out_of_stock: outOfStock(t) }));
+    return [...types.filter((t) => !t.out_of_stock), ...types.filter((t) => t.out_of_stock)];
+  });
 
   /** `getAvailableImagesProperty`. */
   const availableImages = $derived.by(() => {
@@ -90,7 +97,8 @@
   const typeLabel = (t: Item) => {
     const label = `${t.description ?? t.name} · ${t.cores ?? '?'} vCPU · ${t.memory ?? '?'} GB RAM · ${t.disk ?? '?'} GB`;
     const gross = t.prices?.[0]?.price_monthly?.gross;
-    return truthy(gross) ? `${label} · €${numberFormat(gross)}/mo` : label;
+    const priced = truthy(gross) ? `${label} · €${numberFormat(gross)}/mo` : label;
+    return t.out_of_stock ? `${priced} · Out of stock` : priced;
   };
 
   async function submit(e: SubmitEvent) {
@@ -167,7 +175,7 @@
             bind:value={serverType}
             onchange={() => (image = '')}
             error={error?.field('selected_server_type')}
-            options={availableServerTypes.map((t) => ({ value: t.name, label: typeLabel(t) }))}
+            options={availableServerTypes.map((t) => ({ value: t.name, label: typeLabel(t), disabled: t.out_of_stock }))}
           />
           <Listbox
             id="selected_image"
