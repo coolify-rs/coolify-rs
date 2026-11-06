@@ -5,6 +5,7 @@
 //! `PublicGitRepository::getBranch()` (`githubApi()` with the public source) and
 //! `parseEnvFormatToArray()` for the env file import.
 
+use crate::git_http::SendRetry as _;
 use std::time::Duration;
 
 use coolify_db::servers;
@@ -452,7 +453,7 @@ pub async fn github_branch(
     let response = client
         .get(url)
         .header("Accept", "application/vnd.github.v3+json")
-        .send()
+        .send_retry()
         .await
         .map_err(|e| e.to_string())?;
     let header = |k: &str| {

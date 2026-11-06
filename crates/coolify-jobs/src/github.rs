@@ -1,6 +1,7 @@
 //! GitHub App access for private repositories: `generateGithubToken()`,
 //! `generateGithubInstallationToken()` and `githubApi()` (bootstrap/helpers/github.php).
 
+use crate::git_http::SendRetry as _;
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -107,7 +108,7 @@ pub fn app_jwt(private_key_pem: &str, app_id: &str) -> Result<String, String> {
 async fn assert_clock_in_sync(http: &reqwest::Client, api_url: &str) -> Result<(), String> {
     let response = http
         .get(format!("{api_url}/zen"))
-        .send()
+        .send_retry()
         .await
         .map_err(|e| e.to_string())?;
     let Some(date) = response
@@ -169,7 +170,7 @@ pub async fn installation_token(
             .post(&url)
             .header("Authorization", format!("Bearer {jwt}"))
             .header("Accept", "application/vnd.github.machine-man-preview+json")
-            .send()
+            .send_retry()
             .await;
         let retry = match &r {
             Err(e) => e.is_connect() || e.is_timeout(),
@@ -230,7 +231,7 @@ pub async fn repository_id(
         .header("X-GitHub-Api-Version", "2022-11-28")
         .header("Accept", "application/vnd.github.v3+json")
         .header("Authorization", format!("Bearer {token}"))
-        .send()
+        .send_retry()
         .await
         .map_err(|e| e.to_string())?;
     let status = response.status();
@@ -281,7 +282,7 @@ pub async fn repository_access(
             .header("X-GitHub-Api-Version", "2022-11-28")
             .header("Accept", "application/vnd.github.v3+json")
             .header("Authorization", format!("Bearer {token}"))
-            .send()
+            .send_retry()
             .await;
         match r {
             Ok(resp) if resp.status().is_success() || attempt == 3 => {
@@ -406,7 +407,7 @@ pub async fn api(
     if let Some(d) = data {
         request = request.json(d);
     }
-    let response = request.send().await.map_err(|e| e.to_string())?;
+    let response = request.send_retry().await.map_err(|e| e.to_string())?;
     let status = response.status().as_u16();
     Ok((status, response.json().await.unwrap_or(Value::Null)))
 }
@@ -443,7 +444,7 @@ pub async fn pull_requests(
         let token = installation_token(db, enc, Some(source)).await?;
         authed(http.get(&url), &token)
     };
-    let response = request.send().await.map_err(|e| e.to_string())?;
+    let response = request.send_retry().await.map_err(|e| e.to_string())?;
     let header = |name: &str| {
         response
             .headers()
@@ -575,7 +576,7 @@ pub async fn app_info(db: &Db, source: &Record, jwt: &str) -> Result<(u16, Value
         .get(format!("{api}/app"))
         .header("Authorization", format!("Bearer {jwt}"))
         .header("Accept", "application/vnd.github+json")
-        .send()
+        .send_retry()
         .await
         .map_err(|e| e.to_string())?;
     let status = response.status().as_u16();
@@ -612,7 +613,7 @@ pub async fn app_slug(db: &Db, enc: &Encrypter, source: &Record) -> Result<Optio
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .header("Authorization", format!("Bearer {jwt}"))
-        .send()
+        .send_retry()
         .await
         .map_err(|e| e.to_string())?;
     let ok = response.status().is_success();
@@ -637,7 +638,7 @@ pub async fn manifest_conversion(db: &Db, api_url: &str, code: &str) -> Result<V
     let response = http
         .post(format!("{api_url}/app-manifests/{code}/conversions"))
         .header("Accept", "application/vnd.github+json")
-        .send()
+        .send_retry()
         .await
         .map_err(|e| e.to_string())?;
     if !response.status().is_success() {
@@ -670,7 +671,7 @@ pub async fn installation_verification_error(
         http.get(format!("{api}/app/installations/{installation_id}"))
             .header("Authorization", format!("Bearer {jwt}"))
             .header("Accept", "application/vnd.github+json")
-            .send()
+            .send_retry()
             .await
             .map_err(|e| e.to_string())
     }

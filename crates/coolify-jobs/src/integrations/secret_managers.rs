@@ -1,6 +1,7 @@
 //! `DopplerService`, `InfisicalService`, `VaultService`, `SecretManagerLink::fetchSecrets()`,
 //! `RemoteSecretReferences` and `RemoteSecretValueFormatter`. Fetched values live only in memory.
 
+use crate::git_http::SendRetry as _;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -153,7 +154,7 @@ async fn doppler_fetch(
         .bearer_auth(token)
         .header("accept", "application/json")
         .query(&query)
-        .send()
+        .send_retry()
         .await
         .map_err(|e| e.to_string())?;
     let status = response.status();
@@ -183,7 +184,7 @@ async fn infisical_login(
         .post(format!("{base}/api/v1/auth/universal-auth/login"))
         .header("accept", "application/json")
         .json(&json!({"clientId": client_id, "clientSecret": secret}))
-        .send()
+        .send_retry()
         .await
         .map_err(|e| e.to_string())?;
     let status = response.status();
@@ -247,7 +248,7 @@ async fn infisical_fetch(
             ("includeImports", "true"),
         ])
         .query(&options)
-        .send()
+        .send_retry()
         .await
         .map_err(|e| e.to_string())?;
     if response.status().as_u16() == 404 {
@@ -262,7 +263,7 @@ async fn infisical_fetch(
                 ("include_imports", "true"),
             ])
             .query(&options)
-            .send()
+            .send_retry()
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -307,7 +308,7 @@ async fn vault_fetch(
     if !namespace.trim().is_empty() {
         request = request.header("X-Vault-Namespace", namespace);
     }
-    let response = request.send().await.map_err(|e| e.to_string())?;
+    let response = request.send_retry().await.map_err(|e| e.to_string())?;
     let status = response.status();
     let body = parse_body(&response.text().await.unwrap_or_default());
     if !status.is_success() {
@@ -407,7 +408,7 @@ pub async fn validate(
                 .get(format!("{base}/v3/me"))
                 .bearer_auth(token)
                 .header("accept", "application/json")
-                .send()
+                .send_retry()
                 .await
                 .is_ok_and(|r| r.status().is_success()))
         }
@@ -441,7 +442,10 @@ pub async fn validate(
             if !namespace.trim().is_empty() {
                 request = request.header("X-Vault-Namespace", namespace);
             }
-            Ok(request.send().await.is_ok_and(|r| r.status().is_success()))
+            Ok(request
+                .send_retry()
+                .await
+                .is_ok_and(|r| r.status().is_success()))
         }
         _ => Ok(false),
     }

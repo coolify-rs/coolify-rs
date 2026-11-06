@@ -6,6 +6,7 @@
 //! requests then go to `<base>/hetzner/v1/...`, `<base>/vultr/v2/...`,
 //! `<base>/digitalocean/v2/...` and `<base>/hostinger/...`.
 
+use crate::git_http::SendRetry as _;
 use std::time::Duration;
 
 use coolify_db::cloud as db;
@@ -155,7 +156,7 @@ impl Client {
                     req = req.json(d);
                 }
             }
-            match req.send().await {
+            match req.send_retry().await {
                 Ok(r) => {
                     let status = r.status();
                     let headers = r.headers().clone();
@@ -818,7 +819,7 @@ pub async fn probe(
     if accept_json {
         req = req.header("Accept", "application/json");
     }
-    match req.send().await {
+    match req.send_retry().await {
         Ok(r) => Ok(r.status().is_success()),
         Err(e) => Err(e.to_string()),
     }

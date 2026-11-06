@@ -1,6 +1,7 @@
 //! `CloudflareTokenValidator`, `CloudflareDnsProvider`, `ManagedDnsRecordCleanup`,
 //! `ManagedDnsHostnameLock`, `DnsRecordHints` and `CloudflareTunnelService`.
 
+use crate::git_http::SendRetry as _;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -58,7 +59,7 @@ pub async fn validate_token(token: &str, capabilities: &[String]) -> bool {
     };
     let base = api();
     let get = |url: String| request(&client, Method::GET, url, token);
-    let Ok(verification) = get(format!("{base}/user/tokens/verify")).send().await else {
+    let Ok(verification) = get(format!("{base}/user/tokens/verify")).send_retry().await else {
         return false;
     };
     let (status, body) = parse(verification).await;
@@ -70,7 +71,7 @@ pub async fn validate_token(token: &str, capabilities: &[String]) -> bool {
     }
     let Ok(zones) = get(format!("{base}/zones"))
         .query(&[("per_page", 1)])
-        .send()
+        .send_retry()
         .await
     else {
         return false;
@@ -84,7 +85,7 @@ pub async fn validate_token(token: &str, capabilities: &[String]) -> bool {
     }
     let records = get(format!("{base}/zones/{zone_id}/dns_records"))
         .query(&[("per_page", 1)])
-        .send()
+        .send_retry()
         .await;
     if !records.is_ok_and(|r| r.status().is_success()) {
         return false;
@@ -98,7 +99,7 @@ pub async fn validate_token(token: &str, capabilities: &[String]) -> bool {
         };
         return get(format!("{base}/accounts/{account}/cfd_tunnel"))
             .query(&[("per_page", "1"), ("is_deleted", "false")])
-            .send()
+            .send_retry()
             .await
             .is_ok_and(|r| r.status().is_success());
     }
@@ -128,7 +129,7 @@ pub async fn sync_zones(
     loop {
         let response = request(&client, Method::GET, format!("{base}/zones"), token)
             .query(&[("page", page), ("per_page", 50)])
-            .send()
+            .send_retry()
             .await
             .map_err(|e| e.to_string())?;
         let (status, body) = parse(response).await;
@@ -470,7 +471,7 @@ impl Dns<'_> {
             &token,
         )
         .query(&query)
-        .send()
+        .send_retry()
         .await
         .map_err(|e| DnsError::Other(e.to_string()))?;
         let (status, body) = parse(response).await;
@@ -641,7 +642,7 @@ impl Dns<'_> {
             "proxied": proxied,
             "comment": ownership_comment(&uuid),
         }))
-        .send()
+        .send_retry()
         .await
         .map_err(|e| DnsError::Other(e.to_string()))?;
         let (status, body) = parse(response).await;
@@ -736,7 +737,7 @@ impl Dns<'_> {
             &token,
         )
         .json(&Value::Object(changes))
-        .send()
+        .send_retry()
         .await
         .map_err(|e| DnsError::Other(e.to_string()))?;
         let status = response.status().as_u16();
@@ -785,7 +786,7 @@ impl Dns<'_> {
             record.provider_record_id
         );
         let Ok(response) = request(&client, Method::GET, url.clone(), &token)
-            .send()
+            .send_retry()
             .await
         else {
             return Deletion::Failed;
@@ -807,7 +808,10 @@ impl Dns<'_> {
         {
             return Deletion::ChangedExternally;
         }
-        let Ok(deleted) = request(&client, Method::DELETE, url, &token).send().await else {
+        let Ok(deleted) = request(&client, Method::DELETE, url, &token)
+            .send_retry()
+            .await
+        else {
             return Deletion::Failed;
         };
         let status = deleted.status().as_u16();
@@ -856,7 +860,7 @@ impl Dns<'_> {
             record.provider_record_id
         );
         let Ok(response) = request(&client, Method::GET, url.clone(), &token)
-            .send()
+            .send_retry()
             .await
         else {
             return false;
@@ -875,7 +879,7 @@ impl Dns<'_> {
         }
         let patched = request(&client, Method::PATCH, url, &token)
             .json(&json!({"comment": ownership_comment(&record.uuid)}))
-            .send()
+            .send_retry()
             .await;
         if !patched.is_ok_and(|r| r.status().is_success()) {
             return false;
@@ -913,7 +917,10 @@ impl Dns<'_> {
             zone.provider_zone_id,
             record.provider_record_id
         );
-        let Ok(response) = request(&client, Method::GET, url, &token).send().await else {
+        let Ok(response) = request(&client, Method::GET, url, &token)
+            .send_retry()
+            .await
+        else {
             return false;
         };
         let (_, body) = parse(response).await;
@@ -1439,7 +1446,7 @@ async fn tunnel_request(
         builder = builder.json(b);
     }
     let response = builder
-        .send()
+        .send_retry()
         .await
         .map_err(|e| DnsError::Other(e.to_string()))?;
     let (status, value) = parse(response).await;
@@ -1660,7 +1667,7 @@ pub async fn tunnel_set_up(
                 format!("{}/accounts/{account}/cfd_tunnel/{tunnel_id}", api()),
                 token,
             )
-            .send()
+            .send_retry()
             .await;
         }
         return Err(e);
@@ -1700,14 +1707,14 @@ async fn delete_stopped_tunnel(
             format!("{path}/connections"),
             token,
         )
-        .send()
+        .send_retry()
         .await
         .is_err()
         {
             return Some(did_not_respond());
         }
         let Ok(response) = request(&client, Method::DELETE, path.clone(), token)
-            .send()
+            .send_retry()
             .await
         else {
             return Some(did_not_respond());

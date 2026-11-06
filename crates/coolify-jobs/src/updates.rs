@@ -2,6 +2,7 @@
 //! coolify-rs installation: the version file and `upgrade.sh` come from the addresses the installer
 //! sets, never from upstream's CDN. Without them, updates are off.
 
+use crate::git_http::SendRetry as _;
 use chrono::Timelike;
 use coolify_compat::cron_expression::{in_zone, time_zone};
 use std::cmp::Ordering;
@@ -45,7 +46,7 @@ pub async fn refresh_versions() -> Option<Value> {
     let response = reqwest::Client::new()
         .get(versions_url()?)
         .timeout(Duration::from_secs(10))
-        .send()
+        .send_retry()
         .await
         .ok()?;
     if !response.status().is_success() {
