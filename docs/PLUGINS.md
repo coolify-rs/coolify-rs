@@ -5,7 +5,7 @@ own data and serve its own API routes, and it can do only what its manifest asks
 [ADR 0010](decisions/0010-plugins.md) explains the design and the security model.
 
 The interface is [`crates/coolify-plugins/wit/plugin.wit`](../crates/coolify-plugins/wit/plugin.wit)
-(`coolify-rs:plugin@0.1.1`; components built for 0.1.0 load unchanged). Any language that can build a WebAssembly component can implement it. This
+(`coolify-rs:plugin@0.1.2`; components built for 0.1.0 and 0.1.1 load unchanged). Any language that can build a WebAssembly component can implement it. This
 guide uses Rust and the SDK in [`plugins/sdk-rust`](../plugins/sdk-rust).
 
 ## A plugin in Rust
@@ -80,6 +80,9 @@ load a component that imports an interface its manifest did not ask for.
 [ADR 0011](decisions/0011-plugin-resource-and-deploy-capabilities.md) explains `resources` and `deploy`.
 Plugins cannot run commands on servers.
 
+A manifest can also declare `[[settings]]` that each team fills in, such as an API key or a webhook URL. They
+are not a capability; see [Team settings](#team-settings).
+
 Logging (`coolify_rs_plugin::log`) is always available.
 
 ## What a plugin can rely on, and what it can't do
@@ -135,6 +138,93 @@ coolify_rs_plugin::export!(Inventory);
   the caller could not deploy the application through the API, neither can the plugin. From an event, it
   runs on the authority of the team admin who granted `deploy`, checked again on every deployment. Every
   deployment, refused or not, is written to the plugin audit log with the plugin's id.
+
+## Team settings
+
+A plugin that needs values per team (a topic, an API key, a webhook URL) declares them in the manifest. Team
+owners and admins fill them in under **Team → Plugins → Configure**, and the plugin reads them with
+`config::get`. [ADR 0014](decisions/0014-plugin-settings.md) explains the design and the threat model.
+
+```toml
+[[settings]]
+key = "topic"                     # lowercase snake case, unique; what the plugin asks for
+label = "Topic"                   # the form field's label, up to 64 characters
+help = "The ntfy topic alerts are published to."   # optional, up to 280 characters
+required = true                   # "Needs configuration" until set
+
+[[settings]]
+key = "token"
+label = "Access token"
+secret = true                     # encrypted at rest, never shown again after saving
+
+[[settings]]
+key = "server"
+label = "Server"
+kind = "url"                      # text (the default), url (https only) or select
+default = "https://ntfy.sh"       # answered while the team has not set one
+
+[[settings]]
+key = "priority"
+label = "Priority"
+options = ["low", "default", "high"]   # a select; kind = "select" is implied
+default = "default"
+```
+
+| Field | |
+|---|---|
+| `key` | Required. `a-z`, `0-9` and `_`, starting with a letter, at most 64 characters, unique in the manifest |
+| `label` | Required. 1 to 64 characters |
+| `help` | Optional. 1 to 280 characters |
+| `secret` | `false` by default. A secret can't have a `default` or `options` |
+| `required` | `false` by default. A required setting can't have a `default` |
+| `default` | Optional, must be a valid value |
+| `options` | Optional. Up to 32 values, shown as a select |
+| `kind` | `text`, `url` (an `https://` URL with a host and no user or password) or `select` (needs `options`) |
+
+At most 32 settings. Values are trimmed, up to 4096 bytes, without line breaks or control characters.
+
+Settings are not a capability: they don't appear in the capability list an admin approves, and adding them in
+an update needs no new approval. A component may import the `config` interface only if its manifest declares
+settings; otherwise coolify-rs refuses to install or load it.
+
+```rust
+use coolify_rs_plugin::{Event, Plugin, config};
+
+struct Ntfy;
+
+impl Plugin for Ntfy {
+    fn on_event(event: Event) -> Result<(), String> {
+        let Some(topic) = config::get("topic") else {
+            coolify_rs_plugin::log::warn("not configured for this team");
+            return Ok(());
+        };
+        let server = config::get_or("server", "https://ntfy.sh");
+        let mut headers: Vec<(String, String)> = vec![];
+        if let Some(token) = config::get("token") {
+            headers.push(("authorization".into(), format!("Bearer {token}")));
+        }
+        // ... coolify_rs_plugin::http::fetch(...) to `{server}/{topic}` with `headers`
+        Ok(())
+    }
+}
+```
+
+- `config::get(key)` returns the team's value, else the default, else `None`. Required settings can be unset
+  too, so handle `None`. A key the manifest doesn't declare is always `None`. `config::get_or(key, default)`
+  and `config::require(key)` (an error for `?`) are shortcuts.
+- **Always the call's team and your own plugin.** As with `storage`, no function takes a team or a plugin.
+- **Secrets come back in clear, to you only.** Never log them or put them in a route's response. Members,
+  admins and other plugins never see them.
+- **Where they live.** `coolify_rs_plugins.team_settings`. A secret is encrypted with `APP_KEY`, the key
+  Coolify encrypts its own secrets with. Without `APP_KEY`, secrets can't be saved.
+- **Switching off and uninstalling.** A team that switches the plugin off keeps its settings. Uninstalling the
+  plugin deletes every team's settings.
+- **Updates.** When a new version removes a setting, its values are deleted. When a setting becomes secret,
+  stored values are encrypted. When a secret stops being secret, its values are deleted, because members would
+  see them. Values the new declaration refuses (another kind or other options) are deleted.
+- **Checking.** `coolify-rs plugin check` runs with defaults only, so don't crash when a setting is unset.
+
+The API (`GET` and `PATCH /api/v1/plugins/{publisher}/{name}/settings`) is under [API](#team-settings-api).
 
 ## Events
 
@@ -297,7 +387,9 @@ on for the instance.
 - **Install from files.** In development mode only: choose `plugin.toml` and the `.wasm`, review the
   capabilities, and approve. The plugin is shown as **Unverified**.
 - **Team → Plugins.** For a plugin holding `deploy`, switching it on asks whether it may queue the team's
-  deployments; the page shows the answer and can change it.
+  deployments; the page shows the answer and can change it. A plugin with settings has **Configure** (members
+  see the settings read-only, without secrets) and a **Needs configuration** badge while a required setting
+  is unset. A secret's field shows "••••• (set)": leave it empty to keep the secret, or Clear it.
 
 ## Checking a plugin
 
@@ -425,7 +517,45 @@ curl -X POST https://coolify.example.com/api/v1/plugins/acme/auto-redeploy/enabl
 | `DELETE /api/v1/plugins/{publisher}/{name}` | Owners and admins of the root team: uninstalls the plugin and deletes its data |
 | `POST /api/v1/plugins/{publisher}/{name}/enable`, `/disable` | Team owners and admins, for their own team; `enable` takes `{"grant_deploy": true\|false}` for a plugin holding `deploy` |
 | `POST /api/v1/plugins/{publisher}/{name}/test-event` with `{"kind": ..., "payload": {...}}` | Team owners and admins, in development mode only: delivers one event to the plugin for their team and reports whether it succeeded |
+| `GET /api/v1/plugins/{publisher}/{name}/settings` | Any token with `read`: the token's team's settings, secrets only as `set` |
+| `PATCH /api/v1/plugins/{publisher}/{name}/settings` | Team owners and admins, with `write`, for their own team |
 | `/api/v1/ext/{publisher}/{name}/...` | Any token with `read`, for a team that enabled the plugin |
+
+### Team settings API
+
+`GET /api/v1/plugins/{publisher}/{name}/settings` answers every declared setting for the token's team. A
+setting that is not secret has `value` (`null` while unset); a secret only says whether it is `set`.
+
+```json
+{
+  "plugin": "acme/ntfy-alerts",
+  "settings": [
+    {"key": "topic", "label": "Topic", "help": "The ntfy topic alerts are published to.", "kind": "text",
+     "secret": false, "required": true, "options": [], "default": null, "set": true, "value": "deploys"},
+    {"key": "token", "label": "Access token", "help": null, "kind": "text",
+     "secret": true, "required": false, "options": [], "default": null, "set": true}
+  ],
+  "needs_configuration": false
+}
+```
+
+`PATCH` the same path with an object of the settings to change: a string sets one, `null` or a blank string
+clears it, and settings left out stay as they are. It answers the same shape. Nothing is written unless every
+value is valid; otherwise it answers 422 with the errors by key, which never repeat a value:
+
+```bash
+curl -X PATCH https://coolify.example.com/api/v1/plugins/acme/ntfy-alerts/settings \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"topic": "deploys", "token": "tk_..."}'
+```
+
+```json
+{"message": "Validation failed.", "errors": {"server": ["Server must be an https:// URL."]}}
+```
+
+Every change is written to the plugin audit log as `team_settings_updated`, with the user and
+`{"set": [keys], "cleared": [keys]}`, never values. 403 for members and tokens without `write`, 404 for a
+plugin that is not installed.
 
 ### An installed plugin
 
@@ -562,6 +692,7 @@ the same code as the API's and answer the same bodies and errors.
 | `GET /ui/plugins`, `POST /ui/plugins`, `PATCH` and `DELETE /ui/plugins/{publisher}/{name}` | Instance admins; installing from files needs development mode, uninstalling the password step |
 | `GET /ui/plugins/catalog`, `POST /ui/plugins/catalog/refresh`, `POST /ui/plugins/catalog/install`, `POST /ui/plugins/{publisher}/{name}/update` | Instance admins |
 | `GET /ui/plugins/team`, `POST /ui/plugins/{publisher}/{name}/team` | Any team member reads; team owners and admins switch with `{"enabled": ...}`. Enabling a plugin that holds `deploy` also needs `"grant_deploy": true` or `false`, as `/enable` does |
+| `GET /ui/plugins/{publisher}/{name}/settings`, `PATCH` the same | Any team member reads, team owners and admins change; the same bodies as the API's `.../settings`. Each plugin of `GET /ui/plugins/team` also carries `settings` and `needs_configuration` |
 | `GET /ui/plugins/{publisher}/{name}/panels/{slot}` | Team members, for a team that enabled the plugin, loaded by a frame of the page |
 | `/ui/ext/{publisher}/{name}/...` | Team members, for a team that enabled the plugin; writes need the CSRF token |
 
