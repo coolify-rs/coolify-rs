@@ -121,11 +121,83 @@ kind.
 
 New kinds may be added at any time. Renaming or removing one needs a new major version of the interface.
 
-## Installing a plugin
+## Checking a plugin
 
-Until the [registry](decisions/0010-plugins.md#7-distribution-a-signed-registry-not-an-app-store) exists,
-plugins are installed directly. Start coolify-rs with `COOLIFY_RS_ALLOW_UNVERIFIED_PLUGINS=true`. Then,
-with an API token of an owner or admin of the root team:
+`coolify-rs plugin check` runs the same conformance check as the registry's CI, and it needs no database:
+
+```bash
+coolify-rs plugin check target/wasm32-wasip2/release/deploy_stats.wasm plugin.toml
+```
+
+The check runs these steps:
+
+1. It parses the manifest and compiles the component.
+2. It refuses imports the manifest did not ask for.
+3. It loads the component in the real sandbox, with the same limits as an installed plugin. Storage is
+   kept in memory, and `http` requests fail.
+4. It sends every event kind the plugin subscribes to with a sample payload, then malformed input: a
+   payload that isn't JSON, wrong types, a 256 KiB string, an unknown kind or version. If the plugin has
+   routes, it also sends odd requests.
+
+It prints a JSON report with each call's result, time and peak memory, and exits non-zero on failure.
+A trap, a timeout or an invalid status fails the check. A plugin that returns an error for input it can't
+use passes, and the error is noted.
+
+## Installing from the catalogue
+
+The [plugin registry](decisions/0010-plugins.md#7-distribution-a-signed-registry-not-an-app-store) is a
+reviewed Git repository, `coolify-rs/plugins`. Its CI publishes `index.json` with an Ed25519 signature.
+
+- **Fetching the index.** coolify-rs fetches the index a minute after it starts, then once a day. An admin
+  can also refresh it.
+- **Checking the index.** coolify-rs checks the signature against the registry keys compiled into it.
+  Signatures by an unknown or expired key are refused, and so is an index older than the one it already
+  has.
+- **Checking downloads.** Every download goes through the plugins' HTTP rules: HTTPS, public addresses
+  only, no redirects, at most 20 MiB. A component is installed only if its SHA-256 matches the index.
+  Plugins installed this way show `origin: "registry"` and `verified: true`.
+
+With an API token of an owner or admin of the root team:
+
+```bash
+# Fetch the index now, then look at the catalogue.
+curl -X POST https://coolify.example.com/api/v1/plugins/catalog/refresh -H "Authorization: Bearer $TOKEN"
+curl https://coolify.example.com/api/v1/plugins/catalog -H "Authorization: Bearer $TOKEN"
+
+# The first install request answers 422 with the capability list. Send it back as grant to install.
+curl -X POST https://coolify.example.com/api/v1/plugins/catalog/install -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"id": "coolify-rs/deploy-stats", "grant": ["events: deployment.succeeded, deployment.failed", "storage", "routes"]}'
+```
+
+Each team then turns the plugin on for itself with `POST /api/v1/plugins/{publisher}/{name}/enable`.
+
+### Updates
+
+An update never widens a plugin's capabilities without an admin's approval.
+
+- **Same or fewer capabilities.** `POST /api/v1/plugins/{publisher}/{name}/update` installs the newest
+  version directly, or the `version` you name. Per-team enablement and the plugin's stored data are kept.
+- **More capabilities.** The refresh records the newer version as a *pending update*, and the catalogue
+  shows what it adds.
+  - An update request without a grant answers 422 with the new capability list and what it adds.
+  - Sending that list back as `grant` approves and installs the version.
+  - Until then the installed version keeps running.
+
+### Yanked and revoked plugins
+
+- **Yanked versions.** New installs and updates skip a yanked version, and naming one explicitly is
+  refused. Installations already on that version keep running, and the catalogue flags them.
+- **Revoked plugins.** At the next refresh, a revoked plugin is switched off on the instance.
+  - `disabled_reason` reads `revoked by the plugin registry: <reason>`, and the audit log records it.
+  - While the plugin stays revoked, it cannot be switched back on, installed, uploaded or updated.
+  - If the registry lifts the revocation, an admin can switch the plugin on again.
+
+## Installing a plugin outside the registry
+
+For plugin authors and private in-house plugins, start coolify-rs with
+`COOLIFY_RS_ALLOW_UNVERIFIED_PLUGINS=true` and upload the component directly. Then, with an API token of an
+owner or admin of the root team:
 
 ```bash
 curl -X POST https://coolify.example.com/api/v1/plugins -H "Authorization: Bearer $TOKEN" \
@@ -143,22 +215,181 @@ curl -X POST https://coolify.example.com/api/v1/plugins -H "Authorization: Beare
        '{manifest: $m, component: $c, grant: ["events: deployment.succeeded, deployment.failed", "storage", "routes"]}')"
 ```
 
+Uploaded plugins show `origin: "upload"` and `verified: false`.
+
 Each team then turns it on for itself:
 
 ```bash
 curl -X POST https://coolify.example.com/api/v1/plugins/acme/deploy-stats/enable -H "Authorization: Bearer $TOKEN"
 ```
 
+## API
+
 | Endpoint | Who can call it |
 |---|---|
 | `GET /api/v1/plugins`, `GET /api/v1/plugins/{publisher}/{name}` | Any token with `read` |
-| `POST /api/v1/plugins` | Owners and admins of the root team, with `write` |
+| `GET /api/v1/plugins/catalog` | Any token with `read` |
+| `POST /api/v1/plugins/catalog/refresh` | Owners and admins of the root team, with `write` |
+| `POST /api/v1/plugins/catalog/install` with `{"id": ..., "version": ..., "grant": [...]}` | Owners and admins of the root team, with `write` |
+| `POST /api/v1/plugins/{publisher}/{name}/update` with `{"version": ..., "grant": [...]}` (both optional) | Owners and admins of the root team, with `write` |
+| `POST /api/v1/plugins` | Owners and admins of the root team, with `write`, in development mode only |
 | `PATCH /api/v1/plugins/{publisher}/{name}` with `{"enabled": false}` | Owners and admins of the root team: switches the plugin off for everyone |
 | `DELETE /api/v1/plugins/{publisher}/{name}` | Owners and admins of the root team: uninstalls the plugin and deletes its data |
 | `POST /api/v1/plugins/{publisher}/{name}/enable`, `/disable` | Team owners and admins, for their own team |
 | `POST /api/v1/plugins/{publisher}/{name}/test-event` with `{"kind": ..., "payload": {...}}` | Team owners and admins, in development mode only: delivers one event to the plugin for their team and reports whether it succeeded |
 | `/api/v1/ext/{publisher}/{name}/...` | Any token with `read`, for a team that enabled the plugin |
 
-`COOLIFY_RS_PLUGINS=off` switches the plugin system off entirely. Plugin data lives in the
-`coolify_rs_plugins` PostgreSQL schema, which Coolify never reads, so a database with plugins can still be
-handed back to Coolify.
+### An installed plugin
+
+`GET /api/v1/plugins/{publisher}/{name}` returns this shape. `POST .../catalog/install` (201) and
+`POST .../update` (200) return it too.
+
+```json
+{
+  "id": "coolify-rs/deploy-stats",
+  "name": "Deploy stats",
+  "version": "0.1.0",
+  "description": "Counts successful and failed deployments per team and serves the totals.",
+  "license": "Apache-2.0",
+  "source": "https://github.com/coolify-rs/coolify-rs/tree/main/plugins/examples/deploy-stats",
+  "sha256": "5296…",
+  "origin": "registry",
+  "verified": true,
+  "enabled": true,
+  "disabled_reason": null,
+  "capabilities": ["events: deployment.succeeded, deployment.failed", "storage", "routes"],
+  "enabled_for_team": false
+}
+```
+
+### `GET /api/v1/plugins/catalog`
+
+`index` is `null` and `plugins` is empty until the first refresh succeeds.
+
+```json
+{
+  "index": {
+    "url": "https://raw.githubusercontent.com/coolify-rs/plugins/main/dist",
+    "key_id": "coolify-rs-2026",
+    "generated_at": "2026-11-06T12:00:00Z",
+    "fetched_at": "2026-11-06T12:01:00Z"
+  },
+  "plugins": [
+    {
+      "id": "coolify-rs/deploy-stats",
+      "name": "Deploy stats",
+      "description": "Counts successful and failed deployments per team and serves the totals.",
+      "license": "Apache-2.0",
+      "source": "https://github.com/coolify-rs/coolify-rs",
+      "latest_version": "0.2.0",
+      "capabilities": ["events: deployment.succeeded, deployment.failed", "storage", "routes"],
+      "verified": true,
+      "installed_version": "0.1.0",
+      "installed_yanked": false,
+      "update_available": true,
+      "update_requires_approval": true,
+      "pending_update": {
+        "version": "0.2.0",
+        "capabilities": ["events: deployment.succeeded, deployment.failed", "storage", "routes"],
+        "added": ["events: deployment.failed"],
+        "found_at": "2026-11-06T12:01:00Z"
+      },
+      "revoked": null,
+      "versions": [
+        {"version": "0.2.0", "yanked": false, "compatible": true, "capabilities": ["…"]},
+        {"version": "0.1.0", "yanked": false, "compatible": true, "capabilities": ["…"]}
+      ]
+    }
+  ]
+}
+```
+
+These fields need explaining:
+
+- `latest_version` is the newest version that isn't yanked and that this coolify-rs can run. Pre-releases
+  count only when there is nothing else. It is `null` when no version qualifies.
+- `capabilities` are those of `latest_version`.
+- `update_available` is true when `latest_version` is newer than the installed version.
+- `update_requires_approval` is true when that update asks for capabilities that weren't granted.
+- `revoked` is `null` or `{"reason": "..."}`.
+- `versions` lists the newest first. `compatible: false` marks a version that needs a newer coolify-rs.
+
+### `POST /api/v1/plugins/catalog/refresh`
+
+```json
+{
+  "url": "https://raw.githubusercontent.com/coolify-rs/plugins/main/dist",
+  "key_id": "coolify-rs-2026",
+  "generated_at": "2026-11-06T12:00:00Z",
+  "fetched_at": "2026-11-06T12:01:00Z",
+  "plugins": 12,
+  "revoked": ["acme/bad-plugin"],
+  "pending_updates": ["coolify-rs/deploy-stats"]
+}
+```
+
+- `revoked` lists the installed plugins this refresh switched off.
+- `pending_updates` lists the installed plugins for which this refresh found a newer version that asks
+  for more.
+- A download, signature or rollback failure answers 502 `{"message": ...}`, and the previous index
+  stays in use.
+
+### Approving capabilities
+
+A missing or different `grant` on install, or an update that needs approval, answers 422 like this:
+
+```json
+{
+  "message": "Approve the plugin's capabilities by sending them back as grant.",
+  "id": "coolify-rs/deploy-stats",
+  "version": "0.2.0",
+  "capabilities": ["events: deployment.succeeded, deployment.failed", "storage", "routes"],
+  "added": ["events: deployment.failed"],
+  "pending_update": true
+}
+```
+
+- On install, `added` lists every capability.
+- On update, `added` lists only what the version asks for beyond the current grant.
+- `pending_update` says whether the version is now recorded as a pending update.
+
+Other errors answer `{"message": ...}`:
+
+| Status | When |
+|---|---|
+| 404 | The plugin, or the version, isn't in the index. Updating a plugin that isn't installed |
+| 409 | The index has never been fetched. The plugin is already installed, or already at that version |
+| 422 | The version is yanked, can't run on this coolify-rs, or the plugin is revoked. For a revoked plugin the body also has `id` and `reason` |
+| 502 | Fetching failed, the signature didn't verify, or the component's SHA-256 doesn't match the index |
+
+## Command line
+
+None of these need a database.
+
+| Command | Does |
+|---|---|
+| `coolify-rs plugin check <component.wasm> <plugin.toml>` | The conformance check described above |
+| `coolify-rs plugin keygen <secret-out> <public-out> --key-id <id> --not-after <YYYY-MM-DD>` | Creates a registry signing key. It writes the secret half with mode 0600, never overwrites a file, and prints only the public half |
+| `coolify-rs plugin build-index <registry-dir> --key <secret> [--out <dir>]` | Builds and signs `index.json` from `plugins/*/*.toml` |
+| `coolify-rs plugin verify-index <dist-dir> [--trust <public-key-file>]` | Verifies an index with the compiled-in keys, and any key you trust explicitly |
+| `coolify-rs plugin review <registry-dir> [--base <main-checkout>] [--out <dir>]` | The registry's pull request checks: metadata, typosquatting, immutability, capability diff and review tier |
+
+[`registry/`](../registry) is the template for the registry repository, with its workflows and scripts.
+
+## Settings
+
+| Variable | Default | Effect |
+|---|---|---|
+| `COOLIFY_RS_PLUGINS` | on | `off` switches the plugin system off entirely |
+| `COOLIFY_RS_ALLOW_UNVERIFIED_PLUGINS` | `false` | `true` turns on development mode: uploads, test events, extra registry keys |
+| `COOLIFY_RS_PLUGIN_REGISTRY` | on | `off` stops the daily refresh. An admin can still refresh by hand. Without refreshes, revocations don't arrive |
+| `COOLIFY_RS_PLUGIN_REGISTRY_URL` | `https://raw.githubusercontent.com/coolify-rs/plugins/main/dist` | The folder that holds `index.json` and `index.json.sig` |
+| `COOLIFY_RS_PLUGIN_REGISTRY_KEYS` | none | Extra trusted keys, as `id:hex-public-key:YYYY-MM-DD` separated by commas. They are read in development mode only and ignored otherwise |
+
+The development key, `coolify-rs-dev-insecure`, signs the test registries. Its secret half is in this
+repository, so coolify-rs never trusts it by default. To try a local registry in development mode, pass
+`signing::DEV_KEY_ENV` in `COOLIFY_RS_PLUGIN_REGISTRY_KEYS`.
+
+Plugin data lives in the `coolify_rs_plugins` PostgreSQL schema, which Coolify never reads. That includes
+the last verified index, revocations and pending updates, so a database with plugins can still be handed
+back to Coolify.
