@@ -162,8 +162,24 @@ async fn update_database_proxies(jobs: &Jobs, srv: &Srv, containers: &[Value]) {
         if !is_running {
             continue;
         }
-        let proxy_running = named_running(containers, &format!("{}-proxy", d.uuid));
-        if d.bool("is_public") && !proxy_running {
+        let proxy_name = format!("{}-proxy", d.uuid);
+        let proxy_running = named_running(containers, &proxy_name);
+        if d.bool("is_public")
+            && proxy_running
+            && crate::databases::proxy::claim_outdated_refresh(
+                &d.uuid,
+                containers
+                    .iter()
+                    .find(|c| {
+                        c.get("name").and_then(Value::as_str) == Some(proxy_name.as_str())
+                            && running(c)
+                    })
+                    .and_then(|c| c.get("labels")),
+            )
+        {
+            // A proxy that an older version started with an older configuration.
+            jobs.spawn_database_proxy_start(d.clone());
+        } else if d.bool("is_public") && !proxy_running {
             let name = d.str("name").unwrap_or_default().to_owned();
             jobs.spawn_database_proxy_start(d.clone());
             if let Some((team_id, server)) = lookup::server(srv.db(), srv.id()).await {

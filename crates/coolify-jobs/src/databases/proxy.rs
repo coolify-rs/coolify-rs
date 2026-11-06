@@ -16,6 +16,32 @@ const NON_TRANSIENT: &[&str] = &[
     "Bind for",
 ];
 
+/// `StartDatabaseProxy::CONFIG_VERSION`: raised when the generated configuration changes, so the
+/// status checks recreate proxies an older version started.
+pub const CONFIG_VERSION: &str = "2";
+/// `StartDatabaseProxy::CONFIG_VERSION_LABEL`.
+pub const CONFIG_VERSION_LABEL: &str = "coolify.databaseProxyConfigVersion";
+
+/// `StartDatabaseProxy::claimOutdatedRefresh($databaseUuid, $labels)`: a running proxy has an older
+/// configuration and no recreation was claimed in the last ten minutes.
+pub fn claim_outdated_refresh(database_uuid: &str, labels: Option<&serde_json::Value>) -> bool {
+    let version = labels
+        .and_then(|l| l.get(CONFIG_VERSION_LABEL))
+        .map(|v| match v {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Null => String::new(),
+            other => other.to_string(),
+        })
+        .unwrap_or_default();
+    if version == CONFIG_VERSION {
+        return false;
+    }
+    crate::server_ops::MARKS.add(
+        format!("database-proxy-refresh:{database_uuid}"),
+        std::time::Duration::from_secs(600),
+    )
+}
+
 /// `database_proxy_dir($uuid)`.
 pub(crate) fn proxy_dir(uuid: &str) -> String {
     format!("{CONFIGURATION_DIR}/{uuid}/proxy")
@@ -48,6 +74,10 @@ pub fn proxy_compose(uuid: &str, public_port: i64, network: &str) -> String {
         ("image", PhpValue::from("nginx:stable-alpine")),
         ("container_name", PhpValue::from(name.as_str())),
         ("restart", PhpValue::from("unless-stopped")),
+        (
+            "labels",
+            PhpValue::map([(CONFIG_VERSION_LABEL, PhpValue::from(CONFIG_VERSION))]),
+        ),
         (
             "ports",
             PhpValue::strings([format!("{public_port}:{public_port}")]),
@@ -140,10 +170,6 @@ impl Jobs {
             ipv6.trim() == "true",
         );
         let compose = proxy_compose(&d.uuid, public_port, &network);
-        let remove = format!("docker rm -f {name}");
-        self.remote()
-            .run_quiet(&t, &[remove.as_str()], RunOptions::op("database.proxy"))
-            .await;
         let commands = [
             format!("mkdir -p {dir}"),
             format!(
@@ -155,6 +181,8 @@ impl Jobs {
                 b64(&compose)
             ),
             format!("docker compose --project-directory {dir} -f {dir}/docker-compose.yaml pull"),
+            // Remove the old proxy only after the pull, so a failed pull keeps it running.
+            docker_remove_command(&name),
             format!("docker compose --project-directory {dir} -f {dir}/docker-compose.yaml up -d"),
         ];
         let refs: Vec<&str> = commands.iter().map(String::as_str).collect();
@@ -245,6 +273,22 @@ pub fn docker_remove_command(container: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxy_compose_has_the_config_version() {
+        let compose = proxy_compose("abc", 15432, "coolify");
+        assert!(compose.contains(
+            "    container_name: abc-proxy\n    restart: unless-stopped\n    labels:\n      coolify.databaseProxyConfigVersion: '2'\n    ports:"
+        ), "{compose}");
+        let uuid = "proxy-claim-test";
+        assert!(!claim_outdated_refresh(
+            uuid,
+            Some(&serde_json::json!({"coolify.databaseProxyConfigVersion": "2"}))
+        ));
+        assert!(claim_outdated_refresh(uuid, Some(&serde_json::json!({}))));
+        // Claimed for ten minutes.
+        assert!(!claim_outdated_refresh(uuid, None));
+    }
 
     #[test]
     fn nginx_matches_upstream_shape() {

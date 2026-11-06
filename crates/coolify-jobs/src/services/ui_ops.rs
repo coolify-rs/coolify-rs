@@ -218,10 +218,6 @@ impl Jobs {
             ipv6.trim() == "true",
         );
         let compose = proxy::proxy_compose(&sub.uuid, port, &network);
-        let remove = format!("docker rm -f {name}");
-        self.remote()
-            .run_quiet(&t, &[remove.as_str()], RunOptions::op("database.proxy"))
-            .await;
         let commands = [
             format!("mkdir -p {dir}"),
             format!(
@@ -233,6 +229,8 @@ impl Jobs {
                 b64(&compose)
             ),
             format!("docker compose --project-directory {dir} -f {dir}/docker-compose.yaml pull"),
+            // Remove the old proxy only after the pull, so a failed pull keeps it running.
+            proxy::docker_remove_command(&name),
             format!("docker compose --project-directory {dir} -f {dir}/docker-compose.yaml up -d"),
         ];
         let refs: Vec<&str> = commands.iter().map(String::as_str).collect();
