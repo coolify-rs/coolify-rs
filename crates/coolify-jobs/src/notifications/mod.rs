@@ -25,7 +25,7 @@ mod channels;
 pub mod lookup;
 mod markdown;
 mod messages;
-mod php;
+pub(crate) mod php;
 pub mod plugin_events;
 mod tracking;
 mod views;

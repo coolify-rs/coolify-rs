@@ -239,15 +239,19 @@
     </div>
 
     <SettingsSection id="container-section" title="Container" description="Docker options and log forwarding for the database container.">
-      <FormInput
-        helper="Add supported docker run options used when the container starts. Unsupported options can interfere with coolify-rs automation."
-        placeholder="--cap-add SYS_ADMIN --device=/dev/fuse"
-        id="customDockerRunOptions"
-        label="Custom Docker options"
-        disabled={!canUpdate}
-        bind:value={form.custom_docker_run_options}
-        error={err('custom_docker_run_options')}
-      />
+      {#if !canUpdate}
+        <FormInput label="Custom Docker options" id="customDockerRunOptionsHidden" disabled value="Hidden (only admins can view)" />
+      {:else}
+        <FormInput
+          helper="Add supported docker run options used when the container starts. Unsupported options can interfere with coolify-rs automation."
+          placeholder="--cap-add SYS_ADMIN --device=/dev/fuse"
+          id="customDockerRunOptions"
+          label="Custom Docker options"
+          disabled={!canUpdate}
+          bind:value={form.custom_docker_run_options}
+          error={err('custom_docker_run_options')}
+        />
+      {/if}
       <DatabaseSubsection id="log-delivery-section" title="Log delivery" helper="Forward container logs to the drain configured on the server.">
         <Listbox
           id="isLogDrainEnabled"

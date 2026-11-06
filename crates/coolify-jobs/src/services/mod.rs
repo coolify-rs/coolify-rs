@@ -53,7 +53,7 @@ fn owner(s: &ServiceRow) -> Owner<'_> {
 }
 
 /// `serverDockerConfigPrefix($server)`.
-fn docker_config_prefix(server: &ServerInfo) -> &'static str {
+pub(crate) fn docker_config_prefix(server: &ServerInfo) -> &'static str {
     if server.is_non_root() {
         "DOCKER_CONTEXT=default DOCKER_CONFIG=\"$(find \"$HOME/.docker/config.json\" -maxdepth 0 -exec dirname {} \\; 2>/dev/null)\" "
     } else {
@@ -94,7 +94,7 @@ pub fn predefined_network_connect_command(
 }
 
 impl Jobs {
-    async fn service_server(&self, s: &ServiceRow) -> Result<ServerInfo, String> {
+    pub(crate) async fn service_server(&self, s: &ServiceRow) -> Result<ServerInfo, String> {
         let id = s.server_id().ok_or("The service has no server.")?;
         let row = servers::find_by_id(&self.0.db, id)
             .await
@@ -103,7 +103,7 @@ impl Jobs {
         Ok(ServerInfo::from_row(&row))
     }
 
-    async fn service_network(&self, s: &ServiceRow) -> String {
+    pub(crate) async fn service_network(&self, s: &ServiceRow) -> String {
         svc::destination_network(&self.0.db, s)
             .await
             .unwrap_or_else(|_| "coolify".to_owned())
@@ -666,33 +666,31 @@ impl Jobs {
     }
 
     /// `StopService::dispatch($service, false, $dockerCleanup)`.
-    /// The chain of `clone_service()`: `StopService`, one `VolumeCloneJob` per volume, `StartService`.
-    pub fn spawn_service_volume_clones(
+    /// The chain of `clone_service()`: `CloneVolumeDataWithSourceStopped::run($source, ...)`.
+    pub async fn spawn_service_volume_clones(
         &self,
         s: ServiceRow,
         source_server: i64,
         target_server: i64,
         clones: Vec<(String, i64, String)>,
     ) {
-        let jobs = self.clone();
-        tokio::spawn(async move {
-            jobs.stop_service(&s, false).await;
-            for (source, volume_id, target) in clones {
-                if let Err(e) = jobs
-                    .clone_volume_data(
-                        source_server,
-                        target_server,
-                        &source,
-                        Some(volume_id),
-                        &target,
-                    )
-                    .await
-                {
-                    tracing::error!(volume = %source, error = %e, "Failed to copy volume data");
-                }
-            }
-            jobs.spawn_service_start(s.id, false, false);
-        });
+        let copies = clones
+            .into_iter()
+            .map(
+                |(source_volume, volume_id, target_volume)| crate::clone_volume_data::VolumeCopy {
+                    source_server,
+                    target_server,
+                    source_volume,
+                    volume_id: Some(volume_id),
+                    target_volume,
+                },
+            )
+            .collect();
+        self.clone_volume_data_with_source_stopped(
+            crate::clone_volume_data::CloneSource::Service(s),
+            copies,
+        )
+        .await;
     }
 
     pub fn spawn_service_stop(&self, s: ServiceRow) {
@@ -981,8 +979,9 @@ impl Jobs {
         });
     }
 
-    /// `getContainerStatus($server, $container)`.
-    pub async fn service_container_status(&self, target: &Target, container: &str) -> String {
+    /// `is_array(getContainerStatus($server, $container, all_data: true))`: the container exists,
+    /// running or stopped.
+    pub async fn service_container_inspected(&self, target: &Target, container: &str) -> bool {
         let c = format!(
             "docker inspect --format '{{{{json .}}}}' {}",
             quote(container)
@@ -992,16 +991,12 @@ impl Jobs {
             .run_quiet(target, &[c.as_str()], RunOptions::op("service.status"))
             .await
         else {
-            return "exited".into();
+            return false;
         };
-        serde_json::from_str::<Value>(out.trim())
-            .ok()
-            .and_then(|v| {
-                v.pointer("/State/Status")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .unwrap_or_else(|| "exited".into())
+        out.lines()
+            .find(|l| !l.trim().is_empty())
+            .and_then(|l| serde_json::from_str::<Value>(l.trim()).ok())
+            .is_some_and(|v| v.is_object())
     }
 
     /// `getContainerLogs($server, $container, $lines, $showTimestamps)`.

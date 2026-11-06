@@ -505,7 +505,7 @@ async fn set_member_role(
         Role::Admin
     };
     member_guard(&state, &ctx, id, min).await?;
-    coolify_db::teams::set_member_role(&state.db, ctx.team_id, id, role.as_str()).await?;
+    coolify_db::teams::set_member_role(&state.db, ctx.team_id, id, role).await?;
     let member = coolify_db::team_pages::user_email(&state.db, id)
         .await?
         .unwrap_or_default();

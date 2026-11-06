@@ -644,9 +644,11 @@ const UPDATE_FIELDS: &[&str] = &[
     "backup_compression_cpu_percentage",
 ];
 
+/// `! is_string($value) || ! validate_timezone($value)`.
 fn valid_timezone_rule(v: &Value) -> Option<&'static str> {
-    (!coolify_compat::timezones::valid_timezone(&as_php_string(v)))
-        .then_some("The server_timezone must be a valid timezone.")
+    (!v.as_str()
+        .is_some_and(coolify_compat::timezones::valid_timezone))
+    .then_some("The server_timezone must be a valid timezone.")
 }
 
 fn update_fields() -> Vec<Field> {
@@ -733,7 +735,12 @@ fn update_fields() -> Vec<Field> {
         },
         Field {
             name: "server_timezone",
-            rules: vec![Rule::String, Rule::Custom(valid_timezone_rule)],
+            rules: vec![
+                Rule::Bail,
+                Rule::Filled,
+                Rule::String,
+                Rule::Custom(valid_timezone_rule),
+            ],
         },
         Field {
             name: "backup_compression_cpu_percentage",

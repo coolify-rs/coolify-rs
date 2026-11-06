@@ -39,7 +39,25 @@ const NOT_FOUND: ApiError = ApiError::Message(StatusCode::NOT_FOUND, "Applicatio
 const NOT_FOUND_NO_PERIOD: ApiError =
     ApiError::Message(StatusCode::NOT_FOUND, "Application not found");
 
-/// `$hidden` of the model; the sensitive ones become visible with `read:sensitive`.
+/// `Application::COMMAND_AND_CONFIGURATION_ATTRIBUTES`: free-form commands and configuration that
+/// can embed credentials. Only users who can update the application and `read:sensitive` tokens
+/// read them.
+pub(crate) const COMMAND_AND_CONFIGURATION_ATTRIBUTES: &[&str] = &[
+    "install_command",
+    "build_command",
+    "start_command",
+    "pre_deployment_command",
+    "post_deployment_command",
+    "health_check_command",
+    "health_check_response_text",
+    "custom_docker_run_options",
+    "docker_compose_custom_start_command",
+    "docker_compose_custom_build_command",
+    "custom_nginx_configuration",
+];
+
+/// The rest of `$hidden` of the model (it spreads `COMMAND_AND_CONFIGURATION_ATTRIBUTES` first);
+/// the sensitive ones become visible with `read:sensitive`.
 const HIDDEN: &[&str] = &[
     "http_basic_auth_password",
     "manual_webhook_secret_github",
@@ -219,7 +237,7 @@ pub(crate) async fn present_preloaded(
         None => swarm_server(state, a).await?,
     };
     let mut r = APPLICATION.present(a.raw.clone());
-    for h in HIDDEN {
+    for h in COMMAND_AND_CONFIGURATION_ATTRIBUTES.iter().chain(HIDDEN) {
         let visible = ctx.can_read_sensitive
             && (model || !matches!(*h, "domain_dns_statuses" | "domain_port_overrides"));
         if !visible {
@@ -1169,8 +1187,6 @@ async fn create_prologue(
     }
     fields::check_container_name_prefix(state, &settings, server.id, None).await?;
     fields::check_custom_internal_name(&settings)?;
-    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-    fields::check_webhook_secret_ability(ctx, &input, enc, None)?;
     Ok(CreateContext {
         input,
         instant,
@@ -2268,7 +2284,7 @@ pub(crate) async fn model_array(
         None => swarm_server(state, a).await?,
     };
     let mut r = APPLICATION.present(a.raw.clone());
-    for h in HIDDEN {
+    for h in COMMAND_AND_CONFIGURATION_ATTRIBUTES.iter().chain(HIDDEN) {
         r.shift_remove(*h);
     }
     r.insert(

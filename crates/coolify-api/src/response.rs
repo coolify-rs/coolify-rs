@@ -51,9 +51,9 @@ pub enum ApiError {
     MissingTeamRole,
     /// 403 `{"message":"Missing required permissions: a, b"}`
     MissingAbilities(Vec<&'static str>),
-    /// 403 `{"success":true,"message":"API is disabled."}`
+    /// 403 `{"success":false,"message":"API is disabled."}`
     ApiDisabled,
-    /// 403 `{"success":true,"message":"You are not allowed to access the API."}`
+    /// 403 `{"success":false,"message":"You are not allowed to access the API."}`
     IpNotAllowed,
     /// 403 policy denial.
     Unauthorized,
@@ -126,11 +126,11 @@ impl IntoResponse for ApiError {
             ),
             Self::ApiDisabled => (
                 StatusCode::FORBIDDEN,
-                json!({"success": true, "message": "API is disabled."}),
+                json!({"success": false, "message": "API is disabled."}),
             ),
             Self::IpNotAllowed => (
                 StatusCode::FORBIDDEN,
-                json!({"success": true, "message": "You are not allowed to access the API."}),
+                json!({"success": false, "message": "You are not allowed to access the API."}),
             ),
             Self::Unauthorized => (
                 StatusCode::FORBIDDEN,

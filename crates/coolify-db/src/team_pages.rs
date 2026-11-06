@@ -685,14 +685,8 @@ pub async fn delete_user(
                 .bind(other)
                 .execute(&mut *tx)
                 .await?;
-                sqlx::query(
-                    "DELETE FROM personal_access_tokens WHERE tokenable_type = $1 AND tokenable_id = $2 AND team_id = $3",
-                )
-                .bind(USER_TOKENABLE)
-                .bind(other)
-                .bind(team.id.to_string())
-                .execute(&mut *tx)
-                .await?;
+                // The new owner keeps the tokens: the API checks the abilities against the role
+                // on each request.
             }
         }
         detach(&mut tx, team.id, user_id).await?;
@@ -772,14 +766,8 @@ pub async fn delete_account(
                 .bind(admin)
                 .execute(&mut *tx)
                 .await?;
-                sqlx::query(
-                    "DELETE FROM personal_access_tokens WHERE tokenable_type = $1 AND tokenable_id = $2 AND team_id = $3",
-                )
-                .bind(USER_TOKENABLE)
-                .bind(admin)
-                .bind(team.id.to_string())
-                .execute(&mut *tx)
-                .await?;
+                // The new owner keeps the tokens: the API checks the abilities against the role
+                // on each request.
             }
         }
         detach(&mut tx, team.id, user_id).await?;

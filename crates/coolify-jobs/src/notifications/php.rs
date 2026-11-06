@@ -124,6 +124,11 @@ fn char_width(c: char) -> usize {
 
 /// `Str::limit($value, $limit)`.
 pub fn str_limit(s: &str, limit: usize) -> String {
+    str_limit_end(s, limit, "...")
+}
+
+/// `Str::limit($value, $limit, $end)`.
+pub fn str_limit_end(s: &str, limit: usize, end: &str) -> String {
     if s.chars().map(char_width).sum::<usize>() <= limit {
         return s.to_owned();
     }
@@ -137,7 +142,7 @@ pub fn str_limit(s: &str, limit: usize) -> String {
         }
     }
     format!(
-        "{}...",
+        "{}{end}",
         s[..cut].trim_end_matches([' ', '\t', '\n', '\r', '\0', '\x0B'])
     )
 }

@@ -865,7 +865,10 @@ pub async fn clone_database(
     let new_uuid = new_public_id();
     let name = match input.str("name").filter(|n| !n.trim().is_empty()) {
         Some(n) => n.to_owned(),
-        None => format!("{}-clone-{new_uuid}", d.str("name").unwrap_or_default()),
+        None => coolify_jobs::clone_volume_data::clone_resource_name(
+            d.str("name").unwrap_or_default(),
+            &new_uuid,
+        ),
     };
     let now = state.now();
     let morph = d.kind.morph();
@@ -899,7 +902,7 @@ pub async fn clone_database(
     }
     if !clones.is_empty() {
         let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
-        jobs.spawn_volume_clones(d.clone(), server_id, clones);
+        jobs.spawn_volume_clones(d.clone(), server_id, clones).await;
     }
     let fresh = dbs::find_in_team(&state.db, ctx.team_id, &new_uuid)
         .await?

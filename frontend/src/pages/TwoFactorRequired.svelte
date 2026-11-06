@@ -50,6 +50,13 @@
     }
   }
 
+  async function switchTeam(e: SubmitEvent, teamId: number) {
+    e.preventDefault();
+    const r = await authUi.twoFactorSwitchTeam(teamId);
+    await session.refresh();
+    router.go(r.redirect, true);
+  }
+
   async function logout(e: SubmitEvent) {
     e.preventDefault();
     await sessionApi.logout();
@@ -104,6 +111,16 @@
         >
           <button class="button w-full justify-center" type="submit" disabled={busy} {...highlighted}>Configure 2FA</button>
         </form>
+      {/if}
+      {#if !data.confirmed && data.teams_without_two_factor.length > 0}
+        <div class="flex flex-col gap-2 border-t border-neutral-200 pt-4 dark:border-white/[0.07]">
+          <p class="text-sm text-neutral-500 dark:text-fg-dim">Or switch to a team that does not require 2FA:</p>
+          {#each data.teams_without_two_factor as team (team.id)}
+            <form onsubmit={(e) => switchTeam(e, team.id)}>
+              <button class="button w-full justify-center" type="submit">{team.name}</button>
+            </form>
+          {/each}
+        </div>
       {/if}
     </div>
   </AuthShell>

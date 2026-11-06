@@ -50,7 +50,11 @@ pub static STANDALONE_REDIS: ModelSpec = ModelSpec {
         "redact_all_env_values_in_logs",
         "include_coolify_default_variables",
     ],
-    hidden: &["legacy_password_quoting"],
+    hidden: &[
+        "redis_conf",
+        "custom_docker_run_options",
+        "legacy_password_quoting",
+    ],
     timestamps: &[
         "started_at",
         "created_at",
@@ -103,7 +107,7 @@ pub static STANDALONE_SQLITE: ModelSpec = ModelSpec {
         "redact_all_env_values_in_logs",
         "include_coolify_default_variables",
     ],
-    hidden: &[],
+    hidden: &["custom_docker_run_options"],
     timestamps: &[
         "started_at",
         "created_at",
@@ -164,7 +168,11 @@ pub static STANDALONE_MONGODB: ModelSpec = ModelSpec {
         "redact_all_env_values_in_logs",
         "include_coolify_default_variables",
     ],
-    hidden: &["mongo_initdb_root_password"],
+    hidden: &[
+        "mongo_initdb_root_password",
+        "mongo_conf",
+        "custom_docker_run_options",
+    ],
     timestamps: &[
         "started_at",
         "created_at",
@@ -226,7 +234,12 @@ pub static STANDALONE_MYSQL: ModelSpec = ModelSpec {
         "redact_all_env_values_in_logs",
         "include_coolify_default_variables",
     ],
-    hidden: &["mysql_password", "mysql_root_password"],
+    hidden: &[
+        "mysql_password",
+        "mysql_root_password",
+        "mysql_conf",
+        "custom_docker_run_options",
+    ],
     timestamps: &[
         "started_at",
         "created_at",
@@ -286,7 +299,12 @@ pub static STANDALONE_MARIADB: ModelSpec = ModelSpec {
         "redact_all_env_values_in_logs",
         "include_coolify_default_variables",
     ],
-    hidden: &["mariadb_password", "mariadb_root_password"],
+    hidden: &[
+        "mariadb_password",
+        "mariadb_root_password",
+        "mariadb_conf",
+        "custom_docker_run_options",
+    ],
     timestamps: &[
         "started_at",
         "created_at",
@@ -345,7 +363,12 @@ pub static STANDALONE_KEYDB: ModelSpec = ModelSpec {
         "redact_all_env_values_in_logs",
         "include_coolify_default_variables",
     ],
-    hidden: &["keydb_password", "legacy_password_quoting"],
+    hidden: &[
+        "keydb_password",
+        "keydb_conf",
+        "custom_docker_run_options",
+        "legacy_password_quoting",
+    ],
     timestamps: &[
         "deleted_at",
         "started_at",
@@ -403,7 +426,11 @@ pub static STANDALONE_DRAGONFLY: ModelSpec = ModelSpec {
         "redact_all_env_values_in_logs",
         "include_coolify_default_variables",
     ],
-    hidden: &["dragonfly_password", "legacy_password_quoting"],
+    hidden: &[
+        "dragonfly_password",
+        "custom_docker_run_options",
+        "legacy_password_quoting",
+    ],
     timestamps: &[
         "deleted_at",
         "started_at",
@@ -461,7 +488,7 @@ pub static STANDALONE_CLICKHOUSE: ModelSpec = ModelSpec {
         "redact_all_env_values_in_logs",
         "include_coolify_default_variables",
     ],
-    hidden: &["clickhouse_admin_password"],
+    hidden: &["clickhouse_admin_password", "custom_docker_run_options"],
     timestamps: &[
         "deleted_at",
         "started_at",

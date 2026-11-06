@@ -822,15 +822,19 @@
       title="Container"
       description={conf ? 'Docker options, configuration, and log forwarding for the database container.' : 'Docker options and log forwarding for the database container.'}
     >
-      <FormInput
-        helper="Add supported docker run options used when the container starts. Unsupported options can interfere with coolify-rs automation."
-        placeholder="--cap-add SYS_ADMIN --device=/dev/fuse"
-        id="customDockerRunOptions"
-        label="Custom Docker options"
-        disabled={!canUpdate}
-        bind:value={form.customDockerRunOptions}
-        error={err('custom_docker_run_options')}
-      />
+      {#if hidden}
+        {@render hiddenInput('Custom Docker options', 'customDockerRunOptionsHidden')}
+      {:else}
+        <FormInput
+          helper="Add supported docker run options used when the container starts. Unsupported options can interfere with coolify-rs automation."
+          placeholder="--cap-add SYS_ADMIN --device=/dev/fuse"
+          id="customDockerRunOptions"
+          label="Custom Docker options"
+          disabled={!canUpdate}
+          bind:value={form.customDockerRunOptions}
+          error={err('custom_docker_run_options')}
+        />
+      {/if}
       {#if conf}
         <DatabaseSubsection id="configuration-section" title="Configuration" helper={conf.section}>
           {#if hidden}

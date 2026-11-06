@@ -1,5 +1,7 @@
 <script lang="ts">
   // Port of upstream livewire/project/clone-me.blade.php (+ Project\CloneMe).
+  import Checkbox from '../components/Checkbox.svelte';
+  import ConfirmModal from '../components/ConfirmModal.svelte';
   import FormInput from '../components/FormInput.svelte';
   import StatusBadge from '../components/StatusBadge.svelte';
   import Forbidden from '../components/Forbidden.svelte';
@@ -28,6 +30,8 @@
   let data = $state<Data | null>(null);
   let newName = $state('');
   let selected = $state<string | null>(null);
+  let cloneVolumeData = $state(false);
+  let confirmType = $state<'environment' | 'project' | null>(null);
   let error = $state<ApiError | null>(null);
   let forbidden = $state(false);
 
@@ -70,7 +74,12 @@
   async function clone(type: 'environment' | 'project') {
     error = null;
     try {
-      const r = await request<{ redirect: string }>('POST', path, { type, new_name: newName, selected_destination: selected });
+      const r = await request<{ redirect: string }>('POST', path, {
+        type,
+        new_name: newName,
+        selected_destination: selected,
+        clone_volume_data: cloneVolumeData,
+      });
       router.go(r.redirect);
     } catch (err) {
       const f = err instanceof ApiError ? err : new ApiError(0, String(err));
@@ -101,6 +110,14 @@
           <div class="application-settings-section-body">
             <div class="max-w-md">
               <FormInput required id="newName" label="New name" bind:value={newName} error={error?.errors.newName?.[0]} />
+            </div>
+            <div class="mt-4 max-w-md">
+              <Checkbox
+                id="cloneVolumeData"
+                label="Clone volume data"
+                helper="Copies the data of the persistent volumes to the clones. Running source resources are stopped while the data is copied and started again afterwards."
+                bind:checked={cloneVolumeData}
+              />
             </div>
           </div>
         </section>
@@ -181,12 +198,33 @@
               </div>
             </div>
             <div class="flex flex-col gap-2 border-t border-neutral-200 p-4 sm:flex-row sm:justify-end dark:border-white/[0.06]">
-              <button type="button" class="button button-highlighted" disabled={!selected} onclick={() => clone('environment')}>Clone to environment</button>
-              <button type="button" class="button button-highlighted" disabled={!selected} onclick={() => clone('project')}>Clone to project</button>
+              {#if cloneVolumeData}
+                <button type="button" class="button button-highlighted" disabled={!selected} onclick={() => (confirmType = 'environment')}>Clone to environment</button>
+                <button type="button" class="button button-highlighted" disabled={!selected} onclick={() => (confirmType = 'project')}>Clone to project</button>
+              {:else}
+                <button type="button" class="button button-highlighted" disabled={!selected} onclick={() => clone('environment')}>Clone to environment</button>
+                <button type="button" class="button button-highlighted" disabled={!selected} onclick={() => clone('project')}>Clone to project</button>
+              {/if}
             </div>
           </div>
         </section>
       </div>
     </div>
   </div>
+{/if}
+
+{#if confirmType}
+  {@const type = confirmType}
+  <ConfirmModal
+    title="Clone with volume data?"
+    actions={['Running source resources are stopped while their volume data is copied.', 'They are started again after the copy, also when the copy fails.']}
+    warningMessage="Running source resources are unavailable while their volume data is copied."
+    confirmWithText={false}
+    step2ButtonText={type === 'environment' ? 'Clone to environment' : 'Clone to project'}
+    onconfirm={async () => {
+      confirmType = null;
+      await clone(type);
+    }}
+    onclose={() => (confirmType = null)}
+  />
 {/if}

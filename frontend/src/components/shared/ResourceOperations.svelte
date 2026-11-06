@@ -3,6 +3,8 @@
   // (+ Project\Shared\ResourceOperations). The "Migrate to another server" section
   // only renders in a Coolify development instance (`isDev()`).
   import Callout from '../Callout.svelte';
+  import Checkbox from '../Checkbox.svelte';
+  import ConfirmModal from '../ConfirmModal.svelte';
   import Empty from '../Empty.svelte';
   import Listbox from '../Listbox.svelte';
   import SettingsSection from '../SettingsSection.svelte';
@@ -46,6 +48,8 @@
   let cloneDestination = $state('');
   let cloneProject = $state('');
   let cloneEnvironment = $state('');
+  let cloneVolumeData = $state(false);
+  let confirmClone = $state(false);
   let moveProject = $state('');
   let moveEnvironment = $state('');
 
@@ -107,6 +111,7 @@
       const r = await request<{ redirect: string }>('POST', `${base}/clone`, {
         destination_uuid: cloneDestination,
         environment_id: Number(cloneEnvironment),
+        clone_volume_data: cloneVolumeData,
       });
       redirect(r.redirect);
     } catch (err) {
@@ -132,9 +137,9 @@
         title="Clone resource"
         description="Create a copy of this resource. Choose where it runs and where it belongs. The current values are selected by default."
       >
-        <Callout type="info" title="Configuration only">
+        <Callout type="info" title="What is copied">
           Cloning copies settings, environment variables, and resource configuration. Stored files,
-          database records, and other persistent data are not copied.
+          database records, and other persistent data are copied only when you select Clone volume data.
         </Callout>
 
         <div class="mt-4 grid gap-4 md:grid-cols-2">
@@ -173,9 +178,23 @@
           />
         </div>
 
+        <div class="mt-4">
+          <Checkbox
+            id="cloneVolumeData"
+            label="Clone volume data"
+            helper="Copies the data of the persistent volumes to the clone. A running source resource is stopped while the data is copied and started again afterwards."
+            bind:checked={cloneVolumeData}
+          />
+        </div>
+
         <div class="mt-4 flex flex-col gap-3 border-t border-neutral-200 pt-4 sm:flex-row sm:items-center sm:justify-between dark:border-white/[0.07]">
-          <p class="text-[13px] text-neutral-500 dark:text-fg-dim">The running resource will not be changed.</p>
-          <button type="button" class="button" disabled={!cloneDestination || !cloneEnvironment} onclick={cloneTo}>Clone resource</button>
+          {#if cloneVolumeData}
+            <p class="text-[13px] text-neutral-500 dark:text-fg-dim">A running resource is stopped while its volume data is copied.</p>
+            <button type="button" class="button" disabled={!cloneDestination || !cloneEnvironment} onclick={() => (confirmClone = true)}>Clone resource</button>
+          {:else}
+            <p class="text-[13px] text-neutral-500 dark:text-fg-dim">The running resource will not be changed.</p>
+            <button type="button" class="button" disabled={!cloneDestination || !cloneEnvironment} onclick={cloneTo}>Clone resource</button>
+          {/if}
         </div>
       </SettingsSection>
 
@@ -221,4 +240,19 @@
       </Callout>
     {/if}
   </div>
+{/if}
+
+{#if confirmClone}
+  <ConfirmModal
+    title="Clone this resource with its volume data?"
+    actions={['If the resource is running, it is stopped while its volume data is copied.', 'The resource is started again after the copy, also when the copy fails.']}
+    warningMessage="A running resource is unavailable while its volume data is copied."
+    confirmWithText={false}
+    step2ButtonText="Clone resource"
+    onconfirm={async () => {
+      confirmClone = false;
+      await cloneTo();
+    }}
+    onclose={() => (confirmClone = false)}
+  />
 {/if}
