@@ -116,7 +116,7 @@ fn message(field: &str, rule: &str, messages: Messages, param: Option<usize>) ->
 }
 
 /// PHP `filter_var($v, FILTER_VALIDATE_INT)` for JSON values.
-fn is_php_int(v: &Value) -> bool {
+pub(crate) fn is_php_int(v: &Value) -> bool {
     match v {
         Value::Bool(b) => *b,
         Value::Number(n) => {
@@ -189,7 +189,7 @@ fn is_laravel_boolean(v: &Value) -> bool {
 }
 
 /// Laravel's `getSize` under a numeric rule: the number, the size of an array, else the string length.
-fn numeric_rule_size(v: &Value) -> f64 {
+pub(crate) fn numeric_rule_size(v: &Value) -> f64 {
     match v {
         Value::Array(a) => a.len() as f64,
         Value::Object(o) => o.len() as f64,
