@@ -8,6 +8,9 @@
 //!   list as `grant`, so a client cannot grant what it never showed.
 //! - `PATCH` and `DELETE /api/v1/plugins/{publisher}/{name}`: switch on or off, uninstall (instance admins).
 //! - `POST /api/v1/plugins/{publisher}/{name}/enable` and `/disable`: for the token's team (team admins).
+//! - `POST /api/v1/plugins/{publisher}/{name}/test-event`: deliver one event to the plugin for the token's
+//!   team and report how it went (development mode only, team admins), so authors can try a plugin without
+//!   a real deployment.
 //! - `/api/v1/ext/{publisher}/{name}/...`: the plugin's own routes, any method.
 //!
 //! A plugin route never sees the caller's token or cookies. Its response can't set cookies or headers of
@@ -77,6 +80,10 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route(
             "/api/v1/plugins/{publisher}/{name}/disable",
             post(disable).route_layer(write()),
+        )
+        .route(
+            "/api/v1/plugins/{publisher}/{name}/test-event",
+            post(test_event).route_layer(write()),
         )
         .route(
             "/api/v1/ext/{publisher}/{name}",
@@ -312,6 +319,65 @@ async fn disable(
     Path((publisher, name)): Path<(String, String)>,
 ) -> ApiResult {
     set_team(&state, &ctx, &format!("{publisher}/{name}"), false).await
+}
+
+#[derive(Deserialize)]
+struct TestEventBody {
+    kind: String,
+    #[serde(default)]
+    payload: Option<Value>,
+}
+
+async fn test_event(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path((publisher, name)): Path<(String, String)>,
+    body: Result<Json<TestEventBody>, axum::extract::rejection::JsonRejection>,
+) -> ApiResult {
+    let invalid =
+        |m: String| ApiError::Status(StatusCode::UNPROCESSABLE_ENTITY, json!({"message": m}));
+    if !state.allow_unverified_plugins {
+        return Err(ApiError::Status(
+            StatusCode::FORBIDDEN,
+            json!({"message": "Test events need COOLIFY_RS_ALLOW_UNVERIFIED_PLUGINS=true."}),
+        ));
+    }
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Status(
+            StatusCode::FORBIDDEN,
+            json!({"message": "Only team owners and admins can send test events."}),
+        ));
+    }
+    let host = host(&state)?;
+    let id = format!("{publisher}/{name}");
+    let p = find(host, &id).await?;
+    let Json(body) = body.map_err(|e| invalid(e.body_text()))?;
+    if !p.manifest.capabilities.events.contains(&body.kind) {
+        return Err(invalid(format!(
+            "The plugin does not subscribe to {}.",
+            body.kind
+        )));
+    }
+    let payload = body.payload.unwrap_or_else(|| json!({}));
+    if !payload.is_object() {
+        return Err(invalid("payload must be a JSON object".into()));
+    }
+    let event = coolify_plugins::Event {
+        kind: body.kind,
+        version: coolify_domain::plugin_events::PAYLOAD_VERSION,
+        team_id: ctx.team_id,
+        payload: payload.to_string(),
+    };
+    match host.call_event(&id, event).await {
+        Ok(()) => Ok(ok(json!({"delivered": true})).into_response()),
+        Err(CallError::Store(e)) => Err(internal(e)),
+        Err(
+            e @ (CallError::Unavailable(_)
+            | CallError::NotEnabledForTeam(_)
+            | CallError::NotGranted(..)),
+        ) => Err(invalid(e.to_string())),
+        Err(e) => Ok(ok(json!({"delivered": false, "error": e.to_string()})).into_response()),
+    }
 }
 
 async fn ext_root(

@@ -217,6 +217,39 @@ async fn install_grant_enable_events_and_routes() {
         r#"{"message":"Plugin not found, or not enabled for this team."}"#,
     );
 
+    // Test events go through the same call path, synchronously, for the token's team only.
+    let r = h
+        .call(
+            "POST",
+            "/api/v1/plugins/coolify-rs/deploy-stats/test-event",
+            Some("acme_owner_write"),
+            Some(json!({"kind": "deployment.failed", "payload": {"application_name": "api"}})),
+        )
+        .await;
+    r.assert(200, r#"{"delivered":true}"#);
+    assert_eq!(stats(&h, "acme_owner_read").await["failed"], 1);
+    let r = h
+        .call(
+            "POST",
+            "/api/v1/plugins/coolify-rs/deploy-stats/test-event",
+            Some("acme_owner_write"),
+            Some(json!({"kind": "backup.failed"})),
+        )
+        .await;
+    r.assert(
+        422,
+        r#"{"message":"The plugin does not subscribe to backup.failed."}"#,
+    );
+    let r = h
+        .call(
+            "POST",
+            "/api/v1/plugins/coolify-rs/deploy-stats/test-event",
+            Some("carol_root"),
+            Some(json!({"kind": "deployment.failed"})),
+        )
+        .await;
+    assert_eq!(r.status, 422, "not enabled for carol's team: {}", r.body);
+
     // The plugin's own 404, served as JSON.
     let r = h
         .call(

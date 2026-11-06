@@ -156,6 +156,7 @@ curl -X POST https://coolify.example.com/api/v1/plugins/acme/deploy-stats/enable
 | `PATCH /api/v1/plugins/{publisher}/{name}` with `{"enabled": false}` | Owners and admins of the root team: switches the plugin off for everyone |
 | `DELETE /api/v1/plugins/{publisher}/{name}` | Owners and admins of the root team: uninstalls the plugin and deletes its data |
 | `POST /api/v1/plugins/{publisher}/{name}/enable`, `/disable` | Team owners and admins, for their own team |
+| `POST /api/v1/plugins/{publisher}/{name}/test-event` with `{"kind": ..., "payload": {...}}` | Team owners and admins, in development mode only: delivers one event to the plugin for their team and reports whether it succeeded |
 | `/api/v1/ext/{publisher}/{name}/...` | Any token with `read`, for a team that enabled the plugin |
 
 `COOLIFY_RS_PLUGINS=off` switches the plugin system off entirely. Plugin data lives in the
