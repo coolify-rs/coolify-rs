@@ -51,6 +51,7 @@ fn hostile_caps() -> Capabilities {
         storage: true,
         routes: true,
         http: vec!["localhost".into()],
+        ..Default::default()
     }
 }
 

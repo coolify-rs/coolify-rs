@@ -100,7 +100,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route_layer(guard)
 }
 
-fn host(state: &AppState) -> Result<&Host, ApiError> {
+pub(crate) fn host(state: &AppState) -> Result<&Host, ApiError> {
     state.plugins.as_ref().ok_or(ApiError::Status(
         StatusCode::NOT_FOUND,
         json!({"message": "Plugins are switched off on this instance."}),
@@ -118,19 +118,19 @@ fn instance_admin(ctx: &AuthCtx) -> Result<(), ApiError> {
     }
 }
 
-fn not_found() -> ApiError {
+pub(crate) fn not_found() -> ApiError {
     ApiError::Status(
         StatusCode::NOT_FOUND,
         json!({"message": "Plugin not found."}),
     )
 }
 
-fn internal(e: impl std::fmt::Display) -> ApiError {
+pub(crate) fn internal(e: impl std::fmt::Display) -> ApiError {
     tracing::error!(error = %e, "plugin request failed");
     ApiError::Internal
 }
 
-fn present(p: &Installed, team_enabled: bool) -> Value {
+pub(crate) fn present(p: &Installed, team_enabled: bool) -> Value {
     let m = &p.manifest;
     json!({
         "id": p.id,
@@ -164,7 +164,7 @@ async fn list(State(state): State<AppState>, Extension(ctx): Extension<AuthCtx>)
     Ok(ok(Value::Array(items)).into_response())
 }
 
-async fn find(host: &Host, id: &str) -> Result<Installed, ApiError> {
+pub(crate) async fn find(host: &Host, id: &str) -> Result<Installed, ApiError> {
     coolify_plugins::store::find(host.db(), id)
         .await
         .map_err(internal)?
@@ -426,7 +426,7 @@ async fn ext(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn call(
+pub(crate) async fn call(
     state: &AppState,
     ctx: &AuthCtx,
     id: &str,
@@ -480,7 +480,7 @@ async fn call(
 }
 
 /// The plugin's response, as safe to serve from coolify-rs's origin.
-fn served(r: coolify_plugins::Response) -> Response {
+pub(crate) fn served(r: coolify_plugins::Response) -> Response {
     let status = StatusCode::from_u16(r.status)
         .ok()
         .filter(|s| (200..600).contains(&s.as_u16()))

@@ -45,7 +45,32 @@ pub struct Capabilities {
     /// Host names the plugin may send HTTPS requests to. Exact names, no wildcards or addresses.
     #[serde(default)]
     pub http: Vec<String>,
+    /// Panels the web UI shows in its slots (ADR 0013). Each is a page of the plugin's own routes, so
+    /// `ui` needs `routes`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ui: Vec<Panel>,
 }
+
+/// Where the web UI can show a plugin's panel.
+pub const UI_SLOTS: &[&str] = &["dashboard", "application", "server", "settings"];
+
+/// One `[[capabilities.ui]]` entry: a panel in a slot of the web UI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Panel {
+    /// One of [`UI_SLOTS`].
+    pub slot: String,
+    /// The panel's heading.
+    pub title: String,
+    /// A `GET` path of the plugin's routes that answers the panel's HTML, such as `/panel`.
+    pub path: String,
+}
+
+/// `/segment/segment...`: letters, digits and `._~-`, no empty, `.` or `..` segments, no query.
+static PANEL_PATH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){1,8}$")
+        .unwrap_or_else(|_| unreachable!())
+});
 
 static ID: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
@@ -121,6 +146,7 @@ impl Manifest {
                 ));
             }
         }
+        validate_ui(caps)?;
         Ok(())
     }
 
@@ -140,6 +166,15 @@ impl Manifest {
         if !caps.http.is_empty() {
             out.push(format!("http: {}", caps.http.join(", ")));
         }
+        if !caps.ui.is_empty() {
+            let mut slots: Vec<&str> = Vec::new();
+            for p in &caps.ui {
+                if !slots.contains(&p.slot.as_str()) {
+                    slots.push(&p.slot);
+                }
+            }
+            out.push(format!("ui: {}", slots.join(", ")));
+        }
         out
     }
 }
@@ -151,7 +186,58 @@ impl Capabilities {
             || (self.storage && !granted.storage)
             || (self.routes && !granted.routes)
             || self.http.iter().any(|h| !granted.http.contains(h))
+            || self.ui.iter().any(|p| !granted.ui.contains(p))
     }
+
+    /// The panels of one slot.
+    pub fn panels<'a>(&'a self, slot: &'a str) -> impl Iterator<Item = &'a Panel> {
+        self.ui.iter().filter(move |p| p.slot == slot)
+    }
+}
+
+/// `[[capabilities.ui]]`: known slots, a short heading, and a plain path of the plugin's own routes.
+fn validate_ui(caps: &Capabilities) -> Result<(), PluginError> {
+    let bad = |msg: String| Err(PluginError::Manifest(msg));
+    if caps.ui.is_empty() {
+        return Ok(());
+    }
+    if !caps.routes {
+        return bad("ui panels are pages of the plugin's routes, so ui needs routes = true".into());
+    }
+    if caps.ui.len() > 8 {
+        return bad("at most 8 ui panels".into());
+    }
+    for (i, p) in caps.ui.iter().enumerate() {
+        if !UI_SLOTS.contains(&p.slot.as_str()) {
+            return bad(format!(
+                "ui slot must be one of {}, not {:?}",
+                UI_SLOTS.join(", "),
+                p.slot
+            ));
+        }
+        if p.title.trim().is_empty()
+            || p.title.chars().count() > 64
+            || p.title.chars().any(char::is_control)
+        {
+            return bad("ui panel titles must be 1 to 64 characters".into());
+        }
+        if !PANEL_PATH.is_match(&p.path) || p.path.split('/').any(|s| s == "." || s == "..") {
+            return bad(format!(
+                "ui panel paths must be plain paths such as \"/panel\", without a query, not {:?}",
+                p.path
+            ));
+        }
+        if caps.ui[..i]
+            .iter()
+            .any(|q| q.slot == p.slot && q.title == p.title)
+        {
+            return bad(format!(
+                "ui panel {:?} is listed twice in {}",
+                p.title, p.slot
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -232,5 +318,97 @@ http = ["hooks.example.com"]
         let mut fewer = old.clone();
         fewer.storage = false;
         assert!(!fewer.exceeds(&old));
+
+        let ui = Manifest::parse(&format!("{OK}{UI}")).unwrap().capabilities;
+        let mut moved = ui.clone();
+        moved.ui[0].slot = "settings".into();
+        assert!(moved.exceeds(&ui));
+        let mut repointed = ui.clone();
+        repointed.ui[0].path = "/other".into();
+        assert!(repointed.exceeds(&ui));
+        let mut dropped = ui.clone();
+        dropped.ui.pop();
+        assert!(!dropped.exceeds(&ui));
+    }
+
+    /// Appended to `OK`: routes, then three panels in two slots.
+    const UI: &str = r#"routes = true
+
+[[capabilities.ui]]
+slot = "dashboard"
+title = "Deployments"
+path = "/panel"
+
+[[capabilities.ui]]
+slot = "application"
+title = "Deploy history"
+path = "/panels/app"
+
+[[capabilities.ui]]
+slot = "dashboard"
+title = "Failures"
+path = "/panels/failures"
+"#;
+
+    #[test]
+    fn parses_ui_panels() {
+        let m = Manifest::parse(&format!("{OK}{UI}")).unwrap();
+        assert_eq!(m.capabilities.ui.len(), 3);
+        assert_eq!(m.capabilities.panels("dashboard").count(), 2);
+        assert_eq!(
+            m.capability_summary(),
+            [
+                "events: deployment.succeeded",
+                "storage",
+                "routes",
+                "http: hooks.example.com",
+                "ui: dashboard, application"
+            ]
+        );
+        // Without panels the summary is unchanged, so grants made before `ui` existed still match.
+        let json = serde_json::to_value(Manifest::parse(OK).unwrap().capabilities).unwrap();
+        assert!(json.get("ui").is_none());
+    }
+
+    #[test]
+    fn rejects_bad_ui_panels() {
+        let cases = [
+            ("routes = true", "routes = false", "needs routes"),
+            (
+                "slot = \"dashboard\"",
+                "slot = \"topbar\"",
+                "ui slot must be",
+            ),
+            ("title = \"Deployments\"", "title = \" \"", "titles"),
+            ("path = \"/panel\"", "path = \"panel\"", "plain paths"),
+            ("path = \"/panel\"", "path = \"/panel?x=1\"", "plain paths"),
+            ("path = \"/panel\"", "path = \"/../admin\"", "plain paths"),
+            ("path = \"/panel\"", "path = \"/a/./b\"", "plain paths"),
+            (
+                "path = \"/panel\"",
+                "path = \"//evil.example\"",
+                "plain paths",
+            ),
+            (
+                "path = \"/panel\"",
+                "path = \"https://evil.example/x\"",
+                "plain paths",
+            ),
+            (
+                "title = \"Failures\"",
+                "title = \"Deployments\"",
+                "listed twice",
+            ),
+            (
+                "path = \"/panel\"",
+                "path = \"/panel\"\nscript = \"x\"",
+                "unknown field",
+            ),
+        ];
+        for (from, to, want) in cases {
+            let text = format!("{OK}{}", UI.replacen(from, to, 1));
+            let err = Manifest::parse(&text).unwrap_err().to_string();
+            assert!(err.contains(want), "{to}: {err}");
+        }
     }
 }

@@ -4,10 +4,12 @@
 
 pub mod egress;
 pub mod manifest;
+pub mod panels;
 pub mod runtime;
 pub mod store;
 
-pub use manifest::{API_VERSION, Capabilities, Manifest};
+pub use manifest::{API_VERSION, Capabilities, Manifest, Panel, UI_SLOTS};
+pub use panels::{PanelError, TeamPanel};
 pub use runtime::{CallError, Caller, Event, Host, Limits, Request, Response, Settings};
 pub use store::Installed;
 

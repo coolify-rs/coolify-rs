@@ -36,6 +36,7 @@ pub mod ui_fleet_metrics;
 pub mod ui_help;
 pub mod ui_layout;
 pub mod ui_notifications;
+pub mod ui_plugins;
 pub mod ui_profile;
 pub mod ui_security;
 pub mod ui_server_analytics;
