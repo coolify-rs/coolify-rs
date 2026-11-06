@@ -4,6 +4,7 @@
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
   import FormInput from '../components/FormInput.svelte';
+  import Checkbox from '../components/Checkbox.svelte';
   import Listbox from '../components/Listbox.svelte';
   import UnsavedBar from '../components/UnsavedBar.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
@@ -13,7 +14,7 @@
   import Callout from '../components/Callout.svelte';
   import EndpointInput from '../components/EndpointInput.svelte';
   import { ApiError } from '../lib/api';
-  import { storagesUi, splitEndpoint, composeEndpoint, type EndpointParts, type StorageDetails, type StorageForm, type StorageResources } from '../lib/storagesApi';
+  import { storagesUi, splitEndpoint, composeEndpoint, detectPathStyleEndpoint, type EndpointParts, type StorageDetails, type StorageForm, type StorageResources } from '../lib/storagesApi';
   import { router, link } from '../lib/router.svelte';
   import { notify } from '../lib/toast.svelte';
   import { page } from '../lib/page.svelte';
@@ -25,6 +26,7 @@
   let parts = $state<EndpointParts>({ scheme: 'https', host: '', port: '', path: '' });
   let saved = $state('');
   let saving = $state(false);
+  let usePathStyleEndpointChanged = $state(false);
 
   // svelte-ignore state_referenced_locally
   const base = `/storages/${uuid}`;
@@ -34,8 +36,9 @@
   }
 
   function applyForm(d: StorageDetails) {
-    form = { name: d.name, description: d.description ?? '', endpoint: d.endpoint, bucket: d.bucket, region: d.region, key: d.key, secret: d.secret };
+    form = { name: d.name, description: d.description ?? '', endpoint: d.endpoint, bucket: d.bucket, region: d.region, key: d.key, secret: d.secret, use_path_style_endpoint: d.use_path_style_endpoint };
     parts = splitEndpoint(d.endpoint);
+    usePathStyleEndpointChanged = d.use_path_style_endpoint_changed;
     saved = snapshot();
   }
 
@@ -104,11 +107,17 @@
     }
   }
 
+  /** `updatedEndpointParts`: the URL style follows the provider until the user picks one. */
+  function endpointChanged() {
+    if (form && !usePathStyleEndpointChanged) form.use_path_style_endpoint = detectPathStyleEndpoint(composeEndpoint(parts));
+  }
+
   async function testConnection() {
     // The round trip syncs `wire:model`, so the form is no longer dirty.
     saved = snapshot();
     try {
       const r = await storagesUi.test(uuid, currentForm());
+      if (form) form.use_path_style_endpoint = r.use_path_style_endpoint;
       notify.ok(r.message, r.details);
       if (data) {
         data.is_usable = true;
@@ -235,7 +244,10 @@
                 <FormInput disabled={!canUpdate} label="Description" id="description" bind:value={form.description} />
                 <div class="lg:col-span-2">
                   {#if canUpdate}
-                    <EndpointInput bind:parts />
+                    <!-- Sends the endpoint right away, so the URL style below follows the provider. -->
+                    <div onchange={endpointChanged}>
+                      <EndpointInput bind:parts />
+                    </div>
                   {:else}
                     <FormInput id="endpoint" label="Endpoint" value={data.endpoint} disabled />
                   {/if}
@@ -249,6 +261,7 @@
                   <FormInput id="key" label="Access key" disabled value="Hidden (only admins can view)" />
                   <FormInput id="secret" label="Secret key" disabled value="Hidden (only admins can view)" />
                 {/if}
+                <Checkbox id="usePathStyleEndpoint" label="Use path-style URLs" helper="Turn this off for providers that only accept virtual-hosted-style URLs (bucket.endpoint). coolify-rs turns it off for Alibaba Cloud OSS, Tencent Cloud COS, and Volcengine TOS, and when the provider rejects path-style URLs." disabled={!canUpdate} bind:checked={form.use_path_style_endpoint} onchange={() => (usePathStyleEndpointChanged = true)} />
               </div>
             </SettingsSection>
           </form>

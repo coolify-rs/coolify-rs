@@ -3591,7 +3591,7 @@ mod tests {
             base_url: "https://c.example".into(),
             app_url: "https://app.example".into(),
             app_name: "Coolify".into(),
-            version: "4.5.1".into(),
+            version: "4.5.3".into(),
             cloud: false,
             dev: false,
         }
@@ -3611,7 +3611,7 @@ mod tests {
         let p = n.to_discord(&ctx()).to_payload(&ctx(), 5);
         assert_eq!(
             coolify_compat::php_json::encode(&p),
-            r#"{"embeds":[{"title":":cross_mark: Server unreachable","description":"Your server 'web' is unreachable.","color":16740447,"fields":[{"name":"IMPORTANT","value":"We automatically try to revive your server and turn on all automations & integrations.","inline":false},{"name":"Time","value":"<t:5:R>","inline":true}],"footer":{"text":"Coolify v4.5.1"}}]}"#
+            r#"{"embeds":[{"title":":cross_mark: Server unreachable","description":"Your server 'web' is unreachable.","color":16740447,"fields":[{"name":"IMPORTANT","value":"We automatically try to revive your server and turn on all automations & integrations.","inline":false},{"name":"Time","value":"<t:5:R>","inline":true}],"footer":{"text":"Coolify v4.5.3"}}]}"#
         );
         let n = Notification::BackupFailed {
             backup: DatabaseBackup {

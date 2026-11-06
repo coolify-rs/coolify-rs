@@ -83,7 +83,11 @@
       {/snippet}
       {#if form.custom_healthcheck_found}
         <div class="mb-4">
-          <Callout type="warning" title="Custom healthcheck detected">Enabling this configuration replaces the custom healthcheck currently defined by the application.</Callout>
+          {#if form.health_check_enabled}
+            <Callout type="warning" title="Dockerfile HEALTHCHECK replaced">This healthcheck replaces the HEALTHCHECK from the Dockerfile. Disable it to use the Dockerfile HEALTHCHECK again.</Callout>
+          {:else}
+            <Callout type="info" title="Dockerfile HEALTHCHECK in use">The application uses the HEALTHCHECK from its Dockerfile. Enabling this healthcheck replaces it.</Callout>
+          {/if}
         </div>
       {/if}
       <div class="max-w-xs">

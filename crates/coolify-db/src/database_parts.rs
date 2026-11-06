@@ -29,6 +29,8 @@ pub static S3_STORAGE: ModelSpec = ModelSpec {
         "updated_at",
         "is_usable",
         "unusable_email_sent",
+        // v4.5.3 (`2026_10_27_142752_add_use_path_style_endpoint_to_s3_storages_table`).
+        "use_path_style_endpoint",
     ],
     hidden: &[],
     timestamps: &["created_at", "updated_at"],
@@ -505,6 +507,8 @@ pub struct NewS3Storage<'a> {
     pub region: &'a str,
     pub key_encrypted: &'a str,
     pub secret_encrypted: &'a str,
+    /// `use_path_style_endpoint` (v4.5.3).
+    pub use_path_style_endpoint: bool,
     pub is_usable: bool,
 }
 
@@ -512,8 +516,8 @@ pub async fn s3_create(db: &Db, n: &NewS3Storage<'_>, now: NaiveDateTime) -> DbR
     db.ensure_writable()?;
     let uuid = new_public_id();
     sqlx::query(
-        "INSERT INTO s3_storages (uuid, name, description, region, key, secret, bucket, endpoint, team_id, is_usable, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)",
+        "INSERT INTO s3_storages (uuid, name, description, region, key, secret, bucket, endpoint, team_id, is_usable, created_at, updated_at, use_path_style_endpoint) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12)",
     )
     .bind(&uuid)
     .bind(n.name)
@@ -526,6 +530,7 @@ pub async fn s3_create(db: &Db, n: &NewS3Storage<'_>, now: NaiveDateTime) -> DbR
     .bind(n.team_id)
     .bind(n.is_usable)
     .bind(now)
+    .bind(n.use_path_style_endpoint)
     .execute(db.pool())
     .await?;
     Ok(uuid)

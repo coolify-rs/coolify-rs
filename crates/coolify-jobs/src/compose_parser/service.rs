@@ -238,7 +238,6 @@ fn setting_flag(settings: &Value, key: &str) -> bool {
 pub fn is_fluent_bit_log_drain_enabled(settings: &Value) -> bool {
     [
         "is_logdrain_newrelic_enabled",
-        "is_logdrain_highlight_enabled",
         "is_logdrain_axiom_enabled",
         "is_logdrain_custom_enabled",
     ]

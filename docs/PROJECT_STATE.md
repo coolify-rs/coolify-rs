@@ -12,10 +12,10 @@ Next: servers read endpoints + UI, then the rest of milestone 2 (IMPLEMENTATION_
 
 | | |
 |---|---|
-| Compatibility baseline | upstream `main` @ `b5823c777b8d60df856fcf779b70e4b1d237a845` (`4.5.1-dev.b5823c777`), image `coollabsio/coolify:sha-b5823c7` |
-| Previous baseline | `v4.5.0` = `5ca69705d681da46028ea15a8a39d90a4ebcce89` (older-database test only) |
-| Upstream analysed up to | `b5823c77…` (`migration/state.json` → `last_analyzed`) |
-| Upstream integrated up to | `b5823c77…` (`last_integrated`, via run `run-5ca69705d-b5823c777`) |
+| Compatibility baseline | upstream tag `v4.5.3` @ `70c1bcb1381de7d42fd290e6cd50bf9a5bcf714d` (`4.5.3`), schema from image `coollabsio/coolify:4.5.3`; runtime reference still `sha-b5823c7` |
+| Previous baseline | upstream `main` @ `b5823c77…` (upgrade test); `v4.5.0` = `5ca69705d681da46028ea15a8a39d90a4ebcce89` (older-database test only) |
+| Upstream analysed up to | `70c1bcb1…` (`migration/state.json` → `last_analyzed`) |
+| Upstream integrated up to | `70c1bcb1…` (`last_integrated`, via run `run-b5823c777-70c1bcb13`) |
 | Toolchain | Rust 1.99.1 (pinned) |
 
 ## Implemented and verified

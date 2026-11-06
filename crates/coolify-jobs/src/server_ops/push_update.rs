@@ -239,13 +239,30 @@ pub async fn push_server_update(jobs: &Jobs, server_id: i64, data: Value) -> Res
     jobs.apply_service_containers(&services, &inspected).await;
     // `checkLogDrainContainer()`
     let on = |k: &str| srv.info.setting_bool(k) == Some(true);
-    if (on("is_logdrain_newrelic_enabled")
-        || on("is_logdrain_highlight_enabled")
+    if on("is_logdrain_newrelic_enabled")
         || on("is_logdrain_axiom_enabled")
-        || on("is_logdrain_custom_enabled"))
-        && !managed_named(&containers, "coolify-log-drain")
+        || on("is_logdrain_custom_enabled")
     {
-        jobs.spawn_log_drain(server_id, true);
+        // `$this->logDrainContainerLabels` of the running, managed drain.
+        let drain = containers.iter().find(|c| {
+            c.get("name").and_then(Value::as_str) == Some("coolify-log-drain")
+                && c.pointer("/labels/coolify.managed").is_some()
+                && running(c)
+        });
+        let outdated = || {
+            let version = drain.and_then(|c| {
+                c.get("labels")
+                    .and_then(|l| l.get(super::log_drain::CONFIG_VERSION_LABEL))
+                    .and_then(Value::as_str)
+            });
+            super::log_drain::claim_outdated_refresh(
+                srv.str_column("uuid").unwrap_or_default(),
+                version,
+            )
+        };
+        if drain.is_none() || outdated() {
+            jobs.spawn_log_drain(server_id, true);
+        }
     }
     Ok(())
 }

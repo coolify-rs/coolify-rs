@@ -32,7 +32,7 @@ mod plugin_cli;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// The upstream release whose API contract and schema this build implements.
-const UPSTREAM_COMPAT_VERSION: &str = "4.5.1-dev.b5823c777";
+const UPSTREAM_COMPAT_VERSION: &str = "4.5.3";
 
 #[derive(Parser)]
 #[command(name = "coolify-rs", version, about)]
@@ -422,11 +422,17 @@ async fn run() -> Result<()> {
         return Ok(());
     }
     let boot = matches!(cli.cmd, Some(Cmd::Boot));
+    // `2026_10_27_160258_remove_highlight_log_drain_from_server_settings_table` dispatches
+    // `StopLogDrain` for these servers; they are stopped once the job runner exists.
+    let mut stop_log_drains: Vec<i64> = Vec::new();
     if boot {
         let prepared = coolify_db::bootstrap::prepare(&cfg.db.url)
             .await
             .context("preparing the database")?;
         tracing::info!(?prepared, "database prepared");
+        stop_log_drains = coolify_db::bootstrap::highlight_log_drain_servers(&cfg.db.url)
+            .await
+            .context("reading the Highlight log drains")?;
         let ran =
             coolify_db::bootstrap::apply_migrations(&cfg.db.url, coolify_db::bootstrap::MIGRATIONS)
                 .await
@@ -558,6 +564,9 @@ async fn run() -> Result<()> {
             if let Some(jobs) = &state.jobs {
                 // Container statuses of databases, every minute (upstream's ServerManagerJob).
                 jobs.spawn_status_poller();
+                for server_id in std::mem::take(&mut stop_log_drains) {
+                    jobs.spawn_log_drain(server_id, false);
+                }
                 // Several dev instances on one host must not fail each other's deployments.
                 if env("COOLIFY_RS_SKIP_STARTUP_CLEANUP").is_none() {
                     jobs.fail_interrupted_deployments().await;

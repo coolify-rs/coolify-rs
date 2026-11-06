@@ -591,6 +591,7 @@ const DRAIN_FIELDS: &[&str] = &[
     "is_logdrain_axiom_enabled",
     "logdrain_axiom_dataset_name",
     "logdrain_axiom_api_key",
+    "logdrain_axiom_domain",
     "is_logdrain_custom_enabled",
     "logdrain_custom_config",
     "logdrain_custom_config_parser",
@@ -618,6 +619,10 @@ pub(crate) fn drain_transform(state: &AppState, ctx: &AuthCtx, s: &ServerRow) ->
     m.insert(
         "logdrain_axiom_dataset_name".into(),
         or_null(&r, "logdrain_axiom_dataset_name"),
+    );
+    m.insert(
+        "logdrain_axiom_domain".into(),
+        or_null(&r, "logdrain_axiom_domain"),
     );
     m.insert(
         "is_logdrain_custom_enabled".into(),
@@ -772,7 +777,7 @@ pub async fn drains_update(
     let input = validated_json(&headers, &uri, &body)?;
     let s = find_server(&state, &ctx, &uuid).await?;
     authorize_update(&ctx)?;
-    use Rule::{Boolean, CustomOwned, Max, Nullable, Regex as Re, String as Str, Url};
+    use Rule::{Boolean, Custom, CustomOwned, Max, Nullable, Regex as Re, String as Str, Url};
     let fields = vec![
         Field {
             name: "is_logdrain_newrelic_enabled",
@@ -797,6 +802,10 @@ pub async fn drains_update(
         Field {
             name: "logdrain_axiom_api_key",
             rules: vec![Nullable, Str, Re(&DRAIN_KEY)],
+        },
+        Field {
+            name: "logdrain_axiom_domain",
+            rules: vec![Nullable, Str, Custom(crate::rules::valid_hostname)],
         },
         Field {
             name: "is_logdrain_custom_enabled",
@@ -895,7 +904,6 @@ pub async fn drains_update(
         if enabled("is_logdrain_newrelic_enabled")
             || enabled("is_logdrain_axiom_enabled")
             || enabled("is_logdrain_custom_enabled")
-            || enabled("is_logdrain_highlight_enabled")
         {
             return Err(validation_errors(&[(
                 "is_logdrain_cloudwatch_enabled",
@@ -939,7 +947,6 @@ pub async fn drains_update(
         let on = |k: &str| r.get(k).is_some_and(crate::serialize::php_truthy);
         // `isLogDrainEnabled()`.
         let drain = on("is_logdrain_newrelic_enabled")
-            || on("is_logdrain_highlight_enabled")
             || on("is_logdrain_axiom_enabled")
             || on("is_logdrain_custom_enabled")
             || on("is_logdrain_cloudwatch_enabled");

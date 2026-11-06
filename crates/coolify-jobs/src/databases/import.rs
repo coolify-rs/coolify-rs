@@ -751,9 +751,10 @@ impl Jobs {
                 commands.push(format!(
                     "docker exec {} sh -c {}",
                     quote(&helper),
-                    quote(
-                        r#"mc alias set s3temp "$S3_ENDPOINT" "$S3_ACCESS_KEY" "$S3_SECRET_KEY""#
-                    )
+                    quote(&format!(
+                        r#"mc alias set{} s3temp "$S3_ENDPOINT" "$S3_ACCESS_KEY" "$S3_SECRET_KEY""#,
+                        super::s3::minio_client_alias_options(s3.path_style)
+                    ))
                 ));
                 commands.push(format!(
                     "docker exec {} mc cp {source_arg} /tmp/restore",

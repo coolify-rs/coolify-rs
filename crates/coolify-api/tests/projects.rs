@@ -351,7 +351,7 @@ async fn older_upstream_database_is_read_only() {
         .read_only_reason
         .clone()
         .unwrap_or_default();
-    assert!(reason.contains("missing 4 upstream migration"), "{reason}");
+    assert!(reason.contains("missing 9 upstream migration"), "{reason}");
     // Reads keep working and adapt to the missing columns.
     let t = h.get("/api/v1/team", "acme_owner_read").await.json();
     assert!(t.get("is_two_factor_required").is_none());

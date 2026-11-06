@@ -740,7 +740,8 @@ impl Jobs {
         directory: &str,
         image: &str,
     ) -> Result<(), String> {
-        self.test_s3_connection(row).await?;
+        let path_style = self.test_s3_connection(row).await?;
+        let alias_options = super::s3::minio_client_alias_options(path_style);
         let s3 = S3Target::from_row(enc, row)?;
         let name = quote(&format!("volume-upload-{execution_uuid}"));
         let resolve = resolve_flags(&s3.endpoint).await;
@@ -753,22 +754,34 @@ impl Jobs {
                 quote(image)
             ),
             format!(
-                "docker exec {name} mc alias set{resolve} temporary {} {} {}",
+                "docker exec {name} mc alias set{resolve}{alias_options} temporary {} {} {}",
                 quote(&s3.endpoint),
                 quote(&s3.key),
                 quote(&s3.secret)
             ),
-            format!(
-                "docker exec {name} mc cp{resolve} {} {}",
-                quote(location),
-                quote(&format!("temporary/{}{directory}/", s3.bucket))
-            ),
         ];
         let refs: Vec<&str> = commands.iter().map(String::as_str).collect();
-        let result = self
+        let copy_command = format!(
+            "docker exec {name} mc cp{resolve} {} {}",
+            quote(location),
+            quote(&format!("temporary/{}{directory}/", s3.bucket))
+        );
+        let copy = [copy_command.as_str()];
+        let result = match self
             .remote()
             .run(&run.target, &refs, RunOptions::op(OP).timeout(run.timeout))
-            .await;
+            .await
+        {
+            // `S3Storage::retryMinioClientUpload()` around the copy.
+            Ok(_) => {
+                super::s3::retry_minio_client_upload(|| {
+                    self.remote()
+                        .run(&run.target, &copy, RunOptions::op(OP).timeout(run.timeout))
+                })
+                .await
+            }
+            Err(e) => Err(e),
+        };
         let remove = format!("docker rm -f {name}");
         self.remote()
             .run_quiet(&run.target, &[remove.as_str()], RunOptions::op(OP))
@@ -786,7 +799,8 @@ impl Jobs {
         container: &str,
         image: &str,
     ) -> Result<String, String> {
-        self.test_s3_connection(row).await?;
+        let path_style = self.test_s3_connection(row).await?;
+        let alias_options = super::s3::minio_client_alias_options(path_style);
         let enc = self
             .0
             .encrypter
@@ -797,7 +811,7 @@ impl Jobs {
         let destination = quote(&format!("temporary/{}{location}", s3.bucket));
         let log = "/tmp/mc-pipe.log";
         let stream = format!(
-            "set -o pipefail; mc alias set{resolve} temporary {} {} {} >/dev/null && lock=$(mc retention info --default --json{resolve} {}) && case \"$lock\" in *'\"enabled\":\"Enabled\"'*) checksum=--checksum=MD5 ;; *) checksum= ;; esac && ({script} | mc pipe{resolve} $checksum {destination} >/dev/null 2>{log} || {{ status=$?; awk -F {} {} {log} >&2; exit $status; }}) && mc stat --json{resolve} {destination} | sed -n {}",
+            "set -o pipefail; mc alias set{resolve}{alias_options} temporary {} {} {} >/dev/null && lock=$(mc retention info --default --json{resolve} {}) && case \"$lock\" in *'\"enabled\":\"Enabled\"'*) checksum=--checksum=MD5 ;; *) checksum= ;; esac && ({script} | mc pipe{resolve} $checksum {destination} >/dev/null 2>{log} || {{ status=$?; awk -F {} {} {log} >&2; exit $status; }}) && mc stat --json{resolve} {destination} | sed -n {}",
             quote(&s3.endpoint),
             quote(&s3.key),
             quote(&s3.secret),

@@ -1,6 +1,6 @@
 //! `S3Storage`: `testConnection` (Flysystem `files()` = `ListObjectsV2`), object
-//! checks and deletes used by backups, signed with AWS SigV4 and path-style URLs;
-//! `SafeWebhookUrl` for the endpoint; `ValidS3BucketName`.
+//! checks and deletes used by backups, signed with AWS SigV4, with path-style or
+//! virtual-hosted-style URLs; `SafeWebhookUrl` for the endpoint; `ValidS3BucketName`.
 
 use std::net::IpAddr;
 use std::time::Duration;
@@ -462,6 +462,108 @@ pub async fn minio_resolve_options(url: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// `S3Storage::VIRTUAL_HOSTED_STYLE_HOST_SUFFIXES`: endpoint host suffixes of providers that reject
+/// path-style URLs: Alibaba Cloud OSS, Tencent Cloud COS (buckets created after 2024-01-01), and
+/// Volcengine / BytePlus TOS.
+const VIRTUAL_HOSTED_STYLE_HOST_SUFFIXES: [&str; 4] = [
+    "aliyuncs.com",
+    "myqcloud.com",
+    "volces.com",
+    "bytepluses.com",
+];
+
+/// `S3Storage::PATH_STYLE_REJECTION_ERRORS`: parts of the errors these providers return for a
+/// path-style request.
+const PATH_STYLE_REJECTION_ERRORS: [&str; 5] = [
+    "secondleveldomainforbidden",
+    "pathstyledomainforbidden",
+    "virtual hosted style",
+    "virtual-hosted style",
+    "virtual-styled",
+];
+
+/// `S3Storage::MINIO_CLIENT_UPLOAD_RETRY_DELAYS_MS`: waits before the second and the third attempt
+/// of an upload with the MinIO client.
+pub const MINIO_CLIENT_UPLOAD_RETRY_DELAYS: [Duration; 2] =
+    [Duration::from_secs(10), Duration::from_secs(30)];
+
+/// `S3Storage::REMOTE_COMMAND_TIMEOUT_EXIT_CODE`: the code of a remote command that timed out.
+pub const REMOTE_COMMAND_TIMEOUT_EXIT_CODE: i32 = 124;
+
+/// `S3Storage::detectPathStyleEndpoint`: the URL style for a new storage: virtual-hosted style for
+/// providers that reject path-style URLs, else path-style.
+pub fn detect_path_style_endpoint(endpoint: Option<&str>) -> bool {
+    let host = crate::compose_parser::php::parse_url(endpoint.unwrap_or_default())
+        .and_then(|u| u.host)
+        .unwrap_or_default()
+        .to_lowercase();
+    !VIRTUAL_HOSTED_STYLE_HOST_SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+/// `S3Storage::usesPathStyleEndpoint`: a row without the column (older schema) or a storage that
+/// is not saved yet uses the default, path-style URLs.
+pub fn uses_path_style_endpoint(row: &Record) -> bool {
+    row.get("use_path_style_endpoint")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true)
+}
+
+/// `S3Storage::isPathStyleRejection`.
+fn is_path_style_rejection(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    PATH_STYLE_REJECTION_ERRORS
+        .iter()
+        .any(|e| lower.contains(e))
+}
+
+/// `S3Storage::minioClientAliasOptions`: the `mc alias set` options. `--api S3v4` signs as
+/// `filesystem()` does; without it, mc probes the signature version on every run and a network
+/// error during the probe makes it try S3v2, which most providers reject. `--path off` uses
+/// virtual-hosted-style URLs; with path-style URLs mc keeps its own `auto` lookup.
+pub fn minio_client_alias_options(path_style: bool) -> &'static str {
+    if path_style {
+        " --api S3v4"
+    } else {
+        " --api S3v4 --path off"
+    }
+}
+
+/// `S3Storage::retryMinioClientUpload`: runs an upload with the MinIO client again when it fails,
+/// for example after a short network outage, waiting 10 and then 30 seconds. A timeout is not
+/// retried, because another full attempt can pass the timeout of the backup job.
+pub async fn retry_minio_client_upload<T, F, Fut>(
+    upload: F,
+) -> Result<T, coolify_remote::RemoteError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, coolify_remote::RemoteError>>,
+{
+    retry_upload(&MINIO_CLIENT_UPLOAD_RETRY_DELAYS, upload).await
+}
+
+/// Laravel's `retry($delays, $callback, when: ...)` for [`retry_minio_client_upload`].
+async fn retry_upload<T, F, Fut>(
+    delays: &[Duration],
+    mut upload: F,
+) -> Result<T, coolify_remote::RemoteError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, coolify_remote::RemoteError>>,
+{
+    let mut delays = delays.iter();
+    loop {
+        match upload().await {
+            Err(e) if e.code != Some(REMOTE_COMMAND_TIMEOUT_EXIT_CODE) => match delays.next() {
+                Some(delay) => tokio::time::sleep(*delay).await,
+                None => return Err(e),
+            },
+            other => return other,
+        }
+    }
+}
+
 /// A decrypted S3 storage.
 #[derive(Clone)]
 pub struct S3Target {
@@ -470,6 +572,8 @@ pub struct S3Target {
     pub region: String,
     pub key: String,
     pub secret: String,
+    /// `usesPathStyleEndpoint()`: `endpoint/bucket` URLs, else `bucket.endpoint`.
+    pub path_style: bool,
 }
 
 impl std::fmt::Debug for S3Target {
@@ -494,7 +598,26 @@ impl S3Target {
             region: text("region"),
             key: secret("key")?,
             secret: secret("secret")?,
+            path_style: uses_path_style_endpoint(row),
         })
+    }
+
+    /// The host and the path of an object (`key`, already encoded; empty for the bucket): the
+    /// bucket is the first path segment, or the first label of the host.
+    fn locate(&self, authority: &str, encoded_key: &str) -> (String, String) {
+        if self.path_style {
+            let path = if encoded_key.is_empty() {
+                format!("/{}/", uri_encode(&self.bucket))
+            } else {
+                format!("/{}/{encoded_key}", uri_encode(&self.bucket))
+            };
+            (authority.to_owned(), path)
+        } else {
+            (
+                format!("{}.{authority}", self.bucket),
+                format!("/{encoded_key}"),
+            )
+        }
     }
 
     fn client(&self) -> Result<reqwest::Client, String> {
@@ -506,7 +629,7 @@ impl S3Target {
             .map_err(|e| e.to_string())
     }
 
-    /// One path-style request signed with SigV4.
+    /// One request signed with SigV4.
     async fn request(
         &self,
         method: reqwest::Method,
@@ -514,12 +637,12 @@ impl S3Target {
         query: &[(&str, &str)],
     ) -> Result<(reqwest::StatusCode, String, Option<u64>), String> {
         let parsed = parse_url(&self.endpoint).ok_or("S3 endpoint is invalid.")?;
-        let encoded_key = key.split('/').map(uri_encode).collect::<Vec<_>>().join("/");
-        let path = if key.is_empty() {
-            format!("/{}/", uri_encode(&self.bucket))
+        let encoded_key = if key.is_empty() {
+            String::new()
         } else {
-            format!("/{}/{encoded_key}", uri_encode(&self.bucket))
+            key.split('/').map(uri_encode).collect::<Vec<_>>().join("/")
         };
+        let (authority, path) = self.locate(&parsed.authority, &encoded_key);
         let mut pairs: Vec<(String, String)> = query
             .iter()
             .map(|(k, v)| (uri_encode(k), uri_encode(v)))
@@ -534,10 +657,8 @@ impl S3Target {
         let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
         let date = now.format("%Y%m%d").to_string();
         let payload = hex(&Sha256::digest(b""));
-        let canonical_headers = format!(
-            "host:{}\nx-amz-content-sha256:{payload}\nx-amz-date:{amz_date}\n",
-            parsed.authority
-        );
+        let canonical_headers =
+            format!("host:{authority}\nx-amz-content-sha256:{payload}\nx-amz-date:{amz_date}\n");
         let signed = "host;x-amz-content-sha256;x-amz-date";
         let canonical = format!(
             "{}\n{path}\n{canonical_query}\n{canonical_headers}\n{signed}\n{payload}",
@@ -558,9 +679,8 @@ impl S3Target {
             self.key
         );
         let url = format!(
-            "{}://{}{path}{}",
+            "{}://{authority}{path}{}",
             parsed.scheme,
-            parsed.authority,
             if canonical_query.is_empty() {
                 String::new()
             } else {
@@ -596,7 +716,7 @@ impl S3Target {
     pub fn presigned_get(&self, key: &str, expires_seconds: u64) -> Result<String, String> {
         let parsed = parse_url(&self.endpoint).ok_or("S3 endpoint is invalid.")?;
         let encoded_key = key.split('/').map(uri_encode).collect::<Vec<_>>().join("/");
-        let path = format!("/{}/{encoded_key}", uri_encode(&self.bucket));
+        let (authority, path) = self.locate(&parsed.authority, &encoded_key);
         let now = Utc::now();
         let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
         let date = now.format("%Y%m%d").to_string();
@@ -605,10 +725,7 @@ impl S3Target {
             "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential={}&X-Amz-Date={amz_date}&X-Amz-Expires={expires_seconds}&X-Amz-SignedHeaders=host",
             uri_encode(&format!("{}/{scope}", self.key))
         );
-        let canonical = format!(
-            "GET\n{path}\n{query}\nhost:{}\n\nhost\nUNSIGNED-PAYLOAD",
-            parsed.authority
-        );
+        let canonical = format!("GET\n{path}\n{query}\nhost:{authority}\n\nhost\nUNSIGNED-PAYLOAD");
         let to_sign = format!(
             "AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}",
             hex(&Sha256::digest(canonical.as_bytes()))
@@ -619,8 +736,8 @@ impl S3Target {
         let k_signing = hmac(&k_service, b"aws4_request");
         let signature = hex(&hmac(&k_signing, to_sign.as_bytes()));
         Ok(format!(
-            "{}://{}{path}?{query}&X-Amz-Signature={signature}",
-            parsed.scheme, parsed.authority
+            "{}://{authority}{path}?{query}&X-Amz-Signature={signature}",
+            parsed.scheme
         ))
     }
 
@@ -634,7 +751,7 @@ impl S3Target {
     ) -> Result<String, String> {
         let parsed = parse_url(&self.endpoint).ok_or("S3 endpoint is invalid.")?;
         let encoded_key = key.split('/').map(uri_encode).collect::<Vec<_>>().join("/");
-        let path = format!("/{}/{encoded_key}", uri_encode(&self.bucket));
+        let (authority, path) = self.locate(&parsed.authority, &encoded_key);
         let now = Utc::now();
         let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
         let date = now.format("%Y%m%d").to_string();
@@ -644,8 +761,7 @@ impl S3Target {
             uri_encode(&format!("{}/{scope}", self.key))
         );
         let canonical = format!(
-            "PUT\n{path}\n{query}\ncontent-disposition:{content_disposition}\nhost:{}\n\ncontent-disposition;host\nUNSIGNED-PAYLOAD",
-            parsed.authority
+            "PUT\n{path}\n{query}\ncontent-disposition:{content_disposition}\nhost:{authority}\n\ncontent-disposition;host\nUNSIGNED-PAYLOAD"
         );
         let to_sign = format!(
             "AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}",
@@ -657,8 +773,8 @@ impl S3Target {
         let k_signing = hmac(&k_service, b"aws4_request");
         let signature = hex(&hmac(&k_signing, to_sign.as_bytes()));
         Ok(format!(
-            "{}://{}{path}?{query}&X-Amz-Signature={signature}",
-            parsed.scheme, parsed.authority
+            "{}://{authority}{path}?{query}&X-Amz-Signature={signature}",
+            parsed.scheme
         ))
     }
 
@@ -682,10 +798,14 @@ impl S3Target {
             } else {
                 "client"
             };
+            let url = match parse_url(&self.endpoint) {
+                Some(p) if !self.path_style => {
+                    format!("{}://{}.{}/", p.scheme, self.bucket, p.authority)
+                }
+                _ => format!("{}/{}/", self.endpoint.trim_end_matches('/'), self.bucket),
+            };
             Err(format!(
-                "Unable to list contents for '', shallow listing Reason: Error executing \"ListObjectsV2\" on \"{}/{}/?list-type=2&prefix=&delimiter=%2F\"; AWS HTTP error: {code} ({kind}): {message}",
-                self.endpoint.trim_end_matches('/'),
-                self.bucket
+                "Unable to list contents for '', shallow listing Reason: Error executing \"ListObjectsV2\" on \"{url}?list-type=2&prefix=&delimiter=%2F\"; AWS HTTP error: {code} ({kind}): {message}"
             ))
         }
     }
@@ -767,16 +887,47 @@ fn friendly(message: String) -> String {
 }
 
 impl Jobs {
-    /// `S3Storage::testConnection(shouldSave: true)`: stores `is_usable`.
-    pub async fn test_s3_connection(&self, row: &Record) -> Result<(), String> {
+    /// `S3Storage::testConnection(shouldSave: true)`: stores `is_usable`, and the URL style when
+    /// the provider rejected path-style URLs. Returns the URL style to use (`usesPathStyleEndpoint`).
+    pub async fn test_s3_connection(&self, row: &Record) -> Result<bool, String> {
         let id = parts::id_of(row);
-        let result = self.check_s3_connection(row).await;
+        let (result, path_style) = self.check_s3_connection_style(row).await;
         let _ = parts::s3_set_usable(&self.0.db, id, result.is_ok(), Jobs::now()).await;
-        result
+        if path_style != uses_path_style_endpoint(row) {
+            let _ = parts::update_row(
+                &self.0.db,
+                "s3_storages",
+                id,
+                &[(
+                    "use_path_style_endpoint",
+                    coolify_db::servers::ColumnValue::Bool(path_style),
+                )],
+                Jobs::now(),
+            )
+            .await;
+        }
+        result.map(|()| path_style)
     }
 
     /// `S3Storage::testConnection()` on a model that is not saved.
     pub async fn check_s3_connection(&self, row: &Record) -> Result<(), String> {
+        self.check_s3_connection_style(row).await.0
+    }
+
+    /// `S3Storage::testConnection()`, with the URL style the storage has afterwards: a storage
+    /// that uses path-style URLs and is rejected for that is tried again with virtual-hosted-style
+    /// URLs, which it keeps when they work (`listFilesWithAddressingStyleFallback`).
+    pub async fn check_s3_connection_style(&self, row: &Record) -> (Result<(), String>, bool) {
+        let mut path_style = uses_path_style_endpoint(row);
+        let result = self.check_s3_connection_with(row, &mut path_style).await;
+        (result, path_style)
+    }
+
+    async fn check_s3_connection_with(
+        &self,
+        row: &Record,
+        path_style: &mut bool,
+    ) -> Result<(), String> {
         let enc = self
             .0
             .encrypter
@@ -813,7 +964,23 @@ impl Jobs {
         }
         if result.is_ok() {
             result = match S3Target::from_row(enc, row) {
-                Ok(target) => target.list_root().await.map_err(friendly),
+                Ok(mut target) => {
+                    target.path_style = *path_style;
+                    match target.list_root().await {
+                        Err(e) if target.path_style && is_path_style_rejection(&e) => {
+                            target.path_style = false;
+                            match target.list_root().await {
+                                Ok(()) => {
+                                    *path_style = false;
+                                    Ok(())
+                                }
+                                Err(_) => Err(e),
+                            }
+                        }
+                        other => other,
+                    }
+                    .map_err(friendly)
+                }
                 Err(e) => Err(e),
             };
         }
@@ -853,5 +1020,143 @@ mod tests {
         let u = parse_url("http://minio:9000/x").unwrap();
         assert_eq!((u.host.as_str(), u.port), ("minio", 9000));
         assert!(parse_url("nope").is_none());
+    }
+
+    #[test]
+    fn path_style_detection() {
+        for virtual_hosted in [
+            "https://oss-cn-hangzhou.aliyuncs.com",
+            "https://aliyuncs.com",
+            "https://cos.ap-guangzhou.myqcloud.com",
+            "https://tos-cn-beijing.volces.com",
+            "https://tos-ap-southeast-1.bytepluses.com:443",
+            "HTTPS://OSS-CN-HANGZHOU.ALIYUNCS.COM",
+        ] {
+            assert!(
+                !detect_path_style_endpoint(Some(virtual_hosted)),
+                "{virtual_hosted}"
+            );
+        }
+        for path_style in [
+            "https://s3.us-east-1.amazonaws.com",
+            "http://minio:9000",
+            "https://notaliyuncs.com",
+            "https://aliyuncs.com.example.com",
+            "oss-cn-hangzhou.aliyuncs.com",
+            "",
+        ] {
+            assert!(detect_path_style_endpoint(Some(path_style)), "{path_style}");
+        }
+        assert!(detect_path_style_endpoint(None));
+        let mut row = Record::new();
+        assert!(uses_path_style_endpoint(&row));
+        row.insert("use_path_style_endpoint".into(), serde_json::Value::Null);
+        assert!(uses_path_style_endpoint(&row));
+        row.insert("use_path_style_endpoint".into(), serde_json::json!(false));
+        assert!(!uses_path_style_endpoint(&row));
+    }
+
+    #[test]
+    fn path_style_rejections() {
+        assert!(is_path_style_rejection(
+            "AWS HTTP error: SecondLevelDomainForbidden (client): Please use virtual hosted style to access."
+        ));
+        assert!(is_path_style_rejection("PathStyleDomainForbidden"));
+        assert!(is_path_style_rejection(
+            "the bucket must be addressed using virtual-styled requests"
+        ));
+        assert!(!is_path_style_rejection(
+            "AccessDenied (client): Access Denied"
+        ));
+        assert_eq!(minio_client_alias_options(true), " --api S3v4");
+        assert_eq!(minio_client_alias_options(false), " --api S3v4 --path off");
+    }
+
+    #[test]
+    fn virtual_hosted_urls() {
+        let mut t = S3Target {
+            endpoint: "https://oss-cn-hangzhou.aliyuncs.com".into(),
+            bucket: "backups".into(),
+            region: "cn-hangzhou".into(),
+            key: "k".into(),
+            secret: "s".into(),
+            path_style: true,
+        };
+        let authority = "oss-cn-hangzhou.aliyuncs.com";
+        assert_eq!(
+            t.locate(authority, "a/b.gz"),
+            (authority.to_owned(), "/backups/a/b.gz".to_owned())
+        );
+        assert_eq!(
+            t.locate(authority, ""),
+            (authority.to_owned(), "/backups/".to_owned())
+        );
+        t.path_style = false;
+        assert_eq!(
+            t.locate(authority, "a/b.gz"),
+            (
+                "backups.oss-cn-hangzhou.aliyuncs.com".to_owned(),
+                "/a/b.gz".to_owned()
+            )
+        );
+        assert_eq!(
+            t.locate(authority, ""),
+            (
+                "backups.oss-cn-hangzhou.aliyuncs.com".to_owned(),
+                "/".to_owned()
+            )
+        );
+        let url = t.presigned_get("a/b.gz", 60).unwrap();
+        assert!(
+            url.starts_with("https://backups.oss-cn-hangzhou.aliyuncs.com/a/b.gz?X-Amz-Algorithm="),
+            "{url}"
+        );
+    }
+
+    #[tokio::test]
+    async fn uploads_are_not_retried_after_a_timeout() {
+        let mut attempts = 0;
+        let result: Result<(), coolify_remote::RemoteError> = retry_minio_client_upload(|| {
+            attempts += 1;
+            async {
+                Err(coolify_remote::RemoteError {
+                    message: "The command on the server timed out after 3600 seconds.".into(),
+                    code: Some(REMOTE_COMMAND_TIMEOUT_EXIT_CODE),
+                })
+            }
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(attempts, 1);
+        let mut attempts = 0;
+        let result = retry_minio_client_upload(|| {
+            attempts += 1;
+            async { Ok::<_, coolify_remote::RemoteError>(Some("done".to_owned())) }
+        })
+        .await;
+        assert_eq!(result.unwrap().as_deref(), Some("done"));
+        assert_eq!(attempts, 1);
+    }
+
+    #[tokio::test]
+    async fn failed_uploads_are_tried_three_times() {
+        assert_eq!(
+            MINIO_CLIENT_UPLOAD_RETRY_DELAYS,
+            [Duration::from_secs(10), Duration::from_secs(30)]
+        );
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let delays = [Duration::from_millis(1), Duration::from_millis(1)];
+        let result: Result<(), coolify_remote::RemoteError> = retry_upload(&delays, || {
+            attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async {
+                Err(coolify_remote::RemoteError {
+                    message: "mc: Unable to upload".into(),
+                    code: Some(1),
+                })
+            }
+        })
+        .await;
+        assert_eq!(result.unwrap_err().message, "mc: Unable to upload");
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 3);
     }
 }

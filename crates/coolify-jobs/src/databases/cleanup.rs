@@ -161,7 +161,6 @@ impl Jobs {
 fn fluent_bit_enabled(server: &ServerInfo) -> bool {
     [
         "is_logdrain_newrelic_enabled",
-        "is_logdrain_highlight_enabled",
         "is_logdrain_axiom_enabled",
         "is_logdrain_custom_enabled",
     ]

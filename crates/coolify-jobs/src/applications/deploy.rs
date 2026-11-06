@@ -1665,7 +1665,15 @@ impl Run {
             self.resolve_remote_secrets(&mut vars).await?;
             vars
         };
+        let mut production_values = Vec::new();
         if self.b.is_preview() {
+            if self.preview_keeps_production_values() {
+                production_values = variables
+                    .iter()
+                    .filter(|v| !v.is_preview)
+                    .cloned()
+                    .collect();
+            }
             variables = self.deployed_variables().await?;
         }
         let deployed_fqdn = self.deployed_fqdn();
@@ -1694,6 +1702,7 @@ impl Run {
                 environment_name: environment.as_deref(),
                 server_ip: Some(&ip),
                 preview: self.b.is_preview().then_some(deployed_fqdn.as_deref()),
+                production_values,
             },
         );
         if let Some(w) = warning {
