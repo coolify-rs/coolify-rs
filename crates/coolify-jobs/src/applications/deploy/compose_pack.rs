@@ -243,6 +243,14 @@ impl Run {
             )
             .await
             .map_err(Fail::new)?;
+            // `parseComposeFileForDeployment()`: no services means the file could not be parsed; an
+            // empty file would fail later with Docker's unclear "no service selected".
+            if parsed.services().is_empty() {
+                return Err(Fail::new(format!(
+                    "The Docker Compose file has no services, or Coolify could not parse it. Check that {} is valid YAML and has a services section.",
+                    self.app.str("docker_compose_location").unwrap_or_default()
+                )));
+            }
             for w in parsed.warnings.clone() {
                 self.log(&format!("Warning: {w}"), "stderr", false).await;
             }
@@ -252,10 +260,6 @@ impl Run {
                 for (_, service) in services.iter_mut() {
                     service.set("env_file", PhpValue::strings([ENV_FILE]));
                 }
-            }
-            if parsed.is_empty() {
-                self.info("Failed to parse docker-compose file.").await;
-                return Err(Fail::new("Failed to parse docker-compose file."));
             }
             // Add build secrets to compose file if enabled and BuildKit is supported
             if self.b.secrets_supported && !self.b.build_secrets.is_empty() {
@@ -508,8 +512,16 @@ impl Run {
         self.modify_dockerfiles_for_compose(compose.unwrap_or(&raw))
             .await?;
         self.info("Pulling & building required images.").await;
-        let build_env = self.b.compose_build_env.take();
-        self.save_buildtime_environment_variables_with(build_env)
+        // Save build-time .env file BEFORE the build
+        let mut build_env = match self.b.compose_build_env.take() {
+            Some(lines) => lines,
+            None => self.generate_buildtime_environment_variables().await?,
+        };
+        let extra = self
+            .compose_build_interpolation_variables(compose, &build_env)
+            .await?;
+        build_env.extend(extra);
+        self.save_buildtime_environment_variables_with(Some(build_env))
             .await?;
         let (u, w, loc) = (
             self.app.uuid.clone(),
@@ -558,6 +570,44 @@ impl Run {
         let dep = self.dep.clone();
         self.exec(vec![Cmd::new(in_docker(&dep, &command)).hidden()])
             .await
+    }
+
+    /// `compose_build_interpolation_variables($composeFile, $buildEnvironment)`: `docker compose build`
+    /// interpolates the whole file, so a required runtime-only variable (`${KEY:?}` in `environment:`)
+    /// would fail the build. The build gets the runtime `.env` lines of the variables the file uses
+    /// outside its build sections; variables a build section or a build secret can read stay out.
+    async fn compose_build_interpolation_variables(
+        &mut self,
+        compose: Option<&ParsedCompose>,
+        build_env: &[String],
+    ) -> Result<Vec<String>, Fail> {
+        // A raw Compose file is the `docker_compose_raw` string, parsed here.
+        let parsed;
+        let value = match compose {
+            Some(c) => &c.top_level,
+            None => {
+                let raw = self.app.str("docker_compose_raw").unwrap_or_default();
+                parsed = compose_parser::validate::parse_docker_compose_yaml(raw)
+                    .map_err(|e| Fail::new(e.to_string()))?;
+                &parsed
+            }
+        };
+        let keys = compose_build_interpolation_keys(value, build_env);
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let saved = self.b.compose_env.take();
+        self.b.compose_env = Some(self.compose_runtime_env().await?);
+        let lines = self.runtime_environment_lines().await;
+        self.b.compose_env = saved;
+        Ok(lines?
+            .0
+            .into_iter()
+            .filter(|l| {
+                keys.iter()
+                    .any(|k| k == l.split('=').next().unwrap_or_default())
+            })
+            .collect())
     }
 
     /// `modify_dockerfiles_for_compose($composeFile)`.
@@ -912,6 +962,87 @@ impl Run {
 }
 
 /// `validateShellSafeCommand($value, $fieldName)`.
+/// `Arr::flatten($values)` then `extractDockerComposeEnvironmentVariableReferences` of each value.
+fn compose_references(value: &PhpValue, out: &mut Vec<String>) {
+    match value {
+        PhpValue::Str(s) => {
+            out.extend(
+                compose_parser::env::extract_docker_compose_environment_variable_references(s),
+            );
+        }
+        PhpValue::Array(items) => {
+            for (_, v) in items {
+                compose_references(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The variable names of `compose_build_interpolation_variables()`: referenced in the Compose file
+/// outside its `build` sections, and neither read by a build (argument, build section, secret) nor
+/// already a build-time variable.
+fn compose_build_interpolation_keys(compose: &PhpValue, build_env: &[String]) -> Vec<String> {
+    let mut compose = compose.clone();
+    let mut read_by_builds: Vec<String> = Vec::new();
+    // `collect(data_get($compose, 'secrets', []))->pluck('environment')->filter()`
+    if let Some(PhpValue::Array(secrets)) = get(&compose, "secrets") {
+        for (_, secret) in secrets {
+            match get(secret, "environment") {
+                Some(PhpValue::Str(s)) if !s.is_empty() && s != "0" => {
+                    read_by_builds.push(s.clone());
+                }
+                Some(PhpValue::Int(i)) if *i != 0 => read_by_builds.push(i.to_string()),
+                _ => {}
+            }
+        }
+    }
+    if let Some(PhpValue::Array(services)) = compose.get_mut("services") {
+        for (_, service) in services.iter_mut() {
+            let build = match get(service, "build") {
+                None | Some(PhpValue::Null) => continue,
+                Some(b) => b.clone(),
+            };
+            // `data_get($build, 'args', [])`: a string build has no args.
+            match get(&build, "args") {
+                Some(PhpValue::Array(args)) if is_list(args) => {
+                    for (_, arg) in args {
+                        let arg = match arg {
+                            PhpValue::Str(s) => s.clone(),
+                            PhpValue::Int(i) => i.to_string(),
+                            PhpValue::Float(f) => f.to_string(),
+                            PhpValue::Bool(true) => "1".to_owned(),
+                            _ => String::new(),
+                        };
+                        read_by_builds.push(arg.split('=').next().unwrap_or_default().to_owned());
+                    }
+                }
+                Some(PhpValue::Array(args)) => {
+                    read_by_builds.extend(args.iter().map(|(k, _)| k.as_string()));
+                }
+                None | Some(PhpValue::Null) => {}
+                // `array_keys((array) $scalar)`
+                Some(_) => read_by_builds.push("0".to_owned()),
+            }
+            compose_references(&build, &mut read_by_builds);
+            service.remove("build");
+        }
+    }
+    let build_keys: Vec<&str> = build_env
+        .iter()
+        .map(|l| l.split('=').next().unwrap_or_default())
+        .collect();
+    let mut references = Vec::new();
+    compose_references(&compose, &mut references);
+    let mut keys: Vec<String> = Vec::new();
+    for r in references {
+        if !keys.contains(&r) && !read_by_builds.contains(&r) && !build_keys.contains(&r.as_str()) {
+            keys.push(r);
+        }
+    }
+    keys
+}
+
 fn validate_shell_safe_command(value: &str, field: &str) -> Step {
     static SAFE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
@@ -1034,6 +1165,47 @@ fn add_build_fingerprint(compose: &mut ParsedCompose, fingerprint: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_interpolation_keys_leave_out_build_inputs() {
+        let compose = compose_parser::validate::parse_docker_compose_yaml(
+            "services:
+  app:
+    build:
+      context: .
+      args:
+        MAPPED_ARG: '${RUNTIME_IN_BUILD_ARGS}'
+        LISTED_FROM_ENV: null
+    environment:
+      FERNET_KEY: '${FERNET_KEY:?}'
+      OPTIONAL_REQUIRED: '${OPTIONAL_REQUIRED?}'
+      BUILD_VALUE: '${BUILD_VALUE}'
+      SECRET_USER: '$FROM_SECRET'
+  worker:
+    build:
+      context: ./worker
+      args:
+        - LISTED_ARG
+    environment:
+      FERNET_KEY: '${FERNET_KEY:?}'
+      PLAIN: '$$NOT_A_REFERENCE'
+secrets:
+  token:
+    environment: FROM_SECRET
+",
+        )
+        .unwrap();
+        assert_eq!(
+            compose_build_interpolation_keys(&compose, &["BUILD_VALUE=\"x\"".to_owned()]),
+            ["FERNET_KEY", "OPTIONAL_REQUIRED"]
+        );
+        // Without a build section, nothing is read by a build.
+        let compose = compose_parser::validate::parse_docker_compose_yaml(
+            "services:\n  web:\n    image: nginx\n    environment:\n      A: ${A:?}\n",
+        )
+        .unwrap();
+        assert_eq!(compose_build_interpolation_keys(&compose, &[]), ["A"]);
+    }
 
     #[test]
     fn dockerfile_paths() {

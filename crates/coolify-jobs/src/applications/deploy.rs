@@ -1641,8 +1641,11 @@ impl Run {
         Ok(())
     }
 
-    /// `save_runtime_environment_variables()`.
-    async fn save_runtime_environment(&mut self) -> Step {
+    /// `generate_runtime_environment_variables()`: the runtime `.env` lines and a warning for the
+    /// deployment log. Uses (and clears) the Docker Compose part in `self.b.compose_env`.
+    pub(super) async fn runtime_environment_lines(
+        &mut self,
+    ) -> Result<(Vec<String>, Option<String>), Fail> {
         // Server variables come from the server the application runs on, not its build server.
         let mut variables: Vec<Var> = if self.main_server.id == self.server.id {
             self.variables().await?
@@ -1696,6 +1699,12 @@ impl Run {
                 preview: self.b.is_preview().then_some(deployed_fqdn.as_deref()),
             },
         );
+        Ok((envs, warning))
+    }
+
+    /// `save_runtime_environment_variables()`.
+    async fn save_runtime_environment(&mut self) -> Step {
+        let (envs, warning) = self.runtime_environment_lines().await?;
         if let Some(w) = warning {
             self.log(&w, "stderr", false).await;
         }
