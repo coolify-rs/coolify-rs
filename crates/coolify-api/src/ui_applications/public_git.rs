@@ -814,7 +814,8 @@ pub async fn create(
 
 /// `importDetectedEnvironmentVariables()`: `EnvironmentVariable::create()` per valid key in one
 /// transaction, each with the preview copy the model's `created` hook adds (from the in-memory
-/// model, so with its default flags) and the version it writes.
+/// model, so with its default flags; not for a generated magic variable of a compose
+/// application) and the version it writes.
 pub(super) async fn import_variables(
     state: &AppState,
     application_id: i64,
@@ -848,7 +849,14 @@ pub(super) async fn import_variables(
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(db_err)?;
-                if found {
+                if found
+                    || !coolify_db::environment_variables::application_copies_to_preview(
+                        &mut *tx,
+                        application_id,
+                        key,
+                    )
+                    .await?
+                {
                     continue;
                 }
             }

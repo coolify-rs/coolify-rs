@@ -8,7 +8,9 @@
 //! `SERVICE_FQDN_*_<port>` values were updated by hand for v4.5.3 (1440ea83d,
 //! `syncComposeServiceUrlVariables`), which keeps them in sync with the service domain, and the
 //! clone line of the `load-*` read commands for 1a2a5362a and 56af27d46 (`exec >&2`, the Git LFS
-//! skip, and the submodule step inside the clone script).
+//! skip, and the submodule step inside the clone script). For 1a2a5362a the preview copies the
+//! `created` hook made of generated magic variables (`SERVICE_PASSWORD_*` and friends) of these
+//! compose applications were removed by hand: a compose preview now generates its own.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -575,4 +577,258 @@ async fn application_parser_matches_upstream() {
         failures.len(),
         failures.join("\n")
     );
+}
+
+/// Seeds the `reference` fixture: the database, the jobs, the application id and `now`.
+async fn seed_reference(enc: &Encrypter) -> (TestDb, Jobs, i64, NaiveDateTime) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/compose_parser/expected/reference.json");
+    let fx: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let tdb = TestDb::new(SEED).await;
+    let app_id = seed(&tdb.db, enc, &fx["context"], &fx["before"]).await;
+    let data = tempfile::tempdir().unwrap();
+    let remote =
+        coolify_remote::Remote::new(coolify_remote::RemoteConfig::new(data.path())).unwrap();
+    let jobs = Jobs::new(tdb.db.clone(), remote, Some(enc.clone()));
+    jobs.set_version(fx["context"]["version"].as_str().unwrap().to_owned());
+    let now =
+        NaiveDateTime::parse_from_str(fx["context"]["now"].as_str().unwrap(), "%Y-%m-%d %H:%M:%S")
+            .unwrap();
+    (tdb, jobs, app_id, now)
+}
+
+type Variables = Vec<(String, Option<String>)>;
+
+/// The application's production or preview variables: `(key, decrypted value)` by id.
+async fn variables(db: &coolify_db::Db, enc: &Encrypter, app_id: i64, preview: bool) -> Variables {
+    let rows: Variables = sqlx::query_as(
+        "SELECT key, value FROM environment_variables WHERE resourceable_type = 'App\\Models\\Application' \
+         AND resourceable_id = $1 AND is_preview = $2 ORDER BY id",
+    )
+    .bind(app_id)
+    .bind(preview)
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    rows.into_iter()
+        .map(|(k, v)| (k, v.map(|v| enc.decrypt_maybe_serialized(&v).unwrap())))
+        .collect()
+}
+
+fn value_of(rows: &Variables, key: &str) -> Option<Option<String>> {
+    rows.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+}
+
+async fn set_value(
+    db: &coolify_db::Db,
+    enc: &Encrypter,
+    (app_id, preview): (i64, bool),
+    key: &str,
+    value: &str,
+) {
+    let done = sqlx::query(
+        "UPDATE environment_variables SET value = $1 WHERE resourceable_type = 'App\\Models\\Application' \
+         AND resourceable_id = $2 AND key = $3 AND is_preview = $4",
+    )
+    .bind(enc.encrypt_serialized(value))
+    .bind(app_id)
+    .bind(key)
+    .bind(preview)
+    .execute(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(done.rows_affected(), 1, "{key} (preview: {preview})");
+}
+
+/// The value of `services.<service>.environment.<key>` in the parsed compose.
+fn service_env(parsed: &compose_parser::ParsedCompose, service: &str, key: &str) -> Option<String> {
+    match compose_parser::php::data_get(
+        &parsed.top_level,
+        &format!("services.{service}.environment.{key}"),
+    ) {
+        Some(coolify_compat::yaml::PhpValue::Str(s)) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+const PR: i64 = 7;
+const GENERATED_KEYS: [&str; 7] = [
+    "SERVICE_PASSWORD_WEB",
+    "SERVICE_BASE64_64_WEB",
+    "SERVICE_HEX_32_WEB",
+    "SERVICE_USER_WEB",
+    "SERVICE_USER_DB",
+    "SERVICE_PASSWORD_DB",
+    "SERVICE_PASSWORD_NOBRACES",
+];
+
+/// 1a2a5362a: a pull request parse keeps the generated magic variables in the preview variables
+/// and stores no production variables for them or for the service domains; the `created` hook
+/// does not copy the production secrets of a compose application to the preview.
+#[tokio::test]
+async fn pull_request_parse_generates_preview_magic_variables() {
+    let enc = Encrypter::new(APP_KEY).unwrap();
+    let (tdb, jobs, app_id, now) = seed_reference(&enc).await;
+
+    // A pull request parse first: no production variables for magic variables.
+    compose_parser::application_parser_at(&jobs, app_id, PR, None, now)
+        .await
+        .unwrap();
+    let production = variables(&tdb.db, &enc, app_id, false).await;
+    let preview = variables(&tdb.db, &enc, app_id, true).await;
+    for key in GENERATED_KEYS {
+        assert_eq!(value_of(&production, key), None, "production {key}");
+        let value = value_of(&preview, key).flatten();
+        assert!(value.is_some_and(|v| !v.is_empty()), "preview {key}");
+    }
+    // The domains of `SERVICE_FQDN_API: /api`, `SERVICE_FQDN_ADMIN_8080` and the magic
+    // references. (A bare `SERVICE_URL_MY_APP_80` is a pass-through variable upstream as well.)
+    for key in [
+        "SERVICE_FQDN_API",
+        "SERVICE_URL_API",
+        "SERVICE_FQDN_ADMIN",
+        "SERVICE_FQDN_WEB",
+        "SERVICE_URL_WEB",
+        "SERVICE_FQDN_WEB_3000",
+        "SERVICE_URL_WEB_3000",
+    ] {
+        assert_eq!(value_of(&production, key), None, "production {key}");
+    }
+
+    // The production parse generates its own secrets; the hook leaves the preview ones alone.
+    compose_parser::application_parser_at(&jobs, app_id, 0, None, now)
+        .await
+        .unwrap();
+    let production = variables(&tdb.db, &enc, app_id, false).await;
+    let preview_after = variables(&tdb.db, &enc, app_id, true).await;
+    for key in GENERATED_KEYS {
+        let prod = value_of(&production, key).flatten().unwrap();
+        let prev = value_of(&preview_after, key).flatten().unwrap();
+        assert_ne!(prod, prev, "{key}");
+        assert_eq!(value_of(&preview, key).flatten().unwrap(), prev, "{key}");
+        assert_eq!(
+            preview_after.iter().filter(|(k, _)| k == key).count(),
+            1,
+            "{key}"
+        );
+    }
+
+    // Another pull request parse changes no production variable.
+    compose_parser::application_parser_at(&jobs, app_id, PR, None, now)
+        .await
+        .unwrap();
+    assert_eq!(variables(&tdb.db, &enc, app_id, false).await, production);
+    tdb.drop_db().await;
+}
+
+/// A production parse of a compose application: the generated magic variables get no preview
+/// copy, the other variables do.
+#[tokio::test]
+async fn production_parse_does_not_copy_generated_magic_variables_to_preview() {
+    let enc = Encrypter::new(APP_KEY).unwrap();
+    let (tdb, jobs, app_id, now) = seed_reference(&enc).await;
+    compose_parser::application_parser_at(&jobs, app_id, 0, None, now)
+        .await
+        .unwrap();
+    let production = variables(&tdb.db, &enc, app_id, false).await;
+    let preview = variables(&tdb.db, &enc, app_id, true).await;
+    for key in GENERATED_KEYS {
+        assert!(value_of(&production, key).is_some(), "production {key}");
+        assert_eq!(value_of(&preview, key), None, "preview {key}");
+    }
+    assert!(value_of(&preview, "BARE_PASSTHROUGH").is_some());
+    assert!(value_of(&preview, "SERVICE_URL_WEB").is_some());
+    tdb.drop_db().await;
+}
+
+/// The final environment of a pull request parse: an empty value reads the preview variable; a
+/// public preview ignores preview variables with the production value, gets its own secrets and
+/// does not resolve `{{...}}` written in the compose file.
+#[tokio::test]
+async fn public_pull_request_parse_does_not_use_production_values() {
+    let enc = Encrypter::new(APP_KEY).unwrap();
+    let (tdb, jobs, app_id, now) = seed_reference(&enc).await;
+    let (db, prod, prev) = (&tdb.db, (app_id, false), (app_id, true));
+    compose_parser::application_parser_at(&jobs, app_id, 0, None, now)
+        .await
+        .unwrap();
+    set_value(db, &enc, prod, "BARE_PASSTHROUGH", "prod-value").await;
+    set_value(db, &enc, prev, "BARE_PASSTHROUGH", "preview-value").await;
+
+    let parsed = compose_parser::application_parser_at(&jobs, app_id, 0, None, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        service_env(&parsed, "web", "BARE_PASSTHROUGH").as_deref(),
+        Some("prod-value")
+    );
+    let parsed = compose_parser::application_parser_at(&jobs, app_id, PR, None, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        service_env(&parsed, "web-pr-7", "BARE_PASSTHROUGH").as_deref(),
+        Some("preview-value")
+    );
+    assert_eq!(
+        service_env(&parsed, "web-pr-7", "SHARED").as_deref(),
+        Some("shared-value")
+    );
+
+    // A private preview keeps a preview secret equal to the production one.
+    let production = variables(db, &enc, app_id, false).await;
+    let prod_password = value_of(&production, "SERVICE_PASSWORD_DB")
+        .flatten()
+        .unwrap();
+    set_value(db, &enc, prev, "SERVICE_PASSWORD_DB", &prod_password).await;
+    compose_parser::application_parser_at(&jobs, app_id, PR, None, now)
+        .await
+        .unwrap();
+    let preview = variables(db, &enc, app_id, true).await;
+    assert_eq!(
+        value_of(&preview, "SERVICE_PASSWORD_DB").flatten(),
+        Some(prod_password.clone())
+    );
+
+    sqlx::query(
+        "UPDATE application_settings SET is_pr_deployments_public_enabled = true WHERE application_id = $1",
+    )
+    .bind(app_id)
+    .execute(db.pool())
+    .await
+    .unwrap();
+    set_value(db, &enc, prev, "BARE_PASSTHROUGH", "prod-value").await;
+    let parsed = compose_parser::application_parser_at(&jobs, app_id, PR, None, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        service_env(&parsed, "web-pr-7", "BARE_PASSTHROUGH").as_deref(),
+        Some("")
+    );
+    assert_eq!(
+        service_env(&parsed, "web-pr-7", "SHARED").as_deref(),
+        Some("{{environment.SHARED_KEY}}")
+    );
+    let preview = variables(db, &enc, app_id, true).await;
+    let regenerated = value_of(&preview, "SERVICE_PASSWORD_DB").flatten().unwrap();
+    assert_ne!(regenerated, prod_password);
+    assert_eq!(regenerated.len(), prod_password.len());
+    assert_eq!(variables(db, &enc, app_id, false).await, production);
+
+    // A preview value of its own is used, and `{{...}}` in it is resolved.
+    set_value(
+        db,
+        &enc,
+        prev,
+        "BARE_PASSTHROUGH",
+        "{{environment.SHARED_KEY}}",
+    )
+    .await;
+    let parsed = compose_parser::application_parser_at(&jobs, app_id, PR, None, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        service_env(&parsed, "web-pr-7", "BARE_PASSTHROUGH").as_deref(),
+        Some("shared-value")
+    );
+    tdb.drop_db().await;
 }
