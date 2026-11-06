@@ -322,11 +322,8 @@ fn text(message: impl Into<String>) -> Message {
     Message::Text(message.into().into())
 }
 
-/// `rejectTerminalSocket()`.
-async fn reject(socket: &mut WebSocket, code: u16, reason: &'static str, message: Option<&str>) {
-    if let Some(message) = message {
-        let _ = socket.send(text(message)).await;
-    }
+/// `rejectTerminalSocket()`: the close code tells the browser why; no text message comes first.
+async fn reject(socket: &mut WebSocket, code: u16, reason: &'static str) {
     let _ = socket
         .send(Message::Close(Some(CloseFrame {
             code,
@@ -345,7 +342,7 @@ fn token_shape_ok(token: &Value) -> Option<&str> {
 /// One connection: `wss.on('connection')` with its handlers.
 async fn run(mut socket: WebSocket, state: AppState, headers: HeaderMap) {
     if let Auth::Rejected(code, reason) = authenticate(&state, &headers).await {
-        reject(&mut socket, code, reason, None).await;
+        reject(&mut socket, code, reason).await;
         return;
     }
     let (events, mut events_rx) = mpsc::channel::<Event>(OUTPUT_QUEUE);
@@ -428,7 +425,7 @@ async fn handle_message(
             "terminalToken" => {
                 let Some(token) = token_shape_ok(&value) else {
                     const MESSAGE: &str = "Unauthorized: Invalid terminal token";
-                    reject(socket, TOKEN_REJECTED, MESSAGE, Some(MESSAGE)).await;
+                    reject(socket, TOKEN_REJECTED, MESSAGE).await;
                     return Err(());
                 };
                 let (state, headers, events, token) = (
@@ -498,7 +495,7 @@ async fn handle_event(
             }
         }
         Event::Redeemed(Err(())) => {
-            reject(socket, TOKEN_REJECTED, TOKEN_REFUSED, Some(TOKEN_REFUSED)).await;
+            reject(socket, TOKEN_REJECTED, TOKEN_REFUSED).await;
             return Err(());
         }
         Event::Redeemed(Ok(session)) => return open(socket, state, events, current, session).await,
@@ -549,7 +546,7 @@ async fn open(
         Err(e) => {
             tracing::warn!(error = %e, "terminal: could not start ssh in a PTY");
             const REFUSED: &str = "Unauthorized: Terminal token was rejected";
-            reject(socket, TOKEN_REJECTED, REFUSED, Some(REFUSED)).await;
+            reject(socket, TOKEN_REJECTED, REFUSED).await;
             Err(())
         }
     }
