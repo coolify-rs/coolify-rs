@@ -74,8 +74,9 @@ const SCRIPT: &str = r#"<script>
   }
   function pct(r) { return r === null || r === undefined ? '–' : trim(r * 100) + '%'; }
   function when(at) { return at.replace('T', ' ').slice(0, 16) + ' UTC'; }
-  function tile(label, value, sub, band) {
+  function tile(label, value, sub, band, hint) {
     var t = el('div', 'stat tile'), h = el('div', 'tile-head');
+    if (hint) t.title = hint;
     h.appendChild(el('span', 'muted', label));
     if (band) h.appendChild(el('span', 'band ' + band, BAND[band]));
     t.appendChild(h);
@@ -95,7 +96,8 @@ const SCRIPT: &str = r#"<script>
       r.restored ? 'median, p90 ' + dur(r.p90_seconds) + (r.unrestored ? ', ' + r.unrestored + ' not restored' : '')
         : (r.unrestored ? r.unrestored + ' not restored yet' : 'No failed deployments'), r.band));
     box.appendChild(tile('Lead time for changes', l.available ? dur(l.median_seconds) : 'Not available',
-      l.available ? 'median, p90 ' + dur(l.p90_seconds) : l.reason, l.band));
+      l.available ? 'median, p90 ' + dur(l.p90_seconds)
+        : (f.deployments ? 'Deployment events carry no commit time' : l.reason), l.band, l.reason));
   }
   function table(head, rows) {
     var wrap = el('div', 'table'), t = el('table'), tr = el('tr');
