@@ -1,0 +1,29 @@
+id = "coolify-rs/deploy-chains"
+name = "Deploy chains"
+version = "0.1.0"
+description = "Deploys the applications that depend on an application after it deploys successfully."
+license = "Apache-2.0"
+source = "https://github.com/coolify-rs/coolify-rs/tree/main/plugins/official/deploy-chains"
+# Version of the plugin interface (crates/coolify-plugins/wit/plugin.wit) the component targets.
+api = "0.1"
+
+[capabilities]
+events = ["deployment.succeeded"]
+storage = true
+routes = true
+# Read-only, as the API shows them to a token without read:sensitive (docs/decisions/0011): to check that a
+# rule names the team's own applications, and to show their names.
+resources = ["applications"]
+# Each team must also grant it when enabling the plugin. Deployments after an event run on the authority of
+# the team admin who granted it (docs/decisions/0011).
+deploy = true
+
+[[capabilities.ui]]
+slot = "application"
+title = "Deploy chain"
+path = "/panels/application"
+
+[[capabilities.ui]]
+slot = "dashboard"
+title = "Deploy chains"
+path = "/panels/overview"
