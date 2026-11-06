@@ -196,6 +196,16 @@ impl Run {
             .map(str::to_owned)
     }
 
+    /// `$this->preview?->keeps_production_values`: previews that existed before the upgrade to
+    /// v4.5.3 (`2026_10_28_103619_add_keeps_production_values_to_application_previews_table`).
+    pub(super) fn preview_keeps_production_values(&self) -> bool {
+        self.b
+            .preview
+            .as_ref()
+            .and_then(|p| p.get("keeps_production_values"))
+            .is_some_and(|v| v.as_bool() == Some(true))
+    }
+
     /// `deployedPreviewVariables()` for a preview (without the variables that hold the production
     /// value when pull requests of forks can deploy), else the production variables.
     pub(super) async fn deployed_variables(&mut self) -> Result<Vec<Var>, Fail> {
@@ -203,7 +213,9 @@ impl Run {
         if !self.b.is_preview() {
             return Ok(vars.into_iter().filter(|v| !v.is_preview).collect());
         }
-        let public = self.app.setting_bool("is_pr_deployments_public_enabled");
+        // `previewVariableIdsWithProductionValues()`: a preview from before v4.5.1 keeps them.
+        let public = self.app.setting_bool("is_pr_deployments_public_enabled")
+            && !self.preview_keeps_production_values();
         let production: HashMap<String, Option<String>> = vars
             .iter()
             .filter(|v| !v.is_preview)
