@@ -1,0 +1,126 @@
+id = "coolify-rs/alerts"
+name = "Alerts"
+version = "0.1.0"
+description = "Sends failed deployments, backups, scheduled tasks, unreachable servers and expiring certificates to ntfy, Google Chat, PagerDuty or Opsgenie."
+license = "Apache-2.0"
+source = "https://github.com/coolify-rs/coolify-rs/tree/main/plugins/official/alerts"
+# Version of the plugin interface (crates/coolify-plugins/wit/plugin.wit) the component targets.
+api = "0.1"
+
+[capabilities]
+# The successes are there to resolve the incidents the failures opened, and for teams that ask for them.
+events = [
+    "deployment.succeeded",
+    "deployment.failed",
+    "backup.succeeded",
+    "backup.succeeded_with_s3_warning",
+    "backup.failed",
+    "backup.missing",
+    "volume_backup.succeeded",
+    "volume_backup.failed",
+    "volume_backup.missing",
+    "volume_backup.recovery_failed",
+    "scheduled_task.succeeded",
+    "scheduled_task.failed",
+    "server.unreachable",
+    "server.reachable",
+    "server.high_disk_usage",
+    "server.docker_cleanup_failed",
+    "container.restart_limit_reached",
+    "ssl.certificates_expiring",
+]
+# The incidents this plugin opened, so a later success resolves them.
+storage = true
+routes = true
+http = ["ntfy.sh", "chat.googleapis.com", "events.pagerduty.com", "api.opsgenie.com", "api.eu.opsgenie.com"]
+
+[[capabilities.ui]]
+slot = "dashboard"
+title = "Alerts"
+path = "/panel"
+
+[[settings]]
+key = "ntfy_topic"
+label = "ntfy.sh topic"
+help = "Alerts are published to this topic on ntfy.sh. Anyone who knows the topic can read it, so treat it as a password. Leave empty to skip ntfy."
+secret = true
+
+[[settings]]
+key = "ntfy_priority"
+label = "ntfy priority"
+help = "The priority of failures on ntfy. Successes are sent at most at default priority."
+options = ["min", "low", "default", "high", "urgent"]
+default = "high"
+
+[[settings]]
+key = "google_chat_webhook"
+label = "Google Chat webhook URL"
+help = "The incoming webhook of a Google Chat space (https://chat.googleapis.com/v1/spaces/...). Leave empty to skip Google Chat."
+kind = "url"
+secret = true
+
+[[settings]]
+key = "pagerduty_routing_key"
+label = "PagerDuty integration key"
+help = "The routing key of an Events API v2 integration. Failures open incidents; the next success of the same resource resolves them. Leave empty to skip PagerDuty."
+secret = true
+
+[[settings]]
+key = "opsgenie_api_key"
+label = "Opsgenie API key"
+help = "The key of an API integration. Failures open alerts; the next success of the same resource closes them. Leave empty to skip Opsgenie."
+secret = true
+
+[[settings]]
+key = "opsgenie_region"
+label = "Opsgenie region"
+help = "eu for accounts on app.eu.opsgenie.com."
+options = ["us", "eu"]
+default = "us"
+
+[[settings]]
+key = "coolify_url"
+label = "Coolify URL"
+help = "This instance's address, such as https://coolify.example.com. When set, alerts link to the deployment, database, task or server in Coolify."
+kind = "url"
+
+[[settings]]
+key = "send_deployments"
+label = "Deployments"
+help = "failed: failed deployments, and the next success of an application that failed. all: every deployment."
+options = ["failed", "all", "off"]
+default = "failed"
+
+[[settings]]
+key = "send_backups"
+label = "Backups"
+help = "Database and storage backups: failed, missing, not uploaded to S3, or a failed recovery. all: successes too."
+options = ["failed", "all", "off"]
+default = "failed"
+
+[[settings]]
+key = "send_tasks"
+label = "Scheduled tasks"
+options = ["failed", "all", "off"]
+default = "failed"
+
+[[settings]]
+key = "send_servers"
+label = "Servers"
+help = "Unreachable servers (and their return), high disk usage and failed Docker cleanups."
+options = ["failed", "all", "off"]
+default = "failed"
+
+[[settings]]
+key = "send_containers"
+label = "Restart limits"
+help = "Containers that reached their restart limit."
+options = ["on", "off"]
+default = "on"
+
+[[settings]]
+key = "send_certificates"
+label = "Certificates"
+help = "SSL certificates of databases that expire soon."
+options = ["on", "off"]
+default = "on"

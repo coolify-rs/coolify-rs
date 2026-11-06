@@ -395,3 +395,57 @@ async fn http_reaches_only_manifest_hosts() {
     );
     tdb.drop_db().await;
 }
+
+#[tokio::test]
+async fn slow_http_fails_the_request_not_the_call() {
+    // A server that accepts and never answers: the egress timeout (10 s) is longer than the event deadline.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((sock, _)) = listener.accept().await {
+            held.push(sock);
+        }
+    });
+    let tdb = TestDb::new("").await;
+    let limits = Limits {
+        event_deadline: Duration::from_millis(1500),
+        max_failures: 1,
+        ..Limits::default()
+    };
+    let egress = Egress {
+        allow_local: true,
+        ..Egress::default()
+    };
+    let host = host(&tdb, limits, egress).await;
+    let id = "test/hostile";
+    host.install(
+        manifest(id, hostile_caps()),
+        &wasm("hostile"),
+        "file",
+        false,
+        None,
+    )
+    .await
+    .unwrap();
+    host.set_team(id, 1, true, None).await.unwrap();
+
+    let started = std::time::Instant::now();
+    let url = format!("http://localhost:{port}/slow");
+    let err = host
+        .call_event(id, event(1, serde_json::json!({"do": "fetch", "url": url})))
+        .await
+        .unwrap_err();
+    // The plugin got an error from `fetch` before the deadline and returned it: not a timeout, not a trap.
+    assert!(matches!(err, CallError::Plugin(..)), "{err}");
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "{:?}",
+        started.elapsed()
+    );
+    // So it does not count towards switching the plugin off (max_failures is 1 here).
+    host.call_event(id, event(1, serde_json::json!({"do": "ok"})))
+        .await
+        .unwrap();
+    tdb.drop_db().await;
+}
