@@ -8,6 +8,7 @@
   import ViewToggle from '../components/ViewToggle.svelte';
   import Empty from '../components/Empty.svelte';
   import NewProjectModal from '../components/NewProjectModal.svelte';
+  import PluginPanels from '../components/PluginPanels.svelte';
   import { uiApi, type DashboardData } from '../lib/api';
   import { link } from '../lib/router.svelte';
   import { listView } from '../lib/listview.svelte';
@@ -291,6 +292,9 @@
             {/if}
           {/if}
         </section>
+
+        <!-- coolify-rs plugins (ADR 0013): nothing unless the team has a dashboard panel. -->
+        <PluginPanels slot="dashboard" />
       </div>
     </div>
   </div>

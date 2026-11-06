@@ -29,6 +29,9 @@ export interface NavContext {
   isOwner: boolean;
   isInstanceAdmin: boolean;
   isCloud?: boolean;
+  /** coolify-rs plugins (ADR 0013): the Settings and Team entries, only when there is something to show. */
+  pluginSettings?: boolean;
+  pluginTeam?: boolean;
 }
 
 export const navSections: [string, NavItem[]][] = [
@@ -86,6 +89,7 @@ export const navSections: [string, NavItem[]][] = [
           { label: 'Members', icon: 'teams', href: '/team/members', active: ['team/members*'], ported: true },
           { label: 'Audit log', icon: 'time-back', href: '/team/audit-log', active: ['team/audit-log'], visible: (c) => c.isAdmin, ported: true },
           { label: 'Admin View', icon: 'admin', href: '/team/admin', active: ['team/admin'], visible: (c) => c.isInstanceAdmin, ported: true },
+          { label: 'Plugins', icon: 'browser-code', href: '/team/plugins', active: ['team/plugins'], visible: (c) => !!c.pluginTeam, ported: true },
           { label: 'Danger Zone', icon: 'danger', href: '/team/danger', active: ['team/danger'], visible: (c) => c.isOwner, sectionStart: true, ported: true },
         ],
       },
@@ -125,6 +129,7 @@ export const navSections: [string, NavItem[]][] = [
           { label: 'Authentication', icon: 'keys', href: '/settings/oauth', active: ['settings/oauth*'], sectionStart: true, ported: true },
           { label: 'Email', icon: 'mail', href: '/settings/email', active: ['settings/email'], ported: true },
           { label: 'Backup', icon: 'database', href: '/settings/backup', active: ['settings/backup'], ported: true },
+          { label: 'Plugins', icon: 'browser-code', href: '/settings/plugins', active: ['settings/plugins'], visible: (c) => !!c.pluginSettings, ported: true },
         ],
       },
     ],

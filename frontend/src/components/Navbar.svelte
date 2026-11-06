@@ -9,11 +9,19 @@
   import { layout } from '../lib/layout.svelte';
   import { page, type NavContextItem } from '../lib/page.svelte';
   import BetaBadge from './BetaBadge.svelte';
+  import { pluginNav } from '../lib/plugins.svelte';
 
   let { desktop = false }: { desktop?: boolean } = $props();
 
   const sections = $derived(
-    visibleSections({ isAdmin: session.isAdmin, isOwner: session.isOwner, isInstanceAdmin: session.isInstanceAdmin, isCloud: session.info?.features.cloud }),
+    visibleSections({
+      isAdmin: session.isAdmin,
+      isOwner: session.isOwner,
+      isInstanceAdmin: session.isInstanceAdmin,
+      isCloud: session.info?.features.cloud,
+      pluginSettings: pluginNav.settings,
+      pluginTeam: pluginNav.team,
+    }),
   );
   const leafActive = (l: NavLeaf) => pathIs(router.path, l.active);
   const itemActive = (i: NavItem) => (isParent(i) ? i.children.some(leafActive) : leafActive(i));

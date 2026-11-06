@@ -42,6 +42,9 @@
   import { page } from '../lib/page.svelte';
   import { router } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
+  import { untrack } from 'svelte';
+  import PluginPanels from '../components/PluginPanels.svelte';
+  import { pluginNav } from '../lib/plugins.svelte';
 
   let {
     uuid,
@@ -68,6 +71,13 @@
     if (active === 'healthcheck' && record?.build_pack === 'dockercompose') router.go(`/project/${uuid}/environment/${env}/application/${app}`, true);
     const r = router.current;
     if (r?.name === 'application-section' && !APPLICATION_SECTIONS.includes(r.params.section)) router.go('/', true);
+    // The Plugins tab exists only while the team has an application panel.
+    if (active === 'plugins' && pluginNav.loaded && !pluginNav.of('application').length) router.go('/', true);
+  });
+  // The menu gains or loses its Plugins entry when the team's panels change.
+  $effect(() => {
+    void pluginNav.panels;
+    if (record) untrack(() => record && setNav(record));
   });
   const currentBackupSection = $derived<'general' | 'executions' | 'danger'>(backupSection === 'executions' || backupSection === 'danger' ? backupSection : 'general');
   const base = $derived(`/project/${uuid}/environment/${env}/application/${app}`);
@@ -93,6 +103,7 @@
       dockerImage: bp === 'dockerimage',
       compose: bp === 'dockercompose',
       swarm: appState?.is_swarm ?? false,
+      plugins: pluginNav.of('application').length > 0,
       // `server-status-badge`.
       serverBadge:
         r.server_status === false
@@ -285,6 +296,8 @@
               <DeploymentHistory uuid={app} {base} {serverName} {timezone} />
             {:else if active === 'danger'}
               <DatabaseDanger kind="application" {record} canDelete={canUpdate} back="/project/{uuid}/environment/{env}" />
+            {:else if active === 'plugins'}
+              <div class="application-settings-form flex min-w-0 flex-col gap-6"><PluginPanels slot="application" resource={app} /></div>
             {/if}
           </div>
         </div>

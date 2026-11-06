@@ -27,6 +27,7 @@
   import ServerPatches from './ServerPatches.svelte';
   import ServerCloudflareTunnel from './ServerCloudflareTunnel.svelte';
   import ServerGithubRunners from './ServerGithubRunners.svelte';
+  import ServerPlugins from './ServerPlugins.svelte';
   import { router } from '../lib/router.svelte';
 
   let { uuid, section, sub }: { uuid: string; section: string; sub?: string } = $props();
@@ -57,6 +58,8 @@
     'security/patches': ServerPatches,
     'cloudflare-tunnel': ServerCloudflareTunnel,
     'github-runners': ServerGithubRunners,
+    // coolify-rs plugins (ADR 0013); the page itself goes home when the team has no server panel.
+    plugins: ServerPlugins,
   };
   const Page = $derived(pages[sub ? `${section}/${sub}` : section]);
   // A path routes/web.php does not have, also `/security` (`redirect(route('dashboard'))`), goes home.

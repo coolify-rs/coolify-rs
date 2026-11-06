@@ -4,12 +4,13 @@ import { serversUi, type ServerFacts, type ServersPageData } from './api';
 import { page } from './page.svelte';
 import { session } from './session.svelte';
 import { serverNavContext } from './serverMenu';
+import { pluginNav } from './plugins.svelte';
 
 export async function loadServerContext(uuid: string, active: string, sub?: string): Promise<{ facts: ServerFacts; list: ServersPageData } | null> {
-  const list = await serversUi.list();
+  const [list] = await Promise.all([serversUi.list(), pluginNav.ready()]);
   const facts = list.servers.find((s) => s.uuid === uuid);
   if (!facts) return null;
-  page.navContext = serverNavContext(facts, active, session.isAdmin, sub);
+  page.navContext = serverNavContext(facts, active, session.isAdmin, sub, pluginNav.of('server').length > 0);
   page.server = {
     uuid: facts.uuid,
     name: facts.name,

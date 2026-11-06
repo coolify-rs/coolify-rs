@@ -79,8 +79,19 @@
   import { session } from './lib/session.svelte';
   import { page } from './lib/page.svelte';
   import { setUnauthenticatedHandler } from './lib/api';
+  import SettingsPlugins from './pages/SettingsPlugins.svelte';
+  import TeamPlugins from './pages/TeamPlugins.svelte';
+  import { pluginNav } from './lib/plugins.svelte';
 
   session.refresh();
+
+  // coolify-rs plugins (ADR 0013): what the menus and slots show, per user and team.
+  $effect(() => {
+    const user = session.info?.user.id;
+    const team = session.info?.current_team?.id;
+    if (user === undefined || team === undefined) pluginNav.reset();
+    else pluginNav.load();
+  });
   setUnauthenticatedHandler(() => {
     session.set(null);
     router.go('/login', true);
@@ -157,6 +168,8 @@
     'team-danger': 'Team Danger Zone',
     'team-audit': 'Team Audit Log',
     'team-admin': 'Team Admin',
+    'team-plugins': 'Team Plugins',
+    'settings-plugins': 'Plugins',
     'select-team': 'Select a team',
     'confirm-password': 'Confirm Password',
     profile: 'Profile',
@@ -305,6 +318,8 @@
       <TeamAudit />
     {:else if router.current.name === 'team-admin'}
       <TeamAdmin />
+    {:else if router.current.name === 'team-plugins'}
+      <TeamPlugins />
     {:else if router.current.name === 'appearance'}
       <Appearance />
     {:else if router.current.name === 'registries'}
@@ -365,6 +380,8 @@
       <SettingsEmail />
     {:else if router.current.name === 'settings-backup'}
       <SettingsBackup />
+    {:else if router.current.name === 'settings-plugins'}
+      <SettingsPlugins />
     {:else if router.current.name === 'settings-oauth'}
       {#key router.path}<SettingsOauth provider={params.provider} />{/key}
     {:else if router.current.name === 'servers'}

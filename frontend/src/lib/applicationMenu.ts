@@ -33,6 +33,8 @@ export const APPLICATION_SECTIONS = [
   'logs',
   'terminal',
   'files',
+  // coolify-rs plugins (ADR 0013); only shown, and only kept, when the team has an application panel.
+  'plugins',
 ];
 
 export function applicationSection(section: string | undefined): string {
@@ -64,7 +66,7 @@ export function applicationBackupNavContext(base: string, backup: string, sectio
 export function applicationNavContext(
   base: string,
   active: string,
-  opts: { canAccessTerminal: boolean; gitBased: boolean; dockerImage: boolean; compose: boolean; swarm?: boolean; serverBadge?: string },
+  opts: { canAccessTerminal: boolean; gitBased: boolean; dockerImage: boolean; compose: boolean; swarm?: boolean; serverBadge?: string; plugins?: boolean },
 ): NavContext {
   const item = (label: string, section: string, icon: string, extra: Partial<Entry> = {}): Entry => ({
     label,
@@ -133,6 +135,7 @@ export function applicationNavContext(
     'Resource Limits': item('Resource Limits', 'resource-limits', 'cpu'),
     'Rollback': item('Rollback', 'rollback', 'time-back'),
     'Tags': item('Tags', 'tags', 'tags'),
+    'Plugins': item('Plugins', 'plugins', 'browser-code', { visible: !!opts.plugins }),
     'Danger Zone': item('Danger Zone', 'danger', 'danger'),
   };
   const menuGroups = [
@@ -141,6 +144,7 @@ export function applicationNavContext(
     ['Git Source', 'Servers', 'Preview Deployments'],
     ['Scheduled Tasks', 'Webhooks', 'Backups'],
     ['Resource Operations', 'Resource Limits', 'Rollback', 'Tags'],
+    ['Plugins'],
     ['Danger Zone'],
   ];
   const groups = menuGroups

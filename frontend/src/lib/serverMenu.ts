@@ -8,7 +8,8 @@ interface Entry extends NavContextItem {
   visible?: boolean;
 }
 
-export function serverNavContext(s: ServerFacts, active: string, isAdmin: boolean, sub?: string): NavContext {
+/** `plugins`: the team has a server panel (coolify-rs plugins, ADR 0013), so the menu has a Plugins entry. */
+export function serverNavContext(s: ServerFacts, active: string, isAdmin: boolean, sub?: string, plugins = false): NavContext {
   const base = `/server/${s.uuid}`;
   const off = !s.functional;
   const canHost = !s.is_build;
@@ -50,6 +51,7 @@ export function serverNavContext(s: ServerFacts, active: string, isAdmin: boolea
         { label: 'Terminal Access', icon: 'browser-terminal', href: `${base}/security/terminal-access`, active: sub === 'terminal-access' },
       ] },
     { label: 'Transfer', icon: 'arrow-right', href: `${base}/transfer`, active: active === 'transfer', group: 'Operations', visible: !s.is_localhost && isAdmin, beta: true, disabled: off },
+    { label: 'Plugins', icon: 'browser-code', href: `${base}/plugins`, active: active === 'plugins', group: 'Plugins', visible: plugins },
     { label: 'Danger Zone', icon: 'danger', href: `${base}/danger`, active: active === 'danger', group: 'Danger Zone', visible: !s.is_coolify_host },
   ];
   // Collection::groupBy keeps groups in first-seen order.
