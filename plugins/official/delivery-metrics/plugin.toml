@@ -1,0 +1,51 @@
+id = "coolify-rs/delivery-metrics"
+name = "Delivery metrics"
+version = "0.1.0"
+description = "The four DORA metrics per team and per application, with CSV exports of metrics, deployments and inventory."
+license = "Apache-2.0"
+source = "https://github.com/coolify-rs/coolify-rs/tree/main/plugins/official/delivery-metrics"
+# Version of the plugin interface (crates/coolify-plugins/wit/plugin.wit) the component targets.
+api = "0.1"
+
+[capabilities]
+# Only deployments: application.status_changed can't tell an outage from a deliberate stop (README).
+events = ["deployment.succeeded", "deployment.failed"]
+storage = true
+routes = true
+# Read-only, as the API shows them to a token without read:sensitive: names and the inventory export.
+resources = ["projects", "applications", "services", "databases", "servers"]
+
+[[capabilities.ui]]
+slot = "dashboard"
+title = "Delivery metrics"
+path = "/panels/dashboard"
+
+[[capabilities.ui]]
+slot = "application"
+title = "Delivery metrics"
+path = "/panels/application"
+
+[[settings]]
+key = "default_window"
+label = "Default window (days)"
+help = "The window the panels and exports use when a request names none."
+options = ["30", "90"]
+default = "30"
+
+[[settings]]
+key = "include_previews"
+label = "Count preview deployments"
+help = "Whether pull request preview deployments count towards the metrics. They are always recorded."
+options = ["no", "yes"]
+default = "no"
+
+[[settings]]
+key = "environments"
+label = "Environments"
+help = "Only count deployments to these environments, separated by commas (for example production). Empty counts every environment."
+
+[[settings]]
+key = "retention_days"
+label = "Retention (days)"
+help = "How long deployments are kept, from 7 to 730 days. Older ones are deleted as new ones arrive."
+default = "180"

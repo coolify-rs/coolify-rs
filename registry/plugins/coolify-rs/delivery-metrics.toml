@@ -1,0 +1,68 @@
+# coolify-rs/delivery-metrics: the first-party DORA metrics plugin from the coolify-rs repository.
+# Every published version is immutable; only `yanked` may change later. See README.md.
+
+[[versions]]
+version = "0.1.0"
+source = "https://github.com/coolify-rs/coolify-rs"
+commit = "b6af3f06152cc145612b44699883cb9606e9022d"
+toolchain = "rust 1.99.1, target wasm32-wasip2"
+builder = "docker.io/library/rust:1.99.1-slim-bookworm@sha256:f2c004e3d2d8b547e8cf7ffbc29205385f4e71d23e53e4e383065db5e9f822cd"
+# PLACEHOLDER from a local (macOS) build of the commit. The builder image's build will differ: replace this
+# with the hash the first CI rebuild prints, and publish that build at `url`, before this entry is merged.
+sha256 = "e31f2f4c97cd6e7fef29647ec02b5efc1fb5b390dfbfe17bd902163feac2bfdd"
+url = "https://github.com/coolify-rs/coolify-rs/releases/download/delivery-metrics-v0.1.0/delivery_metrics.wasm"
+
+[versions.build]
+dir = "plugins"
+command = "rustup target add wasm32-wasip2 && cargo build --release --locked --target wasm32-wasip2 -p delivery-metrics"
+artifact = "target/wasm32-wasip2/release/delivery_metrics.wasm"
+
+[versions.manifest]
+id = "coolify-rs/delivery-metrics"
+name = "Delivery metrics"
+version = "0.1.0"
+description = "The four DORA metrics per team and per application, with CSV exports of metrics, deployments and inventory."
+license = "Apache-2.0"
+source = "https://github.com/coolify-rs/coolify-rs/tree/main/plugins/official/delivery-metrics"
+api = "0.1"
+
+[versions.manifest.capabilities]
+events = ["deployment.succeeded", "deployment.failed"]
+storage = true
+routes = true
+resources = ["projects", "applications", "services", "databases", "servers"]
+
+[[versions.manifest.capabilities.ui]]
+slot = "dashboard"
+title = "Delivery metrics"
+path = "/panels/dashboard"
+
+[[versions.manifest.capabilities.ui]]
+slot = "application"
+title = "Delivery metrics"
+path = "/panels/application"
+
+[[versions.manifest.settings]]
+key = "default_window"
+label = "Default window (days)"
+help = "The window the panels and exports use when a request names none."
+options = ["30", "90"]
+default = "30"
+
+[[versions.manifest.settings]]
+key = "include_previews"
+label = "Count preview deployments"
+help = "Whether pull request preview deployments count towards the metrics. They are always recorded."
+options = ["no", "yes"]
+default = "no"
+
+[[versions.manifest.settings]]
+key = "environments"
+label = "Environments"
+help = "Only count deployments to these environments, separated by commas (for example production). Empty counts every environment."
+
+[[versions.manifest.settings]]
+key = "retention_days"
+label = "Retention (days)"
+help = "How long deployments are kept, from 7 to 730. Older ones are deleted as new ones arrive."
+default = "180"
