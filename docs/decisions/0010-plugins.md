@@ -29,7 +29,8 @@ The core stays two-way: Coolify can take a coolify-rs database back and simply n
 schema. Parity becomes one-way only for a later class of *provider* plugins, such as build packs, that
 must write a value Coolify does not know into one of its tables. Those resources are marked
 plugin-owned, and `coolify-rs check-portable` lists them before a database is handed back. Provider
-plugins are not part of the first version.
+plugins are not part of the first version; [ADR 0012](0012-provider-plugins-and-portability.md) sets the
+rules they will follow.
 
 ### 2. Runtime: WebAssembly components on wasmtime
 
@@ -75,6 +76,8 @@ installing, and each capability corresponds to one interface in the WIT world:
 | `storage` | `storage` | a key-value store of its own, per team, with a quota (10 MiB) | low |
 | `routes` | export `handle-request` | API routes under its prefix; requests arrive authenticated, with the team and token abilities | low |
 | `http` | `http` | HTTPS requests to the hosts listed in the manifest, and no others | medium |
+| `resources` | `resources` | read the call's team's resources of the listed kinds, as the API shows them to a token without `read:sensitive` ([ADR 0011](0011-plugin-resource-and-deploy-capabilities.md)) | high |
+| `deploy` | `deploy` | queue deployments of the call's team's applications through the API's deploy path, once the team also granted it, rate limited ([ADR 0011](0011-plugin-resource-and-deploy-capabilities.md)) | high |
 
 Rules for `http`:
 - Only `https`, only hosts named exactly in the manifest (no wildcards), at most 1 MiB in each
@@ -84,11 +87,11 @@ Rules for `http`:
   plugin cannot reach the database, the Docker socket proxy, cloud metadata endpoints or the managed
   servers' private networks.
 
-Capabilities that reach Coolify's data or servers come later, each behind its own interface and review
-tier: reading the team's resources through the same team-scoped queries the API uses, triggering
-deployments with the abilities of an API token the team grants, and running commands on servers. There
-will never be raw SQL access, because it would bypass team scoping, which is the strongest guarantee
-coolify-rs makes.
+Capabilities that reach Coolify's data or servers each come behind their own interface and review tier.
+Reading the team's resources through the same team-scoped queries the API uses, and triggering
+deployments, are `resources` and `deploy` ([ADR 0011](0011-plugin-resource-and-deploy-capabilities.md)).
+Running commands on servers is not offered. There will never be raw SQL access, because it would bypass
+team scoping, which is the strongest guarantee coolify-rs makes.
 
 ### 4. Who decides what runs
 
@@ -251,13 +254,15 @@ Human review is tiered by risk:
    coolify-rs, the in-app catalogue, yanking and revocation.
 3. **UI slots**: panels on the dashboard, resource pages and settings, rendered in sandboxed iframes that
    talk to the plugin's own routes.
-4. **Higher-risk capabilities and provider plugins**, each with its own ADR.
+4. **Higher-risk capabilities and provider plugins**, each with its own ADR: `resources` and `deploy`
+   ([ADR 0011](0011-plugin-resource-and-deploy-capabilities.md)); provider plugins and
+   `coolify-rs check-portable` ([ADR 0012](0012-provider-plugins-and-portability.md)).
 
 ## Consequences
 
 - wasmtime adds about 15 MB to the binary and some build time. Memory is only used while a plugin is
   loaded.
-- The plugin interface has its own version (`coolify-rs:plugin@0.1.0`), separate from Coolify's. Breaking
+- The plugin interface has its own version (`coolify-rs:plugin@0.1.x`), separate from Coolify's. Breaking
   changes need a new major version, and coolify-rs keeps the previous one working for a release.
 - The registry needs maintainers who review. Until it has them, only first-party plugins and
   development-mode plugins exist.

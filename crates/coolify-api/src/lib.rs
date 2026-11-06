@@ -12,6 +12,7 @@ pub mod git_urls;
 pub mod input;
 pub mod ip;
 pub mod laravel_url;
+mod plugin_bridge;
 pub mod response;
 pub mod routes;
 pub mod rules;

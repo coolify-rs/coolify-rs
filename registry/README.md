@@ -119,7 +119,7 @@ After CI passes, maintainers review. `coolify-rs plugin review` prints the tier 
 | A new plugin | One maintainer reads the source and confirms the capabilities match the stated purpose |
 | A new version, same capabilities | One maintainer checks the source diff since the approved version |
 | A new version with more capabilities, or any `http` host added | Two maintainers |
-| Later high-risk capabilities (server commands, deployments, resource data) | Two maintainers, and a security review of every code path that uses them |
+| A plugin holding `resources` or `deploy`, or a version adding either or a resource kind ([ADR 0011](https://github.com/coolify-rs/coolify-rs/blob/main/docs/decisions/0011-plugin-resource-and-deploy-capabilities.md)) | Two maintainers, and a security review of every code path that uses them |
 
 Yanking takes one maintainer. A revocation takes one maintainer, so it can happen fast. Lifting a
 revocation takes two.

@@ -1,7 +1,7 @@
 //! Shared application state.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use chrono::{NaiveDateTime, SubsecRound, Utc};
@@ -87,7 +87,7 @@ impl AppState {
             jobs.set_version(version.clone());
             jobs
         });
-        Self(Arc::new(Inner {
+        let state = Self(Arc::new(Inner {
             jobs,
             db,
             version,
@@ -98,7 +98,18 @@ impl AppState {
             secure_cookies: o.secure_cookies,
             plugins: o.plugins,
             allow_unverified_plugins: o.allow_unverified_plugins,
-        }))
+        }));
+        crate::plugin_bridge::connect(&state);
+        state
+    }
+
+    /// For what the state owns and must not keep alive, such as the plugin host's bridge to the API.
+    pub(crate) fn downgrade(&self) -> Weak<Inner> {
+        Arc::downgrade(&self.0)
+    }
+
+    pub(crate) fn upgrade(inner: &Weak<Inner>) -> Option<Self> {
+        inner.upgrade().map(Self)
     }
 
     /// Current UTC time at second precision, as Laravel writes `timestamp(0)`.

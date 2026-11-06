@@ -123,6 +123,17 @@ impl Harness {
         Self::build_with(tdb, None, None, Some((host, allow_unverified))).await
     }
 
+    /// A harness with the plugin host (unverified installs allowed) and remote execution (background jobs).
+    #[allow(dead_code)]
+    pub async fn with_plugins_and_remote(remote: coolify_remote::Remote) -> Self {
+        let tdb = TestDb::new(SEED).await;
+        let host =
+            coolify_plugins::Host::start(tdb.db.clone(), coolify_plugins::Settings::default())
+                .await
+                .unwrap();
+        Self::build_with(tdb, None, Some(remote), Some((host, true))).await
+    }
+
     /// A harness that also serves the web UI from `dir`.
     pub async fn with_ui(dir: std::path::PathBuf) -> Self {
         Self::build_with(TestDb::new(SEED).await, Some(dir), None, None).await

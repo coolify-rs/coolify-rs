@@ -32,6 +32,7 @@ impl Host {
             settings,
             loaded: RwLock::new(HashMap::new()),
             memory: Some(Memory::default()),
+            bridges: RwLock::new(Bridges::default()),
         }));
         tick(Arc::downgrade(&host.0));
         Ok(host)
@@ -89,7 +90,7 @@ impl Host {
         };
         let deadline = self.0.settings.limits.event_deadline;
         let (result, elapsed, peak_memory) = self
-            .call_measured(&p, event.team_id, deadline, async |store, plugin| {
+            .call_measured(&p, event.team_id, None, deadline, async |store, plugin| {
                 plugin.call_on_event(store, &event).await
             })
             .await;
@@ -111,8 +112,9 @@ impl Host {
         };
         let deadline = self.0.settings.limits.request_deadline;
         let team_id = caller.team_id;
+        let who = caller.clone();
         let (result, elapsed, peak_memory) = self
-            .call_measured(&p, team_id, deadline, async |store, plugin| {
+            .call_measured(&p, team_id, Some(who), deadline, async |store, plugin| {
                 plugin.call_handle_request(store, &caller, &request).await
             })
             .await;

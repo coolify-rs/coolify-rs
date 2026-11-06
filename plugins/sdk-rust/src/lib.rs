@@ -121,3 +121,58 @@ pub mod storage {
 pub mod http {
     pub use crate::bindings::coolify_rs::plugin::http::{Outgoing, fetch};
 }
+
+/// Capability `resources`: the team's resources, read-only, as the REST API shows them to a token without
+/// `read:sensitive`. Each function needs its kind in the manifest's `resources` list.
+pub mod resources {
+    pub use crate::bindings::coolify_rs::plugin::resources::{Kind, all, environments, get};
+
+    fn parse(text: String) -> Result<serde_json::Value, String> {
+        serde_json::from_str(&text).map_err(|e| e.to_string())
+    }
+
+    /// Every resource of `kind`, as `GET /api/v1/<kind>` lists them.
+    pub fn list(kind: Kind) -> Result<Vec<serde_json::Value>, String> {
+        match parse(all(kind)?)? {
+            serde_json::Value::Array(items) => Ok(items),
+            other => Err(format!("expected a list, got {other}")),
+        }
+    }
+
+    /// One resource, as `GET /api/v1/<kind>/<uuid>` shows it; `None` when the team has no such resource.
+    pub fn find(kind: Kind, uuid: &str) -> Result<Option<serde_json::Value>, String> {
+        get(kind, uuid)?.map(parse).transpose()
+    }
+
+    pub fn projects() -> Result<Vec<serde_json::Value>, String> {
+        list(Kind::Projects)
+    }
+    pub fn servers() -> Result<Vec<serde_json::Value>, String> {
+        list(Kind::Servers)
+    }
+    pub fn applications() -> Result<Vec<serde_json::Value>, String> {
+        list(Kind::Applications)
+    }
+    pub fn services() -> Result<Vec<serde_json::Value>, String> {
+        list(Kind::Services)
+    }
+    pub fn databases() -> Result<Vec<serde_json::Value>, String> {
+        list(Kind::Databases)
+    }
+}
+
+/// Capability `deploy`: queue deployments of the team's applications, as `POST /api/v1/deploy` does.
+///
+/// From a route, the deployment runs on the caller's authority: it fails unless the caller's token could
+/// deploy the application through the API. From an event, it runs on the authority of the team admin who
+/// granted `deploy` to the plugin. Either way the team must have granted `deploy` when enabling the plugin,
+/// and coolify-rs limits how many deployments a team's plugins may queue.
+pub mod deploy {
+    pub use crate::bindings::coolify_rs::plugin::deploy::application;
+
+    /// Queues a deployment and returns the API's answer, parsed.
+    pub fn queue(uuid: &str, force: bool) -> Result<serde_json::Value, String> {
+        let text = application(uuid, force)?;
+        serde_json::from_str(&text).map_err(|e| e.to_string())
+    }
+}

@@ -74,6 +74,9 @@ pub enum Tier {
     OneMaintainerFullReview,
     /// More capabilities or any new `http` host: two maintainers.
     TwoMaintainers,
+    /// `resources` or `deploy` held by a new plugin, or added or widened by a version: two maintainers and
+    /// a security review of every code path that uses them (ADR 0011, section 5).
+    TwoMaintainersSecurityReview,
 }
 
 impl Tier {
@@ -87,6 +90,9 @@ impl Tier {
                 "one maintainer reads the source and confirms the capabilities match the stated purpose"
             }
             Tier::TwoMaintainers => "two maintainers (more capabilities, or a new http host)",
+            Tier::TwoMaintainersSecurityReview => {
+                "two maintainers and a security review of every code path that uses resources or deploy"
+            }
         }
     }
 }
@@ -180,7 +186,18 @@ pub fn capability_items(c: &Capabilities) -> BTreeSet<String> {
     for h in &c.http {
         out.insert(format!("http: {h}"));
     }
+    for k in &c.resources {
+        out.insert(format!("resources: {k}"));
+    }
+    if c.deploy {
+        out.insert("deploy".into());
+    }
     out
+}
+
+/// Capabilities that reach Coolify's data or servers (ADR 0011).
+fn high_risk(item: &str) -> bool {
+    item == "deploy" || item.starts_with("resources: ")
 }
 
 /// Whether `license` is an SPDX expression of OSI-approved licenses only.
@@ -411,7 +428,9 @@ fn review_version(out: &mut Review, entry: &Entry, r: &Release, new_plugin: bool
     let added: Vec<String> = now.difference(&then).cloned().collect();
     let removed: Vec<String> = then.difference(&now).cloned().collect();
     let new_host = added.iter().any(|a| a.starts_with("http: "));
-    let tier = if new_host || (previous.is_some() && !added.is_empty()) {
+    let tier = if added.iter().any(|a| high_risk(a)) {
+        Tier::TwoMaintainersSecurityReview
+    } else if new_host || (previous.is_some() && !added.is_empty()) {
         Tier::TwoMaintainers
     } else if new_plugin || previous.is_none() {
         Tier::OneMaintainerFullReview
@@ -556,6 +575,25 @@ mod tests {
         assert_eq!(c.added, ["http: hooks.example.com"]);
         assert_eq!(c.removed, ["storage"]);
         assert!(r.markdown().contains("**added** http: hooks.example.com"));
+
+        // Resource data or deployments: two maintainers and a security review, for new kinds too.
+        let reads = release(
+            id,
+            "1.2.0",
+            json!({"events": ["deployment.succeeded"], "storage": true, "resources": ["applications"]}),
+        );
+        let r = review(&base, &[entry(id, vec![v1.clone(), reads.clone()])]);
+        assert_eq!(r.changes[0].tier, Tier::TwoMaintainersSecurityReview);
+        assert_eq!(r.changes[0].added, ["resources: applications"]);
+        let base2 = vec![entry(id, vec![v1.clone(), reads.clone()])];
+        let more = release(
+            id,
+            "1.3.0",
+            json!({"events": ["deployment.succeeded"], "storage": true, "resources": ["applications", "servers"], "deploy": true}),
+        );
+        let r = review(&base2, &[entry(id, vec![v1.clone(), reads, more])]);
+        assert_eq!(r.changes[0].tier, Tier::TwoMaintainersSecurityReview);
+        assert_eq!(r.changes[0].added, ["deploy", "resources: servers"]);
 
         // A new plugin: full review.
         let r = review(&[], &base);
