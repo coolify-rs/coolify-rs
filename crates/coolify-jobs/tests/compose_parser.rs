@@ -830,5 +830,35 @@ async fn public_pull_request_parse_does_not_use_production_values() {
         service_env(&parsed, "web-pr-7", "BARE_PASSTHROUGH").as_deref(),
         Some("shared-value")
     );
+
+    // 2dcf8eeca: a preview from before v4.5.1 (`keeps_production_values`) is not treated as
+    // public, so it keeps production values and secrets and `{{...}}` in the compose file resolves.
+    sqlx::query(
+        "INSERT INTO application_previews (uuid, pull_request_id, pull_request_html_url, application_id, keeps_production_values) \
+         VALUES ('keepsproductionvalues', $1, 'https://example.test/pull/7', $2, true)",
+    )
+    .bind(PR as i32)
+    .bind(app_id)
+    .execute(db.pool())
+    .await
+    .unwrap();
+    set_value(db, &enc, prev, "BARE_PASSTHROUGH", "prod-value").await;
+    set_value(db, &enc, prev, "SERVICE_PASSWORD_DB", &prod_password).await;
+    let parsed = compose_parser::application_parser_at(&jobs, app_id, PR, None, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        service_env(&parsed, "web-pr-7", "BARE_PASSTHROUGH").as_deref(),
+        Some("prod-value")
+    );
+    assert_eq!(
+        service_env(&parsed, "web-pr-7", "SHARED").as_deref(),
+        Some("shared-value")
+    );
+    let preview = variables(db, &enc, app_id, true).await;
+    assert_eq!(
+        value_of(&preview, "SERVICE_PASSWORD_DB").flatten(),
+        Some(prod_password)
+    );
     tdb.drop_db().await;
 }
