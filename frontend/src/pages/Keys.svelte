@@ -103,7 +103,7 @@
         {#if data?.can_create}
           <div class="relative h-auto max-w-full inline-flex w-auto">
             <div class="max-w-full inline-flex">
-              <button type="button" class="button whitespace-nowrap text-error! hover:text-error! dark:text-error!" onclick={() => (cleaning = true)}>
+              <button type="button" class="button button-error whitespace-nowrap" onclick={() => (cleaning = true)}>
                 <span class="max-sm:hidden">Delete unused keys</span>
                 <span class="sm:hidden">Delete unused</span>
               </button>

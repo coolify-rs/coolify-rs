@@ -123,8 +123,11 @@
           {#each matching as s (s.uuid)}
             {@const st = latest(s.latest_status)}
             <div class="data-table-row scheduled-backups-table-grid border-b border-neutral-200 last:border-b-0 dark:border-white/[0.06]">
-              <div class="min-w-0">
+              <div class="flex min-w-0 items-center gap-2">
                 <span class="block truncate text-[12px] font-semibold text-black dark:text-fg">{s.frequency}</span>
+                {#if !s.enabled}
+                  <StatusBadge label="Disabled" />
+                {/if}
               </div>
               <div class="flex items-center gap-2">
                 <StatusBadge label={st[0]} type={st[1]} />
