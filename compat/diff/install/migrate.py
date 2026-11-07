@@ -148,7 +148,7 @@ def stage_after():
     _, out = vm("docker", "exec", "coolify", "coolify-rs", "check-schema")
     check("writable", '"read_only_reason": null' in out, out.strip()[-200:])
     _, names = vm("docker", "ps", "-a", "--format", "{{.Names}}")
-    check("coolify-realtime removed", "coolify-realtime" not in names.split(), " ".join(sorted(names.split())))
+    check("no coolify-realtime container", "coolify-realtime" not in names.split(), " ".join(sorted(names.split())))
     _, version = vm("bash", "-c", "docker inspect coolify --format '{{range .Config.Env}}{{println .}}{{end}}' | grep ^COOLIFY_VERSION=")
     check("reports the release version", version.strip() == f"COOLIFY_VERSION={tag}", version.strip())
     show("deployments on coolify-rs", *run("python3", HERE / "deploy_check.py", VM, PORT, timeout=1500), tail=14)

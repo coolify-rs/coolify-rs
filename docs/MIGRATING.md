@@ -68,8 +68,8 @@ This is the normal coolify-rs installer. On a Coolify server it:
   as `.env-<date>` first;
 - keeps the `coolify-db` and `coolify-redis` volumes, the SSH keys in `/data/coolify/ssh`, and the proxy;
 - replaces the Compose files in `/data/coolify/source` with coolify-rs's, and keeps your `docker-compose.custom.yml`;
-- replaces the `coolify` container with coolify-rs, and removes `coolify-realtime`, whose work coolify-rs does itself
-  (the name stays reachable, so existing proxy settings keep working);
+- replaces the `coolify` container with coolify-rs, which also answers to the `coolify-realtime` name, so existing proxy
+  settings keep working;
 - adds its own settings to `.env`: the `COOLIFY_RS_*` lines.
 
 The switch takes a minute or two. Everyone is signed out.
