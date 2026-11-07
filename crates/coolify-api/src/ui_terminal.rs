@@ -682,7 +682,7 @@ pub(crate) async fn redeem(state: &AppState, ctx: &AuthCtx, token: &str) -> Resu
 
 /// `TerminalSessionService::shellCommand()`.
 fn shell_command() -> &'static str {
-    "PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && if [ -f ~/.profile ]; then . ~/.profile; fi && if [ -n \"$SHELL\" ] && [ -x \"$SHELL\" ]; then exec $SHELL; else sh; fi"
+    "PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && if [ -f ~/.profile ]; then . ~/.profile; fi && if [ -n \"$SHELL\" ] && [ -x \"$SHELL\" ] && [ \"${SHELL##*/}\" != nologin ] && [ \"${SHELL##*/}\" != false ]; then exec $SHELL; elif command -v bash >/dev/null 2>&1; then exec bash; else sh; fi"
 }
 
 /// `TerminalSessionService::containerCommand()`.
@@ -708,7 +708,7 @@ mod tests {
     fn commands_are_upstreams() {
         assert_eq!(
             shell_command(),
-            r#"PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && if [ -f ~/.profile ]; then . ~/.profile; fi && if [ -n "$SHELL" ] && [ -x "$SHELL" ]; then exec $SHELL; else sh; fi"#
+            r#"PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && if [ -f ~/.profile ]; then . ~/.profile; fi && if [ -n "$SHELL" ] && [ -x "$SHELL" ] && [ "${SHELL##*/}" != nologin ] && [ "${SHELL##*/}" != false ]; then exec $SHELL; elif command -v bash >/dev/null 2>&1; then exec bash; else sh; fi"#
         );
         assert_eq!(
             container_command(false, "app", false),
