@@ -4,6 +4,7 @@
   import Empty from '../components/Empty.svelte';
   import FormInput from '../components/FormInput.svelte';
   import Listbox from '../components/Listbox.svelte';
+  import LiveToggle from '../components/LiveToggle.svelte';
   import ServerFrame from '../components/ServerFrame.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
   import UnsavedBar from '../components/UnsavedBar.svelte';
@@ -52,7 +53,9 @@
   const base = $derived(`/server-page/${encodeURIComponent(uuid)}/metrics`);
   const canEdit = $derived(session.isAdmin);
   const dirty = $derived(JSON.stringify(form) !== JSON.stringify(saved));
-  const pollSeconds = $derived(Number(interval) <= 60 ? 5 : 60);
+  /** `pollSeconds()`: null while live refresh is off. */
+  const pollSeconds = $derived(live ? (Number(interval) <= 60 ? 5 : 60) : null);
+  let lastPoll = 0;
   const INTERVALS = [
     { value: '5', label: 'Last 5 minutes' },
     { value: '10', label: 'Last 10 minutes' },
@@ -62,13 +65,6 @@
     { value: '10080', label: 'Last week' },
     { value: '43200', label: 'Last 30 days' },
   ];
-  try {
-    const stored = localStorage.getItem('server-metrics-live');
-    if (stored === '0') live = false;
-  } catch {
-    // The default applies.
-  }
-
   function chartOptions(name: string, color: string, loadingText: string, formatter: (v: number) => string = formatPercent) {
     return {
       chart: { height: 240, type: 'area', toolbar: { show: false }, zoom: { enabled: false }, animations: { enabled: true }, background: 'transparent' },
@@ -149,19 +145,17 @@
     }
   }
 
+  /** `pollData()`: at most one refresh per poll period (one second of slack), and none while paused. */
+  function pollData() {
+    if (pollSeconds === null) return;
+    const now = Date.now();
+    if (now - lastPoll < (pollSeconds - 1) * 1000) return;
+    lastPoll = now;
+    loadData();
+  }
   function schedule() {
     clearInterval(poll);
-    if (live) poll = setInterval(loadData, pollSeconds * 1000);
-  }
-  function toggleLive() {
-    live = !live;
-    try {
-      localStorage.setItem('server-metrics-live', live ? '1' : '0');
-    } catch {
-      // Only the preference is lost.
-    }
-    schedule();
-    if (live) loadData();
+    if (pollSeconds !== null) poll = setInterval(pollData, pollSeconds * 1000);
   }
   function destroyCharts() {
     Object.values(charts).forEach((c) => c.destroy());
@@ -232,27 +226,14 @@
             <SettingsSection id="server-metrics-overview-section" title="Metrics" description="Inspect recent CPU and memory usage reported by Sentinel.">
               {#snippet actions()}
                 <div class="flex items-center gap-2">
-                  <div>
-                    <button
-                      type="button"
-                      onclick={toggleLive}
-                      aria-pressed={live}
-                      title="Turn live refresh on or off"
-                      class="inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium ring-1 ring-neutral-200 transition-colors dark:ring-white/[0.08] {live ? 'bg-white text-black shadow-sm dark:bg-white/[0.09] dark:text-fg' : 'text-neutral-500 hover:text-black dark:text-fg-faint dark:hover:text-fg'}"
-                    >
-                      {#if live}
-                        <span class="relative flex h-1.5 w-1.5 shrink-0" aria-hidden="true">
-                          <span class="absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75 motion-safe:animate-ping"></span>
-                          <span class="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-                        </span>
-                      {:else}
-                        <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                          <path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5Z" />
-                        </svg>
-                      {/if}
-                      <span>{live ? 'Live' : 'Paused'}</span>
-                    </button>
-                  </div>
+                  <LiveToggle
+                    bind:live
+                    storageKey="server-metrics-live"
+                    onchange={(next) => {
+                      if (next) pollData();
+                      schedule();
+                    }}
+                  />
                   <button type="button" class="button" disabled={!canEdit || toggling} onclick={toggle}>Disable metrics</button>
                 </div>
               {/snippet}
@@ -268,17 +249,19 @@
                   bind:value={interval}
                   options={INTERVALS}
                   onchange={() => {
+                    // `updatedInterval()`: ranges up to one hour refresh live; longer ranges load once.
+                    live = Number(interval) <= 60;
                     loadData();
                     schedule();
                   }}
                 />
               </div>
-              <p class="mt-3 text-xs leading-5 text-neutral-500 dark:text-fg-dim">While live, ranges up to one hour refresh every five seconds. Longer ranges refresh every minute.</p>
+              <p class="mt-3 text-xs leading-5 text-neutral-500 dark:text-fg-dim">Ranges up to one hour refresh live every five seconds. Longer ranges load once; turn on live refresh to update them every minute.</p>
             </SettingsSection>
           </form>
 
           <div class="grid gap-6 lg:grid-cols-2">
-            {#each [{ key: 'cpu', id: 'server-cpu-metrics-section', title: 'CPU usage', help: 'Percentage of available CPU capacity used by this server.', klass: 'lg:col-span-2' }, { key: 'memory', id: 'server-memory-metrics-section', title: 'Memory usage', help: 'Percentage of physical memory currently used by this server.', klass: '' }, { key: 'network', id: 'server-network-metrics-section', title: 'Network throughput', help: "Receive and transmit rate across the server's network interfaces.", klass: '' }, { key: 'load', id: 'server-load-metrics-section', title: 'Load average', help: 'One minute load average reported by the server.', klass: '' }, { key: 'disk', id: 'server-disk-metrics-section', title: 'Disk usage', help: 'Percentage of the root filesystem used by this server.', klass: '' }] as c (c.key)}
+            {#each [{ key: 'cpu', id: 'server-cpu-metrics-section', title: 'CPU usage', help: 'Average usage of all CPU cores on this server. 100% means that all cores are fully busy. For example, on a server with 8 cores, one fully busy core shows as 12.5%.', klass: 'lg:col-span-2' }, { key: 'memory', id: 'server-memory-metrics-section', title: 'Memory usage', help: 'Percentage of physical memory currently used by this server.', klass: '' }, { key: 'network', id: 'server-network-metrics-section', title: 'Network throughput', help: "Receive and transmit rate across the server's network interfaces.", klass: '' }, { key: 'load', id: 'server-load-metrics-section', title: 'Load average', help: 'One minute load average reported by the server.', klass: '' }, { key: 'disk', id: 'server-disk-metrics-section', title: 'Disk usage', help: 'Percentage of the root filesystem used by this server.', klass: '' }] as c (c.key)}
               <SettingsSection id={c.id} title={c.title} description={c.help} class={c.klass}>
                 {#snippet actions()}
                   <div id="{chartId}-{c.key}-legend" class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs"></div>

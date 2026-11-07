@@ -315,6 +315,48 @@ impl Client {
         }
     }
 
+    /// `prefetchServerWideConcurrently`: the server-wide dashboard bundles of several servers,
+    /// fetched at the same time, so a page waits for the slowest server instead of for every
+    /// server in turn. Each response warms the cache `prefetch_server_wide` reads; a failed fetch
+    /// is remembered like there, so it is not fetched again.
+    pub async fn prefetch_server_wide_concurrently(
+        clients: &[Client],
+        from: &str,
+        to: &str,
+        range: &str,
+        apps_limit: i64,
+    ) {
+        let fetches = clients.iter().filter_map(|client| {
+            let url = dashboard_url(None, from, to, range, 50, 50, apps_limit, Scope::App).ok()?;
+            if cache_get(&client.cache_key(&url)).is_some()
+                || cache_get(&client.dashboard_absence_key()).is_some()
+            {
+                return None;
+            }
+            Some(client.prefetch_dashboard(url))
+        });
+        futures_util::future::join_all(fetches).await;
+    }
+
+    /// One fetch of `prefetchServerWideConcurrently`: a server that cannot start the fetch fails
+    /// again at once later; a failed or rejected answer marks the dashboard absent.
+    async fn prefetch_dashboard(&self, url: String) {
+        // `startRemoteFetch`.
+        if self.ensure_remote_available().is_err() {
+            return;
+        }
+        let Ok(token) = sentinel::ensure_valid_token(&self.srv).await else {
+            return;
+        };
+        // `awaitRemote` and `guard`.
+        match self.run_remote(build_fetch_command(&token, &url)).await {
+            Ok(body) if guard(&body).is_ok() => {
+                cache_put(self.cache_key(&url), body, CACHE_TTL);
+            }
+            _ => cache_put(self.dashboard_absence_key(), "1".to_string(), CACHE_TTL),
+        }
+    }
+
     /// `remoteFetch`.
     async fn remote_fetch(&self, url: &str) -> Result<String, String> {
         self.ensure_remote_available()?;

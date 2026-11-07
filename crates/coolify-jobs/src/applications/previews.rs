@@ -337,7 +337,8 @@ impl Jobs {
             return Ok(());
         }
         let enc = self.0.encrypter.as_ref().ok_or("no encrypter")?;
-        let repository = a.str("git_repository").unwrap_or_default();
+        let repository =
+            crate::github::git_repository_slug(a.str("git_repository").unwrap_or_default());
         let comment = preview
             .get("pull_request_issue_comment_id")
             .and_then(Value::as_str)

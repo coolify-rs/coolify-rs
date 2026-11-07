@@ -88,7 +88,7 @@
 
   let data = $state<ServicePage | null>(null);
   let storages = $state<ServiceStoragePart[] | null>(null);
-  let resources = $state<{ label: string; href: string; active: boolean }[]>([]);
+  let resources = $state<{ label: string; href: string; active: boolean; uuid?: string }[]>([]);
   let missing = $state(false);
 
   const viewKey = 'service-compose-resources-view';
@@ -112,6 +112,8 @@
 
   async function refresh() {
     data = await servicesApi.page(service);
+    // `name-changed`: the breadcrumb shows a saved rename.
+    page.nameChanged(service, data.service.name);
     if (section === 'storages') storages = (await servicesApi.storages(service)).parts;
   }
 
@@ -149,11 +151,11 @@
       .then((r) => {
         const list = (r as unknown as { services?: { uuid: string; name: string }[] }).services ?? [];
         resources = list
-          .map((s) => ({ label: s.name, href: `/project/${uuid}/environment/${env}/service/${s.uuid}`, active: s.uuid === service }))
+          .map((s) => ({ label: s.name, uuid: s.uuid, href: `/project/${uuid}/environment/${env}/service/${s.uuid}`, active: s.uuid === service }))
           .sort((a, b) => strnatcmp(a.label.toLowerCase(), b.label.toLowerCase()));
       })
       .catch(() => {
-        resources = data ? [{ label: data.service.name, href: base, active: true }] : [];
+        resources = data ? [{ label: data.service.name, uuid: service, href: base, active: true }] : [];
       });
   }
 

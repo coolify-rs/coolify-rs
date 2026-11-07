@@ -632,7 +632,7 @@ pub fn stack_fields(
     application_images: &[String],
     database_images: &[String],
     rows: &[(Record, Option<String>)],
-    hide_passwords: bool,
+    hide_values: bool,
 ) -> Vec<StackField> {
     // `$fields->put($group, ...)`: a later resource of the same group replaces the earlier one.
     let mut groups: Vec<(&'static str, &'static [Spec])> = Vec::new();
@@ -728,7 +728,8 @@ pub fn stack_fields(
     out.into_iter()
         .map(|mut field| {
             field.is_locked = field.is_locked || shown_once.contains(&field.key);
-            if field.is_locked || (hide_passwords && field.is_password) {
+            // A member sees no value at all, not only the passwords.
+            if field.is_locked || hide_values {
                 field.value = None;
             }
             field
@@ -779,6 +780,20 @@ mod tests {
         let f = stack_fields(&["heartexlabs/label-studio:1".into()], &[], &rows, false);
         assert!(f[0].is_locked);
         assert_eq!(f[0].value, None);
+    }
+
+    #[test]
+    fn members_see_no_values_not_only_the_passwords() {
+        let rows = [
+            row("SERVICE_PASSWORD_ADMIN", "pw", false),
+            row("SERVICE_USER_ADMIN", "me", false),
+            row("ADMIN_EMAIL", "a@b.c", false),
+        ];
+        let member = stack_fields(&["acme/app:1".into()], &[], &rows, true);
+        assert_eq!(member.len(), 3);
+        assert!(member.iter().all(|f| f.value.is_none() && !f.is_locked));
+        let admin = stack_fields(&["acme/app:1".into()], &[], &rows, false);
+        assert!(admin.iter().all(|f| f.value.is_some()));
     }
 
     #[test]

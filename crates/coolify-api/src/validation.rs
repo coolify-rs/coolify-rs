@@ -15,6 +15,10 @@ pub enum Rule {
     Required,
     /// `present`: the key is in the request, whatever its value.
     Present,
+    /// `filled`: when the key is in the request, its value is not empty (an implicit rule).
+    Filled,
+    /// `bail`: the first failure of the field stops its other rules.
+    Bail,
     Nullable,
     String,
     Boolean,
@@ -81,6 +85,7 @@ fn message(field: &str, rule: &str, messages: Messages, param: Option<usize>) ->
         .unwrap_or_else(|| match rule {
             "required" => "The :attribute field is required.".into(),
             "present" => "The :attribute field must be present.".into(),
+            "filled" => "The :attribute field must have a value.".into(),
             "string" => "The :attribute field must be a string.".into(),
             "boolean" => "The :attribute field must be true or false.".into(),
             "min" => "The :attribute field must be at least :min characters.".into(),
@@ -111,7 +116,7 @@ fn message(field: &str, rule: &str, messages: Messages, param: Option<usize>) ->
 }
 
 /// PHP `filter_var($v, FILTER_VALIDATE_INT)` for JSON values.
-fn is_php_int(v: &Value) -> bool {
+pub(crate) fn is_php_int(v: &Value) -> bool {
     match v {
         Value::Bool(b) => *b,
         Value::Number(n) => {
@@ -184,7 +189,7 @@ fn is_laravel_boolean(v: &Value) -> bool {
 }
 
 /// Laravel's `getSize` under a numeric rule: the number, the size of an array, else the string length.
-fn numeric_rule_size(v: &Value) -> f64 {
+pub(crate) fn numeric_rule_size(v: &Value) -> f64 {
     match v {
         Value::Array(a) => a.len() as f64,
         Value::Object(o) => o.len() as f64,
@@ -200,9 +205,10 @@ pub fn validate(
     messages: Messages,
     allowed: &[&str],
 ) -> Result<(), ApiError> {
-    let mut errors: Map<String, Value> = Map::new();
-    let mut push = |field: &str, msg: String| {
+    let errors: std::cell::RefCell<Map<String, Value>> = std::cell::RefCell::new(Map::new());
+    let push = |field: &str, msg: String| {
         if let Some(list) = errors
+            .borrow_mut()
             .entry(field.to_string())
             .or_insert_with(|| Value::Array(vec![]))
             .as_array_mut()
@@ -230,9 +236,13 @@ pub fn validate(
             _ => false,
         };
         let v = value.unwrap_or(&Value::Null);
+        let bail = f.rules.iter().any(|r| matches!(r, Rule::Bail));
         // Laravel evaluates rules in declared order and stops after a failed
-        // implicit rule (`required`); other failures do not stop it.
+        // implicit rule (`required`); other failures do not stop it, unless the field has `bail`.
         for rule in &f.rules {
+            if bail && errors.borrow().contains_key(f.name) {
+                break;
+            }
             if let Rule::Present = rule {
                 if value.is_none() {
                     push(f.name, message(f.name, "present", messages, None));
@@ -250,11 +260,26 @@ pub fn validate(
                 }
                 continue;
             }
+            if let Rule::Filled = rule {
+                // validateFilled: a key in the request must pass validateRequired.
+                let empty = match v {
+                    Value::Null => true,
+                    Value::String(s) => s.trim().is_empty(),
+                    Value::Array(a) => a.is_empty(),
+                    Value::Object(o) => o.is_empty(),
+                    _ => false,
+                };
+                if value.is_some() && empty {
+                    push(f.name, message(f.name, "filled", messages, None));
+                    break;
+                }
+                continue;
+            }
             if implicit_only {
                 continue;
             }
             match rule {
-                Rule::Required | Rule::Nullable | Rule::Present => {}
+                Rule::Required | Rule::Nullable | Rule::Present | Rule::Filled | Rule::Bail => {}
                 Rule::String => {
                     if !v.is_string() {
                         push(f.name, message(f.name, "string", messages, None));
@@ -360,6 +385,7 @@ pub fn validate(
             push(key, "This field is not allowed.".into());
         }
     }
+    let errors = errors.into_inner();
     if errors.is_empty() {
         Ok(())
     } else {

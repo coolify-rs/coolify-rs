@@ -22,7 +22,10 @@ existing_setting() {
     grep "^$1=" "$ENV_FILE" 2>/dev/null | head -n1 | cut -d '=' -f2- || true
 }
 CDN="${COOLIFY_RS_CDN:-$(existing_setting COOLIFY_RS_CDN)}"
+CDN="${CDN:-https://github.com/coolify-rs/coolify-rs/releases/latest/download}"
 CDN="${CDN%/}"
+COOLIFY_RS_REGISTRY="${COOLIFY_RS_REGISTRY:-$(existing_setting COOLIFY_RS_REGISTRY)}"
+COOLIFY_RS_REGISTRY="${COOLIFY_RS_REGISTRY:-ghcr.io}"
 COOLIFY_RS_IMAGE="${COOLIFY_RS_IMAGE:-$(existing_setting COOLIFY_RS_IMAGE)}"
 COOLIFY_RS_IMAGE="${COOLIFY_RS_IMAGE:-coolify-rs/coolify-rs}"
 COOLIFY_RS_PULL="${COOLIFY_RS_PULL:-$(existing_setting COOLIFY_RS_PULL)}"
@@ -184,7 +187,7 @@ fi
 
 # Get all unique images from docker compose config
 # LATEST_IMAGE env var is needed for image substitution in compose files
-IMAGES=$(REGISTRY_URL=${REGISTRY_URL} LATEST_IMAGE=${LATEST_IMAGE} docker compose --env-file "$ENV_FILE" $COMPOSE_FILES config --images 2>/dev/null | sort -u)
+IMAGES=$(REGISTRY_URL=${REGISTRY_URL} COOLIFY_RS_REGISTRY=${COOLIFY_RS_REGISTRY} LATEST_IMAGE=${LATEST_IMAGE} docker compose --env-file "$ENV_FILE" $COMPOSE_FILES config --images 2>/dev/null | sort -u)
 
 if [ -z "$IMAGES" ]; then
     log "ERROR: Failed to extract images from docker-compose files"
@@ -255,6 +258,7 @@ set_env_var() {
 
 log "Checking environment variables..."
 set_env_var "REGISTRY_URL" "$REGISTRY_URL"
+set_env_var "COOLIFY_RS_REGISTRY" "$COOLIFY_RS_REGISTRY"
 update_env_var "PUSHER_APP_ID" "$(openssl rand -hex 32)"
 update_env_var "PUSHER_APP_KEY" "$(openssl rand -hex 32)"
 update_env_var "PUSHER_APP_SECRET" "$(openssl rand -hex 32)"
@@ -309,7 +313,7 @@ fi
 
 # Pull all images from compose config
 # Using a for loop to avoid subshell issues with exit
-COOLIFY_RS_IMAGE_REF="${REGISTRY_URL:-docker.io}/${COOLIFY_RS_IMAGE}:${LATEST_IMAGE}"
+COOLIFY_RS_IMAGE_REF="${COOLIFY_RS_REGISTRY}/${COOLIFY_RS_IMAGE}:${LATEST_IMAGE}"
 for IMAGE in $IMAGES; do
     if [ "$IMAGE" = "$COOLIFY_RS_IMAGE_REF" ] && [ "$COOLIFY_RS_PULL" = "false" ]; then
         if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then

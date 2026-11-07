@@ -106,6 +106,14 @@ async fn log_drains(
             drains[k] = json!("");
         }
     }
+    // `$settings->logdrain_axiom_domain ?: ServerSetting::DEFAULT_AXIOM_DOMAIN`
+    if !drains
+        .get("logdrain_axiom_domain")
+        .is_some_and(crate::serialize::php_truthy)
+    {
+        drains["logdrain_axiom_domain"] =
+            json!(coolify_jobs::server_ops::log_drain::DEFAULT_AXIOM_DOMAIN);
+    }
     Ok(ok(drains).into_response())
 }
 

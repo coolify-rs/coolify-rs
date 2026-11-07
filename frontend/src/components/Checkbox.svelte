@@ -26,7 +26,8 @@
     ? 'opacity-55'
     : 'cursor-pointer hover:bg-neutral-100/80 dark:hover:bg-white/[0.035]'}"
 >
-  <label class="label flex w-full max-w-full min-w-0 items-center gap-3 px-0 {disabled ? 'cursor-not-allowed' : 'cursor-pointer'}">
+  <!-- An explicit `for`: otherwise the label forwards clicks to its first labelable child, the helper button. -->
+  <label for={id} class="label flex w-full max-w-full min-w-0 items-center gap-3 px-0 {disabled ? 'cursor-not-allowed' : 'cursor-pointer'}">
     <span class="flex min-w-0 grow items-center gap-1.5 break-words text-[12px] text-neutral-600 dark:text-fg-dim">
       {#if label}
         {label}

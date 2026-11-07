@@ -173,7 +173,7 @@ pub(super) fn git_ssh_command(port: &str, identity: Option<&str>, identities_onl
 
 /// The settings `setGitImportSettings()` reads.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct ImportSettings {
+pub(crate) struct ImportSettings {
     pub shallow: bool,
     pub submodules: bool,
     pub lfs: bool,
@@ -190,6 +190,16 @@ impl ImportSettings {
     }
 }
 
+/// `Application::gitLfsSkipSmudgePrefix($onlyCheckout)`: the helper image installs the Git LFS
+/// filter system-wide, so a checkout downloads LFS objects unless the smudge filter is skipped.
+pub(crate) fn git_lfs_skip_smudge_prefix(lfs: bool, only_checkout: bool) -> &'static str {
+    if lfs && !only_checkout {
+        ""
+    } else {
+        "export GIT_LFS_SKIP_SMUDGE=1 && "
+    }
+}
+
 /// `Application::setGitImportSettings(...)`.
 pub(super) fn set_git_import_settings(
     clone: &str,
@@ -200,6 +210,33 @@ pub(super) fn set_git_import_settings(
     git_config_options: Option<&str>,
     base_dir: &str,
 ) -> String {
+    set_git_import_settings_with(
+        clone,
+        s,
+        public,
+        commit,
+        git_ssh_command,
+        git_config_options,
+        base_dir,
+        false,
+    )
+}
+
+/// `Application::setGitImportSettings(..., onlyCheckout: $onlyCheckout)`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn set_git_import_settings_with(
+    clone: &str,
+    s: ImportSettings,
+    public: bool,
+    commit: &str,
+    git_ssh_command: Option<&str>,
+    git_config_options: Option<&str>,
+    base_dir: &str,
+    only_checkout: bool,
+) -> String {
+    static SHORT_SHA: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"\A[0-9a-fA-F]{7,39}\z").unwrap_or_else(|_| unreachable!())
+    });
     let dir = quote(base_dir);
     let git = git_config_options.map_or_else(|| "git".to_owned(), |o| format!("git {o}"));
     let ssh = match git_ssh_command {
@@ -210,20 +247,34 @@ pub(super) fn set_git_import_settings(
                 .to_owned()
         }
     };
-    let mut cmd = clone.to_owned();
+    let mut cmd = format!(
+        "{}{clone}",
+        git_lfs_skip_smudge_prefix(s.lfs, only_checkout)
+    );
     if commit != "HEAD" {
         let c = quote(commit);
         if s.shallow {
-            cmd = format!(
-                "{cmd} && cd {dir} && echo 'Fetching the commit.' && {ssh} {git} fetch --depth=1 origin {c} && {git} -c advice.detachedHead=false checkout {c} >/dev/null 2>&1"
-            );
+            let checkout =
+                format!("{git} -c advice.detachedHead=false checkout {c} >/dev/null 2>&1");
+            if SHORT_SHA.is_match(commit) {
+                // A remote cannot fetch a short SHA: fetch the tip of each branch and let the
+                // checkout expand it, then the full history when it is not a branch tip.
+                let refspec = quote("+refs/heads/*:refs/remotes/origin/*");
+                cmd = format!(
+                    "{cmd} && cd {dir} && echo 'Fetching the commit.' && {ssh} {git} fetch --depth=1 origin {refspec} && ({checkout} || (echo 'The commit is not a branch tip. Fetching the full history.' && {ssh} {git} fetch --unshallow origin {refspec} && {checkout}))"
+                );
+            } else {
+                cmd = format!(
+                    "{cmd} && cd {dir} && echo 'Fetching the commit.' && {ssh} {git} fetch --depth=1 origin {c} && {checkout}"
+                );
+            }
         } else {
             cmd = format!(
                 "{cmd} && cd {dir} && {ssh} {git} -c advice.detachedHead=false checkout {c} >/dev/null 2>&1"
             );
         }
     }
-    if s.submodules {
+    if s.submodules && !only_checkout {
         cmd = format!("{cmd} && cd {dir} && if [ -f .gitmodules ]; then");
         if public {
             cmd = format!(
@@ -235,7 +286,7 @@ pub(super) fn set_git_import_settings(
             "{cmd} echo 'Updating submodules.' && {git} submodule sync && {ssh} {git} submodule update --init --recursive {flags}; fi"
         );
     }
-    if s.lfs {
+    if s.lfs && !only_checkout {
         cmd = format!(
             "{cmd} && cd {dir} && if {git} lfs ls-files -n | grep -q .; then echo 'Downloading Git LFS objects.' && {ssh} {git} lfs pull; fi"
         );
@@ -327,7 +378,8 @@ fn github_pull_request_fetch(
     let second = in_docker(
         i.dep,
         &format!(
-            "cd {dir} && git fetch origin {} && {checkout}",
+            "{}cd {dir} && git fetch origin {} && {checkout}",
+            git_lfs_skip_smudge_prefix(i.settings.lfs, false),
             quote(&branch)
         ),
     );
@@ -953,6 +1005,54 @@ mod tests {
     }
 
     #[test]
+    fn short_commits_and_git_lfs() {
+        let s = ImportSettings {
+            shallow: true,
+            submodules: false,
+            lfs: false,
+        };
+        assert_eq!(
+            set_git_import_settings("git clone x '/a'", s, true, "abc1234", None, None, "/a"),
+            r#"export GIT_LFS_SKIP_SMUDGE=1 && git clone x '/a' && cd '/a' && echo 'Fetching the commit.' && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git fetch --depth=1 origin '+refs/heads/*:refs/remotes/origin/*' && (git -c advice.detachedHead=false checkout 'abc1234' >/dev/null 2>&1 || (echo 'The commit is not a branch tip. Fetching the full history.' && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git fetch --unshallow origin '+refs/heads/*:refs/remotes/origin/*' && git -c advice.detachedHead=false checkout 'abc1234' >/dev/null 2>&1))"#
+        );
+        // A full SHA and a branch name are fetched by name; HEAD needs no checkout.
+        assert!(
+            set_git_import_settings("c", s, true, "v1.2", None, None, "/a")
+                .contains("fetch --depth=1 origin 'v1.2' && git -c")
+        );
+        assert_eq!(
+            set_git_import_settings(
+                "c",
+                ImportSettings { lfs: true, ..s },
+                true,
+                "HEAD",
+                None,
+                None,
+                "/a"
+            ),
+            "c && cd '/a' && if git lfs ls-files -n | grep -q .; then echo 'Downloading Git LFS objects.' && GIT_SSH_COMMAND=\"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null\" git lfs pull; fi"
+        );
+        // A checkout that only reads files skips LFS, submodules and the LFS pull.
+        assert_eq!(
+            set_git_import_settings_with(
+                "c",
+                ImportSettings {
+                    lfs: true,
+                    submodules: true,
+                    ..s
+                },
+                true,
+                "HEAD",
+                None,
+                None,
+                "/a",
+                true
+            ),
+            "export GIT_LFS_SKIP_SMUDGE=1 && c"
+        );
+    }
+
+    #[test]
     fn clone_command() {
         let s = ImportSettings {
             shallow: true,
@@ -972,7 +1072,7 @@ mod tests {
             kind: DeploymentType::Source,
             source: Some(&source),
             settings: s,
-            commit: "deadbeef",
+            commit: "0123456789abcdef0123456789abcdef01234567",
             private_key: None,
             github_token: None,
             oauth_token: None,
@@ -984,7 +1084,7 @@ mod tests {
         assert_eq!(g.full_repo_url, "https://github.com/o/r");
         assert_eq!(
             g.commands[0].command,
-            r#"docker exec abc bash -c 'git clone --depth=1 --recurse-submodules --shallow-submodules -b '\''main'\'' '\''https://github.com/o/r'\'' '\''/artifacts/abc'\'' && cd '\''/artifacts/abc'\'' && echo '\''Fetching the commit.'\'' && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git fetch --depth=1 origin '\''deadbeef'\'' && git -c advice.detachedHead=false checkout '\''deadbeef'\'' >/dev/null 2>&1 && cd '\''/artifacts/abc'\'' && if [ -f .gitmodules ]; then sed -i "s#[A-Za-z0-9._-]*@\(.*\):#https://\1/#g" '\''/artifacts/abc'\''/.gitmodules || true && echo '\''Updating submodules.'\'' && git submodule sync && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git submodule update --init --recursive --depth=1; fi && cd '\''/artifacts/abc'\'' && if git lfs ls-files -n | grep -q .; then echo '\''Downloading Git LFS objects.'\'' && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git lfs pull; fi'"#
+            r#"docker exec abc bash -c 'git clone --depth=1 --recurse-submodules --shallow-submodules -b '\''main'\'' '\''https://github.com/o/r'\'' '\''/artifacts/abc'\'' && cd '\''/artifacts/abc'\'' && echo '\''Fetching the commit.'\'' && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git fetch --depth=1 origin '\''0123456789abcdef0123456789abcdef01234567'\'' && git -c advice.detachedHead=false checkout '\''0123456789abcdef0123456789abcdef01234567'\'' >/dev/null 2>&1 && cd '\''/artifacts/abc'\'' && if [ -f .gitmodules ]; then sed -i "s#[A-Za-z0-9._-]*@\(.*\):#https://\1/#g" '\''/artifacts/abc'\''/.gitmodules || true && echo '\''Updating submodules.'\'' && git submodule sync && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git submodule update --init --recursive --depth=1; fi && cd '\''/artifacts/abc'\'' && if git lfs ls-files -n | grep -q .; then echo '\''Downloading Git LFS objects.'\'' && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git lfs pull; fi'"#
         );
     }
 }

@@ -25,7 +25,7 @@ mod channels;
 pub mod lookup;
 mod markdown;
 mod messages;
-mod php;
+pub mod php;
 pub mod plugin_events;
 mod tracking;
 mod views;
@@ -115,7 +115,7 @@ impl Ctx {
                 .get()
                 .cloned()
                 .or_else(|| std::env::var("COOLIFY_VERSION").ok())
-                .unwrap_or_else(|| "4.5.1".to_owned()),
+                .unwrap_or_else(|| "4.5.3".to_owned()),
             cloud: std::env::var("SELF_HOSTED").is_ok_and(|v| v == "false" || v == "0"),
             dev,
         }

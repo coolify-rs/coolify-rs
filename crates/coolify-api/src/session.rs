@@ -549,6 +549,7 @@ const FORCE_RESET_REQUIRED: &str = "A password reset is required for this accoun
 /// `allowedPathsForTwoFactorSetup()` for the requests behind those pages.
 const TWO_FACTOR_SETUP_PATHS: &[&str] = &[
     "/ui/auth/two-factor-required",
+    "/ui/auth/two-factor-required/switch-team",
     "/ui/auth/confirm-password/state",
     "/ui/profile/confirm-password",
     "/ui/profile/two-factor",

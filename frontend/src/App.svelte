@@ -141,6 +141,7 @@
     void router.path;
     page.switchers = [];
     page.resourceSwitcher = null;
+    page.renamed = {};
     page.navContext = null;
     page.server = null;
     page.sourceConnected = null;

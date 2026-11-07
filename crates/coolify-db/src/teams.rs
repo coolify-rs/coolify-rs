@@ -1,7 +1,7 @@
 //! Teams and members.
 
 use chrono::NaiveDateTime;
-use coolify_domain::TeamId;
+use coolify_domain::{Role, TeamId};
 
 use crate::records::{Record, TEAM, USER, parse_row};
 use crate::{Db, DbError, DbResult};
@@ -130,17 +130,33 @@ pub async fn member_rows(db: &Db, team_id: TeamId) -> DbResult<Vec<MemberRow>> {
 
 const USER_TOKENABLE: &str = "App\\Models\\User";
 
-/// `updateExistingPivot(role)` + `RevokeUserTeamTokens::forUserTeam`, in one transaction.
-pub async fn set_member_role(db: &Db, team_id: TeamId, user_id: i64, role: &str) -> DbResult<()> {
+/// `Member::updateRole()`: `updateExistingPivot(role)` and, on a demotion only,
+/// `RevokeUserTeamTokens::forUserTeam`, in one transaction. A promotion keeps the tokens: the API
+/// checks the abilities against the role on each request.
+pub async fn set_member_role(db: &Db, team_id: TeamId, user_id: i64, role: Role) -> DbResult<()> {
     db.ensure_writable()?;
     let mut tx = db.pool().begin().await?;
+    let previous: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM team_user WHERE team_id = $1 AND user_id = $2 FOR UPDATE",
+    )
+    .bind(team_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     sqlx::query("UPDATE team_user SET role = $3 WHERE team_id = $1 AND user_id = $2")
         .bind(team_id)
         .bind(user_id)
-        .bind(role)
+        .bind(role.as_str())
         .execute(&mut *tx)
         .await?;
-    revoke_tokens(&mut tx, team_id, user_id).await?;
+    // `Role::from($this->getMemberRole())`: a missing role is a member.
+    let previous = previous
+        .as_deref()
+        .and_then(Role::parse)
+        .unwrap_or(Role::Member);
+    if role < previous {
+        revoke_tokens(&mut tx, team_id, user_id).await?;
+    }
     tx.commit().await?;
     Ok(())
 }

@@ -1,7 +1,7 @@
 //! `Project\Shared\ResourceOperations` and `Project\CloneMe`: cloning and moving a resource.
 //!
-//! The volume data toggle has no control in either Blade view, so `cloneVolumeData` stays `false`
-//! here. `migrateTo` only renders in a Coolify development instance (`isDev()`), and the reference
+//! `cloneVolumeData` copies the persistent volumes through `CloneVolumeDataWithSourceStopped`
+//! (`coolify_jobs::clone_volume_data`). `migrateTo` only renders in a Coolify development instance (`isDev()`), and the reference
 //! is not one: the section and its action are not offered.
 
 use std::collections::BTreeMap;
@@ -179,6 +179,11 @@ async fn clone_to(
     let Some(destination) = team_destination(&state, res.team_id, wanted).await? else {
         return Err(bad("Destination not found."));
     };
+    // `authorize(CloneVolumeDataWithSourceStopped::sourceAbility(...))`: an admin ability, checked above.
+    let clone_volume_data = body
+        .get("clone_volume_data")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     tracing::info!(target: "audit", event = "ui.resource.clone_started", team_id = res.team_id, resource_uuid = %res.uuid, destination_uuid = %wanted, environment_id, "clone started");
     let (segment, new_uuid) = match res.class {
         Class::Application => {
@@ -187,7 +192,14 @@ async fn clone_to(
                 .ok_or(super::NOT_FOUND)?;
             (
                 "application",
-                clone_application(&state, &source, &destination, environment_id).await?,
+                clone_application(
+                    &state,
+                    &source,
+                    &destination,
+                    environment_id,
+                    clone_volume_data,
+                )
+                .await?,
             )
         }
         Class::Database => {
@@ -195,7 +207,7 @@ async fn clone_to(
                 .await?
                 .ok_or(super::NOT_FOUND)?;
             let new_uuid = new_public_id();
-            let name = format!("{}-clone-{new_uuid}", res.name);
+            let name = coolify_jobs::notifications::php::clone_resource_name(&res.name, &new_uuid);
             clone_database(
                 &state,
                 &source,
@@ -203,6 +215,7 @@ async fn clone_to(
                 &name,
                 &destination,
                 environment_id,
+                clone_volume_data,
             )
             .await?;
             ("database", new_uuid)
@@ -212,7 +225,7 @@ async fn clone_to(
                 .await?
                 .ok_or(super::NOT_FOUND)?;
             let new_uuid = new_public_id();
-            let name = format!("{}-clone-{new_uuid}", res.name);
+            let name = coolify_jobs::notifications::php::clone_resource_name(&res.name, &new_uuid);
             clone_service(
                 &state,
                 &source,
@@ -220,6 +233,7 @@ async fn clone_to(
                 &name,
                 &destination,
                 environment_id,
+                clone_volume_data,
             )
             .await?;
             ("service", new_uuid)
@@ -339,8 +353,9 @@ async fn clone_database(
     name: &str,
     destination: &Destination,
     environment_id: i64,
+    clone_volume_data: bool,
 ) -> Result<(), ApiError> {
-    let (destination_id, morph_destination, _) = destination;
+    let (destination_id, morph_destination, server) = destination;
     let now = state.now();
     let morph = d.kind.morph();
     let new_id = parts::replicate_database(
@@ -356,16 +371,26 @@ async fn clone_database(
     .await?;
     ops::set_environment_only(&state.db, d.kind.table(), new_id, environment_id).await?;
     parts::copy_tags(&state.db, morph, d.id, new_id).await?;
+    let mut pending: Vec<(String, String)> = Vec::new();
     for volume in parts::persistent_storages(&state.db, morph, d.id).await? {
         let original = parts::str_of(&volume, "name").unwrap_or_default();
+        let new_name = cloned_database_volume(original, &d.uuid, new_uuid);
         parts::replicate_persistent_volume(
             &state.db,
             parts::id_of(&volume),
-            &cloned_database_volume(original, &d.uuid, new_uuid),
+            &new_name,
             new_id,
             now,
         )
         .await?;
+        if clone_volume_data {
+            pending.push((original.to_owned(), new_name));
+        }
+    }
+    if !pending.is_empty() {
+        let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+        jobs.spawn_volume_clones(d.clone(), server.id, pending)
+            .await;
     }
     let fresh = dbs::find_in_team(&state.db, d.team_id, new_uuid)
         .await?
@@ -389,7 +414,7 @@ async fn clone_database(
     Ok(())
 }
 
-/// `clone_service()` without volume data.
+/// `clone_service($source, $destination, [...], $cloneVolumeData)`.
 async fn clone_service(
     state: &AppState,
     s: &ServiceRow,
@@ -397,6 +422,7 @@ async fn clone_service(
     name: &str,
     destination: &Destination,
     environment_id: i64,
+    clone_volume_data: bool,
 ) -> Result<(), ApiError> {
     let (destination_id, morph_destination, server) = destination;
     let now = state.now();
@@ -419,9 +445,19 @@ async fn clone_service(
         tracing::warn!(service = %s.uuid, error = %e, "cloned service could not be parsed");
         ApiError::Internal
     })?;
+    let mut pending = Vec::new();
     for kind in [SubKind::Application, SubKind::Database] {
+        let sources = svc::subs(&state.db, kind, s.id).await?;
         for sub in svc::subs(&state.db, kind, new_id).await? {
             svc::sub_set_status(&state.db, kind, sub.id, "exited", state.now()).await?;
+            if !clone_volume_data {
+                continue;
+            }
+            if let Some(source) = sources.iter().find(|x| x.name == sub.name) {
+                pending.extend(
+                    crate::routes::services::volume_pairs(state, kind, source.id, sub.id).await?,
+                );
+            }
         }
     }
     // The scheduled backups of each database go by name.
@@ -438,6 +474,12 @@ async fn clone_service(
             )
             .await?;
         }
+    }
+    if !pending.is_empty()
+        && let Some(source_server) = s.server_id()
+    {
+        jobs.spawn_service_volume_clones(s.clone(), source_server, server.id, pending)
+            .await;
     }
     Ok(())
 }
@@ -489,6 +531,7 @@ async fn clone_application(
     source: &ApplicationRow,
     destination: &Destination,
     environment_id: i64,
+    clone_volume_data: bool,
 ) -> Result<String, ApiError> {
     let (destination_id, morph, server) = destination;
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
@@ -589,8 +632,13 @@ async fn clone_application(
         columns,
         nixpacks_default,
     };
-    let (new_id, _previews, _volumes) =
+    let (new_id, _previews, volumes) =
         coolify_db::application_ops::clone_application(&state.db, &plan, now).await?;
+    if clone_volume_data && !volumes.is_empty() {
+        let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+        jobs.spawn_clone_volumes(source.clone(), server.id, volumes)
+            .await;
+    }
     if proxied && readonly_labels {
         crate::ui_applications::regenerate_labels(state, new_id, false).await?;
     }
@@ -657,7 +705,7 @@ async fn clone_me_page(
         "can_update": ctx.is_team_admin(),
         "project_name": p.name,
         "environment_name": e.name,
-        "new_name": slug(&format!("{}-clone-{}", p.name, new_public_id())),
+        "new_name": slug(&coolify_jobs::notifications::php::clone_resource_name(&p.name, &new_public_id())),
         "servers": server_list,
         "applications": by_name(applications.iter().map(|a| row_json(&a.raw)).collect()),
         "databases": by_name(databases.iter().map(|d| row_json(&d.raw)).collect()),
@@ -711,6 +759,11 @@ async fn clone_me(
         return Err(bad("Destination not found."));
     };
     let is_project = body.get("type").and_then(Value::as_str) == Some("project");
+    // `authorize(sourceAbility($source))` for each resource: admin abilities, checked above.
+    let clone_volume_data = body
+        .get("clone_volume_data")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let now = state.now();
     let (project_uuid, target_env_id, target_env_uuid) = if is_project {
         if ops::team_project_named(&state.db, p.team_id, new_name).await? {
@@ -741,7 +794,7 @@ async fn clone_me(
         (p.uuid.clone(), id, uuid)
     };
     for a in apps::list_for_environment(&state.db, e.id).await? {
-        clone_application(&state, &a, &destination, target_env_id).await?;
+        clone_application(&state, &a, &destination, target_env_id, clone_volume_data).await?;
     }
     for d in dbs::list_for_environment(&state.db, e.id).await? {
         let name = d
@@ -757,6 +810,7 @@ async fn clone_me(
             &name,
             &destination,
             target_env_id,
+            clone_volume_data,
         )
         .await?;
     }
@@ -769,6 +823,7 @@ async fn clone_me(
             &name,
             &destination,
             target_env_id,
+            clone_volume_data,
         )
         .await?;
     }

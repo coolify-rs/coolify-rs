@@ -11,8 +11,15 @@ fn b64(s: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(s)
 }
 
-const COMPOSE: &str = "\nservices:\n  coolify-log-drain:\n    image: cr.fluentbit.io/fluent/fluent-bit:2.0\n    container_name: coolify-log-drain\n    command: -c /fluent-bit.conf\n    env_file:\n      - .env\n    volumes:\n      - ./fluent-bit.conf:/fluent-bit.conf:ro\n      - ./parsers.conf:/parsers.conf:ro\n    ports:\n      - 127.0.0.1:24224:24224\n    labels:\n      - coolify.managed=true\n    restart: unless-stopped\n";
-const README: &str = "# New Relic Log Drain\nThis log drain is based on [Fluent Bit](https://fluentbit.io/) and New Relic Log Forwarder.\n\nFiles:\n- `fluent-bit.conf` - configuration file for Fluent Bit\n- `docker-compose.yml` - docker-compose file to run Fluent Bit\n- `.env` - environment variables for Fluent Bit\n";
+const COMPOSE: &str = "\nservices:\n  coolify-log-drain:\n    image: cr.fluentbit.io/fluent/fluent-bit:5.1\n    container_name: coolify-log-drain\n    command: -c /fluent-bit.conf\n    env_file:\n      - .env\n    volumes:\n      - ./fluent-bit.conf:/fluent-bit.conf:ro\n      - ./parsers.conf:/parsers.conf:ro\n    ports:\n      - 127.0.0.1:24224:24224\n    labels:\n      - coolify.managed=true\n      - coolify.logDrainConfigVersion=1\n    restart: unless-stopped\n";
+/// `CONFIG_VERSION`: bump when the generated files change (image, config, compose, or README), so
+/// that the server checks start running log drains again with the new files.
+pub const CONFIG_VERSION: &str = "1";
+/// `CONFIG_VERSION_LABEL`.
+pub const CONFIG_VERSION_LABEL: &str = "coolify.logDrainConfigVersion";
+/// `ServerSetting::DEFAULT_AXIOM_DOMAIN`: the Axiom edge deployment for US East 1.
+pub const DEFAULT_AXIOM_DOMAIN: &str = "us-east-1.aws.edge.axiom.co";
+const README_FILES: &str = "\nFiles:\n- `fluent-bit.conf` - configuration file for Fluent Bit\n- `docker-compose.yml` - docker-compose file to run Fluent Bit\n- `.env` - environment variables for Fluent Bit\n";
 const PARSERS: &str = "\n[PARSER]\n    Name        empty_line_skipper\n    Format      regex\n    Regex       /^(?!\\s*$).+/\n";
 
 /// `StopLogDrain::handle`.
@@ -57,12 +64,56 @@ fn text(srv: &Srv, k: &str) -> String {
         .to_string()
 }
 
+/// `trim($settings->logdrain_axiom_domain) ?: ServerSetting::DEFAULT_AXIOM_DOMAIN`.
+pub fn axiom_domain(stored: &str) -> String {
+    let t = coolify_remote::text::php_trim(stored);
+    if t.is_empty() || t == "0" {
+        DEFAULT_AXIOM_DOMAIN.to_owned()
+    } else {
+        t.to_owned()
+    }
+}
+
+/// The labels of `docker ps --format '{{json .}}'` (`k=v,k2=v2`).
+pub fn ps_label<'a>(labels: &'a str, name: &str) -> Option<&'a str> {
+    labels.split(',').find_map(|l| match l.split_once('=') {
+        Some((k, v)) if k == name => Some(v),
+        None if l == name => Some(""),
+        _ => None,
+    })
+}
+
+/// `Cache::add("log-drain-refresh:{uuid}", true, now()->addMinutes(10))`.
+static REFRESH_CLAIMS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// `StartLogDrain::claimOutdatedRefresh`: whether a running log drain container was made with
+/// older files (its `coolify.logDrainConfigVersion` label). Claims the refresh for 10 minutes, so
+/// that the frequent server checks queue only one restart.
+pub fn claim_outdated_refresh(server_uuid: &str, config_version: Option<&str>) -> bool {
+    if config_version == Some(CONFIG_VERSION) {
+        return false;
+    }
+    let Ok(mut claims) = REFRESH_CLAIMS.lock() else {
+        return false;
+    };
+    let now = std::time::Instant::now();
+    claims.retain(|_, until| *until > now);
+    if claims.contains_key(server_uuid) {
+        return false;
+    }
+    claims.insert(
+        server_uuid.to_owned(),
+        now + std::time::Duration::from_secs(600),
+    );
+    true
+}
+
 /// `StartLogDrain::handle`. A failure is only reported to the caller (`handleError`).
 pub async fn start_log_drain(srv: &Srv) -> Result<Option<String>, String> {
     let kind = if flag(srv, "is_logdrain_newrelic_enabled") {
         "newrelic"
-    } else if flag(srv, "is_logdrain_highlight_enabled") {
-        "highlight"
     } else if flag(srv, "is_logdrain_axiom_enabled") {
         "axiom"
     } else if flag(srv, "is_logdrain_custom_enabled") {
@@ -79,7 +130,6 @@ pub async fn start_log_drain(srv: &Srv) -> Result<Option<String>, String> {
     if kind == "none" {
         return Ok(None);
     }
-    stop_log_drain(srv).await;
     let server_name = fluent_bit_value(srv.str_column("name").unwrap_or_default());
     let filter = format!(
         "[FILTER]\n    Name grep\n    Match *\n    Exclude log 127.0.0.1\n[FILTER]\n    Name                modify\n    Match               *\n    Set                 coolify.server_name {server_name}\n    Rename              COOLIFY_APP_NAME coolify.app_name\n    Rename              COOLIFY_PROJECT_NAME coolify.project_name\n    Rename              COOLIFY_SERVER_IP coolify.server_ip\n    Rename              COOLIFY_ENVIRONMENT_NAME coolify.environment_name\n"
@@ -87,7 +137,7 @@ pub async fn start_log_drain(srv: &Srv) -> Result<Option<String>, String> {
     let (config, parsers, env) = match kind {
         "newrelic" => (
             b64(&format!(
-                "\n[SERVICE]\n    Flush     5\n    Daemon    off\n    Tag container_logs\n    Log_Level debug\n    Parsers_File  parsers.conf\n[INPUT]\n    Name              forward\n    Buffer_Chunk_Size 1M\n    Buffer_Max_Size   6M\n{filter}[OUTPUT]\n    Name nrlogs\n    Match *\n    license_key ${{LICENSE_KEY}}\n    # https://log-api.eu.newrelic.com/log/v1 - EU\n    # https://log-api.newrelic.com/log/v1 - US\n    base_uri ${{BASE_URI}}\n"
+                "\n[SERVICE]\n    Flush     5\n    Daemon    off\n    Log_Level warn\n    Parsers_File  parsers.conf\n[INPUT]\n    Name              forward\n    Buffer_Chunk_Size 1M\n    Buffer_Max_Size   6M\n{filter}[OUTPUT]\n    Name nrlogs\n    Match *\n    license_key ${{LICENSE_KEY}}\n    # https://log-api.eu.newrelic.com/log/v1 - EU\n    # https://log-api.newrelic.com/log/v1 - US\n    base_uri ${{BASE_URI}}\n"
             )),
             b64(PARSERS),
             format!(
@@ -96,23 +146,14 @@ pub async fn start_log_drain(srv: &Srv) -> Result<Option<String>, String> {
                 text(srv, "logdrain_newrelic_base_uri")
             ),
         ),
-        "highlight" => (
-            b64(
-                "\n[SERVICE]\n    Flush     5\n    Daemon    off\n    Log_Level debug\n    Parsers_File  parsers.conf\n[INPUT]\n    Name              forward\n    tag               ${HIGHLIGHT_PROJECT_ID}\n    Buffer_Chunk_Size 1M\n    Buffer_Max_Size   6M\n[OUTPUT]\n    Name                forward\n    Match               *\n    Host                otel.highlight.io\n    Port                24224\n",
-            ),
-            b64(PARSERS),
-            format!(
-                "HIGHLIGHT_PROJECT_ID={}\n",
-                text(srv, "logdrain_highlight_project_id")
-            ),
-        ),
         "axiom" => (
             b64(&format!(
-                "\n[SERVICE]\n    Flush     5\n    Daemon    off\n    Log_Level debug\n    Parsers_File  parsers.conf\n[INPUT]\n    Name              forward\n    Buffer_Chunk_Size 1M\n    Buffer_Max_Size   6M\n{filter}[OUTPUT]\n    Name            http\n    Match           *\n    Host            api.axiom.co\n    Port            443\n    URI             /v1/datasets/${{AXIOM_DATASET_NAME}}/ingest\n    # Authorization Bearer should be an API token\n    Header Authorization Bearer ${{AXIOM_API_KEY}}\n    compress gzip\n    format json\n    json_date_key _time\n    json_date_format iso8601\n    tls On\n"
+                "\n[SERVICE]\n    Flush     5\n    Daemon    off\n    Log_Level warn\n    Parsers_File  parsers.conf\n[INPUT]\n    Name              forward\n    Buffer_Chunk_Size 1M\n    Buffer_Max_Size   6M\n{filter}[OUTPUT]\n    Name            http\n    Match           *\n    Host            ${{AXIOM_DOMAIN}}\n    Port            443\n    URI             /v1/ingest/${{AXIOM_DATASET_NAME}}\n    # Authorization Bearer should be an API token\n    Header Authorization Bearer ${{AXIOM_API_KEY}}\n    compress gzip\n    format json\n    json_date_key _time\n    json_date_format iso8601\n    tls On\n"
             )),
             b64(PARSERS),
             format!(
-                "AXIOM_DATASET_NAME={}\nAXIOM_API_KEY={}\n",
+                "AXIOM_DOMAIN={}\nAXIOM_DATASET_NAME={}\nAXIOM_API_KEY={}\n",
+                axiom_domain(&text(srv, "logdrain_axiom_domain")),
                 text(srv, "logdrain_axiom_dataset_name"),
                 text(srv, "logdrain_axiom_api_key")
             ),
@@ -138,6 +179,14 @@ pub async fn start_log_drain(srv: &Srv) -> Result<Option<String>, String> {
             )
         }
     };
+    let provider = match kind {
+        "newrelic" => "New Relic",
+        "axiom" => "Axiom",
+        _ => "Custom",
+    };
+    let readme = format!(
+        "# {provider} Log Drain\nThis log drain is based on [Fluent Bit](https://fluentbit.io/).\n{README_FILES}"
+    );
     let dir = format!("{BASE_CONFIG_DIR}/log-drains");
     let compose_path = format!("{dir}/docker-compose.yml");
     let mut commands = vec![
@@ -151,13 +200,18 @@ pub async fn start_log_drain(srv: &Srv) -> Result<Option<String>, String> {
         ),
         format!(
             "echo '{}' | base64 -d | tee {dir}/README.md > /dev/null",
-            b64(README)
+            b64(&readme)
         ),
         format!(
             "echo '{}' | base64 -d | tee {dir}/.env > /dev/null",
             b64(&env)
         ),
+        // The running drain is removed only after the image pull, so that a slow download does
+        // not stop log collection.
+        "echo 'Pulling Fluent Bit'".to_string(),
+        format!("docker compose -f {compose_path} pull --quiet --ignore-pull-failures"),
         "echo 'Starting Fluent Bit'".to_string(),
+        "docker rm -f coolify-log-drain >/dev/null 2>&1 || true".to_string(),
         format!("docker compose -f {compose_path} up -d"),
     ];
     // `logDrainNetworkConnectCommands`.
@@ -208,5 +262,42 @@ impl Jobs {
             }
             Ok(())
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn axiom_domain_defaults_to_us_east() {
+        assert_eq!(axiom_domain(""), "us-east-1.aws.edge.axiom.co");
+        assert_eq!(axiom_domain("  "), "us-east-1.aws.edge.axiom.co");
+        assert_eq!(
+            axiom_domain(" eu-central-1.aws.edge.axiom.co "),
+            "eu-central-1.aws.edge.axiom.co"
+        );
+    }
+
+    #[test]
+    fn compose_and_readme_carry_the_new_files() {
+        assert!(COMPOSE.contains("image: cr.fluentbit.io/fluent/fluent-bit:5.1\n"));
+        assert!(COMPOSE.contains("      - coolify.logDrainConfigVersion=1\n"));
+        assert_eq!(
+            format!("{CONFIG_VERSION_LABEL}={CONFIG_VERSION}"),
+            "coolify.logDrainConfigVersion=1"
+        );
+        assert!(README_FILES.starts_with("\nFiles:\n- `fluent-bit.conf`"));
+    }
+
+    #[test]
+    fn outdated_drains_are_refreshed_once() {
+        let labels = "coolify.managed=true,coolify.logDrainConfigVersion=1";
+        assert_eq!(ps_label(labels, CONFIG_VERSION_LABEL), Some("1"));
+        assert_eq!(ps_label("coolify.managed=true", CONFIG_VERSION_LABEL), None);
+        assert!(!claim_outdated_refresh("log-drain-current", Some("1")));
+        assert!(claim_outdated_refresh("log-drain-old", None));
+        assert!(!claim_outdated_refresh("log-drain-old", None));
+        assert!(claim_outdated_refresh("log-drain-other", Some("0")));
     }
 }

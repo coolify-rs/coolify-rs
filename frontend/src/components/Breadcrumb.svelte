@@ -63,7 +63,7 @@
         title={s.title}
         class="flex items-center gap-1.5 min-w-0 max-w-full h-8 px-2 rounded-md opacity-70 transition-[background-color,opacity] hover:opacity-100 hover:bg-neutral-100 dark:hover:bg-white/[0.05]"
       >
-        <span class="min-w-0 truncate font-semibold text-black dark:text-fg">{s.label}</span>
+        <span class="min-w-0 truncate font-semibold text-black dark:text-fg">{page.nameOf(s.uuid, s.label)}</span>
         <svg class="size-4 shrink-0 text-neutral-400 dark:text-fg-faint" viewBox="0 0 24 24" fill="none">
           <path d="M8 9l4-4 4 4M8 15l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
@@ -78,7 +78,7 @@
               onclick={() => (openIndex = -1)}
               class="listbox-option {item.active ? 'bg-neutral-100 font-medium text-black dark:bg-white/[0.07] dark:text-fg' : ''}"
             >
-              <span class="min-w-0 flex-1 truncate">{item.label}</span>
+              <span class="min-w-0 flex-1 truncate">{page.nameOf(item.uuid, item.label)}</span>
             </a>
           {/each}
         </div>

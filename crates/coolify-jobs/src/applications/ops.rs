@@ -404,7 +404,7 @@ pub enum LogsResult {
     Logs(String),
     /// 400 `Application is not running.`
     NotRunning,
-    /// 404: no running container for the `service_name`.
+    /// 404: no container (running or stopped) for the `service_name`.
     NoService,
 }
 
@@ -470,41 +470,16 @@ impl Jobs {
                 };
                 found
             }
-            None => &containers[0],
+            // A stopped container still has logs, like in the UI; a running one is preferred.
+            None => containers
+                .iter()
+                .find(|c| c.get("State").and_then(Value::as_str) == Some("running"))
+                .unwrap_or(&containers[0]),
         };
-        let name = container
-            .get("Names")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
         let id = container
             .get("ID")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        // getContainerStatus(): `throwError` is false.
-        let inspected = self
-            .remote()
-            .run_quiet(
-                &t,
-                &[&format!(
-                    "docker inspect --format '{{{{json .}}}}' {}",
-                    quote(name)
-                )],
-                RunOptions::op("application.logs"),
-            )
-            .await
-            .unwrap_or_default();
-        let status = inspected
-            .lines()
-            .find_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
-            .and_then(|v| {
-                v.pointer("/State/Status")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .unwrap_or_else(|| "exited".into());
-        if status != "running" {
-            return Ok(LogsResult::NotRunning);
-        }
         let lines = normalize_log_lines(lines);
         let mut command = format!("docker logs -n {lines}");
         if show_timestamps {
@@ -940,48 +915,32 @@ impl Jobs {
         }
     }
 
-    /// The asynchronous part of `clone_application(..., cloneVolumeData: true)`, per volume:
-    /// `StopApplication`, `VolumeCloneJob`, then a redeployment of the source. Upstream dispatches
-    /// them to queues; here they run in that order.
-    pub fn spawn_clone_volumes(
+    /// The asynchronous part of `clone_application(..., cloneVolumeData: true)`:
+    /// `CloneVolumeDataWithSourceStopped::run($source, $pendingVolumeClones)`.
+    pub async fn spawn_clone_volumes(
         &self,
         source: ApplicationRow,
         target_server_id: i64,
         volumes: Vec<(String, i64, String)>,
     ) {
-        let jobs = self.clone();
-        tokio::spawn(async move {
-            let source_server = source.server_id().unwrap_or(target_server_id);
-            for (source_volume, volume_id, target_volume) in volumes {
-                let _ = jobs.stop_application(&source, false, false, true).await;
-                if let Err(e) = jobs
-                    .clone_volume_data(
-                        source_server,
-                        target_server_id,
-                        &source_volume,
-                        Some(volume_id),
-                        &target_volume,
-                    )
-                    .await
-                {
-                    tracing::error!(volume = %source_volume, error = %e, "Failed to copy volume data");
-                }
-                let deployment = coolify_domain::new_public_id();
-                if let Err(e) = jobs
-                    .queue_application_deployment(
-                        &source,
-                        &deployment,
-                        crate::applications::queue::QueueOptions {
-                            no_questions_asked: true,
-                            ..Default::default()
-                        },
-                    )
-                    .await
-                {
-                    tracing::error!(error = %e, "source could not be redeployed after a volume copy");
-                }
-            }
-        });
+        let source_server = source.server_id().unwrap_or(target_server_id);
+        let copies = volumes
+            .into_iter()
+            .map(
+                |(source_volume, volume_id, target_volume)| crate::clone_volume_data::VolumeCopy {
+                    source_server,
+                    target_server: target_server_id,
+                    source_volume,
+                    volume_id: Some(volume_id),
+                    target_volume,
+                },
+            )
+            .collect();
+        self.clone_volume_data_with_source_stopped(
+            crate::clone_volume_data::CloneSource::Application(source),
+            copies,
+        )
+        .await;
     }
 
     /// `VolumeCloneJob::cloneRemoteVolume()`: the archive goes through this host.

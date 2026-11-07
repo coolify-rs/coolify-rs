@@ -6,6 +6,7 @@
 
 pub mod applications;
 pub mod checks;
+pub mod clone_volume_data;
 pub mod cloud;
 pub mod compose_parser;
 pub mod databases;
@@ -30,6 +31,7 @@ pub mod services;
 pub mod storages;
 pub mod updates;
 mod validate;
+pub mod validate_new_cloud_server;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -100,7 +102,7 @@ impl Jobs {
             .version
             .get()
             .cloned()
-            .unwrap_or_else(|| "4.5.1".into())
+            .unwrap_or_else(|| "4.5.3".into())
     }
 
     pub fn encrypter(&self) -> Option<&Encrypter> {

@@ -162,8 +162,24 @@ async fn update_database_proxies(jobs: &Jobs, srv: &Srv, containers: &[Value]) {
         if !is_running {
             continue;
         }
-        let proxy_running = named_running(containers, &format!("{}-proxy", d.uuid));
-        if d.bool("is_public") && !proxy_running {
+        let proxy_name = format!("{}-proxy", d.uuid);
+        let proxy_running = named_running(containers, &proxy_name);
+        if d.bool("is_public")
+            && proxy_running
+            && crate::databases::proxy::claim_outdated_refresh(
+                &d.uuid,
+                containers
+                    .iter()
+                    .find(|c| {
+                        c.get("name").and_then(Value::as_str) == Some(proxy_name.as_str())
+                            && running(c)
+                    })
+                    .and_then(|c| c.get("labels")),
+            )
+        {
+            // A proxy that an older version started with an older configuration.
+            jobs.spawn_database_proxy_start(d.clone());
+        } else if d.bool("is_public") && !proxy_running {
             let name = d.str("name").unwrap_or_default().to_owned();
             jobs.spawn_database_proxy_start(d.clone());
             if let Some((team_id, server)) = lookup::server(srv.db(), srv.id()).await {
@@ -239,13 +255,30 @@ pub async fn push_server_update(jobs: &Jobs, server_id: i64, data: Value) -> Res
     jobs.apply_service_containers(&services, &inspected).await;
     // `checkLogDrainContainer()`
     let on = |k: &str| srv.info.setting_bool(k) == Some(true);
-    if (on("is_logdrain_newrelic_enabled")
-        || on("is_logdrain_highlight_enabled")
+    if on("is_logdrain_newrelic_enabled")
         || on("is_logdrain_axiom_enabled")
-        || on("is_logdrain_custom_enabled"))
-        && !managed_named(&containers, "coolify-log-drain")
+        || on("is_logdrain_custom_enabled")
     {
-        jobs.spawn_log_drain(server_id, true);
+        // `$this->logDrainContainerLabels` of the running, managed drain.
+        let drain = containers.iter().find(|c| {
+            c.get("name").and_then(Value::as_str) == Some("coolify-log-drain")
+                && c.pointer("/labels/coolify.managed").is_some()
+                && running(c)
+        });
+        let outdated = || {
+            let version = drain.and_then(|c| {
+                c.get("labels")
+                    .and_then(|l| l.get(super::log_drain::CONFIG_VERSION_LABEL))
+                    .and_then(Value::as_str)
+            });
+            super::log_drain::claim_outdated_refresh(
+                srv.str_column("uuid").unwrap_or_default(),
+                version,
+            )
+        };
+        if drain.is_none() || outdated() {
+            jobs.spawn_log_drain(server_id, true);
+        }
     }
     Ok(())
 }

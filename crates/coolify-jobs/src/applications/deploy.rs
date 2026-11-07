@@ -7,7 +7,8 @@
 mod build;
 mod commands;
 pub(super) mod compose_pack;
-mod git;
+pub(crate) mod git;
+mod image_config;
 mod preview;
 mod secrets;
 pub(crate) use secrets::remote_redaction_values;
@@ -842,6 +843,16 @@ impl Jobs {
             hint_added: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         run.init_redaction().await;
+        // `__construct`: `validateDockerRegistryImageConfiguration()` runs before the preview's tag
+        // is read; a failure means the job cannot be created (`fail_undispatchable_deployment`).
+        if let Err(message) = image_config::validate_docker_registry_image_configuration(
+            run.app.str("docker_registry_image_name"),
+            run.app.str("docker_registry_image_tag"),
+            run.b.preview_tag.as_deref(),
+        ) {
+            run.fail_undispatchable(message).await;
+            return;
+        }
         if pull_request_id != 0
             && let Err(e) = run.load_preview().await
         {
@@ -1641,8 +1652,11 @@ impl Run {
         Ok(())
     }
 
-    /// `save_runtime_environment_variables()`.
-    async fn save_runtime_environment(&mut self) -> Step {
+    /// `generate_runtime_environment_variables()`: the runtime `.env` lines and a warning for the
+    /// deployment log. Uses (and clears) the Docker Compose part in `self.b.compose_env`.
+    pub(super) async fn runtime_environment_lines(
+        &mut self,
+    ) -> Result<(Vec<String>, Option<String>), Fail> {
         // Server variables come from the server the application runs on, not its build server.
         let mut variables: Vec<Var> = if self.main_server.id == self.server.id {
             self.variables().await?
@@ -1665,7 +1679,15 @@ impl Run {
             self.resolve_remote_secrets(&mut vars).await?;
             vars
         };
+        let mut production_values = Vec::new();
         if self.b.is_preview() {
+            if self.preview_keeps_production_values() {
+                production_values = variables
+                    .iter()
+                    .filter(|v| !v.is_preview)
+                    .cloned()
+                    .collect();
+            }
             variables = self.deployed_variables().await?;
         }
         let deployed_fqdn = self.deployed_fqdn();
@@ -1694,8 +1716,15 @@ impl Run {
                 environment_name: environment.as_deref(),
                 server_ip: Some(&ip),
                 preview: self.b.is_preview().then_some(deployed_fqdn.as_deref()),
+                production_values,
             },
         );
+        Ok((envs, warning))
+    }
+
+    /// `save_runtime_environment_variables()`.
+    async fn save_runtime_environment(&mut self) -> Step {
+        let (envs, warning) = self.runtime_environment_lines().await?;
         if let Some(w) = warning {
             self.log(&w, "stderr", false).await;
         }
@@ -2213,6 +2242,37 @@ impl Run {
         }
     }
 
+    /// `fail_undispatchable_deployment()`: the job could not be created, so it fails without
+    /// running. Only a deployment that is still in progress changes; the team gets the failure
+    /// notification unless the deployment belongs to a multi-server deployment, and the next
+    /// queued deployment starts.
+    async fn fail_undispatchable(&mut self, message: &str) {
+        let prev = apps::transition_status(&self.jobs.0.db, self.queue_id, "failed", now())
+            .await
+            .ok()
+            .flatten();
+        if prev.as_deref() != Some("in_progress") {
+            return;
+        }
+        tracing::warn!(deployment = %self.dep, "Deployment could not be started: {message}");
+        self.log("========================================", "stderr", false)
+            .await;
+        self.log(
+            &format!("Deployment could not be started: {message}"),
+            "stderr",
+            false,
+        )
+        .await;
+        self.log("========================================", "stderr", false)
+            .await;
+        if self.parent_deployment_uuid.is_none() {
+            self.send_deployment_notification(false).await;
+        }
+        self.jobs
+            .queue_next_deployment(self.app.id, self.main_server.id)
+            .await;
+    }
+
     /// `sendDeploymentNotification($notificationClass)`.
     async fn send_deployment_notification(&self, success: bool) {
         crate::notifications::lookup::notify_deployment(
@@ -2436,7 +2496,23 @@ impl Run {
         Ok(())
     }
 
-    /// `$this->application->fileStorages` and the owner the storage helpers take.
+    /// `previewFileStoragePullRequestId()`: only the current Compose parser mounts the `-pr-<id>`
+    /// copies in a preview; other build packs and the legacy parser mount the application's paths.
+    fn preview_file_storage_pull_request_id(&self) -> i64 {
+        let version = self
+            .app
+            .str("compose_parsing_version")
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
+        if self.app.str("build_pack") == Some("dockercompose") && version >= 3 {
+            self.b.pull_request_id
+        } else {
+            0
+        }
+    }
+
+    /// `$this->application->fileStorages`, each `forPullRequest(previewFileStoragePullRequestId())`
+    /// (the paths this deployment writes), and the owner the storage helpers take.
     pub(super) async fn file_storages(&self) -> Result<(Vec<FileStorage>, StorageOwner), Fail> {
         let db = self.jobs.0.db.clone();
         let enc = self
@@ -2453,9 +2529,10 @@ impl Run {
         )
         .await
         .map_err(|e| Fail::new(e.to_string()))?;
+        let pr = self.preview_file_storage_pull_request_id();
         let files = rows
             .iter()
-            .map(|r| FileStorage::from_record(r, &enc))
+            .map(|r| FileStorage::from_record(r, &enc).map(|f| f.for_pull_request(pr)))
             .collect::<Result<Vec<_>, _>>()
             .map_err(Fail::new)?;
         let owner = StorageOwner::for_application(&db, &self.app)

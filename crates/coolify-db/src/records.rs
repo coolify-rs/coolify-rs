@@ -289,7 +289,12 @@ pub static STANDALONE_POSTGRESQL: ModelSpec = ModelSpec {
         "redact_all_env_values_in_logs",
         "include_coolify_default_variables",
     ],
-    hidden: &["postgres_password", "init_scripts"],
+    hidden: &[
+        "postgres_password",
+        "init_scripts",
+        "postgres_conf",
+        "custom_docker_run_options",
+    ],
     timestamps: &[
         "started_at",
         "created_at",
@@ -320,8 +325,6 @@ pub static SERVER_SETTING: ModelSpec = ModelSpec {
         "is_logdrain_newrelic_enabled",
         "logdrain_newrelic_license_key",
         "logdrain_newrelic_base_uri",
-        "is_logdrain_highlight_enabled",
-        "logdrain_highlight_project_id",
         "is_logdrain_axiom_enabled",
         "logdrain_axiom_dataset_name",
         "logdrain_axiom_api_key",
@@ -383,6 +386,8 @@ pub static SERVER_SETTING: ModelSpec = ModelSpec {
         "patch_checked_at",
         "is_auto_security_updates_enabled",
         "auto_security_updates_time",
+        // v4.5.3 (`2026_10_27_155023_add_logdrain_axiom_domain_to_server_settings_table`).
+        "logdrain_axiom_domain",
     ],
     hidden: &[],
     timestamps: &[

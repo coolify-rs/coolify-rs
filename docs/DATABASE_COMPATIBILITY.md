@@ -1,16 +1,36 @@
 # Database Compatibility
 
-coolify-rs **adopts the upstream PostgreSQL schema unchanged** (ADR 0004). It does not create, alter or migrate
-upstream tables. The baseline schema is captured from real installs:
+coolify-rs **adopts the upstream PostgreSQL schema unchanged** (ADR 0004). It never alters upstream tables on its
+own: a new installation gets the dump of upstream's schema, and `coolify-rs boot` runs the DDL of upstream's own
+migrations (translated from the PHP) to bring a database created by an earlier coolify-rs build to the current
+baseline. The baseline schema is captured from real installs:
 
-- `compat/baseline/upstream-main-b5823c7-schema.sql` + `-migrations.sql`: fresh install of `coollabsio/coolify:sha-b5823c7`
-  (473 migrations) [runtime]: **current baseline**
+- `compat/baseline/upstream-4.5.3-schema.sql` + `-migrations.sql`: fresh install of `coollabsio/coolify:4.5.3`
+  (478 migrations; `php artisan migrate --force` on an empty Postgres 15.19, captured 2026-11-06) [runtime]:
+  **current baseline**
+- `compat/baseline/upstream-main-b5823c7-schema.sql` + `-migrations.sql`: fresh install of
+  `coollabsio/coolify:sha-b5823c7` (473 migrations) [runtime]: previous baseline, the schema earlier coolify-rs
+  builds created; used to test the upgrade to v4.5.3
 - `compat/baseline/upstream-4.5.0-schema.sql` + `-migrations.sql`: 4.5.0 install (83 tables, 56 FKs, 469 migrations)
-  [runtime]: previous baseline, used to test that older databases are refused for writes
+  [runtime]: older baseline, used to test that older databases are refused for writes
 
 Upgrading the 4.5.0 reference in place to `sha-b5823c7` produced the same schema as the fresh install except for
 the literal timestamp defaults upstream bakes in at migration time (`servers.sentinel_updated_at`,
-`*.last_online_at`).
+`*.last_online_at`). The same holds for a `sha-b5823c7` database after the v4.5.3 migrations of
+`bootstrap::MIGRATIONS` (`pg_dump -s` compared; the test `a_b5823c7_database_upgrades_to_4_5_3` compares the catalog).
+
+### v4.5.3 migrations (b5823c7 → v4.5.3)
+
+| Migration | Change |
+|---|---|
+| `2026_10_27_142752_add_use_path_style_endpoint_to_s3_storages_table` | `s3_storages.use_path_style_endpoint boolean NOT NULL DEFAULT true` |
+| `2026_10_27_155023_add_logdrain_axiom_domain_to_server_settings_table` | `server_settings.logdrain_axiom_domain varchar(255) DEFAULT 'us-east-1.aws.edge.axiom.co'` |
+| `2026_10_27_160258_remove_highlight_log_drain_from_server_settings_table` | drops `is_logdrain_highlight_enabled`, `logdrain_highlight_project_id`; stops the log drain of servers that had it on (not transferred away) |
+| `2026_10_28_103619_add_keeps_production_values_to_application_previews_table` | `application_previews.keeps_production_values boolean NOT NULL DEFAULT false`, set to true on existing previews |
+| `2026_10_28_124421_keep_dockerfile_healthcheck_for_existing_applications` | data only: `health_check_enabled = false` where `custom_healthcheck_found` |
+
+`coolify-rs boot` applies them like `php artisan migrate`: each in a transaction with its `migrations` row, under one
+new batch, skipping those already listed. A database created by Coolify v4.5.3 has them all and is left unchanged.
 
 Test databases are created from that dump, so Rust tests run against the real upstream schema.
 
@@ -21,10 +41,10 @@ Test databases are created from that dump, so Rust tests run against the real up
 | Read an existing Coolify DB? | Yes, the primary mode. |
 | Adopt an existing installation? | Yes, side-by-side with upstream initially (API only); see §6 for the consistency model. |
 | Import an export? | Not needed: the schema is shared. A `pg_dump`/restore of the upstream DB is the supported import path. |
-| Upgrade through migrations? | **No** upstream DDL is run by coolify-rs. coolify-rs-only state, if ever needed, goes in a separate `coolify_rs` schema. |
+| Upgrade through migrations? | Only upstream's own migrations, translated from the PHP (`bootstrap::MIGRATIONS`), on `coolify-rs boot`, to bring a coolify-rs database to the current baseline. coolify-rs-only state, if ever needed, goes in a separate `coolify_rs` schema. |
 | Preserve identifiers | Yes: same `id`, `uuid`, team 0 / server 0 / instance settings 0 conventions. |
 | Preserve secrets | Yes: Laravel encrypter implemented and verified both directions with APP_KEY (+ APP_PREVIOUS_KEYS). |
-| Rollback | Nothing to roll back while coolify-rs performs no DDL; data written via the API is upstream-compatible by construction. |
+| Rollback | `upgrade.sh` takes a database backup before `boot` runs migrations; data written via the API is upstream-compatible by construction. |
 
 ### Schema version guard
 

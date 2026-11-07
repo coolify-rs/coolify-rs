@@ -1,6 +1,7 @@
 //! `bootstrap/helpers/gitea.php`: Gitea OAuth tokens, API calls, repositories and branches, plus
 //! the token refresh flow it shares with GitLab.
 
+use crate::git_http::SendRetry as _;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -126,7 +127,7 @@ pub(crate) async fn refresh(
     let response = http
         .post(format!("{base}{}", flow.token_path))
         .form(&form)
-        .send()
+        .send_retry()
         .await
         .map_err(|e| e.to_string())?;
     let status = response.status();

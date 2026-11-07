@@ -2,7 +2,7 @@
   // Port of upstream components/breadcrumb-switcher.blade.php.
   import Reicon from './Reicon.svelte';
   import { link } from '../lib/router.svelte';
-  import type { ResourceSwitcher } from '../lib/page.svelte';
+  import { page, type ResourceSwitcher } from '../lib/page.svelte';
 
   let { switcher }: { switcher: ResourceSwitcher } = $props();
 
@@ -32,7 +32,7 @@
       title="Switch resource"
       class="flex h-8 min-w-0 items-center gap-1.5 rounded-md px-2 opacity-70 transition-[background-color,opacity] hover:bg-neutral-100 hover:opacity-100 dark:hover:bg-white/[0.05]"
     >
-      <span class="min-w-0 truncate font-semibold text-black dark:text-fg">{switcher.label}</span>
+      <span class="min-w-0 truncate font-semibold text-black dark:text-fg">{page.nameOf(switcher.uuid, switcher.label)}</span>
       <svg class="size-4 shrink-0 text-neutral-400 dark:text-fg-faint" viewBox="0 0 24 24" fill="none">
         <path d="M8 9l4-4 4 4M8 15l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
@@ -55,14 +55,14 @@
         {switcher.title}
       </div>
       {#each switcher.items as item (item.href)}
-        {#if item.label.toLowerCase().includes(search.toLowerCase())}
+        {#if page.nameOf(item.uuid, item.label).toLowerCase().includes(search.toLowerCase())}
           <a
             href={item.href}
             use:link
             onclick={() => (open = false)}
             class="listbox-option {item.active ? 'bg-neutral-100 font-medium text-black dark:bg-white/[0.07] dark:text-fg' : ''}"
           >
-            <span class="min-w-0 flex-1 truncate">{item.label}</span>
+            <span class="min-w-0 flex-1 truncate">{page.nameOf(item.uuid, item.label)}</span>
           </a>
         {/if}
       {/each}

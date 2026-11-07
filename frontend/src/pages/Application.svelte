@@ -59,7 +59,7 @@
 
   let record = $state<ApplicationRecord | null>(null);
   let appState = $state<ApplicationState | null>(null);
-  let resources = $state<{ label: string; href: string; active: boolean }[]>([]);
+  let resources = $state<{ label: string; href: string; active: boolean; uuid?: string }[]>([]);
   let missing = $state(false);
   let shownDep = $state<string | null>(null);
   let detail = $state<DeploymentDetail | null>(null);
@@ -92,6 +92,8 @@
     record = r;
     appState = s;
     setNav(r);
+    // `name-changed`: the breadcrumb shows a saved rename.
+    page.nameChanged(app, r.name);
   }
 
   function setNav(r: ApplicationRecord) {
@@ -165,14 +167,15 @@
       .then((res) => {
         const apps = (res.applications ?? []).map((a) => ({
           label: a.name,
+          uuid: a.uuid,
           href: `/project/${uuid}/environment/${env}/application/${a.uuid}`,
           active: a.uuid === app,
         }));
-        const dbs = res.databases.map((d) => ({ label: d.name, href: `/project/${uuid}/environment/${env}/database/${d.uuid}`, active: false }));
+        const dbs = res.databases.map((d) => ({ label: d.name, uuid: d.uuid, href: `/project/${uuid}/environment/${env}/database/${d.uuid}`, active: false }));
         resources = [...apps, ...dbs].sort((a, b) => strnatcmp(a.label.toLowerCase(), b.label.toLowerCase()));
       })
       .catch(() => {
-        resources = record ? [{ label: record.name, href: base, active: true }] : [];
+        resources = record ? [{ label: record.name, uuid: app, href: base, active: true }] : [];
       });
   }
 

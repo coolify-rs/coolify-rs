@@ -351,17 +351,19 @@ pub async fn update(
         .ok_or(ENV_NOT_FOUND)?;
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let id = parts::id_of(&row);
-    let value = input.str("value").map(|v| v.trim().to_owned());
-    let mut values: Vec<(&'static str, ColumnValue)> = vec![
-        (
+    let mut values: Vec<(&'static str, ColumnValue)> = Vec::new();
+    // `if ($request->has('value'))`: a request without a value keeps the stored one.
+    if input.has("value") {
+        let value = input.str("value").map(|v| v.trim().to_owned());
+        values.push((
             "value",
             ColumnValue::Text(value.as_deref().map(|v| enc.encrypt_serialized(v))),
-        ),
-        (
+        ));
+        values.push((
             "is_shared",
             ColumnValue::Bool(is_shared_reference(value.as_deref())),
-        ),
-    ];
+        ));
+    }
     for (field, column) in [
         ("is_literal", "is_literal"),
         ("is_multiline", "is_multiline"),

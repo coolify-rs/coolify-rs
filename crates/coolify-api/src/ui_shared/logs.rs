@@ -536,6 +536,17 @@ async fn read(
     } else {
         plain
     };
+    // `mergedLogs()`: the joined stream of all containers is capped too, cut at a character
+    // boundary (`mb_strcut`) so the viewer never gets half a character.
+    if merged && text.len() > max {
+        let mut end = max;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.truncate(text.trim_end_matches('\n').len());
+        truncated = true;
+    }
     if truncated {
         text.push_str(&format!("\n\n[... Output truncated at {limit} limit ...]"));
     }

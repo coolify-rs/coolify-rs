@@ -194,47 +194,32 @@ fn prefixed_error(provider: &str, e: &CloudError) -> String {
     }
 }
 
-/// `ByHetzner::providerDataErrorMessage`. `HetznerService` retries with `throw`, so a rejected
-/// request is a `RequestException`: the provider's message, otherwise the body.
-fn hetzner_data_error(c: &Client, e: &CloudError) -> String {
-    let details = match c.last_failure() {
-        Some((_, body)) => serde_json::from_str::<Value>(&body)
-            .ok()
-            .and_then(|v| {
-                v.pointer("/error/message")
-                    .filter(|m| php_truthy(m))
-                    .map(as_php_string)
-            })
-            .filter(|m| !m.is_empty())
-            .unwrap_or(body),
-        None => e.to_string(),
-    };
-    format!("Hetzner API error: {details}")
+/// The `loadHetznerData` error: a `CloudProviderApiException` keeps its message, anything else
+/// gets the `Hetzner API error: ` prefix.
+fn hetzner_data_error(e: &CloudError) -> String {
+    match e {
+        CloudError::Provider(p) => p.message.clone(),
+        other => format!("Hetzner API error: {other}"),
+    }
 }
 
-/// The message of the `RequestException` behind a failed `HetznerService` call.
-fn hetzner_exception(c: &Client, e: &CloudError) -> String {
-    let Some((status, body)) = c.last_failure() else {
-        return e.to_string();
-    };
-    // `RequestException::prepareMessage` with Guzzle's `Message::bodySummary`.
-    let message = format!("HTTP request returned status code {status}");
-    if body.is_empty() {
-        return message;
-    }
-    const TRUNCATE_AT: usize = 120;
-    let summary = if body.len() > TRUNCATE_AT {
-        let cut = String::from_utf8_lossy(&body.as_bytes()[..TRUNCATE_AT]).into_owned();
-        format!("{cut} (truncated...)")
-    } else {
-        body
-    };
-    format!("{message}:\n{summary}\n")
+/// `ByHetzner::isServerTypeOutOfStock`: the type's entry for the location says unavailable.
+fn server_type_out_of_stock(server_type: &Value, location: &str) -> bool {
+    server_type
+        .get("locations")
+        .and_then(Value::as_array)
+        .and_then(|l| {
+            l.iter()
+                .find(|l| l.get("name").and_then(Value::as_str) == Some(location))
+        })
+        .and_then(|l| l.get("available"))
+        == Some(&Value::Bool(false))
 }
 
 async fn hetzner_data(c: &Client) -> Result<Value, CloudError> {
     let locations = c.hetzner_locations().await?;
-    let server_types = c.hetzner_server_types().await?;
+    // `getServerTypes(includeOutOfStock: true)`: the form shows them disabled.
+    let server_types = c.hetzner_server_types(None, true).await?;
     let images: Vec<Value> = c
         .hetzner_images()
         .await?
@@ -325,9 +310,7 @@ async fn data(
     };
     let client = Client::new(p, &plain);
     Ok(match p {
-        Provider::Hetzner => data_response(hetzner_data(&client).await, |e| {
-            hetzner_data_error(&client, &e)
-        }),
+        Provider::Hetzner => data_response(hetzner_data(&client).await, |e| hetzner_data_error(&e)),
         Provider::Vultr => {
             data_response(vultr_data(&client).await, |e| prefixed_error("Vultr", &e))
         }
@@ -558,7 +541,11 @@ impl Submit<'_> {
         .await
     }
 
-    fn created(c: &Created) -> ApiResult {
+    /// `ValidateNewCloudServerJob::dispatch($server)`, then the redirect to the server.
+    fn created(&self, c: &Created) -> ApiResult {
+        if let Some(jobs) = &self.state.jobs {
+            jobs.spawn_validate_new_cloud_server(c.id);
+        }
         Ok(ok(json!({"uuid": c.uuid})).into_response())
     }
 
@@ -590,6 +577,22 @@ impl Submit<'_> {
             }
         })
         .await?;
+        // `isServerTypeOutOfStock()` of the selected type, from the types the form loaded.
+        let selected_type = input.str("selected_server_type").unwrap_or_default();
+        let selected_location = input.str("selected_location").unwrap_or_default();
+        if let Ok(types) = Client::new(Provider::Hetzner, &self.token)
+            .hetzner_server_types(None, true)
+            .await
+            && types.iter().any(|t| {
+                t.get("name").and_then(Value::as_str) == Some(selected_type)
+                    && server_type_out_of_stock(t, selected_location)
+            })
+        {
+            return Err(validation_errors(&[(
+                "selected_server_type",
+                "This server type is out of stock in the selected location. Select a different server type or location.",
+            )]));
+        }
         let v4 = flag(input, "enable_ipv4");
         let v6 = flag(input, "enable_ipv6");
         if !v4 && !v6 {
@@ -609,7 +612,8 @@ impl Submit<'_> {
             .await
         {
             Ok(c) => c,
-            Err(e) => return toast_error(hetzner_exception(&client, &e)),
+            // `handleError($e)`: the exception's message.
+            Err(e) => return toast_error(e.to_string()),
         };
         let v4_ip = created
             .pointer("/public_net/ipv4/ip")
@@ -634,7 +638,7 @@ impl Submit<'_> {
             .str("server_name")
             .unwrap_or_default()
             .to_string();
-        let c = self
+        let c = match self
             .row(
                 &name,
                 ip.as_deref().unwrap_or(PLACEHOLDER_IP),
@@ -647,13 +651,25 @@ impl Submit<'_> {
                     ),
                 ],
             )
-            .await?;
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                // `deleteUntrackedHetznerServer`.
+                if server_id != 0
+                    && let Err(d) = client.hetzner_delete_server(server_id).await
+                {
+                    tracing::error!(error = %d, "deleting the untracked Hetzner server failed");
+                }
+                return Err(e);
+            }
+        };
         if flag(&self.input, "enable_backups")
             && let Err(e) = client.hetzner_enable_backup(server_id).await
         {
             tracing::warn!(error = %e, "enabling Hetzner backups failed");
         }
-        Self::created(&c)
+        self.created(&c)
     }
 
     /// `createHetznerServer`.
@@ -811,7 +827,7 @@ impl Submit<'_> {
             )
             .await?;
         }
-        Self::created(&c)
+        self.created(&c)
     }
 
     /// `createVultrServer`.
@@ -948,7 +964,7 @@ impl Submit<'_> {
             )
             .await?;
         }
-        Self::created(&c)
+        self.created(&c)
     }
 
     /// `createDigitalOceanDroplet`.
@@ -1209,7 +1225,7 @@ impl Submit<'_> {
             )
             .await?;
         }
-        Self::created(&c)
+        self.created(&c)
     }
 }
 

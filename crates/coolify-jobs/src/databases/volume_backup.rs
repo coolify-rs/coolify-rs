@@ -507,20 +507,15 @@ impl Jobs {
             format!("test -d {}", quote(&source))
         };
         let script = archive_script(percentage);
+        let mut path_style = false;
         let mut archive = if stream {
             vb::update_execution(db, execution, &[F::LocalDeleted(true)], now())
                 .await
                 .map_err(text)?;
-            let command = self
-                .stream_to_s3_command(
-                    &destinations[0],
-                    &script,
-                    location,
-                    &source,
-                    &container,
-                    &image,
-                )
+            let (command, tested_style) = self
+                .stream_to_s3_command(&destinations[0], &script, location, &container)
                 .await?;
+            path_style = tested_style;
             vb::update_execution(db, execution, &[F::CleanupPending(true)], now())
                 .await
                 .map_err(text)?;
@@ -569,16 +564,38 @@ impl Jobs {
             commands.push(mkdir.as_str());
         }
         commands.push(archive.as_str());
-        let output = self
-            .remote()
-            .run(
-                &run.target,
-                &commands,
-                RunOptions::op(OP).timeout(run.timeout),
-            )
-            .await
-            .map_err(|e| e.message)?
-            .unwrap_or_default();
+        // A stream to S3 runs in a helper container started first, with its mc alias set, so the
+        // S3 keys are never part of a command line; the helper is removed in any case.
+        let output = async {
+            if stream {
+                self.start_stream_helper(
+                    run,
+                    &destinations[0],
+                    &verify,
+                    &source,
+                    &container,
+                    &image,
+                    path_style,
+                )
+                .await?;
+            }
+            self.remote()
+                .run(
+                    &run.target,
+                    &commands,
+                    RunOptions::op(OP).timeout(run.timeout),
+                )
+                .await
+                .map_err(|e| e.message)
+        }
+        .await;
+        if stream {
+            let remove = format!("docker rm -f {} >/dev/null 2>&1 || true", quote(&container));
+            self.remote()
+                .run_quiet(&run.target, &[remove.as_str()], RunOptions::op(OP))
+                .await;
+        }
+        let output = output?.unwrap_or_default();
         vb::update_execution(
             db,
             execution,
@@ -740,7 +757,7 @@ impl Jobs {
         directory: &str,
         image: &str,
     ) -> Result<(), String> {
-        self.test_s3_connection(row).await?;
+        let path_style = self.test_s3_connection(row).await?;
         let s3 = S3Target::from_row(enc, row)?;
         let name = quote(&format!("volume-upload-{execution_uuid}"));
         let resolve = resolve_flags(&s3.endpoint).await;
@@ -752,23 +769,38 @@ impl Jobs {
                 quote(&format!("{location}:{location}:ro")),
                 quote(image)
             ),
-            format!(
-                "docker exec {name} mc alias set{resolve} temporary {} {} {}",
-                quote(&s3.endpoint),
-                quote(&s3.key),
-                quote(&s3.secret)
-            ),
-            format!(
-                "docker exec {name} mc cp{resolve} {} {}",
-                quote(location),
-                quote(&format!("temporary/{}{directory}/", s3.bucket))
-            ),
         ];
         let refs: Vec<&str> = commands.iter().map(String::as_str).collect();
-        let result = self
-            .remote()
-            .run(&run.target, &refs, RunOptions::op(OP).timeout(run.timeout))
-            .await;
+        let alias = super::backup::minio_alias_command(
+            &format!("volume-upload-{execution_uuid}"),
+            &resolve,
+            &s3,
+            path_style,
+        );
+        let copy = format!(
+            "docker exec {name} mc cp{resolve} {} {}",
+            quote(location),
+            quote(&format!("temporary/{}{directory}/", s3.bucket))
+        );
+        let opts = RunOptions::op(OP).timeout(run.timeout);
+        let result = match self.remote().run(&run.target, &refs, opts).await {
+            Ok(_) => match self
+                .remote()
+                .run(&run.target, &[alias.as_str()], RunOptions::op(OP))
+                .await
+            {
+                // `S3Storage::retryMinioClientUpload()` around the copy.
+                Ok(_) => {
+                    let copy = [copy.as_str()];
+                    super::s3::retry_minio_client_upload(|| {
+                        self.remote().run(&run.target, &copy, opts)
+                    })
+                    .await
+                }
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e),
+        };
         let remove = format!("docker rm -f {name}");
         self.remote()
             .run_quiet(&run.target, &[remove.as_str()], RunOptions::op(OP))
@@ -776,17 +808,58 @@ impl Jobs {
         result.map(|_| ()).map_err(|e| e.message)
     }
 
-    /// `streamToS3Command`.
+    /// `startStreamHelper()`: the helper container that streams the volume to S3, with its mc alias.
+    #[allow(clippy::too_many_arguments)]
+    async fn start_stream_helper(
+        &self,
+        run: &Run,
+        row: &Record,
+        verify: &str,
+        source: &str,
+        container: &str,
+        image: &str,
+        path_style: bool,
+    ) -> Result<(), String> {
+        let enc = self
+            .0
+            .encrypter
+            .as_ref()
+            .ok_or("No application encryption key has been specified.")?;
+        let s3 = S3Target::from_row(enc, row)?;
+        let commands = [
+            verify.to_owned(),
+            format!("docker rm -f {} >/dev/null 2>&1 || true", quote(container)),
+            format!(
+                "docker run -d --rm --name {} -e {} -v {} {} >/dev/null",
+                quote(container),
+                quote(&format!("MC_REGION={}", s3.region)),
+                quote(&format!("{source}:/volume:ro")),
+                quote(image)
+            ),
+        ];
+        let refs: Vec<&str> = commands.iter().map(String::as_str).collect();
+        self.remote()
+            .run(&run.target, &refs, RunOptions::op(OP).timeout(run.timeout))
+            .await
+            .map_err(|e| e.message)?;
+        let resolve = resolve_flags(&s3.endpoint).await;
+        let alias = super::backup::minio_alias_command(container, &resolve, &s3, path_style);
+        self.remote()
+            .run(&run.target, &[alias.as_str()], RunOptions::op(OP))
+            .await
+            .map(|_| ())
+            .map_err(|e| e.message)
+    }
+
+    /// `streamToS3Command`: runs in the helper of [`Self::start_stream_helper`].
     async fn stream_to_s3_command(
         &self,
         row: &Record,
         script: &str,
         location: &str,
-        source: &str,
         container: &str,
-        image: &str,
-    ) -> Result<String, String> {
-        self.test_s3_connection(row).await?;
+    ) -> Result<(String, bool), String> {
+        let path_style = self.test_s3_connection(row).await?;
         let enc = self
             .0
             .encrypter
@@ -797,22 +870,15 @@ impl Jobs {
         let destination = quote(&format!("temporary/{}{location}", s3.bucket));
         let log = "/tmp/mc-pipe.log";
         let stream = format!(
-            "set -o pipefail; mc alias set{resolve} temporary {} {} {} >/dev/null && lock=$(mc retention info --default --json{resolve} {}) && case \"$lock\" in *'\"enabled\":\"Enabled\"'*) checksum=--checksum=MD5 ;; *) checksum= ;; esac && ({script} | mc pipe{resolve} $checksum {destination} >/dev/null 2>{log} || {{ status=$?; awk -F {} {} {log} >&2; exit $status; }}) && mc stat --json{resolve} {destination} | sed -n {}",
-            quote(&s3.endpoint),
-            quote(&s3.key),
-            quote(&s3.secret),
+            "set -o pipefail; lock=$(mc retention info --default --json{resolve} {} 2>/dev/null || true) && case \"$lock\" in *'\"enabled\":\"Enabled\"'*) checksum=--checksum=MD5 ;; *) checksum= ;; esac && ({script} | mc pipe{resolve} $checksum {destination} >/dev/null 2>{log} || {{ status=$?; awk -F {} {} {log} >&2; exit $status; }}) && mc stat --json{resolve} {destination} | sed -n {}",
             quote(&format!("temporary/{}", s3.bucket)),
             quote("\r"),
             quote("{ print $NF }"),
             quote(r#"s/.*"size":\([0-9][0-9]*\).*/\1/p"#)
         );
-        Ok(format!(
-            "docker run --rm --name {} -e {} -v {} {} sh -c {}",
-            quote(container),
-            quote(&format!("MC_REGION={}", s3.region)),
-            quote(&format!("{source}:/volume:ro")),
-            quote(image),
-            quote(&stream)
+        Ok((
+            format!("docker exec {} sh -c {}", quote(container), quote(&stream)),
+            path_style,
         ))
     }
 

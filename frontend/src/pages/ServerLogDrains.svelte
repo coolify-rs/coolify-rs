@@ -23,6 +23,7 @@
     is_logdrain_axiom_enabled: boolean;
     logdrain_axiom_dataset_name: string;
     logdrain_axiom_api_key: string;
+    logdrain_axiom_domain: string;
     is_logdrain_custom_enabled: boolean;
     logdrain_custom_config: string;
     logdrain_custom_config_parser: string;
@@ -113,10 +114,13 @@
             </div>
           </SettingsSection>
           <SettingsSection id="server-axiom-drain-section" title="Axiom" description="Send logs to an Axiom dataset using its ingest API.">
-            <div class="grid gap-4 lg:grid-cols-3">
+            <div class="mb-4 max-w-sm">
               <Listbox id="isLogDrainAxiomEnabled" label="Status" bind:value={form.is_logdrain_axiom_enabled} onchange={toggle} options={onoff} disabled={form.is_logdrain_newrelic_enabled || form.is_logdrain_custom_enabled || form.is_logdrain_cloudwatch_enabled || !canEdit} />
+            </div>
+            <div class="grid gap-4 lg:grid-cols-3">
               <FormInput type="password" required={form.is_logdrain_axiom_enabled} id="logDrainAxiomApiKey" label="API key" disabled={active || !canEdit} bind:value={form.logdrain_axiom_api_key} error={err('logdrain_axiom_api_key')} />
               <FormInput required={form.is_logdrain_axiom_enabled} id="logDrainAxiomDatasetName" label="Dataset name" disabled={active || !canEdit} bind:value={form.logdrain_axiom_dataset_name} error={err('logdrain_axiom_dataset_name')} />
+              <FormInput required={form.is_logdrain_axiom_enabled} id="logDrainAxiomDomain" label="Edge domain" placeholder="us-east-1.aws.edge.axiom.co" helper="Base domain of the edge deployment of your Axiom organization.<br><br>US: <code>us-east-1.aws.edge.axiom.co</code><br>EU: <code>eu-central-1.aws.edge.axiom.co</code>" disabled={active || !canEdit} bind:value={form.logdrain_axiom_domain} error={err('logdrain_axiom_domain')} />
             </div>
           </SettingsSection>
           <SettingsSection id="server-cloudwatch-drain-section" title="Amazon CloudWatch Logs" description="Send container logs directly to CloudWatch Logs using the Docker awslogs logging driver.">

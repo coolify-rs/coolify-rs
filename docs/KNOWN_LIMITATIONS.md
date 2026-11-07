@@ -9,13 +9,15 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 
 ## Install and upgrades
 
-- **Install and update address.** Upstream installs and updates from Coolify's CDN. coolify-rs has no published
-  install address yet: `COOLIFY_RS_CDN` must be set on the first install, and the image name `coolify-rs/coolify-rs` is
-  a placeholder. Update checks only read coolify-rs's own version file (`COOLIFY_RS_VERSIONS_URL` or `CDN_URL`);
-  without one, updates are off.
-- **Existing Coolify databases.** coolify-rs does not run upstream's migrations. A database from an older Coolify
-  release is served read-only until upstream Coolify upgrades it. A database with migrations newer than the build is
-  read-only too (writes answer `503`) unless `COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA=true`.
+- **Install and update address.** Upstream installs and updates from Coolify's CDN. coolify-rs installs and updates
+  from its GitHub releases (`COOLIFY_RS_CDN`, default `https://github.com/coolify-rs/coolify-rs/releases/latest/download`)
+  and pulls `ghcr.io/coolify-rs/coolify-rs` (`COOLIFY_RS_REGISTRY`). `REGISTRY_URL` applies to Coolify's helper image
+  only. Update checks read coolify-rs's own version file (`COOLIFY_RS_VERSIONS_URL` or `CDN_URL`).
+- **Existing Coolify databases.** Each release takes over exactly one Coolify release (4.5.3 for `4.5.3-rs.1`; see
+  [MIGRATING.md](MIGRATING.md)). `coolify-rs boot` runs only the upstream migrations that bring its own earlier
+  installs up to that release. A database from an older Coolify release is served read-only until Coolify itself is
+  upgraded to the matching release. A database with migrations newer than the build is read-only too (writes answer
+  `503`) unless `COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA=true`.
 - **Install layout.** No SSH key files or multiplexing sockets on disk, ports 6001 and 6002 are not published, and
   there are no `applications`, `databases`, `services` or `backups` mounts. The terminal websocket is served at
   `/terminal/ws` on the UI's port, so `TERMINAL_PROTOCOL`, `TERMINAL_HOST` and `TERMINAL_PORT` do not apply.
@@ -73,6 +75,10 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
   path, get `200` with the app shell where upstream answers `302`. The browser ends up on the same page.
 - **Servers list** has no Patches column (for example "5 security updates").
 - **Server page after linking a cloud provider** shows no provider status badge, refresh or power controls.
+- **Connection retries**: upstream sends every idempotent outgoing HTTP request once more after a connection failure
+  (`RetryHttpConnectionFailures`, global 10 s connect and 30 s timeouts). coolify-rs does this for Cloudflare only.
+- **Metrics live refresh** is throttled in the browser (one refresh per poll period, none while paused); upstream also
+  enforces it on the server. Loading a range is not limited on either side.
 - **"Configuration changed" warning** on application, database and service pages has no list of the changes.
 - **Remembered list or canvas view** is read in the browser, so a list page shows for an instant before it switches to
   the canvas.
@@ -111,10 +117,15 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
   but writes nothing, where upstream leaves a half-made clone.
 - **Cloning an application from the UI** copies its previews without domains; the API clone regenerates them like
   upstream.
-- **Docker cleanup after a stop** skips the old-image cleanup that keeps rollback copies and the Railpack build cache
-  prune.
+- **Clone volume data** (`CloneVolumeDataWithSourceStopped`) runs its stop, copies and start in the process, not on a
+  queue: a restart of coolify-rs during the copy leaves the source stopped. Checked against a scripted `ssh` only.
+- **TCP proxies of service databases** are not started, recreated or removed by the status checks (standalone
+  databases are).
 - **Deployment rows.** `current_process_id` stays empty, and commands upstream feeds on stdin carry their input inside
   the script.
+- **A registry image name or tag that does not validate** (saved before the forms checked it) fails the deployment
+  when its worker starts, with upstream's "Deployment could not be started" lines. Upstream already refuses it when the
+  job is queued, so its Deploy button or API call answers with an error; coolify-rs answers "Deployment queued.".
 
 ## Servers
 
@@ -178,9 +189,11 @@ These differences are deliberate.
 - **SSH options.** coolify-rs adds `-F /dev/null`, `BatchMode`, `IdentitiesOnly`, no agent and no forwarding, and
   clears the environment, so a hostile server or operator config cannot change behaviour.
 - **Remote output is capped** at 16 MiB for stdout and 1 MiB for stderr.
-- **Client IP.** Upstream trusts `X-Forwarded-For` from any peer, so its API allowlist can be spoofed when the app is
-  reachable without a proxy. coolify-rs uses the peer address unless `COOLIFY_RS_TRUSTED_PROXIES` is set, and then the
-  rightmost untrusted hop. The same rule applies to the scheme and host used for a new server's `sentinel_custom_url`.
+- **Client IP.** Upstream v4.5.3's `client_ip()` uses the forwarded address whenever the TCP peer is a private,
+  loopback or link-local address, so anything on the Docker network or host can set it. coolify-rs keeps its trusted-proxy
+  model (ADR 0006): it uses the peer address unless `COOLIFY_RS_TRUSTED_PROXIES` is set, and then the rightmost untrusted
+  hop, so a private peer is trusted only when listed. The same rule applies to the scheme and host used for a new
+  server's `sentinel_custom_url`.
 - **Database storage responses.** Upstream's `POST` and `PATCH /databases/{uuid}/storages` answers include the whole
   database with its server and saved proxy configuration, also for tokens without `read:sensitive`. coolify-rs leaves
   that relation out.

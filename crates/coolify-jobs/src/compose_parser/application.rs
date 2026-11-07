@@ -94,8 +94,6 @@ impl ServerInfo {
 /// One run of the parser: the application model as loaded (and changed in memory), its server
 /// and the database.
 pub struct Run<'a> {
-    /// The parser walked a volume of the compose file: upstream then dispatches `ServerFilesFromServerJob`.
-    pub saw_volume: bool,
     db: &'a Db,
     enc: &'a Encrypter,
     now: NaiveDateTime,
@@ -181,7 +179,6 @@ impl<'a> Run<'a> {
             docker_compose_raw: app.str("docker_compose_raw").map(str::to_owned),
         };
         Ok(Run {
-            saw_volume: false,
             db,
             enc,
             now,
@@ -413,6 +410,18 @@ impl<'a> Run<'a> {
         value: Option<&str>,
         is_required: Option<bool>,
     ) -> Result<EnvRow, String> {
+        self.env_create_as(key, value, is_required, false).await
+    }
+
+    /// `EnvironmentVariable::create([...])` of a production (`is_preview` false) or preview
+    /// variable, with the model's `created` hook.
+    async fn env_create_as(
+        &mut self,
+        key: &str,
+        value: Option<&str>,
+        is_required: Option<bool>,
+        is_preview: bool,
+    ) -> Result<EnvRow, String> {
         let key = key.trim_matches([' ', '\t', '\n', '\r', '\0', '\x0B']);
         if !ENV_KEY.is_match(key) {
             return Err("The key must start with a letter or underscore and may only contain letters, numbers, underscores, and dots.".into());
@@ -424,7 +433,7 @@ impl<'a> Run<'a> {
         let new = NewEnv {
             key: key.to_owned(),
             value_encrypted: trimmed.as_deref().map(|v| self.encrypt(v)),
-            is_preview: false,
+            is_preview,
             is_required: is_required.unwrap_or(false),
             is_multiline: false,
             is_literal: false,
@@ -435,11 +444,15 @@ impl<'a> Run<'a> {
         let id = store::env_insert(self.db, MORPH, self.app.id, &new, &self.version, self.now)
             .await
             .map_err(Self::db_err)?;
-        // The `created` hook: a preview copy unless one exists.
-        if store::env_first(self.db, MORPH, self.app.id, key, true)
-            .await
-            .map_err(Self::db_err)?
-            .is_none()
+        // The `created` hook: a production variable gets a preview copy unless one exists. A
+        // compose preview generates its own magic secrets on the first pull request parse.
+        if !is_preview
+            && store::env_first(self.db, MORPH, self.app.id, key, true)
+                .await
+                .map_err(Self::db_err)?
+                .is_none()
+            && !(self.build_pack_is_compose()
+                && coolify_db::environment_variables::is_generated_magic_variable(key))
         {
             let copy = NewEnv {
                 is_preview: true,
@@ -456,9 +469,33 @@ impl<'a> Run<'a> {
             value_encrypted: new.value_encrypted,
             is_required: new.is_required,
             preserve_compose_null: false,
-            is_preview: false,
+            is_preview,
             is_shared: new.is_shared,
         })
+    }
+
+    /// `$resource->environment_variables_preview()->firstOrCreate(['key' => ...], ['value' => ...,
+    /// 'is_preview' => true])`: the row and its `wasRecentlyCreated`.
+    async fn env_preview_first_or_create(
+        &mut self,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<(EnvRow, bool), String> {
+        if let Some(row) = store::env_first(self.db, MORPH, self.app.id, key, true)
+            .await
+            .map_err(Self::db_err)?
+        {
+            return Ok((row, false));
+        }
+        Ok((self.env_create_as(key, value, None, true).await?, true))
+    }
+
+    /// `$resource->environment_variables()->where('key', $key)->first()?->value`.
+    async fn env_production_value(&self, key: &str) -> Result<Option<String>, String> {
+        Ok(store::env_first(self.db, MORPH, self.app.id, key, false)
+            .await
+            .map_err(Self::db_err)?
+            .and_then(|r| self.decrypt(r.value_encrypted.as_deref())))
     }
 
     /// `$resource->environment_variables()->updateOrCreate(['key' => ...], ['value' => ..., 'is_preview' => false])`.
@@ -470,6 +507,11 @@ impl<'a> Run<'a> {
             self.env_create(key, value, None).await?;
             return Ok(());
         };
+        self.env_set_value(&row, value).await
+    }
+
+    /// `$variable->update(['value' => $value])`.
+    async fn env_set_value(&mut self, row: &EnvRow, value: Option<&str>) -> Result<(), String> {
         let new = value.map(|v| {
             v.trim_matches([' ', '\t', '\n', '\r', '\0', '\x0B'])
                 .to_owned()
@@ -490,6 +532,44 @@ impl<'a> Run<'a> {
         store::env_update(self.db, row.id, &u, self.now)
             .await
             .map_err(Self::db_err)
+    }
+
+    /// `syncComposeServiceUrlVariables($application, $serviceEnvKey, $url, $host)`: the stored
+    /// `SERVICE_URL_`/`SERVICE_FQDN_` variables of a compose service follow its domain; port
+    /// variables (`SERVICE_URL_API_8000`) get the URL or host with their port. `None` clears them.
+    async fn sync_compose_service_url_variables(
+        &mut self,
+        service_env_key: &str,
+        url: Option<&str>,
+        host: Option<&str>,
+    ) -> Result<(), String> {
+        if let Some(url) = url {
+            self.env_update_or_create(&format!("SERVICE_URL_{service_env_key}"), Some(url))
+                .await?;
+            self.env_update_or_create(&format!("SERVICE_FQDN_{service_env_key}"), host)
+                .await?;
+        }
+        let pattern = regex::Regex::new(&format!(
+            r"^SERVICE_(URL|FQDN)_{}(?:_(\d+))?$",
+            regex::escape(service_env_key)
+        ))
+        .map_err(|e| e.to_string())?;
+        let rows = store::env_list(self.db, MORPH, self.app.id, false)
+            .await
+            .map_err(Self::db_err)?;
+        for row in rows {
+            // `where('key', 'LIKE', "SERVICE_URL_{$key}%")->orWhere(... "SERVICE_FQDN_{$key}%")`, then the pattern.
+            let Some(c) = pattern.captures(&row.key) else {
+                continue;
+            };
+            let base = if &c[1] == "URL" { url } else { host };
+            let value = match (base, c.get(2)) {
+                (Some(v), Some(port)) => Some(format!("{v}:{}", port.as_str())),
+                (v, _) => v.map(str::to_owned),
+            };
+            self.env_set_value(&row, value.as_deref()).await?;
+        }
+        Ok(())
     }
 
     /// The stored plaintext for the dirty check (`null` stays null, untrimmed casts compare
@@ -662,7 +742,7 @@ pub(crate) async fn application_parser(
     commit: Option<&str>,
 ) -> Result<ParsedCompose, String> {
     let is_pull_request = pull_request_id != 0;
-    // `$resource->previews()->find($preview_id)`
+    // `$pullRequestPreview`: `$resource->previews()->find($preview_id)`, else the preview of the pull request.
     let preview = if is_pull_request {
         coolify_db::application_ops::preview(run.db, run.app.id, pull_request_id)
             .await
@@ -670,6 +750,16 @@ pub(crate) async fn application_parser(
     } else {
         None
     };
+    // A public preview can run the compose file of a fork pull request. A preview from before
+    // v4.5.1 keeps the production values (`keeps_production_values`, a v4.5.3 column: read from
+    // the row, so it is false on an older schema).
+    let keeps_production_values = preview
+        .as_ref()
+        .and_then(|p| p.get("keeps_production_values"))
+        .is_some_and(|v| v.as_bool() == Some(true));
+    let is_public_pull_request = is_pull_request
+        && run.setting_default("is_pr_deployments_public_enabled", false)
+        && !keeps_production_values;
     run.warnings.clear();
     let uuid = run.uuid();
     let Some(compose) = run
@@ -784,12 +874,16 @@ pub(crate) async fn application_parser(
                     run.attrs.fqdn = Some(fqdn_with_port);
                     run.save().await?;
                 }
-                let env_key = if parsed.has_port {
-                    php::before_last(&key, "_")
-                } else {
-                    key.clone()
-                };
-                run.env_update_or_create(&env_key, Some(&fqdn)).await?;
+                // The stored variables belong to the main application; a preview deployment gets
+                // its own domains.
+                if !is_pull_request {
+                    let env_key = if parsed.has_port {
+                        php::before_last(&key, "_")
+                    } else {
+                        key.clone()
+                    };
+                    run.env_update_or_create(&env_key, Some(&fqdn)).await?;
+                }
             }
             if run.build_pack_is_compose()
                 && (key.starts_with("SERVICE_FQDN_") || key.starts_with("SERVICE_URL_"))
@@ -862,19 +956,24 @@ pub(crate) async fn application_parser(
                     Some(p) => (format!("{url}:{p}"), format!("{fqdn_env}:{p}")),
                     None => (url.clone(), fqdn_env.clone()),
                 };
-                run.env_first_or_create(
-                    &format!("SERVICE_FQDN_{preserved}"),
-                    Some(Some(&fqdn_env)),
-                    None,
-                )
-                .await?;
-                run.env_first_or_create(
-                    &format!("SERVICE_URL_{preserved}"),
-                    Some(Some(&url)),
-                    None,
-                )
-                .await?;
-                if let (true, Some(p)) = (
+                // The stored variables belong to the main application; a preview deployment gets
+                // its own domains.
+                if !is_pull_request {
+                    run.env_first_or_create(
+                        &format!("SERVICE_FQDN_{preserved}"),
+                        Some(Some(&fqdn_env)),
+                        None,
+                    )
+                    .await?;
+                    run.env_first_or_create(
+                        &format!("SERVICE_URL_{preserved}"),
+                        Some(Some(&url)),
+                        None,
+                    )
+                    .await?;
+                }
+                if let (false, true, Some(p)) = (
+                    is_pull_request,
                     parsed.has_port,
                     parsed
                         .port
@@ -937,11 +1036,38 @@ pub(crate) async fn application_parser(
                     secret.as_deref(),
                     run.now.and_utc().timestamp(),
                 );
-                run.env_first_or_create(&key, Some(value.as_deref()), None)
-                    .await?;
+                if is_pull_request {
+                    // A preview deployment reads its preview variables, so a pull request parse
+                    // generates the value there.
+                    let (preview_variable, was_recently_created) = run
+                        .env_preview_first_or_create(&key, value.as_deref())
+                        .await?;
+                    // A public preview does not get the production secret; it gets its own value.
+                    if is_public_pull_request
+                        && !was_recently_created
+                        && run.decrypt(preview_variable.value_encrypted.as_deref())
+                            == run.env_production_value(&key).await?
+                    {
+                        let regenerated = env::generate_env_value(
+                            &command,
+                            secret.as_deref(),
+                            run.now.and_utc().timestamp(),
+                        );
+                        run.env_set_value(&preview_variable, regenerated.as_deref())
+                            .await?;
+                    }
+                } else {
+                    run.env_first_or_create(&key, Some(value.as_deref()), None)
+                        .await?;
+                }
             }
         }
     }
+
+    // `$isPullRequestMagicVariable`: a pull request parse keeps its magic variables in the preview
+    // variables (see above), not in the production variables.
+    let is_pull_request_magic_variable =
+        |key: &str| is_pull_request && all_magic.iter().any(|(k, _)| k.as_string() == key);
 
     let service_name_environments = if run.build_pack_is_compose() {
         env::generate_docker_compose_service_name(&services, pull_request_id)
@@ -1090,6 +1216,9 @@ pub(crate) async fn application_parser(
                         &main_directory,
                         found.as_ref().map(|f| f.fs_path.as_str()),
                     )?;
+                    // The file storage keeps the path of the application; a preview deployment adds
+                    // the suffix (`LocalFileVolume::forPullRequest()`).
+                    let stored_source = source.clone();
                     if is_pull_request && found.as_ref().is_none_or(|f| f.is_preview_suffix_enabled)
                     {
                         source = volumes::add_preview_deployment_suffix(&source, pull_request_id);
@@ -1107,7 +1236,7 @@ pub(crate) async fn application_parser(
                                 store::file_volume_update(
                                     run.db,
                                     f.id,
-                                    &source,
+                                    &stored_source,
                                     &target,
                                     content_change,
                                     is_directory,
@@ -1121,7 +1250,7 @@ pub(crate) async fn application_parser(
                                     run.db,
                                     MORPH,
                                     run.app.id,
-                                    &source,
+                                    &stored_source,
                                     &target,
                                     content_enc.as_deref(),
                                     is_directory,
@@ -1225,7 +1354,6 @@ pub(crate) async fn application_parser(
                     },
                 );
             }
-            run.saw_volume = true;
             php::put(&mut volumes_parsed, index.clone(), volume);
         }
 
@@ -1360,8 +1488,10 @@ pub(crate) async fn application_parser(
                         } else {
                             Some(default.as_str())
                         };
-                        run.env_first_or_create(&var, Some(value_for_create), Some(required))
-                            .await?;
+                        if !is_pull_request_magic_variable(&var) {
+                            run.env_first_or_create(&var, Some(value_for_create), Some(required))
+                                .await?;
+                        }
                         if default.contains("${") {
                             let mut search = 0usize;
                             let mut nested = env::extract_balanced_brace_content(&default, search);
@@ -1373,7 +1503,7 @@ pub(crate) async fn application_parser(
                                     .map_or(nested_content.clone(), |s| s.0.clone());
                                 let magic_var = nested_name.starts_with("SERVICE_URL_")
                                     || nested_name.starts_with("SERVICE_FQDN_");
-                                if !magic_var {
+                                if !magic_var && !is_pull_request_magic_variable(&nested_name) {
                                     match &nested_split {
                                         Some((v, _, d)) => {
                                             run.env_first_or_create(v, Some(Some(d)), None).await?;
@@ -1393,7 +1523,9 @@ pub(crate) async fn application_parser(
                         }
                     }
                     None => {
-                        run.env_first_or_create(&content, None, Some(false)).await?;
+                        if !is_pull_request_magic_variable(&content) {
+                            run.env_first_or_create(&content, None, Some(false)).await?;
+                        }
                     }
                 },
                 None => {
@@ -1485,7 +1617,9 @@ pub(crate) async fn application_parser(
         if run.build_pack_is_compose() {
             for (for_service, domain) in &domains_map {
                 let parsed_domain = domains::compose_domain_entry_string(domain);
-                let formatted = php::upper(&service_name).replace(['-', '.'], "_");
+                let env_key = php::upper(&domains::normalize_compose_service_name(
+                    &for_service.as_string(),
+                ));
                 if php::filled_str(parsed_domain.as_deref()) {
                     let first = parsed_domain
                         .unwrap_or_default()
@@ -1498,9 +1632,6 @@ pub(crate) async fn application_parser(
                     let mut without_port = url.clone();
                     without_port.port = None;
                     let url_text = without_port.to_string();
-                    let env_key = php::upper(&domains::normalize_compose_service_name(
-                        &for_service.as_string(),
-                    ));
                     php::put_str(
                         &mut coolify_environments,
                         &format!("SERVICE_URL_{env_key}"),
@@ -1515,22 +1646,11 @@ pub(crate) async fn application_parser(
                     if is_pull_request {
                         continue;
                     }
-                    run.env_update_or_create(&format!("SERVICE_URL_{env_key}"), Some(&url_text))
-                        .await?;
-                    run.env_update_or_create(&format!("SERVICE_FQDN_{env_key}"), Some(&host))
+                    run.sync_compose_service_url_variables(&env_key, Some(&url_text), Some(&host))
                         .await?;
                 } else if !is_pull_request {
-                    for prefix in ["SERVICE_FQDN_", "SERVICE_URL_"] {
-                        store::env_null_values_like(
-                            run.db,
-                            MORPH,
-                            run.app.id,
-                            &format!("{prefix}{formatted}%"),
-                            run.now,
-                        )
-                        .await
-                        .map_err(Run::db_err)?;
-                    }
+                    run.sync_compose_service_url_variables(&env_key, None, None)
+                        .await?;
                 }
             }
         }
@@ -1641,20 +1761,43 @@ pub(crate) async fn application_parser(
                     continue;
                 }
                 let mut value = v;
+                let mut is_value_from_database = false;
                 if value == PhpValue::Str(String::new())
                     && !(is_pull_request && k.as_string().starts_with("SERVICE_URL_"))
-                    && let Some(row) =
-                        store::env_first(run.db, MORPH, run.app.id, &k.as_string(), false)
-                            .await
-                            .map_err(Run::db_err)?
-                    && let Some(stored) = run
-                        .decrypt(row.value_encrypted.as_deref())
-                        .filter(|s| !s.is_empty())
                 {
-                    value = PhpValue::Str(stored);
+                    // A preview uses its preview variables, like ApplicationDeploymentJob does.
+                    let mut db_env = store::env_first(
+                        run.db,
+                        MORPH,
+                        run.app.id,
+                        &k.as_string(),
+                        is_pull_request,
+                    )
+                    .await
+                    .map_err(Run::db_err)?;
+                    // A public preview does not get preview variables that still have the
+                    // production value.
+                    if let Some(row) = &db_env
+                        && is_public_pull_request
+                        && run.env_production_value(&k.as_string()).await?
+                            == run.decrypt(row.value_encrypted.as_deref())
+                    {
+                        db_env = None;
+                    }
+                    if let Some(row) = db_env
+                        && let Some(stored) = run
+                            .decrypt(row.value_encrypted.as_deref())
+                            .filter(|s| !s.is_empty())
+                    {
+                        value = PhpValue::Str(stored);
+                        is_value_from_database = true;
+                    }
                 }
+                // A public preview resolves shared variables only in its own variables, not in
+                // the compose file of the pull request.
                 if let PhpValue::Str(s) = &value
                     && s.contains("{{")
+                    && (is_value_from_database || !is_public_pull_request)
                 {
                     value = PhpValue::Str(run.resolve_shared(s, false).await?);
                 }

@@ -590,6 +590,7 @@ impl Jobs {
                 continue;
             };
             let observed = list.iter().map(|(_, r)| *r).max().unwrap_or(0);
+            let still_running = list.iter().any(|(s, _)| !s.contains("exited"));
             let previous = a.int("restart_count").unwrap_or(0);
             let max = a.int("max_restart_count").unwrap_or(0);
             if observed > previous {
@@ -626,20 +627,22 @@ impl Jobs {
                 )
                 .await;
             }
-            // `$restartLimitReached`: the first check that sees it stops the application and tells
-            // the team; the application stays stopped until a deployment resets the limit.
-            if max > 0
-                && observed >= max
-                && queries::claim_application_restart_limit(db, id, now)
+            // `$restartLimitReached`: the first check that sees it tells the team; the application
+            // stays stopped until a deployment resets the limit. The stop is sent again while a
+            // container still runs, because an earlier stop can fail or come too late.
+            if max > 0 && observed >= max {
+                let claimed = queries::claim_application_restart_limit(db, id, now)
                     .await
-                    .unwrap_or(false)
-            {
-                let jobs = self.clone();
-                let stopped = a.clone();
-                tokio::spawn(async move {
-                    jobs.stop_application(&stopped, false, false, false).await;
-                });
-                if let Some(environment_id) = a.int("environment_id")
+                    .unwrap_or(false);
+                if claimed || still_running {
+                    let jobs = self.clone();
+                    let stopped = a.clone();
+                    tokio::spawn(async move {
+                        jobs.stop_application(&stopped, false, false, false).await;
+                    });
+                }
+                if claimed
+                    && let Some(environment_id) = a.int("environment_id")
                     && let Some((team_id, notification)) = lookup::application_restart_limit(
                         db,
                         environment_id,

@@ -410,8 +410,6 @@ pub async fn update(
     if !errors.is_empty() {
         return Err(ApiError::Validation(errors));
     }
-    fields::check_webhook_secret_ability(&ctx, &input, enc, Some(&found))?;
-
     let mut github_app = None;
     if input.has("github_app_uuid") {
         if found.str("build_pack") == Some("dockerimage")

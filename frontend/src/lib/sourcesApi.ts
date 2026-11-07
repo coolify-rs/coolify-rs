@@ -157,7 +157,8 @@ export async function setSourceCrumbs(type: Provider, uuid: string, connected: b
       heading: 'Sources',
       title: 'Switch sources',
       label: current.name || 'Source',
-      items: sorted.map((s) => ({ label: s.name, href: `/source/${s.type}/${s.uuid}`, active: s === current })),
+      uuid: current.uuid,
+      items: sorted.map((s) => ({ label: s.name, uuid: s.uuid, href: `/source/${s.type}/${s.uuid}`, active: s === current })),
     },
   ];
   page.sourceConnected = connected;

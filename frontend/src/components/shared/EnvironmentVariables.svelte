@@ -325,6 +325,8 @@
         {#if canManage}
           <Callout type="info" title="Note">
             Inline comments with space before # (e.g., <code class="font-mono">KEY=value #comment</code>) are stripped.
+            To set flags, put <code class="font-mono"># coolify: literal buildtime=false runtime=false</code>
+            directly above a variable line. Without this line, the flags of a variable do not change.
           </Callout>
           <FormTextarea rows={10} class="whitespace-pre-wrap font-sans" id="variables" label="Production" bind:value={variables} />
           {#if showPreview}

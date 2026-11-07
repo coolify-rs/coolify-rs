@@ -276,11 +276,10 @@ const SERVER_SETTING_FILLABLE: &[&str] = &[
     "is_logdrain_newrelic_enabled",
     "logdrain_newrelic_license_key",
     "logdrain_newrelic_base_uri",
-    "is_logdrain_highlight_enabled",
-    "logdrain_highlight_project_id",
     "is_logdrain_axiom_enabled",
     "logdrain_axiom_dataset_name",
     "logdrain_axiom_api_key",
+    "logdrain_axiom_domain",
     "is_swarm_worker",
     "is_logdrain_custom_enabled",
     "logdrain_custom_config",
@@ -2066,6 +2065,7 @@ impl Import<'_> {
                 "docker_registry_image_tag": get_or_null(p, "docker_registry_image_tag"),
                 "domain_port_overrides": get_or_null(p, "domain_port_overrides"),
                 "max_restart_count": int_or(p, "max_restart_count", 0),
+                "keeps_production_values": bool_of(p, "keeps_production_values", false),
             }));
             let (id, was_created) = if let Some(id) = preview {
                 attrs.insert("deleted_at".into(), Value::Null);
@@ -2563,6 +2563,7 @@ impl Import<'_> {
             "secret": secret("secret"),
             "bucket": trimmed("bucket"),
             "endpoint": trimmed("endpoint"),
+            "use_path_style_endpoint": bool_of(p, "use_path_style_endpoint", true),
             "is_usable": bool_of(p, "is_usable", true),
         }));
         let id = self.insert(conn, "s3_storages", attrs).await?;

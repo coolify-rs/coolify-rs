@@ -359,7 +359,7 @@ impl Jobs {
         self.spawn_database_delete(d, delete_volumes, delete_configurations, true);
     }
 
-    /// `logs_by_uuid`: `None` when the database has no running container.
+    /// `logs_by_uuid`: `None` when the database has no container.
     pub async fn database_logs(
         &self,
         d: &DatabaseRow,
@@ -396,25 +396,8 @@ impl Jobs {
         let Some(first) = containers.first() else {
             return Ok(None);
         };
-        let names = first
-            .get("Names")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        // A stopped container still has logs, like in the UI.
         let id = first.get("ID").and_then(Value::as_str).unwrap_or_default();
-        let inspect = format!("docker inspect --format '{{{{json .}}}}' {}", quote(names));
-        let state = self
-            .remote()
-            .run_quiet(&t, &[inspect.as_str()], RunOptions::op("database.logs"))
-            .await
-            .unwrap_or_default();
-        let running = json_lines(&state)
-            .first()
-            .and_then(|c| c.pointer("/State/Status"))
-            .and_then(Value::as_str)
-            == Some("running");
-        if !running {
-            return Ok(None);
-        }
         let mut command = format!("docker logs -n {lines}");
         if timestamps {
             command.push_str(" --timestamps");
@@ -460,29 +443,31 @@ impl Jobs {
         )))
     }
 
-    /// The Bus chain of `clone_by_uuid`: stop once, clone all volumes (`VolumeCloneJob`), start once.
-    pub fn spawn_volume_clones(
+    /// `clone_by_uuid`: `CloneVolumeDataWithSourceStopped::run($database, $volumeJobs)`.
+    pub async fn spawn_volume_clones(
         &self,
         d: DatabaseRow,
         target_server_id: i64,
         clones: Vec<(String, String)>,
     ) {
-        let jobs = self.clone();
-        tokio::spawn(async move {
-            let Ok(server) = jobs.server_for(&d).await else {
-                return;
-            };
-            jobs.stop_database(&d, &server, true).await;
-            for (source, target) in clones {
-                if let Err(e) = jobs
-                    .clone_volume_data(server.id, target_server_id, &source, None, &target)
-                    .await
-                {
-                    tracing::warn!(database = %d.uuid, error = %e, "volume clone failed");
-                }
-            }
-            jobs.start_database(&d, None).await;
-        });
+        let Some(source_server) = d.server_id() else {
+            return;
+        };
+        let copies = clones
+            .into_iter()
+            .map(|(source, target)| crate::clone_volume_data::VolumeCopy {
+                source_server,
+                target_server: target_server_id,
+                source_volume: source,
+                volume_id: None,
+                target_volume: target,
+            })
+            .collect();
+        self.clone_volume_data_with_source_stopped(
+            crate::clone_volume_data::CloneSource::Database(d),
+            copies,
+        )
+        .await;
     }
 
     /// `StopDatabase::handle`.
@@ -528,7 +513,7 @@ impl Jobs {
         )
         .await;
         if docker_cleanup {
-            self.spawn_cleanup_after_stop(server.clone());
+            self.spawn_cleanup_after_stop(server.id, server.uuid.clone());
         }
         // The row was read before the stop; a public database loses its proxy too.
         let public = dbs::find_in_team(&self.0.db, d.team_id, &d.uuid)
@@ -595,7 +580,7 @@ impl Jobs {
     }
 
     /// `StartDatabase::queueStart` + `DatabaseStartJob` + `StartPostgresql`.
-    async fn start_database(&self, d: &DatabaseRow, user_id: Option<i64>) {
+    pub(crate) async fn start_database(&self, d: &DatabaseRow, user_id: Option<i64>) {
         let server = match self.server_for(d).await {
             Ok(s) => s,
             Err(e) => {
@@ -968,6 +953,42 @@ impl Jobs {
             crate::applications::status::Snapshot::POLLED,
         )
         .await;
+        self.check_database_proxies(&databases, &containers).await;
+    }
+
+    /// The TCP proxy part of `GetContainersStatus` (not Swarm): a public database gets its proxy
+    /// (again when an older version started it with an older configuration), a private one loses it.
+    async fn check_database_proxies(&self, databases: &[DatabaseRow], containers: &[Value]) {
+        for c in containers {
+            let uuid = c
+                .pointer("/Config/Labels/coolify.databaseUuid")
+                .and_then(Value::as_str);
+            let Some(d) = uuid.and_then(|u| databases.iter().find(|d| d.uuid == u)) else {
+                continue;
+            };
+            let name = format!("/{}-proxy", d.uuid);
+            let found = containers
+                .iter()
+                .find(|p| p.get("Name").and_then(Value::as_str) == Some(name.as_str()));
+            let result = if d.bool("is_public") {
+                match found {
+                    None => self.start_database_proxy(d).await,
+                    Some(p)
+                        if proxy::claim_outdated_refresh(&d.uuid, p.pointer("/Config/Labels")) =>
+                    {
+                        self.start_database_proxy(d).await
+                    }
+                    Some(_) => Ok(()),
+                }
+            } else if found.is_some() {
+                self.stop_database_proxy(d).await
+            } else {
+                Ok(())
+            };
+            if let Err(e) = result {
+                tracing::warn!(database = %d.uuid, error = %e, "TCP proxy check failed");
+            }
+        }
     }
 
     /// The database part of `GetContainersStatus` and `PushServerUpdateJob`.

@@ -172,7 +172,7 @@
             </div>
             {#if field.isLocked}
               <FormInput id="fields.{field.key}.locked" disabled value="Locked (shown once)" />
-            {:else if data.is_password_hidden && field.isPassword}
+            {:else if data.is_password_hidden}
               <FormInput id="fields.{field.key}.hidden" disabled value="Hidden (only admins can view)" />
             {:else}
               <FormInput

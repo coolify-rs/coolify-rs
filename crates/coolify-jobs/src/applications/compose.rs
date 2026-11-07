@@ -126,6 +126,9 @@ pub struct EnvContext<'a> {
     /// A preview deployment: `$this->preview->fqdn`, and `variables` holds the deployed preview
     /// variables.
     pub preview: Option<Option<&'a str>>,
+    /// A preview that keeps production values (`$this->preview->keeps_production_values`): the
+    /// production variables, of which the runtime ones without a preview copy are added.
+    pub production_values: Vec<Var>,
 }
 
 /// What a Docker Compose deployment adds to the runtime env file.
@@ -246,23 +249,22 @@ pub fn runtime_env(
         .compose
         .as_ref()
         .map_or(&[], |c| c.excluded_ids.as_slice());
-    let mut runtime: Vec<&Var> = production
-        .iter()
-        .copied()
-        .filter(|v| !excluded_runtime_key(&v.key) && !excluded.contains(&v.id))
-        .collect();
-    if a.setting_bool("is_env_sorting_enabled") {
-        runtime.sort_by(|x, y| x.key.cmp(&y.key));
-    } else {
-        runtime.sort_by_key(|v| v.id);
+    /// The runtime variables of `vars`, sorted by key or id.
+    fn runtime_of<'v>(vars: Vec<&'v Var>, excluded: &[i64], sort_by_key: bool) -> Vec<&'v Var> {
+        let mut vars: Vec<&Var> = vars
+            .into_iter()
+            .filter(|v| !excluded_runtime_key(&v.key) && !excluded.contains(&v.id))
+            .collect();
+        if sort_by_key {
+            vars.sort_by(|x, y| x.key.cmp(&y.key));
+        } else {
+            vars.sort_by_key(|v| v.id);
+        }
+        vars.into_iter().filter(|v| v.is_runtime).collect()
     }
-    let runtime: Vec<&Var> = runtime.into_iter().filter(|v| v.is_runtime).collect();
-    let service_ref = |v: &&Var| {
-        let value = v.value.as_deref().unwrap_or_default();
-        value.starts_with("$SERVICE_") || value.contains("${SERVICE_")
-    };
-    let (late, early): (Vec<&Var>, Vec<&Var>) = runtime.into_iter().partition(service_ref);
-    for v in early.into_iter().chain(late) {
+    let sort_by_key = a.setting_bool("is_env_sorting_enabled");
+    let runtime = runtime_of(production.clone(), excluded, sort_by_key);
+    let line_of = |v: &Var| {
         let line = if v.remote && v.uses_legacy_escaping {
             // `format_remote_secret_value()`
             crate::integrations::secret_managers::dotenv(v.resolved.as_deref().unwrap_or_default())
@@ -272,7 +274,29 @@ pub fn runtime_env(
             let resolved = v.resolved.clone().unwrap_or_default();
             escape_env_file_value(Some(&resolved), v.allows_interpolation(&resolved))
         };
-        envs.push(format!("{}={line}", v.key));
+        format!("{}={line}", v.key)
+    };
+    let runtime_keys: Vec<&str> = runtime.iter().map(|v| v.key.as_str()).collect();
+    // A preview from before v4.5.1 also gets the production variables that have no preview copy.
+    let kept: Vec<&Var> = if ctx.preview.is_some() && !runtime.is_empty() {
+        runtime_of(
+            ctx.production_values.iter().collect(),
+            excluded,
+            sort_by_key,
+        )
+        .into_iter()
+        .filter(|v| !runtime_keys.contains(&v.key.as_str()))
+        .collect()
+    } else {
+        Vec::new()
+    };
+    let service_ref = |v: &&Var| {
+        let value = v.value.as_deref().unwrap_or_default();
+        value.starts_with("$SERVICE_") || value.contains("${SERVICE_")
+    };
+    let (late, early): (Vec<&Var>, Vec<&Var>) = runtime.into_iter().partition(service_ref);
+    for v in early.into_iter().chain(late).chain(kept) {
+        envs.push(line_of(v));
     }
 
     let ports = main_ports(a);
@@ -673,4 +697,92 @@ pub fn compose(c: &ComposeInput<'_>) -> String {
         compose.set("volumes", names);
     }
     yaml::dump(&compose, 10)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn var(id: i64, key: &str, value: &str, is_preview: bool) -> Var {
+        Var {
+            id,
+            key: key.into(),
+            value: Some(value.into()),
+            resolved: Some(value.into()),
+            is_literal: false,
+            is_multiline: false,
+            is_shared: false,
+            is_shown_once: false,
+            is_runtime: true,
+            is_buildtime: true,
+            is_preview,
+            uses_legacy_escaping: false,
+            remote: false,
+            preserve_compose_null: false,
+            cipher: None,
+        }
+    }
+
+    fn app() -> ApplicationRow {
+        let mut raw = coolify_db::records::Record::new();
+        raw.insert("ports_exposes".into(), "3000".into());
+        let mut settings = coolify_db::records::Record::new();
+        settings.insert("include_coolify_default_variables".into(), false.into());
+        ApplicationRow {
+            id: 1,
+            uuid: "app".into(),
+            team_id: 1,
+            raw,
+            settings,
+            environment: Default::default(),
+            project: Default::default(),
+            team: Default::default(),
+            destination: None,
+        }
+    }
+
+    fn lines(production_values: Vec<Var>, preview: &[Var]) -> Vec<String> {
+        let ctx = EnvContext {
+            commit: "abc",
+            branch: None,
+            compose: None,
+            container_name: "app-pr-7",
+            project_name: None,
+            environment_name: None,
+            server_ip: None,
+            preview: Some(Some("https://pr-7.example.com")),
+            production_values,
+        };
+        runtime_env(&app(), preview, &ctx).0
+    }
+
+    /// `generate_runtime_environment_variables()` of a preview: one from before v4.5.1
+    /// (`keeps_production_values`) also gets the production variables without a preview copy.
+    #[test]
+    fn previews_from_before_the_upgrade_keep_production_values() {
+        let preview = [var(11, "DATABASE_URL", "postgres://preview", true)];
+        let production = vec![
+            var(1, "DATABASE_URL", "postgres://production", false),
+            var(2, "SECRET_KEY", "s3cret", false),
+        ];
+        let new = lines(Vec::new(), &preview);
+        assert!(
+            new.contains(&r#"DATABASE_URL="postgres://preview""#.to_owned()),
+            "{new:?}"
+        );
+        assert!(!new.iter().any(|l| l.starts_with("SECRET_KEY=")));
+        let kept = lines(production.clone(), &preview);
+        assert!(kept.contains(&r#"DATABASE_URL="postgres://preview""#.to_owned()));
+        assert!(!kept.contains(&r#"DATABASE_URL="postgres://production""#.to_owned()));
+        let position = |l: &str| kept.iter().position(|x| x == l);
+        assert!(
+            position(r#"SECRET_KEY="s3cret""#) > position(r#"DATABASE_URL="postgres://preview""#)
+        );
+        // Without any preview variable, nothing is added.
+        assert!(
+            !lines(production, &[])
+                .iter()
+                .any(|l| l.starts_with("SECRET_KEY="))
+        );
+    }
 }

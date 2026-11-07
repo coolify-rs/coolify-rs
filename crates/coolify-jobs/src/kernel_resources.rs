@@ -36,7 +36,7 @@ impl Jobs {
             let Ok(Some(row)) = servers::find_by_id(&jobs.0.db, server_id).await else {
                 return;
             };
-            let check = crate::cloud::refresh_state(&jobs, &row);
+            let check = crate::cloud::refresh_cloud_provider_state(&jobs, &row);
             match tokio::time::timeout(PROVIDER_CHECK_TIMEOUT, check).await {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => {

@@ -39,7 +39,25 @@ const NOT_FOUND: ApiError = ApiError::Message(StatusCode::NOT_FOUND, "Applicatio
 const NOT_FOUND_NO_PERIOD: ApiError =
     ApiError::Message(StatusCode::NOT_FOUND, "Application not found");
 
-/// `$hidden` of the model; the sensitive ones become visible with `read:sensitive`.
+/// `Application::COMMAND_AND_CONFIGURATION_ATTRIBUTES`: free-form commands and configuration that
+/// can embed credentials. Only users who can update the application and `read:sensitive` tokens
+/// read them.
+pub(crate) const COMMAND_AND_CONFIGURATION_ATTRIBUTES: &[&str] = &[
+    "install_command",
+    "build_command",
+    "start_command",
+    "pre_deployment_command",
+    "post_deployment_command",
+    "health_check_command",
+    "health_check_response_text",
+    "custom_docker_run_options",
+    "docker_compose_custom_start_command",
+    "docker_compose_custom_build_command",
+    "custom_nginx_configuration",
+];
+
+/// The rest of `$hidden` of the model (it spreads `COMMAND_AND_CONFIGURATION_ATTRIBUTES` first);
+/// the sensitive ones become visible with `read:sensitive`.
 const HIDDEN: &[&str] = &[
     "http_basic_auth_password",
     "manual_webhook_secret_github",
@@ -219,7 +237,7 @@ pub(crate) async fn present_preloaded(
         None => swarm_server(state, a).await?,
     };
     let mut r = APPLICATION.present(a.raw.clone());
-    for h in HIDDEN {
+    for h in COMMAND_AND_CONFIGURATION_ATTRIBUTES.iter().chain(HIDDEN) {
         let visible = ctx.can_read_sensitive
             && (model || !matches!(*h, "domain_dns_statuses" | "domain_port_overrides"));
         if !visible {
@@ -504,9 +522,33 @@ static DOCKER_IMAGE_NAME: std::sync::LazyLock<regex::Regex> = std::sync::LazyLoc
     regex::Regex::new(r"\A(?:(?:(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?|\[[0-9a-f:.]+\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*)(?:@sha256)?\z")
         .unwrap_or_else(|_| unreachable!())
 });
-static DOCKER_IMAGE_TAG: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"\A[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\z").unwrap_or_else(|_| unreachable!())
-});
+/// `ValidationPatterns::DOCKER_IMAGE_LITERAL_TAG_PATTERN`.
+static DOCKER_IMAGE_LITERAL_TAG: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"\A[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\z")
+            .unwrap_or_else(|_| unreachable!())
+    });
+/// `ValidationPatterns::DOCKER_IMAGE_TAG_PATTERN` without its length lookahead (1 to 128
+/// characters, checked by `max:128` or [`is_valid_docker_image_tag`]): a tag may hold `$VAR`,
+/// `${VAR}`, `${VAR:-default}` and `${VAR-default}`, which Docker Compose fills in.
+pub(crate) static DOCKER_IMAGE_TAG: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(
+    || {
+        regex::Regex::new(r"\A(?:[A-Za-z0-9_]|\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*(?::?-[A-Za-z0-9_.-]*)?\}))(?:[A-Za-z0-9_.-]|\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*(?::?-[A-Za-z0-9_.-]*)?\}))*\z")
+            .unwrap_or_else(|_| unreachable!())
+    },
+);
+
+/// `ValidationPatterns::isValidDockerImageTag($value, $allowVariables)`.
+pub(crate) fn is_valid_docker_image_tag(value: &str, allow_variables: bool) -> bool {
+    if value.trim().is_empty() {
+        return true;
+    }
+    if allow_variables {
+        (1..=128).contains(&value.chars().count()) && DOCKER_IMAGE_TAG.is_match(value)
+    } else {
+        DOCKER_IMAGE_LITERAL_TAG.is_match(value)
+    }
+}
 static PORTS_EXPOSES: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"^(\d+)(,\d+)*$").unwrap_or_else(|_| unreachable!())
 });
@@ -558,6 +600,15 @@ static GPU_COUNT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|
 
 /// The `DockerImageFormat` rule.
 pub(crate) fn docker_image_format(v: &Value) -> Option<String> {
+    docker_image_format_with(v, false)
+}
+
+/// `new DockerImageFormat(allowVariableTag: true)`: only for images that Docker Compose runs.
+pub(crate) fn docker_image_format_variable_tag(v: &Value) -> Option<String> {
+    docker_image_format_with(v, true)
+}
+
+fn docker_image_format_with(v: &Value, allow_variable_tag: bool) -> Option<String> {
     let bad =
         "The :attribute format is invalid. Use image:tag or image@sha256:hash format.".to_owned();
     let Some(s) = v.as_str() else {
@@ -579,14 +630,15 @@ pub(crate) fn docker_image_format(v: &Value) -> Option<String> {
     let name_ok = name.is_empty() || DOCKER_IMAGE_NAME.is_match(&name) && name.len() <= 255;
     let tag_ok = tag
         .as_deref()
-        .is_none_or(|t| t.is_empty() || DOCKER_IMAGE_TAG.is_match(t));
+        .is_none_or(|t| is_valid_docker_image_tag(t, allow_variable_tag));
     (!(name_ok && tag_ok)).then_some(bad)
 }
 
-/// Splits `name:tag` at the last `:` after the last `/`.
-fn split_tag(s: &str) -> (String, Option<String>) {
+/// Splits `name:tag` at the first `:` after the last `/`: a colon before the last slash is a
+/// registry port, and a later colon can be part of a `${VAR:-default}` tag.
+pub(crate) fn split_tag(s: &str) -> (String, Option<String>) {
     let slash = s.rfind('/').map_or(0, |i| i + 1);
-    match s[slash..].rfind(':') {
+    match s[slash..].find(':') {
         Some(i) => (
             s[..slash + i].to_owned(),
             Some(s[slash + i + 1..].to_owned()),
@@ -1169,8 +1221,6 @@ async fn create_prologue(
     }
     fields::check_container_name_prefix(state, &settings, server.id, None).await?;
     fields::check_custom_internal_name(&settings)?;
-    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-    fields::check_webhook_secret_ability(ctx, &input, enc, None)?;
     Ok(CreateContext {
         input,
         instant,
@@ -1563,7 +1613,7 @@ pub async fn create_dockerimage(
                 Rule::Required,
                 Rule::String,
                 Rule::Max(255),
-                Rule::CustomOwned(docker_image_format),
+                Rule::CustomOwned(docker_image_format_variable_tag),
             ],
         ),
         field(
@@ -1767,21 +1817,7 @@ impl GitKind {
 
 /// `gitRepositorySlug()`: `owner/repo` of a GitHub URL, SSH URL or slug.
 fn git_repository_slug(repository: &str) -> String {
-    if repository.is_empty() {
-        return String::new();
-    }
-    let slug = match git_urls::ssh_git_url_to_https(repository) {
-        Some(https) => UrlParts::parse(&https)
-            .and_then(|p| p.path)
-            .unwrap_or_default(),
-        None if repository.starts_with("http") || repository.contains("github.com") => repository
-            .replace("https://", "")
-            .replace("http://", "")
-            .replace("github.com/", ""),
-        None => repository.to_owned(),
-    };
-    let slug = slug.trim_matches('/');
-    slug.strip_suffix(".git").unwrap_or(slug).to_owned()
+    coolify_jobs::github::git_repository_slug(repository)
 }
 
 /// The git branches of `create_application()` (AC:1542-2395): validation, the type's
@@ -2268,7 +2304,7 @@ pub(crate) async fn model_array(
         None => swarm_server(state, a).await?,
     };
     let mut r = APPLICATION.present(a.raw.clone());
-    for h in HIDDEN {
+    for h in COMMAND_AND_CONFIGURATION_ATTRIBUTES.iter().chain(HIDDEN) {
         r.shift_remove(*h);
     }
     r.insert(
@@ -2855,5 +2891,44 @@ mod tests {
                 .contains("must use @")
         );
         assert!(docker_image_format(&json!("ghcr.io/o/a:v1")).is_none());
+    }
+
+    #[test]
+    fn image_tags_with_variable_references() {
+        for ok in [
+            "$TAG",
+            "${TAG}",
+            "${TAG:-1.2.3}",
+            "${TAG-latest}",
+            "v${MAJOR}.${MINOR}",
+            "_x",
+        ] {
+            assert!(is_valid_docker_image_tag(ok, true), "{ok}");
+        }
+        for bad in [
+            "${TAG:?missing}",
+            "$(id)",
+            "$$TAG",
+            "$1",
+            "${A:-${B}}",
+            "${TAG:-a b}",
+            "-x",
+            "",
+        ] {
+            assert!(
+                bad.is_empty() || !is_valid_docker_image_tag(bad, true),
+                "{bad}"
+            );
+        }
+        assert!(!is_valid_docker_image_tag("$TAG", false));
+        assert!(!is_valid_docker_image_tag(&"a".repeat(129), true));
+        // The tag starts at the first colon after the last slash.
+        assert_eq!(
+            parse_image("registry:5000/app", Some("${TAG:-1.0}")),
+            ("registry:5000/app".into(), "${TAG:-1.0}".into())
+        );
+        assert!(docker_image_format_variable_tag(&json!("ghcr.io/o/a:${TAG:-v1}")).is_none());
+        assert!(docker_image_format(&json!("ghcr.io/o/a:${TAG:-v1}")).is_some());
+        assert!(docker_image_format(&json!("localhost:5000/a")).is_none());
     }
 }

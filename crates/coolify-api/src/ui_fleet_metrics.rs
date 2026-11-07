@@ -99,6 +99,12 @@ fn bucket_ms(range: &str) -> i64 {
     }
 }
 
+/// `historyQuery`: Sentinel averages rows into `bucket_ms` windows. Older Sentinels ignore the
+/// parameter and return raw rows, which `series_rows` buckets the same way.
+fn history_query(range: &str, from: &str) -> String {
+    format!("from={from}&bucket_ms={}", bucket_ms(range))
+}
+
 /// `guard`.
 fn guard(response: &str) -> Result<(), String> {
     match serde_json::from_str::<Value>(response) {
@@ -111,7 +117,7 @@ fn guard(response: &str) -> Result<(), String> {
 }
 
 /// `rootMountName`: `/`, else the disk that holds /data/coolify.
-fn root_mount_name(rows: &[Value]) -> Option<&'static str> {
+pub(crate) fn root_mount_name(rows: &[Value]) -> Option<&'static str> {
     ["/", "/app/db", "/data/coolify", "/data"]
         .into_iter()
         .find(|mount| {
@@ -316,7 +322,10 @@ impl MetricsClient {
             _ => ("cpu", "percent"),
         };
         let rows = self
-            .rows(&format!("{BASE}/{path}/history?from={from}"))
+            .rows(&format!(
+                "{BASE}/{path}/history?{}",
+                history_query(range, from)
+            ))
             .await;
         series_rows(&rows, field, range, metric == "disk")
     }
@@ -324,7 +333,10 @@ impl MetricsClient {
     /// `networkHistory`.
     async fn network_history(&self, range: &str, from: &str) -> (Vec<Point>, Vec<Point>) {
         let rows = self
-            .rows(&format!("{BASE}/network/history?from={from}"))
+            .rows(&format!(
+                "{BASE}/network/history?{}",
+                history_query(range, from)
+            ))
             .await;
         (
             series_rows(&rows, "rxBytesPerSec", range, false),

@@ -139,7 +139,7 @@ async fn logs(
         LogsResult::NoService => Ok(PhpJson(
             StatusCode::NOT_FOUND,
             json!({"message": format!(
-                "No running container found for service_name '{}'.",
+                "No container found for service_name '{}'.",
                 service_name.unwrap_or_default()
             )}),
         )
@@ -497,7 +497,8 @@ pub async fn clone(
         && !volumes.is_empty()
         && let Some(jobs) = state.jobs.as_ref()
     {
-        jobs.spawn_clone_volumes(source.clone(), destination.server_id, volumes);
+        jobs.spawn_clone_volumes(source.clone(), destination.server_id, volumes)
+            .await;
     }
     tracing::info!(target: "audit", event = "api.application.cloned", team_id = ctx.team_id, source_uuid = %source.uuid, application_uuid = %new_uuid, destination_uuid = %destination.uuid, clone_volumes, "application cloned");
     Ok(created(json!({"uuid": new_uuid, "message": "Application cloned."})).into_response())

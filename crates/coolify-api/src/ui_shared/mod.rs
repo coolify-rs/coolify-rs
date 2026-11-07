@@ -7,6 +7,7 @@ pub mod advanced;
 pub mod application_extras;
 pub mod config;
 pub mod destination;
+pub mod dev_view;
 pub mod dns;
 pub mod domains;
 pub mod envs;

@@ -86,6 +86,11 @@
     if (checked) selected.push(id);
   }
 
+  /** `x-init="$nextTick(() => $el.focus())"` on the password field. */
+  function focusOnShow(node: HTMLInputElement) {
+    queueMicrotask(() => node.focus());
+  }
+
   async function copy() {
     try {
       await navigator.clipboard.writeText(confirmationText);
@@ -203,7 +208,8 @@
           <Callout type="danger" title="Final Confirmation" class="mb-4">Please enter your password to confirm this destructive action.</Callout>
           <div class="flex flex-col gap-2 mb-4">
             <label for="password-confirm" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Your Password</label>
-            <!-- Enter must not submit the action (upstream @keydown.enter.prevent). -->
+            <!-- Enter must not submit the action (upstream @keydown.enter.prevent). The field is added only when
+                 this step shows: password managers do not detect a hidden field that becomes visible. -->
             <form onsubmit={(e) => e.preventDefault()}>
               <input type="text" name="username" autocomplete="username" value={session.info?.user.email ?? ''} style="display: none;" />
               <input
@@ -213,6 +219,7 @@
                 class="w-full input"
                 placeholder="Enter your password"
                 autocomplete="current-password"
+                use:focusOnShow
                 onkeydown={(e) => e.key === 'Enter' && e.preventDefault()}
               />
             </form>
