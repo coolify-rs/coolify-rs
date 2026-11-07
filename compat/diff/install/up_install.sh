@@ -13,8 +13,11 @@ SNAP="${UP_SNAPSHOT:-$ROOT/.upstream/snapshot}"
 VERSION="${UP_VERSION:-sha-b5823c7}"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
-cp "$SNAP/docker-compose.yml" "$SNAP/docker-compose.prod.yml" "$SNAP/.env.production" "$SNAP/versions.json" \
+cp "$SNAP/docker-compose.yml" "$SNAP/docker-compose.prod.yml" "$SNAP/.env.production" \
     "$SNAP/scripts/install.sh" "$SNAP/scripts/upgrade.sh" "$SNAP/scripts/upgrade-postgres.sh" "$STAGE/"
+# Until 4.5.x the tree carries versions.json. From 4.6.0 on it is generated for the CDN only, and install.sh reads
+# it from https://cdn.coollabs.io/coolify/versions.json whatever CDN says.
+if [ -f "$SNAP/versions.json" ]; then cp "$SNAP/versions.json" "$STAGE/"; fi
 sed -i '' 's#^CDN=.*#CDN="file:///root/cdn"#' "$STAGE/install.sh" "$STAGE/upgrade.sh"
 tar -C "$STAGE" -cf - . | orb -m "$VM" -u root bash -c 'mkdir -p /root/cdn && tar -C /root/cdn -xf -'
 orb -m "$VM" -u root env ROOT_USER_EMAIL="${ROOT_USER_EMAIL:-}" ROOT_USER_PASSWORD="${ROOT_USER_PASSWORD:-}" \

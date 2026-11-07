@@ -3,7 +3,7 @@
 
     migrate.py <private work folder> <coolify-rs image tag> [stage ...]
 
-One throwaway OrbStack VM: upstream's own installer at the release coolify-rs matches (UP_VERSION, default 4.5.3, from
+One throwaway OrbStack VM: upstream's own installer at the release coolify-rs matches (UP_VERSION, default 4.6.0, from
 .upstream/snapshot-<version>), a deployment on it, the dry-run check, the coolify-rs installer over it, checks and a
 deployment on coolify-rs, then upstream's installer again to go back. The image is coolify-rs/coolify-rs:<tag> in the
 local Docker. Stages: clean up user seed dryrun migrate after back delete. Without stages, all run and the VM is deleted at
@@ -20,7 +20,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 VM, PORT = "coolify-rs-agent-install-up", "28093"
-UP_VERSION = os.environ.get("UP_VERSION", "4.5.3")
+UP_VERSION = os.environ.get("UP_VERSION", "4.6.0")
 work, tag = Path(sys.argv[1]), sys.argv[2]
 stages = sys.argv[3:]
 failures = []
@@ -110,8 +110,22 @@ def stage_user():
     check("first user", "user 0 teams 1" in out, out.strip()[-200:])
 
 
+# Names upstream later renamed or deleted. A long-lived Coolify install carries these rows next to the current
+# names (seen on a real 4.6.0 instance), and coolify-rs must still take the database.
+HISTORICAL_MIGRATIONS = [
+    "2018_08_08_100000_create_telescope_entries_table",
+    "2025_10_10_120000_create_cloud_init_scripts_table",
+    "2025_10_10_120000_create_webhook_notification_settings_table",
+    "2025_10_10_120001_populate_webhook_notification_settings_for_existing_teams",
+]
+
+
 def stage_seed():
     show("deployments on Coolify", *run("python3", HERE / "deploy_check.py", VM, PORT, timeout=1500), tail=14)
+    values = ", ".join(f"('{m}', (SELECT max(batch) FROM migrations))" for m in HISTORICAL_MIGRATIONS)
+    code, out = vm("docker", "exec", "coolify-db", "psql", "-U", "coolify", "-d", "coolify", "-Atc",
+                   f"INSERT INTO migrations (migration, batch) VALUES {values}")
+    check("old migration names of a long-lived install", code == 0, out.strip())
 
 
 def stage_dryrun():
