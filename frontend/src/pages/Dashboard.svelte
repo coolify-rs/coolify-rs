@@ -12,7 +12,8 @@
   import { uiApi, type DashboardData } from '../lib/api';
   import { link } from '../lib/router.svelte';
   import { listView } from '../lib/listview.svelte';
-  import { sortNatural } from '../lib/natsort';
+  import { strnatcasecmp } from '../lib/natsort';
+  import SortHeader from '../components/SortHeader.svelte';
   import { serverMetricsPoll, type Point } from '../lib/metricsApi.svelte';
 
   const limit = 8;
@@ -23,13 +24,44 @@
 
   const metrics = serverMetricsPoll();
 
+  // `Dashboard::$projectSort`, `$serverSort` (`column-direction`).
+  let projectSort = $state('name-asc');
+  let serverSort = $state('name-asc');
+
+  /** `Dashboard::sortItems()`: by the column, natural and case-insensitive, with the name as tie-breaker. */
+  function sortItems<T extends { name: string }>(items: T[], sort: string, value: (item: T, column: string) => string | number): T[] {
+    const [column, direction] = sort.split('-');
+    const order = direction === 'desc' ? -1 : 1;
+    return [...items]
+      .sort((a, b) => strnatcasecmp(a.name, b.name))
+      .sort((a, b) => order * strnatcasecmp(String(value(a, column)), String(value(b, column))));
+  }
+  const isValidSort = (sort: string, columns: string[]) => {
+    const [column, direction] = sort.split('-');
+    return columns.includes(column) && ['asc', 'desc'].includes(direction);
+  };
+  const sortedProjects = (d: DashboardData, sort: string) =>
+    sortItems(d.projects, sort, (p, column) => (column === 'resources' ? p.resources : column === 'description' ? (p.description ?? '') : p.name));
+  const sortedServers = (d: DashboardData, sort: string) =>
+    sortItems(d.servers, sort, (s, column) => (column === 'description' ? (s.description ?? '') : column === 'status' ? s.status : s.name));
+  const startMetrics = (d: DashboardData) =>
+    metrics.start(sortedServers(d, serverSort).slice(0, limit).filter((s) => s.is_metrics_enabled).map((s) => s.uuid));
+  function setProjectSort(sort: string) {
+    if (isValidSort(sort, ['name', 'resources', 'description'])) projectSort = sort;
+  }
+  function setServerSort(sort: string) {
+    if (!isValidSort(sort, ['name', 'description', 'status'])) return;
+    serverSort = sort;
+    if (data) startMetrics(data);
+  }
+
   uiApi.dashboard().then((d) => {
     data = d;
-    metrics.start(sortNatural(d.servers, (s) => s.name).slice(0, limit).filter((s) => s.is_metrics_enabled).map((s) => s.uuid));
+    startMetrics(d);
   });
 
-  const projects = $derived(data ? sortNatural(data.projects, (p) => p.name).slice(0, limit) : []);
-  const servers = $derived(data ? sortNatural(data.servers, (s) => s.name).slice(0, limit) : []);
+  const projects = $derived(data ? sortedProjects(data, projectSort).slice(0, limit) : []);
+  const servers = $derived(data ? sortedServers(data, serverSort).slice(0, limit) : []);
   const navigateTo = (p: DashboardData['projects'][number]) =>
     p.environments.length === 1 ? `/project/${p.uuid}/environment/${p.environments[0].uuid}` : `/project/${p.uuid}`;
   const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
@@ -46,7 +78,7 @@
   const card =
     'group relative flex min-h-28 min-w-0 flex-col rounded-xl border border-neutral-200 bg-white p-3 shadow-sm transition-all hover:-translate-y-px hover:border-neutral-300 hover:shadow-md dark:border-white/[0.08] dark:bg-white/[0.05] dark:hover:border-white/[0.14]';
   const glyph = 'resource-glyph flex size-8 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500';
-  const projectCols = 'grid-cols-[minmax(0,1fr)_7rem_4rem] gap-4 @2xl:min-w-[560px] @2xl:grid-cols-[minmax(0,1.2fr)_7rem_minmax(0,1.5fr)_4rem]';
+  const projectCols = 'grid-cols-[minmax(0,1fr)_7rem_4.5rem] gap-4 @2xl:min-w-[560px] @2xl:grid-cols-[minmax(0,1.2fr)_7rem_minmax(0,1.5fr)_4.5rem]';
   // A Usage column (latest CPU and memory) only when a listed server collects metrics.
   const showServerUsage = $derived(servers.some((s) => s.is_metrics_enabled));
   const hasTrafficAnalytics = $derived(!!data?.servers.some((s) => s.is_traffic_analytics_enabled));
@@ -133,12 +165,14 @@
                 {/each}
               </div>
             {:else}
-              <div class={tableShell}>
+              <div class="{tableShell} transition-opacity">
                 <div class="grid {projectCols} {tableHead}">
-                  <div>Project</div>
-                  <div>Contents</div>
-                  <div class="hidden @2xl:block">Description</div>
-                  <div></div>
+                  <SortHeader label="Project" asc="name-asc" desc="name-desc" current={projectSort} onsort={setProjectSort} server />
+                  <SortHeader label="Contents" asc="resources-asc" desc="resources-desc" first="desc" current={projectSort} onsort={setProjectSort} server title="Sort by resource count" />
+                  <div class="hidden @2xl:block">
+                    <SortHeader label="Description" asc="description-asc" desc="description-desc" current={projectSort} onsort={setProjectSort} server />
+                  </div>
+                  <span class="text-right">Actions</span>
                 </div>
                 {#each projects as p (p.uuid)}
                   <div class="relative grid {projectCols} {tableRow}">
@@ -241,14 +275,16 @@
                 {/each}
               </div>
             {:else}
-              <div class={tableShell}>
+              <div class="{tableShell} transition-opacity">
                 <div class="grid {serverCols} gap-4 @2xl:min-w-[480px] {tableHead}">
-                  <div>Server</div>
-                  <div class="hidden @2xl:block">Description</div>
+                  <SortHeader label="Server" asc="name-asc" desc="name-desc" current={serverSort} onsort={setServerSort} server />
+                  <div class="hidden @2xl:block">
+                    <SortHeader label="Description" asc="description-asc" desc="description-desc" current={serverSort} onsort={setServerSort} server />
+                  </div>
                   {#if showServerUsage}
                     <div class="hidden @xl:block">Usage</div>
                   {/if}
-                  <div>Status</div>
+                  <SortHeader label="Status" asc="status-asc" desc="status-desc" current={serverSort} onsort={setServerSort} server />
                 </div>
                 {#each servers as s (s.uuid)}
                   <a href="/server/{s.uuid}" use:link class="grid {serverCols} gap-4 @2xl:min-w-[480px] hover:no-underline {tableRow}">

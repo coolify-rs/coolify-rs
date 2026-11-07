@@ -66,7 +66,7 @@
               <div class="min-w-0 flex-1">
                 <div class="flex items-start justify-between gap-2">
                   <p class="truncate text-[13px] font-semibold text-black dark:text-fg">{d.application_name}</p>
-                  <StatusBadge label={d.status === 'in_progress' ? 'In progress' : 'Queued'} type={d.status === 'in_progress' ? 'warning' : 'neutral'} />
+                  <StatusBadge label={d.status === 'in_progress' ? 'In progress' : 'Queued'} type={d.status === 'in_progress' ? 'warning' : 'neutral'} spinning={d.status === 'in_progress'} class="shrink-0" />
                 </div>
                 {#if path !== ''}
                   <p class="mt-0.5 truncate text-[11px] text-neutral-500 dark:text-fg-faint">{path}</p>

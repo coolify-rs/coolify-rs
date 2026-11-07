@@ -20,6 +20,11 @@ export function strnatcmp(a: string, b: string): number {
   return xa.length - xb.length;
 }
 
+/** `SORT_NATURAL | SORT_FLAG_CASE` (PHP `strnatcasecmp`): natural order, case-insensitive. */
+export function strnatcasecmp(a: string, b: string): number {
+  return strnatcmp(a.toLowerCase(), b.toLowerCase());
+}
+
 export function sortNatural<T>(items: T[], key: (t: T) => string): T[] {
   return [...items].sort((a, b) => strnatcmp(key(a), key(b)));
 }

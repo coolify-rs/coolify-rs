@@ -2,6 +2,7 @@
   // Port of upstream livewire/server/docker-images.blade.php.
   import Reicon from '../components/Reicon.svelte';
   import ConfirmModal from '../components/ConfirmModal.svelte';
+  import SortHeader from '../components/SortHeader.svelte';
   import Empty from '../components/Empty.svelte';
   import SkeletonTable from '../components/SkeletonTable.svelte';
   import Pager from '../components/Pager.svelte';
@@ -13,13 +14,26 @@
   import { notify } from '../lib/toast.svelte';
 
   let { uuid }: { uuid: string } = $props();
-  type Image = { id: string; short_id: string; repository: string; tag: string; reference: string; size: string; created: string; containers: string[] };
+  type Image = {
+    id: string;
+    short_id: string;
+    repository: string;
+    tag: string;
+    reference: string;
+    size: string;
+    size_bytes: number;
+    created: string;
+    created_at: number;
+    containers: string[];
+  };
   let images = $state<Image[]>([]);
   let usage = $state<{ size: string; reclaimable: string } | null>(null);
   let loaded = $state(false);
   let search = $state('');
   let page = $state(1);
   let pageSize = $state(10);
+  // `DockerImages::$sort`, such as "size_desc". Empty keeps the order of `docker image ls` (newest first).
+  let sort = $state('');
   let deleting = $state<string | null>(null);
   const base = $derived(`/server-page/${encodeURIComponent(uuid)}/images`);
 
@@ -51,7 +65,31 @@
     }
   }
   const q = $derived(search.trim().toLowerCase());
-  const visible = $derived(images.filter((i) => !q || `${i.repository}:${i.tag} ${i.short_id}`.toLowerCase().includes(q)));
+  // `DockerImages::sortColumns()`.
+  const sortColumns: Record<string, (i: Image) => string | number> = {
+    repository: (i) => `${i.repository}:${i.tag}`,
+    tag: (i) => i.tag,
+    id: (i) => i.short_id,
+    created: (i) => i.created_at ?? 0,
+    size: (i) => i.size_bytes ?? 0,
+    used: (i) => i.containers.join(', '),
+  };
+  const cmp = (a: string | number, b: string | number) => (a < b ? -1 : a > b ? 1 : 0);
+  function sorted(list: Image[]): Image[] {
+    const column = sortColumns[sort.slice(0, sort.lastIndexOf('_'))];
+    if (!column) return list;
+    const order = sort.endsWith('_desc') ? -1 : 1;
+    return [...list].sort((a, b) => order * (cmp(column(a), column(b)) || cmp(a.reference, b.reference)));
+  }
+  // `DockerImages::setSort()`: back to the first page.
+  function setSort(value: string) {
+    const column = value.slice(0, value.lastIndexOf('_'));
+    const direction = value.slice(value.lastIndexOf('_') + 1);
+    if (!(column in sortColumns) || !['asc', 'desc'].includes(direction)) return;
+    sort = value;
+    page = 1;
+  }
+  const visible = $derived(sorted(images.filter((i) => !q || `${i.repository}:${i.tag} ${i.short_id}`.toLowerCase().includes(q))));
   $effect(() => {
     const last = Math.max(1, Math.ceil(visible.length / pageSize));
     if (page > last) page = last;
@@ -97,15 +135,15 @@
             <Empty size="sm" title={q ? 'No matching images' : 'No images found'} description={q ? 'Try another repository, tag or ID, or clear the search.' : 'Images pulled or built on this server will appear here.'} iconName="layers" />
           </div>
         {:else}
-          <div class="data-table">
+          <div class="data-table transition-opacity">
             <div class="data-table-header server-images-table-grid">
-              <span>Repository</span>
-              <span>Tag</span>
-              <span>Image ID</span>
-              <span>Created</span>
-              <span>Size</span>
-              <span>Used by</span>
-              <span>Actions</span>
+              <SortHeader label="Repository" asc="repository_asc" desc="repository_desc" current={sort} onsort={setSort} server />
+              <SortHeader label="Tag" asc="tag_asc" desc="tag_desc" current={sort} onsort={setSort} server />
+              <SortHeader label="Image ID" asc="id_asc" desc="id_desc" current={sort} onsort={setSort} server />
+              <SortHeader label="Created" asc="created_asc" desc="created_desc" first="desc" current={sort} onsort={setSort} server />
+              <SortHeader label="Size" asc="size_asc" desc="size_desc" first="desc" current={sort} onsort={setSort} server />
+              <SortHeader label="Used by" asc="used_asc" desc="used_desc" current={sort} onsort={setSort} server />
+              <span class="text-right">Actions</span>
             </div>
             {#each visible.slice((page - 1) * pageSize, page * pageSize) as image (image.reference)}
               <div class="data-table-row server-images-table-grid border-b border-neutral-200 last:border-b-0 dark:border-white/[0.08]">
@@ -126,9 +164,17 @@
                     <span class="block truncate text-[11px] text-neutral-600 dark:text-fg-dim" title={image.containers.join(', ')}>{image.containers.join(', ')}</span>
                   {/if}
                 </div>
-                <div>
+                <div class="flex justify-end">
                   {#if image.containers.length === 0 && session.isAdmin}
-                    <button type="button" class="button button-error" onclick={() => (deleting = image.reference)}>Delete</button>
+                    <button
+                      type="button"
+                      class="icon-button shrink-0 text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
+                      title="Delete image"
+                      aria-label="Delete {image.reference}"
+                      onclick={() => (deleting = image.reference)}
+                    >
+                      <Reicon name="trash" class="size-3.5" />
+                    </button>
                   {/if}
                 </div>
               </div>

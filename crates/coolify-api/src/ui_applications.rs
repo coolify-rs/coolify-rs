@@ -690,6 +690,7 @@ pub async fn deployments(
                 "is_api": d.bool("is_api"),
                 "rollback": d.bool("rollback"),
                 "pull_request_id": d.int("pull_request_id").unwrap_or(0),
+                "server_id": d.int("server_id"),
                 "server_name": d.str("server_name"),
                 "created_at": d.str("created_at"),
                 "finished_at": d.str("finished_at"),
