@@ -59,6 +59,7 @@ pub mod traffic;
 pub mod ui_servers;
 pub mod users;
 pub mod volume_backups;
+pub mod worker_host;
 
 use std::time::Duration;
 

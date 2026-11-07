@@ -48,18 +48,23 @@ pub async fn record_missed_database_backup(
     now: NaiveDateTime,
 ) -> DbResult<()> {
     db.ensure_writable()?;
-    sqlx::query(
+    let (column, value, host) =
+        crate::worker_host::insert_parts(db.schema(), "scheduled_database_backup_executions", 6);
+    let sql = format!(
         "INSERT INTO scheduled_database_backup_executions \
-         (uuid, database_name, scheduled_database_backup_id, status, message, local_storage_deleted, finished_at, created_at, updated_at) \
-         VALUES ($1, $2, $3, 'failed', $4, false, $5, $5, $5)",
-    )
-    .bind(new_public_id())
-    .bind(database_name)
-    .bind(backup_id)
-    .bind(message)
-    .bind(now)
-    .execute(db.pool())
-    .await?;
+         (uuid, database_name, scheduled_database_backup_id, status, message, local_storage_deleted, finished_at, created_at, updated_at{column}) \
+         VALUES ($1, $2, $3, 'failed', $4, false, $5, $5, $5{value})"
+    );
+    let mut query = sqlx::query(&sql)
+        .bind(new_public_id())
+        .bind(database_name)
+        .bind(backup_id)
+        .bind(message)
+        .bind(now);
+    if let Some(host) = host {
+        query = query.bind(host);
+    }
+    query.execute(db.pool()).await?;
     Ok(())
 }
 
@@ -71,17 +76,22 @@ pub async fn record_missed_volume_backup(
     now: NaiveDateTime,
 ) -> DbResult<()> {
     db.ensure_writable()?;
-    sqlx::query(
+    let (column, value, host) =
+        crate::worker_host::insert_parts(db.schema(), "scheduled_volume_backup_executions", 5);
+    let sql = format!(
         "INSERT INTO scheduled_volume_backup_executions \
-         (uuid, scheduled_volume_backup_id, status, message, finished_at, created_at, updated_at) \
-         VALUES ($1, $2, 'failed', $3, $4, $4, $4)",
-    )
-    .bind(new_public_id())
-    .bind(backup_id)
-    .bind(message)
-    .bind(now)
-    .execute(db.pool())
-    .await?;
+         (uuid, scheduled_volume_backup_id, status, message, finished_at, created_at, updated_at{column}) \
+         VALUES ($1, $2, 'failed', $3, $4, $4, $4{value})"
+    );
+    let mut query = sqlx::query(&sql)
+        .bind(new_public_id())
+        .bind(backup_id)
+        .bind(message)
+        .bind(now);
+    if let Some(host) = host {
+        query = query.bind(host);
+    }
+    query.execute(db.pool()).await?;
     Ok(())
 }
 

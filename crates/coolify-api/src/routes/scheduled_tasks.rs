@@ -75,7 +75,8 @@ fn present_execution(ctx: &AuthCtx, raw: Record) -> Value {
         raw,
         &["created_at", "updated_at", "started_at", "finished_at"],
     );
-    for hidden in ["id", "scheduled_task_id"] {
+    // `worker_host`: `RecordsWorkerHost` hides it (Coolify v4.6.0).
+    for hidden in ["id", "scheduled_task_id", "worker_host"] {
         r.shift_remove(hidden);
     }
     if !ctx.can_read_sensitive {

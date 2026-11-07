@@ -449,15 +449,20 @@ pub async fn create_execution(
 ) -> DbResult<(i64, String)> {
     db.ensure_writable()?;
     let uuid = new_public_id();
-    let id = sqlx::query_scalar(
-        "INSERT INTO scheduled_volume_backup_executions (uuid, scheduled_volume_backup_id, s3_storage_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $4) RETURNING id",
-    )
-    .bind(&uuid)
-    .bind(backup_id)
-    .bind(s3_storage_id)
-    .bind(now)
-    .fetch_one(db.pool())
-    .await?;
+    let (column, value, host) =
+        crate::worker_host::insert_parts(db.schema(), "scheduled_volume_backup_executions", 5);
+    let sql = format!(
+        "INSERT INTO scheduled_volume_backup_executions (uuid, scheduled_volume_backup_id, s3_storage_id, created_at, updated_at{column}) VALUES ($1, $2, $3, $4, $4{value}) RETURNING id"
+    );
+    let mut query = sqlx::query_scalar(&sql)
+        .bind(&uuid)
+        .bind(backup_id)
+        .bind(s3_storage_id)
+        .bind(now);
+    if let Some(host) = host {
+        query = query.bind(host);
+    }
+    let id = query.fetch_one(db.pool()).await?;
     Ok((id, uuid))
 }
 

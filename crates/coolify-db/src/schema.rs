@@ -26,6 +26,9 @@ const INSPECTED_TABLES: &[&str] = &[
     "project_settings",
     "environments",
     "private_keys",
+    "scheduled_task_executions",
+    "scheduled_database_backup_executions",
+    "scheduled_volume_backup_executions",
 ];
 
 pub fn supported_migrations() -> BTreeSet<String> {
