@@ -434,12 +434,19 @@ async fn redis_create_and_start() {
         "{compose}"
     );
     assert!(compose.contains("- REDIS_USERNAME=default"), "{compose}");
-    let hash: Option<String> =
-        sqlx::query_scalar("SELECT config_hash FROM standalone_redis WHERE uuid = $1")
+    // The start job saves the hash after the status, so `running:healthy` can be seen first.
+    let mut hash: Option<String> = None;
+    for _ in 0..100 {
+        hash = sqlx::query_scalar("SELECT config_hash FROM standalone_redis WHERE uuid = $1")
             .bind(&uuid)
             .fetch_one(h.tdb.db.pool())
             .await
             .unwrap();
+        if hash.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     assert!(hash.is_some());
     f.h.finish().await;
 }
