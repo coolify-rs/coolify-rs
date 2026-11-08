@@ -292,7 +292,7 @@ async fn create_show_list_and_lifecycle() {
     let r = h
         .call("DELETE", &format!("/api/v1/databases/{uuid}"), W, None)
         .await;
-    assert_eq!(r.status, 403, "delete needs deploy: {}", r.body);
+    r.assert(403, r#"{"message":"Missing required permissions: delete"}"#);
     let r = h
         .call("DELETE", &format!("/api/v1/databases/{uuid}"), ROOT, None)
         .await;

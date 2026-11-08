@@ -9,6 +9,8 @@ use common::Harness;
 use serde_json::json;
 
 const W: Option<&str> = Some("acme_owner_write");
+/// DELETE routes need the `delete` ability since 4.6.0.
+const DEL: Option<&str> = Some("acme_owner_delete");
 
 #[tokio::test]
 async fn validation_messages_match_upstream() {
@@ -114,7 +116,7 @@ async fn project_lifecycle() {
         .await
         .assert(422, r#"{"message":"Validation failed.","errors":{"name":["The name must be at least 3 characters."]}}"#);
 
-    h.call("DELETE", &format!("/api/v1/projects/{uuid}"), W, None)
+    h.call("DELETE", &format!("/api/v1/projects/{uuid}"), DEL, None)
         .await
         .assert(200, r#"{"message":"Project deleted."}"#);
     let left: i64 = sqlx::query_scalar("SELECT count(*) FROM environments")
@@ -194,10 +196,10 @@ async fn environments() {
     assert_eq!(d["applications"], json!([]));
     assert_eq!(d["redis"], json!([]));
 
-    h.call("DELETE", &format!("{base}/environments/staging"), W, None)
+    h.call("DELETE", &format!("{base}/environments/staging"), DEL, None)
         .await
         .assert(200, r#"{"message":"Environment deleted."}"#);
-    h.call("DELETE", &format!("{base}/environments/staging"), W, None)
+    h.call("DELETE", &format!("{base}/environments/staging"), DEL, None)
         .await
         .assert(404, r#"{"message":"Environment not found."}"#);
     h.finish().await;
@@ -222,7 +224,7 @@ async fn resources_block_deletion_unless_soft_deleted() {
     .execute(&pool)
     .await
     .unwrap();
-    h.call("DELETE", &format!("/api/v1/projects/{uuid}"), W, None)
+    h.call("DELETE", &format!("/api/v1/projects/{uuid}"), DEL, None)
         .await
         .assert(
             400,
@@ -231,7 +233,7 @@ async fn resources_block_deletion_unless_soft_deleted() {
     h.call(
         "DELETE",
         &format!("/api/v1/projects/{uuid}/environments/production"),
-        W,
+        DEL,
         None,
     )
     .await
@@ -253,7 +255,7 @@ async fn resources_block_deletion_unless_soft_deleted() {
         .execute(&pool)
         .await
         .unwrap();
-    h.call("DELETE", &format!("/api/v1/projects/{uuid}"), W, None)
+    h.call("DELETE", &format!("/api/v1/projects/{uuid}"), DEL, None)
         .await
         .assert(200, r#"{"message":"Project deleted."}"#);
     h.finish().await;

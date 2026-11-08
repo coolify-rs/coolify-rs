@@ -64,6 +64,8 @@ const TOKENS: &[(&str, i64, &str, &str, Option<&str>)] = &[
     ("carol_root", 3, "2", r#"["root"]"#, None),
     // Token for a team the user is not a member of.
     ("alice_foreign_team", 1, "2", r#"["read"]"#, None),
+    // A write token after `add_access_grants_to_team_members_and_tokens` (4.6.0) gave it `delete`.
+    ("acme_owner_delete", 1, "1", r#"["write","delete"]"#, None),
 ];
 
 pub struct Harness {
