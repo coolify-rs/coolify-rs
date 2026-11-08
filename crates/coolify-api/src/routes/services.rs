@@ -1032,6 +1032,14 @@ pub async fn create(
         let compose = decode_compose(input.str("docker_compose_raw"))?;
         jobs_services::compose_parses(&compose).map_err(|_| ApiError::Internal)?;
         injection_check(&compose)?;
+        // `Service::saving`: new shared variable references in the compose file.
+        crate::shared_refs::authorize_added(
+            &ctx,
+            Some(environment_id),
+            None,
+            Some(&compose),
+            "docker_compose_raw",
+        )?;
         let name = match input.str("name") {
             Some(n) => strip_tags(Some(n)),
             None => format!("service-{}", random_str(10)),
@@ -1189,6 +1197,14 @@ pub async fn update(
         let compose = decode_compose(input.str("docker_compose_raw"))?;
         jobs_services::compose_parses(&compose).map_err(|_| ApiError::Internal)?;
         injection_check(&compose)?;
+        // `Service::saving`: new shared variable references in the compose file.
+        crate::shared_refs::authorize_added(
+            &ctx,
+            s.raw.get("environment_id").and_then(Value::as_i64),
+            s.raw.get("docker_compose_raw").and_then(Value::as_str),
+            Some(&compose),
+            "docker_compose_raw",
+        )?;
         values.push(("docker_compose_raw", ColumnValue::Text(Some(compose))));
     }
     if input.has("name") {
@@ -1627,6 +1643,7 @@ fn shared_reference(value: Option<&str>) -> bool {
 /// Creates or updates one variable with the attributes the API accepts.
 async fn env_upsert(
     state: &AppState,
+    ctx: &AuthCtx,
     s: &ServiceRow,
     key: &str,
     input: &Input,
@@ -1636,12 +1653,21 @@ async fn env_upsert(
     let now = state.now();
     let plain = input.str("value").map(|v| v.trim().to_owned());
     let flag = |k: &str| input.has(k).then(|| input_bool(input, k));
+    let environment_id = s.raw.get("environment_id").and_then(Value::as_i64);
     if let Some(row) = svc::env_row_by_key(&state.db, s.id, key).await? {
         let id = row.get("id").and_then(Value::as_i64).unwrap_or_default();
         let mut values: Vec<(&'static str, ColumnValue)> = Vec::new();
         if input.has("value") || create_defaults {
             let old = env_value(enc, &row);
             if old != plain {
+                // The model's `saving` hook: new shared variable references need read access.
+                crate::shared_refs::authorize_added(
+                    ctx,
+                    environment_id,
+                    old.as_deref(),
+                    plain.as_deref(),
+                    "value",
+                )?;
                 values.push((
                     "value",
                     ColumnValue::Text(plain.as_deref().map(|v| enc.encrypt_serialized(v))),
@@ -1669,6 +1695,7 @@ async fn env_upsert(
         }
         svc::env_update_columns(&state.db, id, &values, now).await?;
     } else {
+        crate::shared_refs::authorize_added(ctx, environment_id, None, plain.as_deref(), "value")?;
         let new = coolify_db::compose::NewEnv {
             key: key.to_owned(),
             value_encrypted: plain.as_deref().map(|v| enc.encrypt_serialized(v)),
@@ -1716,7 +1743,7 @@ pub async fn create_env(
             "Environment variable already exists. Use PATCH request to update it.",
         ));
     }
-    let row = env_upsert(&state, &s, &key, &input, true).await?;
+    let row = env_upsert(&state, &ctx, &s, &key, &input, true).await?;
     tracing::info!(target: "audit", event = "api.service.env_created", team_id = ctx.team_id, service_uuid = %s.uuid, env_key = %key, "service variable created");
     let absent = [
         "is_preview",
@@ -1748,7 +1775,7 @@ pub async fn update_env(
         ));
     }
     // `if ($request->has('value'))`: a request without a value keeps the stored one.
-    let row = env_upsert(&state, &s, &key, &input, false).await?;
+    let row = env_upsert(&state, &ctx, &s, &key, &input, false).await?;
     tracing::info!(target: "audit", event = "api.service.env_updated", team_id = ctx.team_id, service_uuid = %s.uuid, env_key = %key, "service variable updated");
     Ok(created(present_env(&state, &ctx, &s, &row).await?).into_response())
 }
@@ -1778,7 +1805,7 @@ pub async fn bulk_envs(
         env_validate(&one)?;
         let key = env_key_of(&one);
         let existed = svc::env_row_by_key(&state.db, s.id, &key).await?.is_some();
-        let row = env_upsert(&state, &s, &key, &one, false).await?;
+        let row = env_upsert(&state, &ctx, &s, &key, &one, false).await?;
         // `updateOrCreate(['key' => $key], $item)`: a new model has only the attributes of the item.
         let mut absent: Vec<&str> = Vec::new();
         if !existed {

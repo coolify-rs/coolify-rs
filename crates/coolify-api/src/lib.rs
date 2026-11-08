@@ -21,6 +21,7 @@ pub mod serialize;
 pub mod server_delete;
 pub mod server_transfer;
 pub mod session;
+pub mod shared_refs;
 pub mod state;
 pub mod terminal_ws;
 pub mod ui;
