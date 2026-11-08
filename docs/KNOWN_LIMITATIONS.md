@@ -66,6 +66,12 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 
 ## UI
 
+- **Member access grants on resource pages.** The API checks the grants of members and tokens on every project,
+  environment and resource endpoint, and the UI hides what a member cannot see and blocks team-level pages. Resource
+  pages of applications and databases follow the grants; the pages of services, environment variables, storages,
+  scheduled tasks, backups, previews and shared variables still need an owner or admin to change anything, as before
+  4.6.0 (a member with write, deploy or delete grants there uses the API instead). Navigation entries for project
+  and environment shared variables stay visible to a restricted member.
 - **No real-time connection.** Upstream pushes updates over Laravel Echo; coolify-rs pages poll instead. Proxy status
   toasts, scheduled task results and server transfer progress appear on the next poll (the transfer list every 15
   seconds). Canvases show a status change after Refresh, or on the dashboard canvas within five seconds. The "real-time
