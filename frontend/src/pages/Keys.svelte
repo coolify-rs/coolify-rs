@@ -91,7 +91,7 @@
     }
   }
 
-  const rowGrid = 'grid-cols-[minmax(0,1fr)_7rem_1.75rem] sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_7rem_1.75rem]';
+  const rowGrid = 'grid-cols-[minmax(0,1fr)_7rem_4.5rem] sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_7rem_4.5rem]';
 </script>
 
 <svelte:window onclick={(e) => menuOpen && menuRoot && !menuRoot.contains(e.target as Node) && (menuOpen = false)} />
@@ -166,7 +166,7 @@
             <div class="pl-11">Private key</div>
             <div class="hidden sm:block">Description</div>
             <div class="text-center">Status</div>
-            <div class="w-7"></div>
+            <div class="text-right">Actions</div>
           </div>
           {#each data.keys as key (key.uuid)}
             {#if key.can_view}
@@ -188,9 +188,11 @@
                   <div class="flex justify-center">
                     {#if key.in_use}<StatusBadge label="In use" type="success" />{:else}<StatusBadge label="Unused" type="warning" />{/if}
                   </div>
-                  <button type="button" class="icon-button" title="Edit private key" aria-label="Edit {key.name}" onclick={() => openEditor(key)}>
-                    <Reicon name="settings" class="size-3.5" />
-                  </button>
+                  <div class="flex justify-end">
+                    <button type="button" class="icon-button" title="Edit private key" aria-label="Edit {key.name}" onclick={() => openEditor(key)}>
+                      <Reicon name="settings" class="size-3.5" />
+                    </button>
+                  </div>
                 </div>
               </div>
             {:else}

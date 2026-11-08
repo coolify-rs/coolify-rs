@@ -10,6 +10,7 @@
     onclick,
     disabled = false,
     title,
+    ariaLabel,
     children,
   }: {
     href?: string;
@@ -17,12 +18,13 @@
     onclick?: (e: MouseEvent) => void;
     disabled?: boolean;
     title?: string;
+    ariaLabel?: string;
     children: Snippet;
   } = $props();
 </script>
 
 {#if href}
-  <a {href} use:link role="menuitem" {title} class="listbox-option justify-start! {klass}">{@render children()}</a>
+  <a {href} use:link role="menuitem" {title} aria-label={ariaLabel} class="listbox-option justify-start! {klass}">{@render children()}</a>
 {:else}
-  <button type="button" role="menuitem" {title} {disabled} class="listbox-option justify-start! {klass}" {onclick}>{@render children()}</button>
+  <button type="button" role="menuitem" {title} aria-label={ariaLabel} {disabled} class="listbox-option justify-start! {klass}" {onclick}>{@render children()}</button>
 {/if}
