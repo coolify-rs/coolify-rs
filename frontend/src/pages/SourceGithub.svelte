@@ -96,6 +96,7 @@
         label: 'Sources',
         backTitle: 'Back to Integrations',
         ariaLabel: 'GitHub App settings',
+        name: d.name || 'GitHub App',
         groups: [
           [
             { label: 'General', icon: 'settings', href: base, active: tab === 'general' },

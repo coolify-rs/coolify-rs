@@ -103,6 +103,7 @@
       initScripts: (dbState.kind ?? 'postgresql') === 'postgresql',
       sqlite: dbState.kind === 'sqlite',
     });
+    menu.name = r.name;
     page.navContext = menu;
     if (backup) {
       // `/backups/{uuid}/s3` and `/retention` redirect to the backup's General page.

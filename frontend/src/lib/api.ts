@@ -568,6 +568,7 @@ export interface DeploymentListItem {
   is_api: boolean;
   rollback: boolean;
   pull_request_id: number;
+  server_id: number | null;
   server_name: string | null;
   created_at: string | null;
   finished_at: string | null;

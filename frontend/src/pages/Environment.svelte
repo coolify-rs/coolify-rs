@@ -3,6 +3,7 @@
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
   import Dropdown from '../components/Dropdown.svelte';
+  import SortHeader from '../components/SortHeader.svelte';
   import Pager from '../components/Pager.svelte';
   import ViewToggle from '../components/ViewToggle.svelte';
   import ResourceLogo from '../components/ResourceLogo.svelte';
@@ -217,9 +218,10 @@
   const sortOptions = [
     { value: 'name-asc', label: 'Name A–Z' },
     { value: 'name-desc', label: 'Name Z–A' },
-    { value: 'type', label: 'Resource type' },
-    { value: 'status', label: 'Status' },
+    { value: 'type-asc', label: 'Resource type' },
+    { value: 'status-asc', label: 'Status' },
   ];
+  const sortResources = (value: string) => ((sortBy = value), (page = 1));
 
   const filtered = $derived.by(() => {
     const query = search.trim().toLowerCase();
@@ -234,12 +236,18 @@
         .toLowerCase();
       return matchesType && matchesTags && matchesServer && matchesStatus && (!query || searchable.includes(query));
     });
-    return list.sort((a, b) => {
-      if (sortBy === 'name-desc') return b.name.localeCompare(a.name);
-      if (sortBy === 'type') return a.typeLabel.localeCompare(b.typeLabel) || a.name.localeCompare(b.name);
-      if (sortBy === 'status') return statusLabel(a).localeCompare(statusLabel(b)) || a.name.localeCompare(b.name);
-      return a.name.localeCompare(b.name);
-    });
+    const [column, direction] = sortBy.split('-');
+    type Item = (typeof list)[number];
+    const sortValues: Record<string, (i: Item) => string> = {
+      name: (i) => i.name,
+      type: (i) => i.typeLabel,
+      status: (i) => statusLabel(i),
+      domain: (i) => (i.application?.fqdn ? displayDomain(i.application.fqdn) : '') || '',
+      server: (i) => i.server || 'Unknown',
+    };
+    const sortValue = sortValues[column] ?? sortValues.name;
+    const order = direction === 'desc' ? -1 : 1;
+    return list.sort((a, b) => order * (sortValue(a).localeCompare(sortValue(b)) || a.name.localeCompare(b.name)));
   });
   const totalPages = $derived(Math.max(1, Math.ceil(filtered.length / pageSize)));
   $effect.pre(() => {
@@ -431,6 +439,7 @@
               {/snippet}
             </Dropdown>
 
+            <div class={view.mode === 'grid' ? '' : 'min-[769px]:hidden'}>
             <Dropdown panelClass="w-48!">
               {#snippet trigger({ open })}
                 <button type="button" class="button" aria-haspopup="listbox" aria-expanded={open}>
@@ -450,7 +459,7 @@
                 {#each sortOptions as option (option.value)}
                   <button
                     type="button"
-                    class="flex h-9 w-full items-center rounded-md px-2 text-left text-[12px] text-neutral-600 transition-colors hover:bg-neutral-100 hover:text-black dark:text-fg-dim dark:hover:bg-white/[0.06] dark:hover:text-fg"
+                    class="listbox-option"
                     onclick={() => ((sortBy = option.value), close(), (page = 1))}
                   >
                     <span class="flex-1">{option.label}</span>
@@ -463,6 +472,7 @@
                 {/each}
               {/snippet}
             </Dropdown>
+            </div>
 
             <ViewToggle canvasUrl="/project/{uuid}/environment/{env}/canvas" bind:mode={() => view.mode, (m) => ((view.mode = m), (page = 1))} />
           </div>
@@ -521,11 +531,11 @@
             <div
               class="environment-resource-grid border-b border-neutral-200 bg-neutral-50 px-4 py-2.5 text-[11px] font-medium text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-fg-faint"
             >
-              <div>Resource</div>
-              <div class="resource-type">Type</div>
-              <div>Status</div>
-              <div class="resource-domain">Domain</div>
-              <div class="resource-server">Server</div>
+              <SortHeader label="Resource" asc="name-asc" desc="name-desc" current={sortBy} onsort={sortResources} />
+              <SortHeader label="Type" asc="type-asc" desc="type-desc" current={sortBy} onsort={sortResources} class="resource-type" />
+              <SortHeader label="Status" asc="status-asc" desc="status-desc" current={sortBy} onsort={sortResources} />
+              <SortHeader label="Domain" asc="domain-asc" desc="domain-desc" current={sortBy} onsort={sortResources} class="resource-domain" />
+              <SortHeader label="Server" asc="server-asc" desc="server-desc" current={sortBy} onsort={sortResources} class="resource-server" />
               <div class="resource-tags">Tags</div>
             </div>
 
@@ -559,10 +569,17 @@
                   </div>
                 </div>
 
-                <div class="resource-type truncate text-[12px] text-neutral-600 dark:text-fg-dim">{item.typeLabel}</div>
+                <div class="resource-type min-w-0">
+                  <button
+                    type="button"
+                    class="table-filter-value truncate text-[12px] text-neutral-600 dark:text-fg-dim"
+                    onclick={() => toggleFilter('typeFilters', item.type)}
+                    title="Filter by {item.typeLabel}">{item.typeLabel}</button
+                  >
+                </div>
 
-                <div>
-                  <ResourceStatus {item} />
+                <div class="min-w-0">
+                  <ResourceStatus {item} onfilter={() => toggleFilter('statusFilters', statusState(item))} />
                 </div>
 
                 <div class="resource-domain min-w-0">
@@ -573,7 +590,14 @@
                   {/if}
                 </div>
 
-                <div class="resource-server truncate text-[12px] text-neutral-600 dark:text-fg-dim">{item.server}</div>
+                <div class="resource-server min-w-0">
+                  <button
+                    type="button"
+                    class="table-filter-value truncate text-[12px] text-neutral-600 dark:text-fg-dim"
+                    onclick={() => toggleFilter('serverFilters', item.server || 'Unknown')}
+                    title="Filter by {item.server || 'Unknown'}">{item.server || 'Unknown'}</button
+                  >
+                </div>
 
                 <div class="resource-tags flex min-w-0 items-center gap-1 overflow-hidden">
                   {#each item.tags.slice(0, 2) as tag (tag.id)}

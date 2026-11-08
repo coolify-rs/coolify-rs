@@ -3,6 +3,8 @@
   // livewire/project/shared/storages/all.blade.php (Project\Service\Storage, Project\Shared\Storages\All).
   // External Compose volumes and the stale-entry actions of Compose volumes are not ported.
   import Reicon from '../Reicon.svelte';
+  import RowActions from '../RowActions.svelte';
+  import RowAction from '../RowAction.svelte';
   import Modal from '../Modal.svelte';
   import Callout from '../Callout.svelte';
   import Dropdown from '../Dropdown.svelte';
@@ -235,7 +237,9 @@
               {#if data.show_backup_action}
                 <div class="volumes-col-actions volumes-cell-actions flex flex-nowrap items-center justify-end gap-1.5">
                   {#if canUpdate}
-                    <button type="button" class="button !px-2.5 !text-xs" onclick={() => openBackup(v.id)}>Backup</button>
+                    <button type="button" class="icon-button shrink-0" title="Configure volume backup" aria-label="Configure backup for {v.name}" onclick={() => openBackup(v.id)}>
+                      <Reicon name="database" class="size-3.5" />
+                    </button>
                   {:else}
                     <span class="text-neutral-400 dark:text-fg-faint">—</span>
                   {/if}
@@ -280,14 +284,31 @@
                 {@render backupCell(v.id)}
               </div>
               <div class="volumes-col-actions volumes-cell-actions flex flex-nowrap items-center justify-end gap-1.5">
-                <button type="submit" class="button !px-2.5 !text-xs">Update</button>
-                {#if !v.is_shared}
-                  {#if data.show_backup_action}
-                    <button type="button" class="button !px-2.5 !text-xs" onclick={() => openBackup(v.id)}>Backup</button>
-                  {:else if data.database_backup_available}
-                    <button type="button" class="button !px-2.5 !text-xs" onclick={() => (databaseBackupOpen = true)}>Backup</button>
+                <button type="submit" class="sr-only" tabindex="-1" aria-hidden="true">Update</button>
+                {#if v.is_shared && !(canUpdate && (data.show_backup_action || data.database_backup_available))}
+                  <button type="button" class="icon-button shrink-0" title="Update storage" aria-label="Update {f.name}" onclick={() => saveVolume(v.id)}>
+                    <Reicon name="check" class="size-3.5" />
+                  </button>
+                {:else}
+                  {#snippet storageActions()}
+                    <RowAction onclick={() => saveVolume(v.id)}>Update</RowAction>
+                    {#if canUpdate}
+                      {#if data?.show_backup_action && !v.is_shared}
+                        <RowAction onclick={() => openBackup(v.id)}>Backup</RowAction>
+                      {:else if data?.database_backup_available}
+                        <RowAction onclick={() => (databaseBackupOpen = true)}>Backup</RowAction>
+                      {/if}
+                    {/if}
+                  {/snippet}
+                  {#if v.is_shared}
+                    <RowActions label="Storage actions" children={storageActions} />
+                  {:else}
+                    <RowActions label="Storage actions" children={storageActions}>
+                      {#snippet danger()}
+                        <RowAction onclick={() => (deleting = v)}>Delete</RowAction>
+                      {/snippet}
+                    </RowActions>
                   {/if}
-                  <button type="button" class="button button-error" onclick={() => (deleting = v)}>Delete</button>
                 {/if}
               </div>
             </div>

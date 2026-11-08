@@ -58,22 +58,17 @@ pub async fn env_first(
     Ok(row.map(env_row))
 }
 
-/// `$resource->environment_variables()->get()` (no order), or for previews
-/// `environment_variables_preview()` with its `CASE` order.
+/// `$resource->environment_variables()->get()` or `environment_variables_preview()->get()`
+/// (no order; v4.6.0 dropped the `CASE` order of the preview relation).
 pub async fn env_list(
     db: &Db,
     resource_type: &str,
     resource_id: i64,
     is_preview: bool,
 ) -> DbResult<Vec<EnvRow>> {
-    let order = if is_preview {
-        " ORDER BY CASE WHEN is_required = true THEN 1 WHEN LOWER(key) LIKE 'service_%' THEN 2 ELSE 3 END, LOWER(key) ASC"
-    } else {
-        ""
-    };
     let rows: Vec<EnvTuple> = sqlx::query_as(&format!(
         "SELECT {ENV_COLUMNS} FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 \
-         AND is_preview = $3{order}"
+         AND is_preview = $3"
     ))
     .bind(resource_type)
     .bind(resource_id)

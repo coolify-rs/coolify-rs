@@ -88,6 +88,10 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 - **"Configuration changed" warning** on application, database and service pages has no list of the changes.
 - **Remembered list or canvas view** is read in the browser, so a list page shows for an instant before it switches to
   the canvas.
+- **SQLite on the deploy canvas** is offered (v4.6.0) but its create call fails, as upstream: the canvas route group has
+  no `databases/sqlite` route.
+- **Table column sorts** that upstream runs on the server (dashboard, server images and resources, tag deployments) run
+  in the browser on the loaded rows; the order is the same, the header spinner only shows where the page reloads.
 - **Cloud tokens, cloud-init scripts and integration tokens** pages stay empty for a member, where upstream shows its
   403 page.
 - **Application General page instant saves** (site type, labels) store only that setting; upstream also saves unsaved

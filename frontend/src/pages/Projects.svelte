@@ -4,6 +4,7 @@
   import ViewToggle from '../components/ViewToggle.svelte';
   import Empty from '../components/Empty.svelte';
   import Dropdown from '../components/Dropdown.svelte';
+  import SortHeader from '../components/SortHeader.svelte';
   import Pager from '../components/Pager.svelte';
   import NewProjectModal from '../components/NewProjectModal.svelte';
   import { uiApi, type DashboardData } from '../lib/api';
@@ -26,9 +27,10 @@
   const sortOptions = [
     { value: 'name-asc', label: 'Name A–Z' },
     { value: 'name-desc', label: 'Name Z–A' },
-    { value: 'resources', label: 'Most resources' },
-    { value: 'environments', label: 'Most environments' },
+    { value: 'resources-desc', label: 'Most resources' },
+    { value: 'environments-desc', label: 'Most environments' },
   ];
+  const sortProjects = (value: string) => ((sortBy = value), (page = 1));
 
   const filtered = $derived.by(() => {
     const query = search.trim().toLowerCase();
@@ -36,12 +38,20 @@
       const searchable = [p.name, p.description].filter(Boolean).join(' ').toLowerCase();
       return !query || searchable.includes(query);
     });
-    return list.sort((a, b) => {
-      if (sortBy === 'name-desc') return b.name.localeCompare(a.name);
-      if (sortBy === 'resources') return b.resources - a.resources || a.name.localeCompare(b.name);
-      if (sortBy === 'environments') return b.environments.length - a.environments.length || a.name.localeCompare(b.name);
-      return a.name.localeCompare(b.name);
-    });
+    const [column, direction] = sortBy.split('-');
+    type Project = (typeof list)[number];
+    const sortValues: Record<string, (p: Project) => string | number> = {
+      name: (p) => p.name,
+      resources: (p) => Number(p.resources),
+      environments: (p) => p.environments.length,
+      created: (p) => Date.parse(p.created_at ?? '') || 0,
+      description: (p) => p.description || '',
+    };
+    const sortValue = sortValues[column] ?? sortValues.name;
+    const order = direction === 'desc' ? -1 : 1;
+    const compare = (a: string | number, b: string | number) =>
+      typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b));
+    return list.sort((a, b) => order * compare(sortValue(a), sortValue(b)) || a.name.localeCompare(b.name));
   });
   const totalPages = $derived(Math.max(1, Math.ceil(filtered.length / pageSize)));
   $effect.pre(() => {
@@ -102,6 +112,7 @@
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
+          <div class={view.mode === 'grid' ? '' : 'min-[641px]:hidden'}>
           <Dropdown panelClass="w-52!">
             {#snippet trigger({ open })}
               <button type="button" class="button" aria-haspopup="listbox" aria-expanded={open}>
@@ -121,7 +132,7 @@
               {#each sortOptions as option (option.value)}
                 <button
                   type="button"
-                  class="flex h-9 w-full items-center rounded-md px-2 text-left text-[12px] text-neutral-600 transition-colors hover:bg-neutral-100 hover:text-black dark:text-fg-dim dark:hover:bg-white/[0.06] dark:hover:text-fg"
+                  class="listbox-option"
                   onclick={() => {
                     sortBy = option.value;
                     close();
@@ -138,6 +149,7 @@
               {/each}
             {/snippet}
           </Dropdown>
+          </div>
 
           <ViewToggle canvasUrl="/projects/canvas" bind:mode={() => view.mode, (m) => ((view.mode = m), (page = 1))} />
         </div>
@@ -212,11 +224,11 @@
           <div
             class="projects-table-grid border-b border-neutral-200 bg-neutral-50 px-4 py-2.5 text-[11px] font-medium text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-fg-faint"
           >
-            <div>Project</div>
-            <div>Contents</div>
-            <div>Created</div>
-            <div class="project-description">Description</div>
-            <div></div>
+            <SortHeader label="Project" asc="name-asc" desc="name-desc" current={sortBy} onsort={sortProjects} />
+            <SortHeader label="Contents" asc="resources-asc" desc="resources-desc" first="desc" current={sortBy} onsort={sortProjects} />
+            <SortHeader label="Created" asc="created-asc" desc="created-desc" first="desc" current={sortBy} onsort={sortProjects} />
+            <SortHeader label="Description" asc="description-asc" desc="description-desc" current={sortBy} onsort={sortProjects} class="project-description" />
+            <span class="text-right">Actions</span>
           </div>
           {#each paginated as p (p.uuid)}
             <div

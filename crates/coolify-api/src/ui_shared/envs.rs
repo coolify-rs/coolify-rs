@@ -1099,15 +1099,24 @@ async fn add(
 }
 
 /// `formatEnvironmentVariables`.
-fn format_dev(state: &AppState, rows: &[Record], hide: bool) -> Result<String, ApiError> {
+fn format_dev(
+    state: &AppState,
+    rows: &[Record],
+    hide: bool,
+    compose: Option<&ComposeHint<'_>>,
+) -> Result<String, ApiError> {
     let mut lines = Vec::new();
     for r in rows {
         let key = text(r, "key").unwrap_or_default();
         if is_protected(key) {
             continue;
         }
+        let stored = plain(state, r)?;
+        let hint = compose
+            .map(|c| compose_default_hint(c, key, stored.as_deref()))
+            .unwrap_or_default();
         // `formatEnvVariableForDevView`.
-        let value = if hide { None } else { plain(state, r)? };
+        let value = if hide { None } else { stored };
         let flags = [
             ("literal", flag(r, "is_literal")),
             ("buildtime", flag(r, "is_buildtime")),
@@ -1120,9 +1129,36 @@ fn format_dev(state: &AppState, rows: &[Record], hide: bool) -> Result<String, A
             is_multiline: flag(r, "is_multiline"),
             flags: &flags,
         };
-        lines.push(dev_view::format_variable(&v, !hide, dev_view::ENV_FLAGS));
+        lines.push(format!(
+            "{hint}{}",
+            dev_view::format_variable(&v, !hide, dev_view::ENV_FLAGS)
+        ));
     }
     Ok(lines.join("\n"))
+}
+
+/// The compose file behind `composeInfoFor()` of a resource that `showsHardcodedEnvironmentVariables()`.
+struct ComposeHint<'a> {
+    assignments: &'a [Assignment],
+    can_view_compose: bool,
+}
+
+/// `composeDefaultHint()`: an empty value makes the deployment use the Compose default, so the
+/// developer view shows that default above the line.
+fn compose_default_hint(c: &ComposeHint<'_>, key: &str, value: Option<&str>) -> String {
+    if value.is_some_and(|v| !v.trim().is_empty()) || !c.can_view_compose {
+        return String::new();
+    }
+    let info = compose_info(c.assignments, key);
+    let default = info
+        .as_ref()
+        .and_then(|i| i.get("default"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if default.trim().is_empty() || default.contains('\n') {
+        return String::new();
+    }
+    format!("# Compose default: {default}\n")
 }
 
 /// `getDevView`.
@@ -1134,11 +1170,20 @@ async fn dev_view(
     let res = find(&state, &ctx, &kind, &uuid).await?;
     let alphabetical = res.setting_bool("is_env_sorting_enabled");
     let hide = !ctx.is_team_admin();
+    let assignments = if res.is_compose() {
+        extract_hardcoded(res.compose_raw().unwrap_or_default())
+    } else {
+        Vec::new()
+    };
+    let compose = res.is_compose().then_some(ComposeHint {
+        assignments: &assignments,
+        can_view_compose: ctx.is_team_admin(),
+    });
     let prod = re::scoped(&state.db, &res.morph, res.id, false, alphabetical).await?;
-    let variables = format_dev(&state, &prod, hide)?;
+    let variables = format_dev(&state, &prod, hide, compose.as_ref())?;
     let preview = if show_preview(&res) {
         let rows = re::scoped(&state.db, &res.morph, res.id, true, alphabetical).await?;
-        Some(format_dev(&state, &rows, hide)?)
+        Some(format_dev(&state, &rows, hide, compose.as_ref())?)
     } else {
         None
     };
@@ -1965,4 +2010,36 @@ async fn destroy(
     re::delete_ids(&state.db, &[id]).await?;
     audit_deleted(&state, &ctx, &meta, &res, &r).await;
     Ok(ok(json!({"message": "Environment variable deleted successfully."})).into_response())
+}
+
+#[cfg(test)]
+mod compose_default_hint_tests {
+    use super::*;
+
+    const COMPOSE: &str = "services:\n  app:\n    image: nginx\n    environment:\n      - PORT=${PORT:-8080}\n      - NAME=${NAME}\n";
+
+    fn hint(key: &str, value: Option<&str>, can_view_compose: bool) -> String {
+        let assignments = extract_hardcoded(COMPOSE);
+        compose_default_hint(
+            &ComposeHint {
+                assignments: &assignments,
+                can_view_compose,
+            },
+            key,
+            value,
+        )
+    }
+
+    #[test]
+    fn empty_value_shows_the_compose_default() {
+        assert_eq!(hint("PORT", None, true), "# Compose default: 8080\n");
+        assert_eq!(hint("PORT", Some(" "), true), "# Compose default: 8080\n");
+    }
+
+    #[test]
+    fn no_hint_with_a_value_without_a_default_or_without_access() {
+        assert_eq!(hint("PORT", Some("9000"), true), "");
+        assert_eq!(hint("NAME", None, true), "");
+        assert_eq!(hint("PORT", None, false), "");
+    }
 }

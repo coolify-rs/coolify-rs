@@ -201,9 +201,11 @@
                           <span class="text-[11px] text-neutral-500 dark:text-fg-dim">{t.zones.length} {t.zones.length === 1 ? 'zone' : 'zones'}</span>
                         {/if}
                       </div>
-                      <button type="button" class="icon-button" title="Edit integration token" aria-label="Edit {t.name}" onclick={() => openEditor(t)}>
-                        <Reicon name="settings" class="size-3.5" />
-                      </button>
+                      <div class="flex justify-end">
+                        <button type="button" class="icon-button" title="Edit integration token" aria-label="Edit {t.name}" onclick={() => openEditor(t)}>
+                          <Reicon name="settings" class="size-3.5" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>

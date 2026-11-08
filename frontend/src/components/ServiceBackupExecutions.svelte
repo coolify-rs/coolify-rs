@@ -64,7 +64,7 @@
   }
   const headline = (s: string) => s.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   const statusType = (s: string): 'success' | 'error' | 'warning' | 'neutral' => (s === 'success' ? 'success' : s === 'failed' ? 'error' : s === 'running' ? 'warning' : 'neutral');
-  const grid = 'grid-cols-[minmax(150px,1.4fr)_100px_100px_110px_190px_90px_48px]';
+  const grid = 'grid-cols-[minmax(150px,1.4fr)_100px_100px_110px_190px_90px_4.5rem]';
 </script>
 
 {#if selected}
