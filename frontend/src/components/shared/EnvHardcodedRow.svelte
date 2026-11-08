@@ -44,7 +44,7 @@
     <span class="data-table-cell-dash">-</span>
     <span class="data-table-cell-dash">-</span>
     <span class="data-table-cell-dash">-</span>
-    <div class="flex items-center gap-0.5 justify-self-end">
+    <div class="flex items-center justify-end gap-0.5 justify-self-end">
       {#if !row.is_value_hidden}
         <button type="button" title="Copy value" aria-label="Copy value" class="icon-button group shrink-0" onclick={copyValue}>
           <span class="inline-flex transition-transform duration-150 ease-out group-active:scale-75">

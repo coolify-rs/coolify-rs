@@ -94,8 +94,22 @@ impl Resource {
     }
 }
 
+/// `VisibleThroughAccessGrants` on a row with an `id` (projects, environments).
+fn id_visible(r: &Record, check: fn(i64) -> bool) -> bool {
+    r.get("id").and_then(Value::as_i64).is_none_or(check)
+}
+
 /// `ServerCanvas::loadResources`: applications, services, then every database relation.
+/// Resources the request cannot see are left out (`VisibleThroughAccessGrants`).
 pub async fn resources(db: &Db, environment_ids: &[i64]) -> DbResult<Vec<Resource>> {
+    let all = all_resources(db, environment_ids).await?;
+    Ok(all
+        .into_iter()
+        .filter(|r| crate::access::resource_visible(Some(r.environment_id()), r.uuid()))
+        .collect())
+}
+
+async fn all_resources(db: &Db, environment_ids: &[i64]) -> DbResult<Vec<Resource>> {
     let mut out = Vec::new();
     for (table, morph) in [
         ("applications", APPLICATION_MORPH),
@@ -255,12 +269,16 @@ pub async fn links(db: &Db, environment_ids: &[i64]) -> DbResult<Vec<Record>> {
 
 /// `Project::query()->where('team_id', $teamId)->orderBy('name')`.
 pub async fn team_projects(db: &Db, team_id: i64) -> DbResult<Vec<Record>> {
-    rows(
+    let list = rows(
         db,
         "SELECT row_to_json(t)::text FROM projects t WHERE t.team_id = ANY($1) ORDER BY t.name",
         &[team_id],
     )
-    .await
+    .await?;
+    Ok(list
+        .into_iter()
+        .filter(|r| id_visible(r, crate::access::project_visible))
+        .collect())
 }
 
 pub async fn project_by_uuid(db: &Db, team_id: i64, uuid: &str) -> DbResult<Option<Record>> {
@@ -271,27 +289,39 @@ pub async fn project_by_uuid(db: &Db, team_id: i64, uuid: &str) -> DbResult<Opti
     .bind(uuid)
     .fetch_optional(db.pool())
     .await?;
-    text.as_deref().map(decode).transpose()
+    Ok(text
+        .as_deref()
+        .map(decode)
+        .transpose()?
+        .filter(|r| id_visible(r, crate::access::project_visible)))
 }
 
 /// The environments of the projects of a team (`whereHas('project', ...)`).
 pub async fn team_environments(db: &Db, team_id: i64) -> DbResult<Vec<Record>> {
-    rows(
+    let list = rows(
         db,
         "SELECT row_to_json(t)::text FROM environments t WHERE EXISTS (SELECT 1 FROM projects p WHERE p.id = t.project_id AND p.team_id = ANY($1))",
         &[team_id],
     )
-    .await
+    .await?;
+    Ok(list
+        .into_iter()
+        .filter(|r| id_visible(r, crate::access::environment_visible))
+        .collect())
 }
 
 /// `$project->environments()->orderBy('id')`, or `whereIn('project_id', ...)`.
 pub async fn project_environments(db: &Db, project_ids: &[i64]) -> DbResult<Vec<Record>> {
-    rows(
+    let list = rows(
         db,
         "SELECT row_to_json(t)::text FROM environments t WHERE t.project_id = ANY($1) ORDER BY t.id",
         project_ids,
     )
-    .await
+    .await?;
+    Ok(list
+        .into_iter()
+        .filter(|r| id_visible(r, crate::access::environment_visible))
+        .collect())
 }
 
 pub async fn projects_by_id(db: &Db, ids: &[i64]) -> DbResult<HashMap<i64, Record>> {
@@ -323,7 +353,10 @@ pub async fn find_environment(
             .fetch_optional(db.pool())
             .await?;
         if let Some(t) = text {
-            return decode(&t).map(Some);
+            let r = decode(&t)?;
+            if id_visible(&r, crate::access::environment_visible) {
+                return Ok(Some(r));
+            }
         }
     }
     Ok(None)
@@ -338,7 +371,11 @@ pub async fn environment_in_team(db: &Db, team_id: i64, uuid: &str) -> DbResult<
     .bind(uuid)
     .fetch_optional(db.pool())
     .await?;
-    text.as_deref().map(decode).transpose()
+    Ok(text
+        .as_deref()
+        .map(decode)
+        .transpose()?
+        .filter(|r| id_visible(r, crate::access::environment_visible)))
 }
 
 /// The transaction of `EnvironmentCanvasController::updatePositions`: merges the positions into

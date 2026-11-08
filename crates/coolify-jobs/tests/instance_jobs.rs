@@ -300,10 +300,18 @@ async fn a_lost_occurrence_fails_and_notifies_once_an_hour() {
 async fn api_tokens_about_to_expire_are_warned_about_once() {
     let (t, jobs, endpoint, _dir) = setup().await;
     let db = &t.db;
-    for (id, name, hours) in [(1, "soon", 5), (2, "later", 48), (3, "past", -5)] {
+    // `WARNING_DAYS` (548dec65b): 7 days ahead, but a token that lives 7 days or less only 24 hours
+    // ahead. (name, expires in hours, created hours ago)
+    for (id, name, hours, age) in [
+        (1, "soon", 5, 0),
+        (2, "week", 120, 720),
+        (3, "past", -5, 720),
+        (4, "short", 120, 0),
+        (5, "far", 200, 720),
+    ] {
         sqlx::query(&format!(
-            "INSERT INTO personal_access_tokens (id, tokenable_type, tokenable_id, name, token, team_id, expires_at) \
-             VALUES ({id}, 'App\\Models\\User', 1, '{name}', 'x{id}', '1', now() + interval '{hours} hours')"
+            "INSERT INTO personal_access_tokens (id, tokenable_type, tokenable_id, name, token, team_id, expires_at, created_at) \
+             VALUES ({id}, 'App\\Models\\User', 1, '{name}', 'x{id}', '1', now() + interval '{hours} hours', now() - interval '{age} hours')"
         ))
         .execute(db.pool())
         .await
@@ -315,10 +323,12 @@ async fn api_tokens_about_to_expire_are_warned_about_once() {
     kernel::run_job(&jobs, KernelJob::ApiTokenExpirationWarning, now())
         .await
         .unwrap();
-    let bodies = endpoint.wait_for(1).await;
+    let bodies = endpoint.wait_for(2).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(endpoint.bodies().len(), 1, "{bodies:?}");
-    assert!(bodies[0].1.to_string().contains("soon"));
+    assert_eq!(endpoint.bodies().len(), 2, "{bodies:?}");
+    let all = format!("{bodies:?}");
+    assert!(all.contains("soon") && all.contains("week"), "{all}");
+    assert!(!all.contains("short") && !all.contains("far"), "{all}");
     // `sanctum:prune-expired --hours=1` leaves the others.
     kernel::run_job(&jobs, KernelJob::PruneExpiredTokens, now())
         .await
@@ -333,7 +343,7 @@ async fn api_tokens_about_to_expire_are_warned_about_once() {
     );
     assert_eq!(
         count(db, "SELECT count(*) FROM personal_access_tokens").await,
-        2
+        4
     );
 }
 

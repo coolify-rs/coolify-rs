@@ -479,6 +479,30 @@ pub(super) fn base_directory_rule(m: &Map<String, Value>, attribute: &str) -> Op
     }
 }
 
+/// `ValidationPatterns::normalizeDirectoryPath()` (v4.6.0): "apps/web/" becomes "/apps/web", and an
+/// empty value "/".
+pub(super) fn normalize_directory_path(path: Option<&str>) -> String {
+    let php_trim = |s: &str| {
+        s.trim_matches(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '\0' | '\x0B'))
+            .to_owned()
+    };
+    format!("/{}", php_trim(path.unwrap_or_default()).trim_matches('/'))
+}
+
+/// `$this->base_directory = ValidationPatterns::normalizeDirectoryPath($this->base_directory)` at
+/// the start of `submit()` of the new-resource forms.
+pub(super) fn normalize_base_directory(m: &mut Map<String, Value>) {
+    let value = match m.get("base_directory") {
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    };
+    m.insert(
+        "base_directory".into(),
+        Value::String(normalize_directory_path(value.as_deref())),
+    );
+}
+
 /// The `baseDirectory` mutator, then the `saving` hook's trim (which runs the mutator again).
 pub(super) fn base_directory_value(v: Option<&str>) -> String {
     let set = |v: &str| format!("/{}", v.trim_start_matches('/'));
@@ -547,7 +571,8 @@ pub async fn create(
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
-    let m = body(&bytes);
+    let mut m = body(&bytes);
+    normalize_base_directory(&mut m);
     let text = |k: &str| m.get(k).and_then(Value::as_str).map(str::to_owned);
     let repository_url = text("repository_url").unwrap_or_default();
     let git_branch = text("git_branch").unwrap_or_default();
@@ -886,6 +911,15 @@ pub(super) async fn import_variables(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directory_paths_are_normalized() {
+        assert_eq!(normalize_directory_path(Some("apps/web/")), "/apps/web");
+        assert_eq!(normalize_directory_path(Some(" /apps/web ")), "/apps/web");
+        assert_eq!(normalize_directory_path(Some("")), "/");
+        assert_eq!(normalize_directory_path(None), "/");
+        assert_eq!(normalize_directory_path(Some("//")), "/");
+    }
 
     #[test]
     fn sources() {

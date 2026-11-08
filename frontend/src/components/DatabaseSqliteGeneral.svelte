@@ -150,7 +150,7 @@
     <div>
       <SettingsSection
         title="Connect application"
-        description="Mount the data volume of this database into an application on the same server. The application must run as user 65532 or as root to access the files."
+        description="Mount the data volume of this database into an application on the same server. Keep the data in a Docker volume as the database files are writable by every user, so with a bind mount every user on the host can read and change them."
       >
         {#if connect}
           {#if connect.connections.length || connect.compose_connections.length}

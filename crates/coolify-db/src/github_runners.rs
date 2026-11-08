@@ -520,11 +520,12 @@ pub async fn queued_ids(db: &Db, app_id: i64, limit: i64) -> DbResult<Vec<i64>> 
     .await?)
 }
 
-/// The servers `ReconcileGithubRunnersJob` looks at.
+/// The servers `ReconcileGithubRunnersJob` looks at (`serversToReconcile()`): the server ids come
+/// from one UNION, since an OR of two EXISTS subqueries makes Postgres plan a per-server scan.
 pub async fn reconcile_server_ids(db: &Db) -> DbResult<Vec<i64>> {
     Ok(sqlx::query_scalar(&format!(
-        "SELECT s.id FROM servers s WHERE EXISTS (SELECT 1 FROM github_runner_configs c WHERE c.server_id = s.id AND c.is_enabled = true) \
-         OR EXISTS (SELECT 1 FROM github_runner_executions e WHERE e.server_id = s.id AND e.status IN {OCCUPYING}) ORDER BY s.id"
+        "SELECT s.id FROM servers s WHERE s.id IN (SELECT server_id FROM github_runner_configs WHERE is_enabled = true \
+         UNION SELECT server_id FROM github_runner_executions WHERE status IN {OCCUPYING}) ORDER BY s.id"
     ))
     .fetch_all(db.pool())
     .await?)

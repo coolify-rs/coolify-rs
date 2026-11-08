@@ -50,6 +50,8 @@ export interface NavContext {
   backTitle: string;
   ariaLabel: string;
   groups: NavContextItem[][];
+  /** Labels the main menu row that opens this menu again (`registerMainNavContext` `$name`). */
+  name?: string;
   /** The menu one Back away (`x-main-nav-menu :depth`, `navOnly`). */
   parent?: NavContext;
 }

@@ -249,7 +249,8 @@ pub async fn find(
                 .ok_or(NOT_FOUND)?;
             let s = svc::find_by_id(db, service_id)
                 .await?
-                .filter(|s| s.team_id == ctx.team_id)
+                // `VisibleThroughAccessGrants` on the service of the part.
+                .filter(|s| s.team_id == ctx.team_id && svc::visible(s))
                 .ok_or(NOT_FOUND)?;
             let sub = svc::sub_by_uuid(db, sub_kind, service_id, uuid)
                 .await?

@@ -125,6 +125,9 @@
           <div class="min-w-0 flex-1">
             <div class="flex flex-wrap items-center gap-2">
               <h4 class="truncate text-sm font-semibold text-black dark:text-fg">{task.name}</h4>
+              {#if !task.enabled}
+                <StatusBadge label="Disabled" />
+              {/if}
               {#if task.container}
                 <code class="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[11px] text-neutral-600 dark:bg-white/[0.05] dark:text-fg-dim">{task.container}</code>
               {/if}

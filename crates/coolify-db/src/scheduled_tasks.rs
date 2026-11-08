@@ -291,16 +291,21 @@ pub async fn start_execution(
     started_at: NaiveDateTime,
 ) -> DbResult<i64> {
     db.ensure_writable()?;
-    Ok(sqlx::query_scalar(
-        "INSERT INTO scheduled_task_executions (uuid, scheduled_task_id, started_at, retry_count, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $3, $3) RETURNING id",
-    )
-    .bind(uuid)
-    .bind(task_id)
-    .bind(started_at)
-    .bind(retry_count)
-    .fetch_one(db.pool())
-    .await?)
+    let (column, value, host) =
+        crate::worker_host::insert_parts(db.schema(), "scheduled_task_executions", 5);
+    let sql = format!(
+        "INSERT INTO scheduled_task_executions (uuid, scheduled_task_id, started_at, retry_count, created_at, updated_at{column}) \
+         VALUES ($1, $2, $3, $4, $3, $3{value}) RETURNING id"
+    );
+    let mut query = sqlx::query_scalar(&sql)
+        .bind(uuid)
+        .bind(task_id)
+        .bind(started_at)
+        .bind(retry_count);
+    if let Some(host) = host {
+        query = query.bind(host);
+    }
+    Ok(query.fetch_one(db.pool()).await?)
 }
 
 /// `$this->task_log->update(['status' => ..., 'message' => ...])`.
@@ -390,15 +395,20 @@ pub async fn record_missed_execution(
     now: NaiveDateTime,
 ) -> DbResult<()> {
     db.ensure_writable()?;
-    sqlx::query(
-        "INSERT INTO scheduled_task_executions (uuid, scheduled_task_id, status, message, retry_count, finished_at, created_at, updated_at) \
-         VALUES ($1, $2, 'failed', $3, 0, $4, $4, $4)",
-    )
-    .bind(new_public_id())
-    .bind(task_id)
-    .bind(message)
-    .bind(now)
-    .execute(db.pool())
-    .await?;
+    let (column, value, host) =
+        crate::worker_host::insert_parts(db.schema(), "scheduled_task_executions", 5);
+    let sql = format!(
+        "INSERT INTO scheduled_task_executions (uuid, scheduled_task_id, status, message, retry_count, finished_at, created_at, updated_at{column}) \
+         VALUES ($1, $2, 'failed', $3, 0, $4, $4, $4{value})"
+    );
+    let mut query = sqlx::query(&sql)
+        .bind(new_public_id())
+        .bind(task_id)
+        .bind(message)
+        .bind(now);
+    if let Some(host) = host {
+        query = query.bind(host);
+    }
+    query.execute(db.pool()).await?;
     Ok(())
 }

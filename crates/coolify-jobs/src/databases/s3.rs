@@ -456,10 +456,87 @@ pub async fn minio_resolve_options(url: &str) -> Vec<String> {
     if host.parse::<IpAddr>().is_ok() {
         return Vec::new();
     }
-    let ips = resolve(&host, parsed.port).await;
-    let ip = ips.iter().find(|i| i.is_ipv4()).or_else(|| ips.first());
-    ip.map(|ip| vec![format!("{host}:{}={ip}", parsed.port)])
-        .unwrap_or_default()
+    let mut ips = resolve(&host, parsed.port).await;
+    // IPv4 first; mc keeps one IP per host, so `minio_client_resolve_options` picks one entry.
+    ips.sort_by_key(IpAddr::is_ipv6);
+    ips.iter()
+        .map(|ip| format!("{host}:{}={ip}", parsed.port))
+        .collect()
+}
+
+/// `S3Storage::RESOLVE_PROBE_TIMEOUT_SECONDS`: how long the helper container waits for a TCP
+/// connection to one IP of the endpoint.
+const RESOLVE_PROBE_TIMEOUT_SECONDS: u64 = 5;
+
+/// The `docker run` of `minioClientResolveOptions()` that prints the first IP that connects.
+pub(crate) fn resolve_probe_command(
+    ips: &[&str],
+    port: u16,
+    image: &str,
+    network: Option<&str>,
+) -> String {
+    let quoted: Vec<String> = ips
+        .iter()
+        .map(|ip| coolify_remote::shell::quote(ip))
+        .collect();
+    let probe = format!(
+        "for ip in {}; do if timeout {RESOLVE_PROBE_TIMEOUT_SECONDS} bash -c \"exec 3<>/dev/tcp/$ip/{port}\" 2>/dev/null; then echo \"$ip\"; exit 0; fi; done",
+        quoted.join(" ")
+    );
+    format!(
+        "docker run --rm{} {} bash -c {}",
+        network.map_or(String::new(), |n| format!(
+            " --network {}",
+            coolify_remote::shell::quote(n)
+        )),
+        coolify_remote::shell::quote(image),
+        coolify_remote::shell::quote(&probe)
+    )
+}
+
+/// `S3Storage::minioClientResolveOptions($server, $image, $network)`: the mc `--resolve` option
+/// that pins the endpoint host to one of its validated IPs. mc keeps one IP per host, so when the
+/// host has more than one IP, a helper container on the upload network connects to each IP, IPv4
+/// first, and the first IP that connects is used. When no IP connects, the first IP is used, so
+/// mc reports the real connection error.
+pub async fn minio_client_resolve_options(
+    jobs: &Jobs,
+    target: &coolify_remote::Target,
+    endpoint: &str,
+    image: &str,
+    network: Option<&str>,
+) -> String {
+    let entries = minio_resolve_options(endpoint).await;
+    let Some(first) = entries.first() else {
+        return String::new();
+    };
+    let mut entry = first.clone();
+    if entries.len() > 1 {
+        let ips: Vec<&str> = entries
+            .iter()
+            .map(|e| e.rsplit_once('=').map_or(e.as_str(), |(_, ip)| ip))
+            .collect();
+        let port = first
+            .rsplit_once('=')
+            .and_then(|(host, _)| host.rsplit_once(':'))
+            .and_then(|(_, port)| port.parse::<u16>().ok())
+            .unwrap_or(0);
+        let command = resolve_probe_command(&ips, port, image, network);
+        let timeout = Duration::from_secs(ips.len() as u64 * RESOLVE_PROBE_TIMEOUT_SECONDS + 60);
+        let reachable = jobs
+            .remote()
+            .run_quiet(
+                target,
+                &[command.as_str()],
+                coolify_remote::RunOptions::op("s3.resolve").timeout(timeout),
+            )
+            .await
+            .unwrap_or_default();
+        if let Some(index) = ips.iter().position(|ip| *ip == reachable.trim()) {
+            entry = entries[index].clone();
+        }
+    }
+    format!(" --resolve {}", coolify_remote::shell::quote(&entry))
 }
 
 /// `S3Storage::VIRTUAL_HOSTED_STYLE_HOST_SUFFIXES`: endpoint host suffixes of providers that reject
@@ -991,6 +1068,31 @@ impl Jobs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn resolve_entries_list_every_ip_ipv4_first() {
+        assert_eq!(
+            minio_resolve_options("http://localhost:9000").await,
+            ["localhost:9000=127.0.0.1", "localhost:9000=::1"]
+        );
+        assert!(
+            minio_resolve_options("http://127.0.0.1:9000")
+                .await
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_resolve_probe_tries_each_ip_in_order() {
+        assert_eq!(
+            resolve_probe_command(&["127.0.0.1", "::1"], 9000, "img:1", Some("net")),
+            r#"docker run --rm --network 'net' 'img:1' bash -c 'for ip in '\''127.0.0.1'\'' '\''::1'\''; do if timeout 5 bash -c "exec 3<>/dev/tcp/$ip/9000" 2>/dev/null; then echo "$ip"; exit 0; fi; done'"#
+        );
+        assert!(
+            resolve_probe_command(&["127.0.0.1"], 443, "img:1", None)
+                .starts_with("docker run --rm 'img:1' bash -c ")
+        );
+    }
 
     #[test]
     fn bucket_names() {

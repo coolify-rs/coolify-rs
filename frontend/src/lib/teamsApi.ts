@@ -17,6 +17,37 @@ export interface InvitationRow {
   via: string;
   role: string;
   link: string;
+  /** `Access::summary($invite->access)`, for the member role. */
+  access_summary?: string | null;
+}
+
+/** One stored grant (`Grant::toArray`). */
+export interface StoredGrant {
+  scope: string;
+  uuid: string | null;
+  levels: string[];
+}
+
+/** A row of the access editor (`Access::row`). */
+export interface AccessRow {
+  key: string;
+  targets: string[];
+  levels: Record<string, boolean>;
+}
+
+export interface AccessLevelInfo {
+  name: string;
+  label: string;
+  description: string;
+  includes: string[];
+}
+
+export interface AccessOptions {
+  scope_options: { value: string; label: string; header?: boolean }[];
+  project_options: { value: string; label: string }[];
+  levels: AccessLevelInfo[];
+  presets: Record<string, AccessRow>;
+  supported: boolean;
 }
 
 export interface InvitationsData {
@@ -51,6 +82,7 @@ export interface AuditData {
   total: number;
   per_page: number;
   page: number;
+  sort?: string;
 }
 
 export interface AdminData {
@@ -118,10 +150,16 @@ export const teamsUi = {
   danger: () => request<DangerData>('GET', '/ui/team/danger'),
   remove: () => request<{ message: string }>('POST', '/ui/team/danger', {}),
   invitations: () => request<InvitationsData>('GET', '/ui/team/invitations'),
-  invite: (email: string, role: string, via: 'email' | 'link') => request<{ message: string }>('POST', '/ui/team/invitations', { email, role, via }),
+  invite: (email: string, role: string, via: 'email' | 'link', access: StoredGrant[]) =>
+    request<{ message: string }>('POST', '/ui/team/invitations', { email, role, via, access }),
+  accessOptions: () => request<AccessOptions>('GET', '/ui/team/access-options'),
+  memberAccess: (id: number) => request<{ title: string; summary: string; rows: AccessRow[] }>('GET', `/ui/team/members/${id}/access`),
+  saveMemberAccess: (id: number, rows: AccessRow[]) => request<{ message: string }>('POST', `/ui/team/members/${id}/access`, { rows }),
+  invitationAccess: (rows: AccessRow[]) => request<{ access: StoredGrant[]; summary: string }>('POST', '/ui/team/invitation-access', { rows }),
   revoke: (id: number) => request<{ message: string }>('DELETE', `/ui/team/invitations/${id}`),
   removeAvatar: () => request<{ message: string }>('DELETE', '/ui/team/avatar'),
-  audit: (params: { search: string; action: string; source: string; per_page: number; page: number }) => request<AuditData>('GET', `/ui/team/audit-log?${query(params)}`),
+  audit: (params: { search: string; action: string; source: string; per_page: number; page: number; sort: string }) =>
+    request<AuditData>('GET', `/ui/team/audit-log?${query(params)}`),
   admin: (params: { search: string; team_filter: string; sort: string; per_page: number; page: number }) => request<AdminData>('GET', `/ui/team/admin?${query(params)}`),
   adminDelete: (id: number, password: string) => request<{ message: string }>('POST', `/ui/team/admin/${id}/delete`, { password }),
   invitation: (uuid: string) => request<InvitationView>('GET', `/ui/invitations/${encodeURIComponent(uuid)}`),

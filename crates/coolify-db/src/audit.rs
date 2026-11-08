@@ -358,6 +358,31 @@ pub async fn page(
     per_page: i64,
     page: i64,
 ) -> DbResult<(i64, Vec<crate::records::Record>)> {
+    page_sorted(
+        db,
+        team_id,
+        include_instance,
+        filter,
+        columns,
+        per_page,
+        page,
+        None,
+    )
+    .await
+}
+
+/// `Team\AuditLog::setSort`: `(column, direction)` before `latestFirst()`.
+#[allow(clippy::too_many_arguments)]
+pub async fn page_sorted(
+    db: &Db,
+    team_id: i64,
+    include_instance: bool,
+    filter: &Filter,
+    columns: &[&str],
+    per_page: i64,
+    page: i64,
+    sort: Option<(&'static str, &'static str)>,
+) -> DbResult<(i64, Vec<crate::records::Record>)> {
     let team = if include_instance {
         "(team_id = $1 OR team_id IS NULL)"
     } else {
@@ -381,9 +406,10 @@ pub async fn page(
         .bind(&filter.search)
         .fetch_one(db.pool())
         .await?;
+    let order = sort.map_or(String::new(), |(c, d)| format!("{c} {d}, "));
     let sql = format!(
         "SELECT row_to_json(r)::text FROM (SELECT {} FROM audit_events WHERE {wh} \
-         ORDER BY created_at DESC, id DESC LIMIT $6 OFFSET $7) r",
+         ORDER BY {order}created_at DESC, id DESC LIMIT $6 OFFSET $7) r",
         columns.join(", ")
     );
     let rows: Vec<String> = sqlx::query_scalar(&sql)

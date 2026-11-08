@@ -179,7 +179,7 @@ fn php_string(v: &Value) -> String {
     }
 }
 
-fn is_laravel_boolean(v: &Value) -> bool {
+pub(crate) fn is_laravel_boolean(v: &Value) -> bool {
     match v {
         Value::Bool(_) => true,
         Value::Number(n) => n.as_i64().is_some_and(|i| i == 0 || i == 1),

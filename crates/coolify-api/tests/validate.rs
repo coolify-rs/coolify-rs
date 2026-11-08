@@ -16,6 +16,8 @@ use coolify_remote::{Remote, RemoteConfig};
 use serde_json::json;
 
 const W: Option<&str> = Some("acme_owner_write");
+/// DELETE routes need the `delete` ability since 4.6.0.
+const DEL: Option<&str> = Some("acme_owner_delete");
 
 /// Answers validation's commands; the SSH user picks the scenario.
 const FAKE_SSH: &str = r#"#!/bin/sh
@@ -288,7 +290,7 @@ async fn changing_the_address_drops_the_pinned_host_key() {
 
     std::fs::write(&pin, "x").unwrap();
     let r = h
-        .call("DELETE", &format!("/api/v1/servers/{uuid}"), W, None)
+        .call("DELETE", &format!("/api/v1/servers/{uuid}"), DEL, None)
         .await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert!(!pin.exists());

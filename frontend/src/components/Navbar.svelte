@@ -18,6 +18,7 @@
       isAdmin: session.isAdmin,
       isOwner: session.isOwner,
       isInstanceAdmin: session.isInstanceAdmin,
+      teamWide: session.coversWholeTeam,
       isCloud: session.info?.features.cloud,
       pluginSettings: pluginNav.settings,
       pluginTeam: pluginNav.team,
@@ -42,6 +43,8 @@
   });
   const shownContext = $derived(navLevel === 0 ? page.navContext : navLevel === 1 ? (page.navContext?.parent ?? null) : null);
   const showContext = $derived(!!shownContext);
+  // `$navContextName`: the name of the deepest menu that has one.
+  const navContextName = $derived(page.navContext?.name ?? page.navContext?.parent?.name ?? 'Resource menu');
 
   const collapsed = $derived(layout.collapsed);
   const centerWhenCollapsed = $derived(collapsed ? 'lg:justify-center lg:px-0' : '');
@@ -256,6 +259,26 @@
     {#if !showContext && !submenu}
       <li class="contents">
         <ul role="list" class="flex flex-col gap-y-0.5 {navSwap && 'nav-swap-' + navSwap}">
+          {#if page.navContext}
+            <!-- On a resource page the main menu opens the deepest resource menu again. -->
+            <li class="mb-1">
+              <button
+                type="button"
+                onclick={() => {
+                  navLevel = 0;
+                  navSwap = 'forward';
+                }}
+                title="Back to the {navContextName} menu"
+                aria-label="Back to the {navContextName} menu"
+                class="menu-item menu-back bg-transparent! hover:bg-neutral-100! dark:hover:bg-white/[0.06]! {centerWhenCollapsed}"
+              >
+                <span class="flex-1 truncate pl-6 text-center font-medium text-black dark:text-fg {hideWhenCollapsed}">{navContextName}</span>
+                <span class="menu-back-icon flex shrink-0 items-center justify-center">
+                  <Reicon name="chevron-down" class="size-3 -rotate-90 text-coollabs dark:text-fg-dim" />
+                </span>
+              </button>
+            </li>
+          {/if}
           {#each sections as [sectionLabel, items], si (sectionLabel)}
             {#if si > 0}
               <li

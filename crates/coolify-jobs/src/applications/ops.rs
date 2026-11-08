@@ -976,10 +976,11 @@ impl Jobs {
                 .iter()
                 .find(|(k, _)| k == "o")
                 .is_some_and(|(_, v)| v.split(',').any(|o| o.trim() == "bind"));
+        let labels = self.compose_volume_labels(volume_id, target_volume).await;
         let create = if bind {
-            create_volume_command("local", &[], target_volume)
+            create_volume_command("local", &[], &labels, target_volume)
         } else {
-            create_volume_command(&driver, &options, target_volume)
+            create_volume_command(&driver, &options, &labels, target_volume)
         };
         let plain = bind || (driver == "local" && options.is_empty());
         if !bind {
@@ -1098,6 +1099,29 @@ impl Jobs {
         Ok(())
     }
 
+    /// `VolumeCloneJob::composeVolumeLabels()`: the labels Docker Compose puts on a volume it
+    /// creates, so `docker compose up` does not warn that the volume "was not created by Docker
+    /// Compose". The volume key in the generated Compose file is the volume name.
+    async fn compose_volume_labels(
+        &self,
+        volume_id: Option<i64>,
+        target_volume: &str,
+    ) -> Vec<(String, String)> {
+        let Some(id) = volume_id else {
+            return Vec::new();
+        };
+        match ops::compose_project_of_volume(&self.0.db, id).await {
+            Ok(Some(project)) => vec![
+                ("com.docker.compose.project".to_owned(), project),
+                (
+                    "com.docker.compose.volume".to_owned(),
+                    target_volume.to_owned(),
+                ),
+            ],
+            _ => Vec::new(),
+        }
+    }
+
     /// `VolumeCloneJob::handle()`.
     pub(crate) async fn clone_volume_data(
         &self,
@@ -1149,11 +1173,15 @@ impl Jobs {
                 .iter()
                 .find(|(k, _)| k == "o")
                 .is_some_and(|(_, v)| v.split(',').any(|o| o.trim() == "bind"));
+        let labels = self.compose_volume_labels(volume_id, target_volume).await;
         let (create, remembered_plain) = if bind {
-            (create_volume_command("local", &[], target_volume), true)
+            (
+                create_volume_command("local", &[], &labels, target_volume),
+                true,
+            )
         } else {
             (
-                create_volume_command(&driver, &options, target_volume),
+                create_volume_command(&driver, &options, &labels, target_volume),
                 driver == "local" && options.is_empty(),
             )
         };
@@ -1208,13 +1236,21 @@ fn volume_configuration(inspected: &str) -> (String, Vec<(String, String)>) {
 }
 
 /// `createTargetVolumeCommand()`.
-fn create_volume_command(driver: &str, options: &[(String, String)], target: &str) -> String {
+fn create_volume_command(
+    driver: &str,
+    options: &[(String, String)],
+    labels: &[(String, String)],
+    target: &str,
+) -> String {
     let mut command = "docker volume create".to_owned();
     if driver != "local" {
         command.push_str(&format!(" --driver {}", quote(driver)));
     }
     for (k, v) in options {
         command.push_str(&format!(" --opt {}", quote(&format!("{k}={v}"))));
+    }
+    for (k, v) in labels {
+        command.push_str(&format!(" --label {}", quote(&format!("{k}={v}"))));
     }
     command.push_str(&format!(" {}", quote(target)));
     format!("sh -c {}", quote(&command))
@@ -1236,6 +1272,32 @@ pub fn image_tag(reference: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cloned_volumes_get_the_compose_labels() {
+        let labels = [
+            ("com.docker.compose.project".to_owned(), "svc".to_owned()),
+            ("com.docker.compose.volume".to_owned(), "new-vol".to_owned()),
+        ];
+        assert_eq!(
+            create_volume_command(
+                "local",
+                &[("type".to_owned(), "none".to_owned())],
+                &labels,
+                "new-vol"
+            ),
+            format!(
+                "sh -c {}",
+                quote(
+                    "docker volume create --opt 'type=none' --label 'com.docker.compose.project=svc' --label 'com.docker.compose.volume=new-vol' 'new-vol'"
+                )
+            )
+        );
+        assert_eq!(
+            create_volume_command("local", &[], &[], "v"),
+            format!("sh -c {}", quote("docker volume create 'v'"))
+        );
+    }
 
     #[test]
     fn log_lines() {

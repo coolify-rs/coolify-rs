@@ -86,13 +86,17 @@ pub struct ActiveDeployment {
     pub status: String,
     pub project_name: Option<String>,
     pub environment_name: Option<String>,
+    /// For `visibleToCurrentActor()`; not part of the page data.
+    #[serde(skip)]
+    pub environment_id: i64,
 }
 
 /// `DeploymentsIndicator::deployments`: `ownedByTeam` goes through the application, also a deleted one.
 pub async fn active_deployments(db: &Db, team_id: i64) -> DbResult<Vec<ActiveDeployment>> {
-    Ok(sqlx::query_as(
+    Ok(sqlx::query_as::<_, ActiveDeployment>(
         "SELECT q.id, a.uuid AS application_uuid, q.application_name, q.deployment_url, q.pull_request_id, \
-                q.server_name, q.status, p.name AS project_name, e.name AS environment_name \
+                q.server_name, q.status, p.name AS project_name, e.name AS environment_name, \
+                e.id AS environment_id \
            FROM application_deployment_queues q \
            JOIN applications a ON a.id::text = q.application_id \
            JOIN environments e ON e.id = a.environment_id \
@@ -102,5 +106,14 @@ pub async fn active_deployments(db: &Db, team_id: i64) -> DbResult<Vec<ActiveDep
     )
     .bind(team_id)
     .fetch_all(db.pool())
-    .await?)
+    .await?
+    .into_iter()
+    // `visibleToCurrentActor()`.
+    .filter(|d: &ActiveDeployment| {
+        crate::access::resource_visible(
+            Some(d.environment_id),
+            d.application_uuid.as_deref().unwrap_or_default(),
+        )
+    })
+    .collect())
 }

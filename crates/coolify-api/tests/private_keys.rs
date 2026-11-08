@@ -18,6 +18,8 @@ fn fixture() -> Vec<Value> {
 }
 
 const W: Option<&str> = Some("acme_owner_write");
+/// DELETE routes need the `delete` ability since 4.6.0.
+const DEL: Option<&str> = Some("acme_owner_delete");
 
 #[tokio::test]
 async fn create_list_show_with_sensitive_gating() {
@@ -176,7 +178,7 @@ async fn update_and_delete() {
     .execute(h.tdb.db.pool())
     .await
     .unwrap();
-    let r = h.call("DELETE", &path, W, None).await;
+    let r = h.call("DELETE", &path, DEL, None).await;
     assert_eq!(r.status, 422);
     assert_eq!(
         r.json()["message"],
@@ -186,10 +188,10 @@ async fn update_and_delete() {
         .execute(h.tdb.db.pool())
         .await
         .unwrap();
-    h.call("DELETE", &path, W, None)
+    h.call("DELETE", &path, DEL, None)
         .await
         .assert(200, r#"{"message":"Private Key deleted."}"#);
-    h.call("DELETE", &path, W, None)
+    h.call("DELETE", &path, DEL, None)
         .await
         .assert(404, r#"{"message":"Private Key not found."}"#);
     h.finish().await;

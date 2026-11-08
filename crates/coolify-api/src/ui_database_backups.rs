@@ -265,9 +265,14 @@ async fn edit_payload(state: &AppState, d: &DatabaseRow, b: &Record) -> Result<V
                 .map(str::to_owned)
         })
         .unwrap_or_else(|| "Instance timezone".to_owned());
+    // `$isServiceSqlDatabase`: a service database picks its databases like a standalone one.
+    let is_service_sql_database = b.get("database_type").and_then(Value::as_str)
+        == Some(r"App\Models\ServiceDatabase")
+        && matches!(d.kind, Kind::Postgresql | Kind::Mysql | Kind::Mariadb);
     Ok(json!({
         "uuid": b.get("uuid"),
         "database_type": b.get("database_type"),
+        "is_service_sql_database": is_service_sql_database,
         "form": form,
         "timezone": timezone,
         "storages": available.iter().map(|(id, name, usable)| json!({"id": id, "name": name, "is_usable": usable})).collect::<Vec<_>>(),

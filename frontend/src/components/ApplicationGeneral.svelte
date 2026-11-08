@@ -139,8 +139,9 @@
   // could_set_build_commands()
   const canSetBuildCommands = $derived(storedPack === 'nixpacks' || storedPack === 'railpack');
   const hasDockerfile = $derived(str(record.dockerfile) !== '');
-  // is_github_based() && !is_public_repository()
-  const privateGit = $derived(!!record.source_type && !appState.source_is_public);
+  // `supportsWatchPaths()`: git_based() && !is_public_repository(). Deploy-key applications
+  // have no source but receive manual webhooks, so a source is not required.
+  const supportsWatchPaths = $derived(!hasDockerfile && storedPack !== 'dockerimage' && !appState.source_is_public);
   const registryRequired = $derived(
     !!appState.server_is_swarm || setting('is_build_server_enabled') || appState.server_can_build === false,
   );
@@ -741,7 +742,7 @@
                       </div>
                     {/if}
                   </div>
-                  {#if record.source_type === 'App\\Models\\GithubApp' && !appState.source_is_public}
+                  {#if supportsWatchPaths}
                     <div class="pt-4">
                       <FormTextarea helper={WATCH_HELPER} placeholder="services/api/**" id="watchPaths" label="Watch paths" disabled={!canUpdate || composeBusy} bind:value={form.watchPaths} />
                     </div>
@@ -782,7 +783,7 @@
                     {/if}
                   {/if}
                 </RepositoryPaths>
-                {#if privateGit}
+                {#if supportsWatchPaths}
                   <div class="pb-4">
                     <FormTextarea
                       helper="Order-based pattern matching to filter Git webhook deployments. Enter one pattern per line. Commas do not separate patterns. Supports wildcards (*, **, ?) and negation (!). Last matching pattern wins."

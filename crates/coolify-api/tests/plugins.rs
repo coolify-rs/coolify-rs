@@ -158,8 +158,8 @@ async fn install_grant_enable_events_and_routes() {
         .await;
     r.assert(
         403,
-        // Coolify's own write guard turns members away before the handler's admin check.
-        r#"{"message":"Missing required team role."}"#,
+        // Coolify's own token check turns members away before the handler's admin check.
+        r#"{"message":"This API token has more access than you have in this team. Revoke it and create a new token."}"#,
     );
     let r = h
         .call(

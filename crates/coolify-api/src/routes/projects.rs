@@ -23,6 +23,7 @@ use crate::serialize::{serialize_record, serialize_value};
 use crate::state::AppState;
 use crate::validation::patterns::{COMBINED_MESSAGES, NAME_MESSAGES, description, name};
 use crate::validation::validate;
+use coolify_domain::grants::{AccessLevel, Target};
 
 const PROJECT_NOT_FOUND: ApiError = ApiError::Message(StatusCode::NOT_FOUND, "Project not found.");
 const ENV_NOT_FOUND: ApiError = ApiError::Message(StatusCode::NOT_FOUND, "Environment not found.");
@@ -31,8 +32,18 @@ const ENV_EXISTS: ApiError = ApiError::Message(
     "Environment with this name already exists.",
 );
 
-fn require_admin(ctx: &AuthCtx) -> Result<(), ApiError> {
-    if ctx.is_team_admin() {
+/// `ProjectPolicy` / `EnvironmentPolicy`: the grant level on the target.
+fn require(ctx: &AuthCtx, target: &Target, level: AccessLevel) -> Result<(), ApiError> {
+    if ctx.can(level, target) {
+        Ok(())
+    } else {
+        Err(ApiError::Unauthorized)
+    }
+}
+
+/// `ProjectPolicy::create`: write on the whole team.
+fn require_team_write(ctx: &AuthCtx) -> Result<(), ApiError> {
+    if ctx.allows_team_wide(AccessLevel::Write) {
         Ok(())
     } else {
         Err(ApiError::Unauthorized)
@@ -156,7 +167,7 @@ pub async fn create(
     uri: Uri,
     body: Bytes,
 ) -> ApiResult {
-    require_admin(&ctx)?;
+    require_team_write(&ctx)?;
     let input = validated_json(&headers, &uri, &body)?;
     validate(
         &input,
@@ -191,7 +202,7 @@ pub async fn update(
         &["name", "description"],
     )?;
     let project = find_project(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &Target::project(project.id), AccessLevel::Write)?;
     let p = projects::update(
         &state.db,
         &project,
@@ -213,7 +224,7 @@ pub async fn delete(
     Path(uuid): Path<String>,
 ) -> ApiResult {
     let project = find_project(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &Target::project(project.id), AccessLevel::Delete)?;
     if !projects::project_is_empty(&state.db, project.id).await? {
         return Err(ApiError::Message(
             StatusCode::BAD_REQUEST,
@@ -235,7 +246,7 @@ pub async fn create_environment(
     let input = validated_json(&headers, &uri, &body)?;
     validate(&input, &[name(true)], NAME_MESSAGES, &["name"])?;
     let project = find_project(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &Target::project(project.id), AccessLevel::Write)?;
     let env_name = input.str("name").unwrap_or_default();
     if projects::environment_name_taken(&state.db, project.id, env_name, None).await? {
         return Err(ENV_EXISTS);
@@ -263,7 +274,7 @@ pub async fn update_environment(
     )?;
     let project = find_project(&state, &ctx, &uuid).await?;
     let env = find_env(&state, &project, &env).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &Target::environment(env.id), AccessLevel::Write)?;
     if input.filled("name")
         && let Some(new_name) = input.str("name")
         && new_name != env.name
@@ -290,7 +301,7 @@ pub async fn delete_environment(
 ) -> ApiResult {
     let project = find_project(&state, &ctx, &uuid).await?;
     let env = find_env(&state, &project, &env).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &Target::environment(env.id), AccessLevel::Delete)?;
     if !projects::environment_is_empty(&state.db, env.id).await? {
         return Err(ApiError::Message(
             StatusCode::BAD_REQUEST,

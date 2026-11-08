@@ -28,6 +28,8 @@ export interface NavContext {
   isAdmin: boolean;
   isOwner: boolean;
   isInstanceAdmin: boolean;
+  /** `$teamWide`: members limited to some projects only see project pages. */
+  teamWide?: boolean;
   isCloud?: boolean;
   /** coolify-rs plugins (ADR 0013): the Settings and Team entries, only when there is something to show. */
   pluginSettings?: boolean;
@@ -43,21 +45,23 @@ export const navSections: [string, NavItem[]][] = [
       {
         label: 'Monitoring',
         icon: 'graph',
+        visible: (c) => c.teamWide !== false,
         children: [
           { label: 'Analytics', icon: 'analytics', href: '/analytics', active: ['analytics'] },
           { label: 'Metrics', icon: 'graph', href: '/metrics', active: ['metrics'] },
         ],
       },
-      { label: 'Terminal', icon: 'browser-terminal', href: '/terminal', active: ['terminal*'], visible: (c) => c.isAdmin, ported: true },
+      { label: 'Terminal', icon: 'browser-terminal', href: '/terminal', active: ['terminal*'], visible: (c) => c.teamWide !== false && c.isAdmin, ported: true },
     ],
   ],
   [
     'Infrastructure',
     [
-      { label: 'Servers', icon: 'servers', href: '/servers', active: ['server/*', 'servers', 'servers/*'], ported: true },
+      { label: 'Servers', icon: 'servers', href: '/servers', active: ['server/*', 'servers', 'servers/*'], visible: (c) => c.teamWide !== false, ported: true },
       {
         label: 'Integrations',
         icon: 'link',
+        visible: (c) => c.teamWide !== false,
         children: [
           { label: 'Sources', icon: 'sources', href: '/sources', active: ['sources', 'source/*'] },
           { label: 'Destinations', icon: 'destinations', href: '/destinations', active: ['destinations', 'destination/*'] },
@@ -69,11 +73,11 @@ export const navSections: [string, NavItem[]][] = [
         label: 'Shared Variables',
         icon: 'variables',
         children: [
-          { label: 'Overview', icon: 'dashboard', href: '/shared-variables', active: ['shared-variables'], ported: true },
-          { label: 'Team', icon: 'teams', href: '/shared-variables/team', active: ['shared-variables/team*'], ported: true },
+          { label: 'Overview', icon: 'dashboard', href: '/shared-variables', active: ['shared-variables'], visible: (c) => c.teamWide !== false, ported: true },
+          { label: 'Team', icon: 'teams', href: '/shared-variables/team', active: ['shared-variables/team*'], visible: (c) => c.teamWide !== false, ported: true },
           { label: 'Projects', icon: 'projects', href: '/shared-variables/projects', active: ['shared-variables/projects', 'shared-variables/project/*'], ported: true },
           { label: 'Environments', icon: 'layers', href: '/shared-variables/environments', active: ['shared-variables/environments*'], ported: true },
-          { label: 'Servers', icon: 'servers', href: '/shared-variables/servers', active: ['shared-variables/servers', 'shared-variables/server/*'], ported: true },
+          { label: 'Servers', icon: 'servers', href: '/shared-variables/servers', active: ['shared-variables/servers', 'shared-variables/server/*'], visible: (c) => c.teamWide !== false, ported: true },
         ],
       },
     ],
@@ -84,6 +88,7 @@ export const navSections: [string, NavItem[]][] = [
       {
         label: 'Team',
         icon: 'teams',
+        visible: (c) => c.teamWide !== false,
         children: [
           { label: 'General', icon: 'settings', href: '/team', active: ['team'], ported: true },
           { label: 'Members', icon: 'teams', href: '/team/members', active: ['team/members*'], ported: true },
@@ -96,6 +101,7 @@ export const navSections: [string, NavItem[]][] = [
       {
         label: 'Notifications',
         icon: 'notifications',
+        visible: (c) => c.teamWide !== false,
         children: [
           { label: 'Email', icon: 'mail', href: '/notifications/email', active: ['notifications/email'], ported: true },
           { label: 'Discord', brandIcon: 'discord', href: '/notifications/discord', active: ['notifications/discord'], ported: true },
@@ -109,19 +115,19 @@ export const navSections: [string, NavItem[]][] = [
         label: 'Keys & Tokens',
         icon: 'keys',
         children: [
-          { label: 'Private Keys', icon: 'keys', href: '/security/private-key', active: ['security/private-key*'], ported: true },
-          { label: 'Cloud Tokens', icon: 'cloud', href: '/security/cloud-tokens', active: ['security/cloud-tokens*'], visible: (c) => c.isAdmin, ported: true },
-          { label: 'Integration Tokens', icon: 'network', href: '/security/integration-tokens', active: ['security/integration-tokens'], visible: (c) => c.isAdmin, ported: true },
-          { label: 'Cloud-Init Scripts', icon: 'file-content', href: '/security/cloud-init-scripts', active: ['security/cloud-init-scripts*'], visible: (c) => c.isAdmin, ported: true },
+          { label: 'Private Keys', icon: 'keys', href: '/security/private-key', active: ['security/private-key*'], visible: (c) => c.teamWide !== false, ported: true },
           { label: 'API Tokens', icon: 'code', href: '/security/api-tokens', active: ['security/api-tokens'], ported: true },
+          { label: 'Cloud Tokens', icon: 'cloud', href: '/security/cloud-tokens', active: ['security/cloud-tokens*'], sectionStart: true, visible: (c) => c.teamWide !== false && c.isAdmin, ported: true },
+          { label: 'Integration Tokens', icon: 'network', href: '/security/integration-tokens', active: ['security/integration-tokens'], visible: (c) => c.teamWide !== false && c.isAdmin, ported: true },
+          { label: 'Cloud-Init Scripts', icon: 'file-content', href: '/security/cloud-init-scripts', active: ['security/cloud-init-scripts*'], sectionStart: true, visible: (c) => c.teamWide !== false && c.isAdmin, ported: true },
         ],
       },
-      { label: 'Subscription', icon: 'subscription', href: '/subscription', active: ['subscription*'], visible: (c) => !!c.isCloud && c.isAdmin, ported: true },
-      { label: 'Tags', icon: 'tags', href: '/tags', active: ['tags*', 'canvas/tags'], ported: true },
+      { label: 'Subscription', icon: 'subscription', href: '/subscription', active: ['subscription*'], visible: (c) => c.teamWide !== false && !!c.isCloud && c.isAdmin, ported: true },
+      { label: 'Tags', icon: 'tags', href: '/tags', active: ['tags*', 'canvas/tags'], visible: (c) => c.teamWide !== false, ported: true },
       {
         label: 'Settings',
         icon: 'settings',
-        visible: (c) => c.isInstanceAdmin,
+        visible: (c) => c.teamWide !== false && c.isInstanceAdmin,
         children: [
           { label: 'General', icon: 'settings', href: '/settings', active: ['settings'], ported: true },
           { label: 'Advanced', icon: 'grid', href: '/settings/advanced', active: ['settings/advanced'], ported: true },

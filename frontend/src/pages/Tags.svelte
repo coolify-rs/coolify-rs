@@ -4,6 +4,7 @@
   import Empty from '../components/Empty.svelte';
   import Modal from '../components/Modal.svelte';
   import Dropdown from '../components/Dropdown.svelte';
+  import SortHeader from '../components/SortHeader.svelte';
   import Pager from '../components/Pager.svelte';
   import ViewToggle from '../components/ViewToggle.svelte';
   import FormInput from '../components/FormInput.svelte';
@@ -87,19 +88,47 @@
   const sortOptions = [
     { value: 'name-asc', label: 'Name A–Z' },
     { value: 'name-desc', label: 'Name Z–A' },
-    { value: 'resources', label: 'Most resources' },
+    { value: 'resources-desc', label: 'Most resources' },
   ];
   const resources = (t: TagRow) => t.applications_count + t.services_count;
   const filtered = $derived.by(() => {
     const q = search.trim().toLowerCase();
     const list = (tags ?? []).filter((t) => !q || t.name.toLowerCase().includes(q));
-    return [...list].sort((a, b) => {
-      if (sortBy === 'name-desc') return b.name.localeCompare(a.name);
-      if (sortBy === 'resources') return resources(b) - resources(a) || a.name.localeCompare(b.name);
-      return a.name.localeCompare(b.name);
-    });
+    const [column, direction] = sortBy.split('-');
+    const sortValues: Record<string, (t: TagRow) => string | number> = {
+      name: (t) => t.name,
+      resources: (t) => resources(t),
+      applications: (t) => t.applications_count,
+      services: (t) => t.services_count,
+    };
+    const sortValue = sortValues[column] ?? sortValues.name;
+    const order = direction === 'desc' ? -1 : 1;
+    const compare = (a: string | number, b: string | number) =>
+      typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b));
+    return [...list].sort((a, b) => order * compare(sortValue(a), sortValue(b)) || a.name.localeCompare(b.name));
   });
+  const sortTags = (value: string) => ((sortBy = value), (page = 1));
   const paginated = $derived(filtered.slice((page - 1) * pageSize, page * pageSize));
+
+  // `Show::$deploymentSort` / `activeDeployments()`: null keeps them grouped by server.
+  let deploymentSort = $state<string | null>(null);
+  function setDeploymentSort(value: string) {
+    if (['resource-asc', 'resource-desc', 'server-asc', 'server-desc', 'status-asc', 'status-desc'].includes(value)) deploymentSort = value;
+  }
+  // PHP `strcasecmp`: byte order of the lowercased strings.
+  const strcasecmp = (a: string, b: string) => {
+    const x = a.toLowerCase();
+    const y = b.toLowerCase();
+    return x < y ? -1 : x > y ? 1 : 0;
+  };
+  const activeDeployments = $derived.by(() => {
+    const list = details?.deployments ?? [];
+    if (deploymentSort === null) return list;
+    const [column, direction] = deploymentSort.split('-');
+    const field = ({ resource: 'application_name', server: 'server_name', status: 'status' } as const)[column as 'resource' | 'server' | 'status'];
+    const order = direction === 'desc' ? -1 : 1;
+    return [...list].sort((a, b) => order * strcasecmp(String(a[field] ?? ''), String(b[field] ?? '')) || a.id - b.id);
+  });
 
   // Connect modal.
   let connectOpen = $state(false);
@@ -207,6 +236,7 @@
           </div>
 
           <div class="flex flex-wrap items-center gap-2">
+            <div class={view.mode === 'grid' ? '' : 'min-[641px]:hidden'}>
             <Dropdown panelClass="w-52!">
               {#snippet trigger({ open })}
                 <button type="button" class="button" aria-haspopup="listbox" aria-expanded={open}>
@@ -220,7 +250,7 @@
                 {#each sortOptions as option (option.value)}
                   <button
                     type="button"
-                    class="flex h-9 w-full items-center rounded-md px-2 text-left text-[12px] text-neutral-600 transition-colors hover:bg-neutral-100 hover:text-black dark:text-fg-dim dark:hover:bg-white/[0.06] dark:hover:text-fg"
+                    class="listbox-option"
                     onclick={() => {
                       sortBy = option.value;
                       close();
@@ -237,6 +267,7 @@
                 {/each}
               {/snippet}
             </Dropdown>
+            </div>
 
             <ViewToggle canvasUrl="/canvas/tags" bind:mode={() => view.mode, (m) => ((view.mode = m), (page = 1))} />
           </div>
@@ -279,10 +310,10 @@
         {:else}
           <div class="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm dark:border-white/[0.08] dark:bg-white/[0.05]">
             <div class="tags-table-grid border-b border-neutral-200 bg-neutral-50 px-4 py-2.5 text-[11px] font-medium text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-fg-faint">
-              <div>Tag</div>
-              <div>Resources</div>
-              <div>Applications</div>
-              <div class="tag-services">Services</div>
+              <SortHeader label="Tag" asc="name-asc" desc="name-desc" current={sortBy} onsort={sortTags} />
+              <SortHeader label="Resources" asc="resources-asc" desc="resources-desc" first="desc" current={sortBy} onsort={sortTags} />
+              <SortHeader label="Applications" asc="applications-asc" desc="applications-desc" first="desc" current={sortBy} onsort={sortTags} />
+              <SortHeader label="Services" asc="services-asc" desc="services-desc" first="desc" current={sortBy} onsort={sortTags} class="tag-services" />
             </div>
             {#each paginated as tag (tag.id)}
               <a
@@ -407,18 +438,18 @@
         </SettingsSection>
 
         <SettingsSection title="Active deployments" description="Queued and running deployments for applications using this tag." flush>
-          <div class="overflow-x-auto">
+          <div class="overflow-x-auto transition-opacity">
             {#if details.deployments.length === 0}
               <div class="p-3">
                 <Empty title="No active deployments" description="Deployments will appear here while they are queued or running." iconName="play-circle" size="sm" />
               </div>
             {:else}
               <div class="grid min-w-[620px] grid-cols-[minmax(0,1fr)_minmax(10rem,.55fr)_7rem] border-b border-neutral-200 bg-neutral-50 px-4 py-2.5 text-[11px] font-medium text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-fg-faint">
-                <div>Resource</div>
-                <div>Server</div>
-                <div>Status</div>
+                <SortHeader label="Resource" asc="resource-asc" desc="resource-desc" current={deploymentSort ?? ''} onsort={setDeploymentSort} server />
+                <SortHeader label="Server" asc="server-asc" desc="server-desc" current={deploymentSort ?? ''} onsort={setDeploymentSort} server />
+                <SortHeader label="Status" asc="status-asc" desc="status-desc" current={deploymentSort ?? ''} onsort={setDeploymentSort} server />
               </div>
-              {#each details.deployments as d (d.id)}
+              {#each activeDeployments as d (d.id)}
                 <a
                   href={d.deployment_url ?? undefined}
                   class="grid min-h-13 min-w-[620px] grid-cols-[minmax(0,1fr)_minmax(10rem,.55fr)_7rem] items-center border-b border-neutral-200 px-4 py-2.5 text-[12px] transition-colors last:border-b-0 hover:bg-neutral-50 hover:no-underline dark:border-white/[0.07] dark:hover:bg-white/[0.025]"

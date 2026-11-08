@@ -10,6 +10,11 @@ class SessionState {
     return role === 'owner' || role === 'admin';
   }
 
+  /** `AccessResolver::coversWholeTeam` for the session team. */
+  get coversWholeTeam(): boolean {
+    return this.info?.current_team?.covers_whole_team !== false;
+  }
+
   get isOwner(): boolean {
     return this.info?.current_team?.role === 'owner';
   }

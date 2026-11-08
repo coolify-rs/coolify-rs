@@ -92,6 +92,23 @@ async fn application_ids(
     project_id: Option<i64>,
     branch: Option<&str>,
 ) -> Result<Vec<i64>, String> {
+    query_application_ids(state, source, project_id, branch, None).await
+}
+
+/// `manualWebhookApplications()`'s SQL prefilter: every repository form that
+/// `manualWebhookRepositoryMatches()` accepts contains the repository name, so the database
+/// discards unrelated applications that share the branch. The full match stays in Rust.
+fn repository_pattern(full_name: &str) -> String {
+    format!("%{}%", full_name.to_lowercase().replace('_', "\\_"))
+}
+
+async fn query_application_ids(
+    state: &AppState,
+    source: Option<(i64, &str)>,
+    project_id: Option<i64>,
+    branch: Option<&str>,
+    repository: Option<&str>,
+) -> Result<Vec<i64>, String> {
     let mut sql = String::from("SELECT id FROM applications WHERE deleted_at IS NULL");
     let mut n = 0;
     let mut next = || {
@@ -108,6 +125,12 @@ async fn application_ids(
     if branch.is_some() {
         sql.push_str(&format!(" AND git_branch = ${}", next()));
     }
+    if repository.is_some() {
+        sql.push_str(&format!(
+            " AND LOWER(git_repository) LIKE ${} ESCAPE '\\'",
+            next()
+        ));
+    }
     let mut q = sqlx::query_scalar::<_, i64>(&sql);
     if let Some((id, morph)) = source {
         q = q.bind(id).bind(morph);
@@ -117,6 +140,9 @@ async fn application_ids(
     }
     if let Some(b) = branch {
         q = q.bind(b);
+    }
+    if let Some(r) = repository {
+        q = q.bind(repository_pattern(r));
     }
     q.fetch_all(state.db.pool())
         .await
@@ -129,7 +155,7 @@ async fn manual_applications(
     branch: Option<&str>,
     full_name: &str,
 ) -> Result<Vec<ApplicationRow>, String> {
-    let ids = application_ids(state, None, None, branch).await?;
+    let ids = query_application_ids(state, None, None, branch, Some(full_name)).await?;
     Ok(load_apps(state, ids)
         .await?
         .into_iter()
@@ -267,4 +293,24 @@ fn pr_public(a: &ApplicationRow) -> bool {
 /// `X-…` header helper used by the handlers.
 fn header(headers: &HeaderMap, name: &str) -> String {
     payload::header_str(headers, name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{payload, repository_pattern};
+
+    #[test]
+    fn the_repository_prefilter_keeps_every_accepted_form() {
+        assert_eq!(repository_pattern("Acme/My_Repo"), "%acme/my\\_repo%");
+        // Every form `manualWebhookRepositoryMatches()` accepts contains the lowercase name.
+        for url in [
+            "https://github.com/Acme/My_Repo.git",
+            "git@github.com:acme/my_repo.git",
+            "acme/my_repo",
+        ] {
+            if payload::repository_matches(Some(url), "Acme/My_Repo") {
+                assert!(url.to_lowercase().contains("acme/my_repo"), "{url}");
+            }
+        }
+    }
 }

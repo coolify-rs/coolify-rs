@@ -28,8 +28,13 @@ const BASE: &str = "http://localhost:8888/api";
 const CACHE_TTL: Duration = Duration::from_secs(60);
 /// `SPARK_MAX_POINTS`.
 const SPARK_MAX_POINTS: usize = 40;
-/// `array_chunk($tasks, 8, true)`.
+/// How many metric reads of the page run at once. They read the answers of
+/// [`prefetch_concurrently`], so they rarely reach a server.
 const BATCH: usize = 8;
+/// `SentinelMetricsClient::REMOTE_TIMEOUT` of the page prefetch.
+const REMOTE_TIMEOUT: Duration = Duration::from_secs(20);
+/// `ROOT_MOUNTS`: mounts that can hold the root disk, in the order of `rootMountName()`.
+const ROOT_MOUNTS: [&str; 4] = ["/", "/app/db", "/data/coolify", "/data"];
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -264,37 +269,154 @@ fn series_rows(rows: &[Value], field: &str, range: &str, root_only: bool) -> Vec
         .collect()
 }
 
+/// `historyUrl`: Sentinel 1.1.4+ returns only the root mounts of the disk history; older
+/// versions ignore `mount`.
+fn history_url(metric: &str, range: &str, from: &str) -> String {
+    let path = match metric {
+        "memory" | "disk" | "load" | "network" => metric,
+        _ => "cpu",
+    };
+    let mut query = history_query(range, from);
+    if metric == "disk" {
+        // `http_build_query` encodes `/` and `,`.
+        let mounts = ROOT_MOUNTS
+            .join(",")
+            .replace('/', "%2F")
+            .replace(',', "%2C");
+        query.push_str(&format!("&mount={mounts}"));
+    }
+    format!("{BASE}/{path}/history?{query}")
+}
+
+/// `pageUrls`: every URL the page reads for one server.
+fn page_urls(range: &str, from: &str) -> Vec<String> {
+    let mut urls = vec![
+        format!("{BASE}/summary"),
+        format!("{BASE}/containers/current"),
+    ];
+    urls.extend(
+        ["cpu", "memory", "disk", "load", "network"]
+            .iter()
+            .map(|m| history_url(m, range, from)),
+    );
+    urls
+}
+
+fn cache_key(srv: &Srv, url: &str) -> String {
+    format!("metrics:{}:{url}", srv.row.uuid)
+}
+
+fn cached(key: &str) -> Option<String> {
+    let cache = CACHE.lock().ok()?;
+    cache
+        .get(key)
+        .filter(|(until, _)| *until > Instant::now())
+        .map(|(_, body)| body.clone())
+}
+
+fn remember(key: String, body: &str) {
+    if let Ok(mut cache) = CACHE.lock() {
+        let now = Instant::now();
+        cache.retain(|_, (until, _)| *until > now);
+        cache.insert(key, (now + CACHE_TTL, body.to_owned()));
+    }
+}
+
+/// `startBatch` and `awaitBatch`: one `docker exec` that curls every URL in order, the responses
+/// separated by 0x1E. `true` last: a failed curl empties only its own response.
+async fn fetch_batch(srv: &Srv, urls: &[String]) -> Result<String, String> {
+    let token = sentinel::ensure_valid_token(srv).await?;
+    let script = urls
+        .iter()
+        .map(|url| {
+            format!(
+                "curl -s --connect-timeout 3 --max-time 10 -H @- \"{url}\" <<'COOLIFY_SENTINEL_AUTH'\nAuthorization: Bearer {token}\nCOOLIFY_SENTINEL_AUTH"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\nprintf '\\036'\n");
+    let command = format!(
+        "docker exec -i coolify-sentinel sh -s <<'COOLIFY_SENTINEL_SCRIPT'\n{script}\ntrue\nCOOLIFY_SENTINEL_SCRIPT"
+    );
+    Ok(srv
+        .run_once(&[command], "fleet.metrics", REMOTE_TIMEOUT)
+        .await?
+        .unwrap_or_default())
+}
+
+/// `SentinelMetricsClient::prefetchConcurrently`: the page responses of every server at the same
+/// time, one SSH command per server, so the page waits for the slowest server only. URLs still
+/// cached are not fetched again; a failed fetch is not tried again per metric.
+async fn prefetch_concurrently(
+    servers: Vec<std::sync::Arc<Srv>>,
+    range: &str,
+    from: &str,
+) -> HashMap<String, HashMap<String, Option<String>>> {
+    let tasks = servers.into_iter().map(|srv| {
+        let urls: Vec<String> = page_urls(range, from)
+            .into_iter()
+            .filter(|url| cached(&cache_key(&srv, url)).is_none())
+            .collect();
+        async move {
+            let mut prefetched = HashMap::new();
+            if urls.is_empty() {
+                return (srv.row.uuid.clone(), prefetched);
+            }
+            let output = fetch_batch(&srv, &urls).await.unwrap_or_default();
+            let mut responses: Vec<&str> = output.split('\u{1e}').collect();
+            if responses.len() != urls.len() {
+                responses.clear();
+            }
+            for (index, url) in urls.iter().enumerate() {
+                let body = responses.get(index).map_or("", |r| r.trim());
+                let answer = guard(body).ok().map(|()| {
+                    remember(cache_key(&srv, url), body);
+                    body.to_owned()
+                });
+                prefetched.insert(url.clone(), answer);
+            }
+            (srv.row.uuid.clone(), prefetched)
+        }
+    });
+    join_all(tasks).await.into_iter().collect()
+}
+
 #[derive(Clone)]
 struct MetricsClient {
     srv: std::sync::Arc<Srv>,
+    /// url => response of [`prefetch_concurrently`]; `None` when it failed.
+    prefetched: std::sync::Arc<HashMap<String, Option<String>>>,
 }
 
 impl MetricsClient {
-    /// `raw`: answers are kept for a minute; a failure is not.
+    /// `raw`: the prefetched answer, else one kept for a minute; a failure is not kept.
     async fn raw(&self, url: &str) -> Result<String, String> {
-        let key = format!("metrics:{}:{url}", self.srv.row.uuid);
-        if let Ok(cache) = CACHE.lock()
-            && let Some((until, body)) = cache.get(&key)
-            && *until > Instant::now()
-        {
-            return Ok(body.clone());
+        if let Some(answer) = self.prefetched.get(url) {
+            return answer
+                .clone()
+                .ok_or_else(|| "Metrics request failed.".to_string());
         }
-        let token = sentinel::ensure_valid_token(&self.srv).await?;
-        let command = format!(
-            "docker exec coolify-sentinel sh -c 'curl -s --max-time 10 -H \"Authorization: Bearer {token}\" \"{url}\"'"
-        );
-        let body = self
-            .srv
-            .run_once(&[command], "fleet.metrics", Duration::from_secs(15))
-            .await?
-            .unwrap_or_default();
+        let key = cache_key(&self.srv, url);
+        if let Some(body) = cached(&key) {
+            return Ok(body);
+        }
+        let body = self.remote_fetch(url).await;
         guard(&body)?;
-        if let Ok(mut cache) = CACHE.lock() {
-            let now = Instant::now();
-            cache.retain(|_, (until, _)| *until > now);
-            cache.insert(key, (now + CACHE_TTL, body.clone()));
-        }
+        remember(key, &body);
         Ok(body)
+    }
+
+    /// `remoteFetch`, through `fetchOverSsh`; no answer is an empty one.
+    async fn remote_fetch(&self, url: &str) -> String {
+        let Ok(token) = sentinel::ensure_valid_token(&self.srv).await else {
+            return String::new();
+        };
+        let command = format!(
+            "docker exec -i coolify-sentinel sh -s <<'COOLIFY_SENTINEL_SCRIPT'\ncurl -sS --connect-timeout 2 --max-time 3 -H @- \"{url}\" <<'COOLIFY_SENTINEL_AUTH'\nAuthorization: Bearer {token}\nCOOLIFY_SENTINEL_AUTH\nCOOLIFY_SENTINEL_SCRIPT"
+        );
+        crate::ui_server_metrics::fetch_over_ssh(&self.srv, &[command], url)
+            .await
+            .unwrap_or_default()
     }
 
     async fn rows(&self, url: &str) -> Vec<Value> {
@@ -315,29 +437,19 @@ impl MetricsClient {
 
     /// `history`.
     async fn history(&self, metric: &str, range: &str, from: &str) -> Vec<Point> {
-        let (path, field) = match metric {
-            "memory" => ("memory", "used"),
-            "disk" => ("disk", "usedPercent"),
-            "load" => ("load", "load1"),
-            _ => ("cpu", "percent"),
+        let field = match metric {
+            "memory" => "used",
+            "disk" => "usedPercent",
+            "load" => "load1",
+            _ => "percent",
         };
-        let rows = self
-            .rows(&format!(
-                "{BASE}/{path}/history?{}",
-                history_query(range, from)
-            ))
-            .await;
+        let rows = self.rows(&history_url(metric, range, from)).await;
         series_rows(&rows, field, range, metric == "disk")
     }
 
     /// `networkHistory`.
     async fn network_history(&self, range: &str, from: &str) -> (Vec<Point>, Vec<Point>) {
-        let rows = self
-            .rows(&format!(
-                "{BASE}/network/history?{}",
-                history_query(range, from)
-            ))
-            .await;
+        let rows = self.rows(&history_url("network", range, from)).await;
         (
             series_rows(&rows, "rxBytesPerSec", range, false),
             series_rows(&rows, "txBytesPerSec", range, false),
@@ -648,7 +760,7 @@ enum Answer {
     Network(Vec<Point>, Vec<Point>),
 }
 
-/// `runMetricTasks`: at most eight at a time, and one failure only misses its own value.
+/// The page's metric reads, a few at a time; one failure only misses its own value (`attempt`).
 async fn run_batched<T>(tasks: Vec<BoxFuture<'static, T>>) -> Vec<T> {
     let mut results = Vec::with_capacity(tasks.len());
     let mut tasks = tasks.into_iter().peekable();
@@ -714,14 +826,23 @@ async fn page(
         .copied()
         .filter(|s| server_uuid.is_empty() || s.uuid == server_uuid)
         .collect();
-    let clients: HashMap<String, MetricsClient> = targets
+    // Coolify does not connect to an unreachable server.
+    let functional: Vec<std::sync::Arc<Srv>> = targets
         .iter()
         .filter(|s| is_functional(s))
-        .map(|s| {
+        .map(|s| std::sync::Arc::new(Srv::from_row(jobs, (*s).clone())))
+        .collect();
+    let from = range_from(&range, chrono::Utc::now());
+    let mut prefetched = prefetch_concurrently(functional.clone(), &range, &from).await;
+    let clients: HashMap<String, MetricsClient> = functional
+        .into_iter()
+        .map(|srv| {
+            let answers = prefetched.remove(&srv.row.uuid).unwrap_or_default();
             (
-                s.uuid.clone(),
+                srv.row.uuid.clone(),
                 MetricsClient {
-                    srv: std::sync::Arc::new(Srv::from_row(jobs, (*s).clone())),
+                    srv,
+                    prefetched: std::sync::Arc::new(answers),
                 },
             )
         })
@@ -741,7 +862,6 @@ async fn page(
         run_batched(tasks).await.into_iter().collect()
     };
 
-    let from = range_from(&range, chrono::Utc::now());
     let mut tasks: Vec<BoxFuture<'static, (String, Answer)>> = Vec::new();
     for uuid in &keys {
         let has_summary = summaries.get(uuid).is_some_and(Option::is_some);
@@ -994,6 +1114,24 @@ mod tests {
         assert!(guard("{\"error\":\"x\"}").is_err());
         assert!(guard("").is_err());
         assert!(guard("null").is_err());
+    }
+
+    #[test]
+    fn page_urls_ask_disk_history_for_the_root_mounts() {
+        let from = "2026-11-08T10:00:00Z";
+        assert_eq!(
+            history_url("disk", "24h", from),
+            "http://localhost:8888/api/disk/history?from=2026-11-08T10:00:00Z&bucket_ms=300000&mount=%2F%2C%2Fapp%2Fdb%2C%2Fdata%2Fcoolify%2C%2Fdata"
+        );
+        assert_eq!(
+            history_url("bogus", "7d", from),
+            "http://localhost:8888/api/cpu/history?from=2026-11-08T10:00:00Z&bucket_ms=1800000"
+        );
+        let urls = page_urls("24h", from);
+        assert_eq!(urls.len(), 7);
+        assert_eq!(urls[0], "http://localhost:8888/api/summary");
+        assert_eq!(urls[1], "http://localhost:8888/api/containers/current");
+        assert!(urls[6].starts_with("http://localhost:8888/api/network/history?"));
     }
 
     #[test]

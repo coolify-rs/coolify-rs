@@ -668,7 +668,8 @@ pub async fn create(
     if !ctx.is_team_admin() {
         return Err(ApiError::Unauthorized);
     }
-    let m = body(&bytes);
+    let mut m = body(&bytes);
+    super::public_git::normalize_base_directory(&mut m);
     if provider == "deploy-key" {
         return create_deploy_key(&state, &ctx, &m).await;
     }

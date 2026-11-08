@@ -24,10 +24,12 @@ use axum::routing::{get, post};
 use coolify_compat::{password, totp};
 use coolify_db::audit::Actor;
 use coolify_db::users::{self, LoginUser, Membership};
+use coolify_domain::grants::{Access, AccessLevel, AccessScope};
 use coolify_domain::{Abilities, Ability, Role, TeamId};
 use rand::RngCore;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 use subtle::ConstantTimeEq;
 
 use crate::audit::Meta;
@@ -406,6 +408,62 @@ fn csrf_ok(headers: &HeaderMap, expected: &str) -> bool {
         .is_some_and(|got| bool::from(got.as_bytes().ct_eq(expected.as_bytes())))
 }
 
+/// The access of a session user in a team: the member's grants (`AccessResolver::layersFor`
+/// without a token).
+pub(crate) async fn membership_access(
+    state: &AppState,
+    memberships: &[Membership],
+    team_id: TeamId,
+) -> Result<Arc<Access>, ApiError> {
+    let Some(m) = memberships.iter().find(|m| m.team_id == team_id) else {
+        return Ok(Arc::new(Access {
+            layers: vec![Default::default()],
+            ..Default::default()
+        }));
+    };
+    let access = coolify_db::access::actor(&state.db, team_id, m.grants(), None).await?;
+    Ok(Arc::new(access))
+}
+
+/// `coversWholeTeam` from the stored grants alone (a team grant with any level).
+pub(crate) fn membership_covers_whole_team(m: &Membership) -> bool {
+    m.grants().is_none_or(|grants| {
+        grants
+            .iter()
+            .any(|g| g.scope == AccessScope::Team && !g.levels.is_empty())
+    })
+}
+
+/// Abilities of the `/ui/api/v1` bridge, which stands in for upstream's Livewire pages: the
+/// session token of [`abilities_for`] plus `delete` for owners and admins, and for members the
+/// levels their grants give somewhere. The handlers then check the grants on each target.
+fn bridge_abilities(role: Role, access: &Access) -> Abilities {
+    if role.is_admin() {
+        let mut list = abilities_for(role).as_slice().to_vec();
+        list.push(Ability::Delete.as_str().to_string());
+        return Abilities::new(list);
+    }
+    let mut levels: Vec<AccessLevel> = Vec::new();
+    for layer in &access.layers {
+        let sets = std::iter::once(&layer.team_levels)
+            .chain(layer.project_levels.values())
+            .chain(layer.environment_levels.values())
+            .chain(layer.resource_levels.values());
+        for set in sets {
+            for l in set {
+                if *l != AccessLevel::Root && !levels.contains(l) {
+                    levels.push(*l);
+                }
+            }
+        }
+    }
+    if levels.is_empty() {
+        return abilities_for(role);
+    }
+    levels.sort();
+    Abilities::new(levels.iter().map(|l| l.as_str().to_string()).collect())
+}
+
 /// UI abilities derived from the team role (`UseSessionTeamApiToken`).
 fn abilities_for(role: Role) -> Abilities {
     let list: &[Ability] = if role.is_admin() {
@@ -427,6 +485,8 @@ pub(crate) struct Live {
     memberships: Vec<Membership>,
     team_id: TeamId,
     csrf: String,
+    /// The user's access in `team_id`.
+    access: Arc<Access>,
 }
 
 /// Loads and validates the session; ends it if the user or password changed.
@@ -468,12 +528,14 @@ pub(crate) async fn live_session(state: &AppState, headers: &HeaderMap) -> Resul
             tracing::warn!(error = %e, "could not persist current team");
         }
     }
+    let access = membership_access(state, &memberships, team_id).await?;
     Ok(Live {
         id,
         user,
         memberships,
         team_id,
         csrf,
+        access,
     })
 }
 
@@ -484,6 +546,7 @@ pub struct WebUser {
     pub user_id: i64,
     pub team_id: TeamId,
     memberships: Vec<Membership>,
+    access: Arc<Access>,
 }
 
 impl WebUser {
@@ -513,6 +576,7 @@ impl WebUser {
             role,
             can_read_sensitive: role.is_admin(),
             abilities: abilities_for(role),
+            access: self.access.clone(),
         }
     }
 }
@@ -525,6 +589,7 @@ pub async fn web_user(state: &AppState, headers: &HeaderMap) -> Result<WebUser, 
             user_id: live.user.id,
             team_id: live.team_id,
             memberships: live.memberships,
+            access: live.access,
         }),
         Err(_) => Err((
             StatusCode::FOUND,
@@ -611,15 +676,17 @@ pub async fn user_guard(State(state): State<AppState>, mut req: Request, next: N
                 role,
                 can_read_sensitive: role.is_admin(),
                 abilities: abilities_for(role),
+                access: live.access.clone(),
             },
         })
     }
     .await;
     match result {
         Ok(user) => {
+            let access = user.ctx.access.clone();
             req.extensions_mut().insert(user.ctx.clone());
             req.extensions_mut().insert(user);
-            next.run(req).await
+            coolify_db::access::scope(access, next.run(req)).await
         }
         Err(e) => e.into_response(),
     }
@@ -656,9 +723,77 @@ pub(crate) fn session_id(headers: &HeaderMap) -> Option<String> {
 const TEAM_2FA_REQUIRED: &str =
     "Your team requires two-factor authentication. Configure it to continue.";
 
+/// The requests behind upstream's `access.team-wide` pages (servers, keys, sources,
+/// destinations, notifications, storages, tags, settings, team pages, fleet analytics and
+/// metrics, the deploy canvas, the terminal page and the team and server shared variables).
+const TEAM_WIDE_UI_PREFIXES: &[&str] = &[
+    "/ui/analytics",
+    "/ui/metrics",
+    "/ui/canvas/deploy",
+    "/ui/tags",
+    "/ui/notifications",
+    "/ui/storages",
+    "/ui/settings",
+    "/ui/subscription",
+    "/ui/team/members",
+    "/ui/team/invitations",
+    "/ui/team/audit-log",
+    "/ui/team/admin",
+    "/ui/team/danger",
+    "/ui/team/avatar",
+    "/ui/terminal",
+    "/ui/servers",
+    "/ui/server-page",
+    "/ui/destination-list",
+    "/ui/keys",
+    "/ui/security/cloud-tokens",
+    "/ui/security/cloud-init-scripts",
+    "/ui/security/integration-tokens",
+    "/ui/sources",
+    "/ui/cloud",
+    "/ui/shared-variables/overview",
+    "/ui/shared-variables/owners",
+    "/ui/plugins/team",
+];
+
+/// The `canvas/api` routes with `access.team-wide` (`routes/web.php`).
+fn is_team_wide_canvas_path(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/canvas/api/") else {
+        return false;
+    };
+    [
+        "tags/",
+        "shared-variables/team/",
+        "dashboard/",
+        "github-apps",
+        "security/keys",
+    ]
+    .iter()
+    .any(|p| rest.starts_with(p))
+        || rest == "servers"
+        || rest.starts_with("servers/")
+}
+
+/// `EnsureTeamWideAccess` for a JSON request of a team-level page.
+pub(crate) fn is_team_wide_ui_path(path: &str) -> bool {
+    path == "/ui/team"
+        || TEAM_WIDE_UI_PREFIXES.iter().any(|p| {
+            path == *p
+                || path
+                    .strip_prefix(p)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
+}
+
 /// The team context of a browser session behind the web gates.
 fn web_ctx(live: &Live, path: &str) -> Result<AuthCtx, ApiError> {
     web_gates(live, path)?;
+    if is_team_wide_ui_path(path) && !live.access.covers_whole_team() {
+        return Err(ApiError::Message(
+            StatusCode::FORBIDDEN,
+            crate::auth::TEAM_WIDE_DENIED_MESSAGE,
+        ));
+    }
     let m = live
         .memberships
         .iter()
@@ -675,6 +810,7 @@ fn web_ctx(live: &Live, path: &str) -> Result<AuthCtx, ApiError> {
         role: m.role,
         can_read_sensitive: m.role.is_admin(),
         abilities: abilities_for(m.role),
+        access: live.access.clone(),
     })
 }
 
@@ -706,15 +842,37 @@ pub async fn ui_guard(State(state): State<AppState>, mut req: Request, next: Nex
                 "CSRF token mismatch.",
             ));
         }
-        web_ctx(&live, &path)
+        let mut ctx = web_ctx(&live, &path)?;
+        ctx.abilities = bridge_abilities(ctx.role, &ctx.access);
+        // `ApiAbility`'s scoped routes and `EnsureTeamWideAccess`: a member limited to some
+        // projects uses only the project and resource endpoints.
+        if !ctx.covers_whole_team() && !bridge_path_is_scoped(&path) {
+            return Err(ApiError::Message(
+                StatusCode::FORBIDDEN,
+                crate::auth::TEAM_WIDE_DENIED_MESSAGE,
+            ));
+        }
+        Ok(ctx)
     }
     .await;
     match result {
         Ok(ctx) => {
+            let access = ctx.access.clone();
             req.extensions_mut().insert(ctx);
-            next.run(req).await
+            coolify_db::access::scope(access, next.run(req)).await
         }
         Err(e) => e.into_response(),
+    }
+}
+
+/// The first segment after `/ui/api/v1/` is one of `ApiAbility::SCOPED_ACCESS_ROUTES`.
+fn bridge_path_is_scoped(path: &str) -> bool {
+    match path.strip_prefix("/ui/api/v1/") {
+        Some(rest) => {
+            let seg = rest.split('/').next().unwrap_or_default();
+            crate::auth::SCOPED_ACCESS_ROUTES.contains(&seg)
+        }
+        None => true,
     }
 }
 
@@ -747,6 +905,18 @@ pub async fn canvas_guard(State(state): State<AppState>, mut req: Request, next:
             .iter()
             .find(|m| m.team_id == team)
             .ok_or(ApiError::InvalidToken)?;
+        let access = if team == live.team_id {
+            live.access.clone()
+        } else {
+            membership_access(&state, &live.memberships, team).await?
+        };
+        // `access.team-wide` on the team-level canvas routes.
+        if !access.covers_whole_team() && is_team_wide_canvas_path(&path) {
+            return Err(ApiError::Message(
+                StatusCode::FORBIDDEN,
+                crate::auth::TEAM_WIDE_DENIED_MESSAGE,
+            ));
+        }
         Ok(AuthCtx {
             token_id: 0,
             user_id: live.user.id,
@@ -755,13 +925,15 @@ pub async fn canvas_guard(State(state): State<AppState>, mut req: Request, next:
             role: m.role,
             can_read_sensitive: m.role.is_admin(),
             abilities: abilities_for(m.role),
+            access,
         })
     }
     .await;
     match result {
         Ok(ctx) => {
+            let access = ctx.access.clone();
             req.extensions_mut().insert(ctx);
-            next.run(req).await
+            coolify_db::access::scope(access, next.run(req)).await
         }
         Err(e) => e.into_response(),
     }
@@ -824,6 +996,8 @@ fn session_json(
             "avatar_url": m.avatar_url(),
             "two_factor_required": m.two_factor_required,
             "two_factor_blocked": m.two_factor_required && user.two_factor_confirmed_at.is_none(),
+            // `EnsureTeamWideAccess`: false for a member limited to some projects.
+            "covers_whole_team": membership_covers_whole_team(m),
         })),
         "csrf_token": csrf,
         // `CheckForcePasswordReset` and `showBoarding()`, which the pages redirect on.

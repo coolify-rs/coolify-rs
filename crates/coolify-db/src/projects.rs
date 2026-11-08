@@ -66,18 +66,30 @@ pub async fn list(db: &Db, team_id: TeamId) -> DbResult<Vec<Record>> {
     .bind(team_id)
     .fetch_all(db.pool())
     .await?;
-    rows.iter().map(|r| decode(r, "project")).collect()
+    let rows: Vec<Record> = rows
+        .iter()
+        .map(|r| decode(r, "project"))
+        .collect::<DbResult<_>>()?;
+    Ok(rows
+        .into_iter()
+        .filter(|r| {
+            r.get("id")
+                .and_then(serde_json::Value::as_i64)
+                .is_none_or(crate::access::project_visible)
+        })
+        .collect())
 }
 
 pub async fn find(db: &Db, team_id: TeamId, uuid: &str) -> DbResult<Option<ProjectRef>> {
-    Ok(sqlx::query_as(
+    Ok(sqlx::query_as::<_, ProjectRef>(
         "SELECT id, uuid, team_id, name, description FROM projects WHERE team_id = $1 AND uuid = $2 \
          LIMIT 1",
     )
     .bind(team_id)
     .bind(uuid)
     .fetch_optional(db.pool())
-    .await?)
+    .await?
+    .filter(|p: &ProjectRef| crate::access::project_visible(p.id)))
 }
 
 pub async fn record(db: &Db, project_id: i64) -> DbResult<Record> {
@@ -96,9 +108,21 @@ pub async fn environment_records(db: &Db, project_id: i64) -> DbResult<Vec<Recor
     .bind(project_id)
     .fetch_all(db.pool())
     .await?;
-    rows.iter()
+    let rows: Vec<Record> = rows
+        .iter()
         .map(|r| decode(r, "environment").map(|raw| ENVIRONMENT.present(raw)))
-        .collect()
+        .collect::<DbResult<_>>()?;
+    Ok(rows
+        .into_iter()
+        .filter(environment_record_visible)
+        .collect())
+}
+
+/// `VisibleThroughAccessGrants` for an environment record.
+fn environment_record_visible(r: &Record) -> bool {
+    r.get("id")
+        .and_then(serde_json::Value::as_i64)
+        .is_none_or(crate::access::environment_visible)
 }
 
 pub async fn environment_briefs(db: &Db, project_id: i64) -> DbResult<Vec<Record>> {
@@ -109,7 +133,14 @@ pub async fn environment_briefs(db: &Db, project_id: i64) -> DbResult<Vec<Record
     .bind(project_id)
     .fetch_all(db.pool())
     .await?;
-    rows.iter().map(|r| decode(r, "environment")).collect()
+    let rows: Vec<Record> = rows
+        .iter()
+        .map(|r| decode(r, "environment"))
+        .collect::<DbResult<_>>()?;
+    Ok(rows
+        .into_iter()
+        .filter(environment_record_visible)
+        .collect())
 }
 
 pub async fn environment_record(db: &Db, env_id: i64) -> DbResult<Record> {
@@ -128,13 +159,14 @@ pub async fn team_environment_by_uuid(
     team_id: TeamId,
     uuid: &str,
 ) -> DbResult<Option<(i64, String, String)>> {
-    Ok(sqlx::query_as(
+    Ok(sqlx::query_as::<_, (i64, String, String)>(
         "SELECT e.id, p.uuid, e.uuid FROM environments e JOIN projects p ON p.id = e.project_id WHERE e.uuid = $1 AND p.team_id = $2 LIMIT 1",
     )
     .bind(uuid)
     .bind(team_id)
     .fetch_optional(db.pool())
-    .await?)
+    .await?
+    .filter(|(id, _, _): &(i64, String, String)| crate::access::environment_visible(*id)))
 }
 
 pub async fn find_environment(
@@ -151,8 +183,8 @@ pub async fn find_environment(
         .bind(name_or_uuid)
         .fetch_optional(db.pool())
         .await?;
-        if env.is_some() {
-            return Ok(env);
+        if let Some(env) = env.filter(|e| crate::access::environment_visible(e.id)) {
+            return Ok(Some(env));
         }
     }
     Ok(None)

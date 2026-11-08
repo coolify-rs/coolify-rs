@@ -25,6 +25,7 @@ use crate::response::{ApiError, ApiResult, created, ok};
 use crate::serialize::{php_truthy, serialize_record};
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 /// `ValidationPatterns::ENVIRONMENT_VARIABLE_KEY_PATTERN`.
 static KEY_PATTERN: LazyLock<Regex> =
@@ -61,6 +62,11 @@ pub struct ResourceScope {
     pub project_id: Option<i64>,
     /// `$resource->server` or `$resource->destination->server`.
     pub server_id: Option<i64>,
+    /// Whether the application parses its Compose file (Docker Compose build pack, not a raw
+    /// Compose deployment), for `useExactEscaping()`.
+    pub parses_compose: bool,
+    /// `docker_compose_raw`.
+    pub compose_raw: Option<String>,
 }
 
 impl ResourceScope {
@@ -73,7 +79,34 @@ impl ResourceScope {
             environment_id: a.environment.get("id").and_then(Value::as_i64),
             project_id: a.project.get("id").and_then(Value::as_i64),
             server_id: a.server_id(),
+            parses_compose: a.str("build_pack") == Some("dockercompose")
+                && !a.setting_bool("is_raw_compose_deployment_enabled"),
+            compose_raw: a.str("docker_compose_raw").map(str::to_owned),
         }
+    }
+
+    /// `Application::useExactEscaping()` for a variable saved before exact escaping (Coolify
+    /// v4.6.0): a quoted value with a quote that Docker Compose cannot read, or a variable whose
+    /// stored value the old Compose parser wrote into the container.
+    pub fn legacy_variable_uses_exact_escaping(
+        &self,
+        key: &str,
+        quoted: bool,
+        resolved: Option<&str>,
+    ) -> bool {
+        let unreadable = quoted
+            && resolved.is_some_and(|v| {
+                v.contains('\'')
+                    && !((v.starts_with('{') || v.starts_with('['))
+                        && serde_json::from_str::<Value>(v).is_ok())
+            });
+        unreadable
+            || (self.parses_compose
+                && coolify_jobs::compose_parser::legacy_escaping::variables_with_stored_value_before_exact_escaping(
+                    self.compose_raw.as_deref(),
+                )
+                .iter()
+                .any(|k| k == key))
     }
 }
 
@@ -193,17 +226,20 @@ pub async fn present_variable(
 ) -> Result<Value, ApiError> {
     let value = plain_value(state, &row)?;
     let quoted = flag(&row, "is_literal") || flag(&row, "is_multiline");
-    let legacy = flag(&row, "uses_legacy_escaping");
-    let finish = |v: Option<String>| match v {
-        Some(v) if legacy => Some(legacy_escaped_value(&v, quoted)),
-        other => other,
-    };
-    let real = finish(resolve_real_value(state, scope, value.as_deref(), true).await?);
     let key = row
         .get("key")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
+    let resolved = resolve_real_value(state, scope, value.as_deref(), true).await?;
+    // `getRealValue`: the old escaping only where the resource does not use exact escaping.
+    let legacy = flag(&row, "uses_legacy_escaping")
+        && !scope.legacy_variable_uses_exact_escaping(&key, quoted, resolved.as_deref());
+    let finish = |v: Option<String>| match v {
+        Some(v) if legacy => Some(legacy_escaped_value(&v, quoted)),
+        other => other,
+    };
+    let real = finish(resolved);
     let is_required = flag(&row, "is_required");
 
     let mut m = ENVIRONMENT_VARIABLE.present(row);
@@ -345,6 +381,7 @@ fn new_variable(
 /// `create_env` after the authorization: the new variable's uuid.
 pub async fn create_variable(
     state: &AppState,
+    ctx: &AuthCtx,
     scope: &ResourceScope,
     mut input: Input,
 ) -> Result<String, ApiError> {
@@ -361,6 +398,14 @@ pub async fn create_variable(
             "Environment variable already exists. Use PATCH request to update it.",
         ));
     }
+    // The model's `saving` hook.
+    crate::shared_refs::authorize_added(
+        ctx,
+        scope.environment_id,
+        None,
+        input.str("value").map(php_trim),
+        "value",
+    )?;
     let (v, copy) = new_variable(state, &input)?;
     let row = store::create_on_resource(
         &state.db,
@@ -380,7 +425,13 @@ pub async fn create_variable(
 
 /// `if ($request->has('value')) $env->value = ...; $env->fill(...); $env->save()` with Eloquent's
 /// dirty check and the model's `saving` hook. A request without a value keeps the stored one.
-async fn save_variable(state: &AppState, row: &Record, input: &Input) -> Result<Record, ApiError> {
+async fn save_variable(
+    state: &AppState,
+    ctx: &AuthCtx,
+    scope: &ResourceScope,
+    row: &Record,
+    input: &Input,
+) -> Result<Record, ApiError> {
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let id = row.get("id").and_then(Value::as_i64).unwrap_or_default();
     let old = plain_value(state, row)?;
@@ -392,6 +443,14 @@ async fn save_variable(state: &AppState, row: &Record, input: &Input) -> Result<
     let mut dirty: Vec<(&'static str, ColumnValue)> = Vec::new();
     let value_dirty = old.as_deref() != new;
     if value_dirty {
+        // The model's `saving` hook: new shared variable references need read access to them.
+        crate::shared_refs::authorize_added(
+            ctx,
+            scope.environment_id,
+            old.as_deref(),
+            new,
+            "value",
+        )?;
         dirty.push((
             "value",
             ColumnValue::Text(new.map(|v| enc.encrypt_serialized(v))),
@@ -444,7 +503,7 @@ pub async fn update_variable(
             StatusCode::NOT_FOUND,
             "Environment variable not found.",
         ))?;
-    let saved = save_variable(state, &row, &input).await?;
+    let saved = save_variable(state, ctx, scope, &row, &input).await?;
     present_variable(state, ctx, scope, saved, Loaded::Row, Some(&input)).await
 }
 
@@ -490,10 +549,17 @@ pub async fn bulk_upsert_variables(
         let found = store::first_by_key(&state.db, scope.morph, scope.id, key, is_preview).await?;
         let presented = match found {
             Some(row) => {
-                let saved = save_variable(state, &row, item).await?;
+                let saved = save_variable(state, ctx, scope, &row, item).await?;
                 present_variable(state, ctx, scope, saved, Loaded::Row, Some(item)).await?
             }
             None => {
+                crate::shared_refs::authorize_added(
+                    ctx,
+                    scope.environment_id,
+                    None,
+                    item.str("value").map(php_trim),
+                    "value",
+                )?;
                 let (v, copy) = new_variable(state, item)?;
                 let row = store::create_on_resource(
                     &state.db,
@@ -565,12 +631,12 @@ pub async fn application_create(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(APP_NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let input = lenient_json(&headers, &uri, &body);
     let scope = ResourceScope::application(&a);
-    let env_uuid = create_variable(&state, &scope, input).await?;
+    let env_uuid = create_variable(&state, &ctx, &scope, input).await?;
     tracing::info!(target: "audit", event = "api.application.env_created", team_id = ctx.team_id, application_uuid = %a.uuid, env_uuid = %env_uuid, "environment variable created");
     Ok(created(json!({"uuid": env_uuid})).into_response())
 }
@@ -588,7 +654,7 @@ pub async fn application_update(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(APP_NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let scope = ResourceScope::application(&a);
@@ -610,7 +676,7 @@ pub async fn application_bulk(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(APP_NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let scope = ResourceScope::application(&a);
@@ -628,7 +694,7 @@ pub async fn application_delete(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(APP_NOT_FOUND_PERIOD)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let scope = ResourceScope::application(&a);

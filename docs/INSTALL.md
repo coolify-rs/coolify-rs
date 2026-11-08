@@ -22,7 +22,7 @@ curl -fsSL https://github.com/coolify-rs/coolify-rs/releases/latest/download/ins
 This installs the newest release. To install a particular one, pass its version:
 
 ```bash
-curl -fsSL https://github.com/coolify-rs/coolify-rs/releases/latest/download/install.sh | sudo bash -s 4.5.3-rs.1
+curl -fsSL https://github.com/coolify-rs/coolify-rs/releases/latest/download/install.sh | sudo bash -s 4.6.0-rs.1
 ```
 
 When the script finishes, open `http://<your-server>:8000` and register. The first account owns the instance.
@@ -80,8 +80,8 @@ Upgrading signs everyone out, because coolify-rs keeps sessions in memory.
 
 ## Versions
 
-A coolify-rs version names the Coolify release it matches, plus its own counter: `4.5.3-rs.1` is the first coolify-rs
-release that matches Coolify 4.5.3. The dashboard and the API report this version. The database schema is Coolify's,
+A coolify-rs version names the Coolify release it matches, plus its own counter: `4.6.0-rs.1` is the first coolify-rs
+release that matches Coolify 4.6.0. The dashboard and the API report this version. The database schema is Coolify's,
 so a coolify-rs release only works with a database at its Coolify version (see [MIGRATING.md](MIGRATING.md)).
 
 Images: `ghcr.io/coolify-rs/coolify-rs:<version>` and `:latest`, for `linux/amd64` and `linux/arm64`.

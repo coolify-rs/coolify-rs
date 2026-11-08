@@ -509,7 +509,9 @@ async fn images(
             "dangling": dangling,
             "reference": if dangling { id.clone() } else { format!("{repository}:{tag}") },
             "size": image.get("Size"),
+            "size_bytes": docker_size_to_bytes(&text("Size")),
             "created": image.get("CreatedSince"),
+            "created_at": docker_created_at(&text("CreatedAt")),
             "containers": used.get(&id).cloned().unwrap_or_default(),
         }));
     }
@@ -737,4 +739,61 @@ async fn analytics_save(
         ok(json!({"message": "Traffic analytics settings updated. Restarting Sentinel."}))
             .into_response(),
     )
+}
+
+/// `DockerImages::sizeToBytes()`: Docker prints sizes with decimal units, for example
+/// "512kB", "52.5MB" or "1.2GB"; anything else is 0.
+fn docker_size_to_bytes(size: &str) -> i64 {
+    let re = regex::Regex::new(r"^([\d.]+)\s*([kKMGTP]?)B$").unwrap_or_else(|_| unreachable!());
+    let Some(m) = re.captures(size.trim()) else {
+        return 0;
+    };
+    let number: f64 = m[1].parse().unwrap_or(0.0);
+    let exponent = match m[2].to_ascii_uppercase().as_str() {
+        "" => 0,
+        "K" => 1,
+        "M" => 2,
+        "G" => 3,
+        "T" => 4,
+        _ => 5,
+    };
+    (number * 1000f64.powi(exponent)).round() as i64
+}
+
+/// The `created_at` sort key of `DockerImages::formatImage()`: Docker prints
+/// "2024-05-01 10:00:00 +0000 UTC"; the trailing zone name is dropped before parsing.
+fn docker_created_at(created: &str) -> i64 {
+    let re = regex::Regex::new(r" [A-Z]+$").unwrap_or_else(|_| unreachable!());
+    let trimmed = re.replace(created, "");
+    chrono::DateTime::parse_from_str(&trimmed, "%Y-%m-%d %H:%M:%S %z")
+        .map(|d| d.timestamp())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod docker_image_sort_tests {
+    use super::*;
+
+    #[test]
+    fn sizes_use_decimal_units() {
+        assert_eq!(docker_size_to_bytes("512kB"), 512_000);
+        assert_eq!(docker_size_to_bytes("52.5MB"), 52_500_000);
+        assert_eq!(docker_size_to_bytes("1.2GB"), 1_200_000_000);
+        assert_eq!(docker_size_to_bytes("0B"), 0);
+        assert_eq!(docker_size_to_bytes("12B"), 12);
+        assert_eq!(docker_size_to_bytes("n/a"), 0);
+    }
+
+    #[test]
+    fn created_at_drops_the_zone_name() {
+        assert_eq!(
+            docker_created_at("2024-05-01 10:00:00 +0000 UTC"),
+            1_714_557_600
+        );
+        assert_eq!(
+            docker_created_at("2024-05-01 12:00:00 +0200 CEST"),
+            1_714_557_600
+        );
+        assert_eq!(docker_created_at(""), 0);
+    }
 }

@@ -13,11 +13,16 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
   from its GitHub releases (`COOLIFY_RS_CDN`, default `https://github.com/coolify-rs/coolify-rs/releases/latest/download`)
   and pulls `ghcr.io/coolify-rs/coolify-rs` (`COOLIFY_RS_REGISTRY`). `REGISTRY_URL` applies to Coolify's helper image
   only. Update checks read coolify-rs's own version file (`COOLIFY_RS_VERSIONS_URL` or `CDN_URL`).
-- **Existing Coolify databases.** Each release takes over exactly one Coolify release (4.5.3 for `4.5.3-rs.1`; see
-  [MIGRATING.md](MIGRATING.md)). `coolify-rs boot` runs only the upstream migrations that bring its own earlier
-  installs up to that release. A database from an older Coolify release is served read-only until Coolify itself is
-  upgraded to the matching release. A database with migrations newer than the build is read-only too (writes answer
-  `503`) unless `COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA=true`.
+- **Update channels.** The Preview and Nightly channels of the update settings take a version only from a version
+  file that lists channels (`{"stable": …, "preview": …, "nightly": …}`); with a stable-only file every channel
+  gets the stable release. A custom image tag installs `ghcr.io/coolify-rs/coolify-rs:<tag>`.
+- **Existing Coolify databases.** Each release takes over exactly one Coolify release (4.6.0 for `4.6.0-rs.1`; see
+  [MIGRATING.md](MIGRATING.md)). `coolify-rs boot` runs the upstream migrations from Coolify 4.5.3 to that release (the
+  ones that bring its own earlier installs up), whoever created the database: a Coolify 4.5.3 database is upgraded to
+  the 4.6.0 schema on the first start, and from then on only Coolify 4.6.0 can take it back. A database from a Coolify
+  release older than 4.5.3 is served read-only until Coolify itself is upgraded. A database with migrations newer than
+  the build is read-only too (writes answer `503`) unless `COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA=true`. Migration names that
+  upstream later renamed or deleted (`compat/baseline/historical-migrations.txt`) are accepted.
 - **Install layout.** No SSH key files or multiplexing sockets on disk, ports 6001 and 6002 are not published, and
   there are no `applications`, `databases`, `services` or `backups` mounts. The terminal websocket is served at
   `/terminal/ws` on the UI's port, so `TERMINAL_PROTOCOL`, `TERMINAL_HOST` and `TERMINAL_PORT` do not apply.
@@ -44,6 +49,9 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 
 ## API
 
+- **No MCP server.** Upstream serves an MCP endpoint at `/mcp` (`routes/ai.php`, `App\Mcp\Servers\CoolifyServer` and
+  its tools). coolify-rs does not: `/mcp` and the MCP tools are not ported. Only the `POST /api/v1/mcp/enable` and
+  `/mcp/disable` switch exists, which stores the setting and changes nothing else.
 - **No API rate limiting.** Upstream applies `throttle:api` (200 requests a minute, `X-RateLimit-*` headers).
   coolify-rs has none; only sign-in is throttled.
 - **Errors for clients that do not ask for JSON** get the JSON body upstream sends to JSON clients, instead of
@@ -66,6 +74,12 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 
 ## UI
 
+- **Member access grants on resource pages.** The API checks the grants of members and tokens on every project,
+  environment and resource endpoint, and the UI hides what a member cannot see and blocks team-level pages. Resource
+  pages of applications and databases follow the grants; the pages of services, environment variables, storages,
+  scheduled tasks, backups, previews and shared variables still need an owner or admin to change anything, as before
+  4.6.0 (a member with write, deploy or delete grants there uses the API instead). Navigation entries for project
+  and environment shared variables stay visible to a restricted member.
 - **No real-time connection.** Upstream pushes updates over Laravel Echo; coolify-rs pages poll instead. Proxy status
   toasts, scheduled task results and server transfer progress appear on the next poll (the transfer list every 15
   seconds). Canvases show a status change after Refresh, or on the dashboard canvas within five seconds. The "real-time
@@ -82,6 +96,10 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 - **"Configuration changed" warning** on application, database and service pages has no list of the changes.
 - **Remembered list or canvas view** is read in the browser, so a list page shows for an instant before it switches to
   the canvas.
+- **SQLite on the deploy canvas** is offered (v4.6.0) but its create call fails, as upstream: the canvas route group has
+  no `databases/sqlite` route.
+- **Table column sorts** that upstream runs on the server (dashboard, server images and resources, tag deployments) run
+  in the browser on the loaded rows; the order is the same, the header spinner only shows where the page reloads.
 - **Cloud tokens, cloud-init scripts and integration tokens** pages stay empty for a member, where upstream shows its
   403 page.
 - **Application General page instant saves** (site type, labels) store only that setting; upstream also saves unsaved
@@ -106,8 +124,6 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 
 ## Deployments
 
-- **Laravel applications built with Nixpacks** (`IS_LARAVEL` set) fail with "Laravel applications built with Nixpacks
-  are not supported by coolify-rs yet."
 - **Compose files with a parsing version below 3** (resources created by old Coolify releases) cannot be parsed or
   deployed.
 - **Preview domains have no DNS check.** "Check DNS" and "Check all DNS" say checks are not available, and a new

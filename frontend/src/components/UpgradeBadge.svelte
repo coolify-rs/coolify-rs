@@ -36,6 +36,8 @@
   let healthTimeouts = 0;
   let wentDown = false;
   const latestVersion = $derived(upgrade?.latest_version ?? '');
+  // `isUpgradeAvailable`: with a custom image, only the full button, when a tag is set.
+  const available = $derived(upgrade?.custom ? fullButton && latestVersion !== '' : !!upgrade?.available);
 
   const elapsedText = $derived(`${Math.floor(elapsedTime / 60)}:${String(elapsedTime % 60).padStart(2, '0')}`);
   const beforeUnload = (event: BeforeUnloadEvent) => {
@@ -184,8 +186,8 @@
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && !showProgress && (open = false)} />
 
-<div title={upgrade?.available ? 'New version available' : 'No upgrade available'}>
-  {#if upgrade?.available}
+<div title={available ? 'New version available' : 'No upgrade available'}>
+  {#if available}
     <div class="relative w-auto h-auto {open ? 'z-40' : ''}">
       {#if fullButton}
         <button type="button" class="button button-highlighted" onclick={() => (open = true)}>Upgrade now</button>
@@ -211,8 +213,8 @@
               <div class="min-w-0 flex-1">
                 <h3 class="truncate">{upgradeComplete ? 'Upgrade complete' : showProgress ? 'Upgrading…' : 'Upgrade available'}</h3>
                 <p class="mt-0.5 text-[12px] leading-4" style="color: var(--coollabs-subtle)">
-                  {upgrade.current_version} <span class="mx-0.5">&rarr;</span>
-                  {upgrade.latest_version}
+                  {upgrade?.current_version} <span class="mx-0.5">&rarr;</span>
+                  {upgrade?.latest_version}
                 </p>
               </div>
               {#if !showProgress || upgradeError}

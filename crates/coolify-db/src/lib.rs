@@ -10,6 +10,7 @@
 //! same (heap) order upstream returns, which differential tests compare byte
 //! for byte.
 
+pub mod access;
 pub mod application_ops;
 pub mod applications;
 pub mod audit;
@@ -59,6 +60,7 @@ pub mod traffic;
 pub mod ui_servers;
 pub mod users;
 pub mod volume_backups;
+pub mod worker_host;
 
 use std::time::Duration;
 

@@ -293,7 +293,8 @@ async fn update_and_delete() {
 
     // Delete: the row and its settings, destinations and variables go away.
     let sid = scalar_i64(&h, &format!("SELECT id FROM servers WHERE uuid = '{uuid}'")).await;
-    h.call("DELETE", &path, W, None)
+    // `api.ability:delete` since v4.6.0.
+    h.call("DELETE", &path, Some("acme_owner_delete"), None)
         .await
         .assert(200, r#"{"message":"Server deleted."}"#);
     for table in [
