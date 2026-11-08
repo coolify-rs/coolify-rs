@@ -16,7 +16,7 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 - **Update channels.** The Preview and Nightly channels of the update settings take a version only from a version
   file that lists channels (`{"stable": …, "preview": …, "nightly": …}`); with a stable-only file every channel
   gets the stable release. A custom image tag installs `ghcr.io/coolify-rs/coolify-rs:<tag>`.
-- **Existing Coolify databases.** Each release takes over exactly one Coolify release (4.6.0 for `4.6.0-rs.1`; see
+- **Existing Coolify databases.** Each release takes over exactly one Coolify release (4.6.0 for `4.6.0-rs.2`; see
   [MIGRATING.md](MIGRATING.md)). `coolify-rs boot` runs the upstream migrations from Coolify 4.5.3 to that release (the
   ones that bring its own earlier installs up), whoever created the database: a Coolify 4.5.3 database is upgraded to
   the 4.6.0 schema on the first start, and from then on only Coolify 4.6.0 can take it back. A database from a Coolify
@@ -25,7 +25,9 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
   upstream later renamed or deleted (`compat/baseline/historical-migrations.txt`) are accepted.
 - **Install layout.** No SSH key files or multiplexing sockets on disk, ports 6001 and 6002 are not published, and
   there are no `applications`, `databases`, `services` or `backups` mounts. The terminal websocket is served at
-  `/terminal/ws` on the UI's port, so `TERMINAL_PROTOCOL`, `TERMINAL_HOST` and `TERMINAL_PORT` do not apply.
+  `/terminal/ws` on the UI's port, and on port 6002 inside the `coolify` network, where the proxy configuration of an
+  instance with a domain sends it (`COOLIFY_RS_TERMINAL_LISTEN`, `off` to turn it off). `TERMINAL_PROTOCOL`,
+  `TERMINAL_HOST` and `TERMINAL_PORT` do not apply. Nothing listens on port 6001: live updates use the UI's port.
 - **Startup tasks.** Of upstream's `app:init`, coolify-rs does not run `cleanup:names`, the environment-name slash
   fix, the Coolify database backup restore, the user email update or the cleanup of unused proxy networks.
   `cleanup:stucked-resources` runs on its schedule only. The alive signal to upstream's telemetry address is left out on
