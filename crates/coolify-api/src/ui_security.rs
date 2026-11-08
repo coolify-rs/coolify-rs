@@ -1,4 +1,4 @@
-//! Page endpoints of `App\Livewire\Security\{ApiTokens, CloudProviderTokens, CloudProviderTokenForm,
+//! Page endpoints of `App\Livewire\Security\{CloudProviderTokens, CloudProviderTokenForm,
 //! CloudProviderToken\Show, CloudInitScripts, CloudInitScriptForm, CloudInitScript\Show,
 //! IntegrationTokens, IntegrationTokenForm, IntegrationTokenEditor}`.
 
@@ -11,9 +11,7 @@ use axum::{Extension, Json, Router};
 use coolify_db::cloud;
 use coolify_db::integration_tokens as it;
 use coolify_db::records::Record;
-use rand::Rng;
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::audit::Meta;
 use crate::auth::AuthCtx;
@@ -21,18 +19,10 @@ use crate::response::{ApiError, ApiResult, PhpJson, ok};
 use crate::routes::cloud_tokens::cloud_init_rule;
 use crate::routes::integration_tokens::{error_message, verify};
 use crate::state::AppState;
-use crate::ui_notifications::{blank, toast_error, unauthorized, validation_failed};
+use crate::ui_notifications::{blank, toast_error, unauthorized};
 
 pub fn routes(state: AppState) -> Router<AppState> {
     Router::new()
-        .route(
-            "/ui/security/api-tokens",
-            get(api_tokens).post(create_api_token),
-        )
-        .route(
-            "/ui/security/api-tokens/{id}",
-            axum::routing::delete(revoke_api_token),
-        )
         .route(
             "/ui/security/cloud-tokens",
             get(cloud_tokens).post(add_cloud_token),
@@ -93,224 +83,6 @@ fn field_errors(errors: Map<String, Value>) -> Response {
     )
     .into_response()
 }
-
-fn iso8601(t: chrono::NaiveDateTime) -> String {
-    format!("{}+00:00", t.format("%Y-%m-%dT%H:%M:%S"))
-}
-
-/// `hash('crc32b', ...)`.
-fn crc32b(data: &[u8]) -> String {
-    let mut crc: u32 = !0;
-    for b in data {
-        crc ^= u32::from(*b);
-        for _ in 0..8 {
-            crc = if crc & 1 == 1 {
-                (crc >> 1) ^ 0xEDB8_8320
-            } else {
-                crc >> 1
-            };
-        }
-    }
-    format!("{:08x}", !crc)
-}
-
-// ── API tokens ──────────────────────────────────────────────────────────
-
-const ABILITIES: &[&str] = &[
-    "read",
-    "read:sensitive",
-    "write",
-    "write:sensitive",
-    "deploy",
-    "root",
-];
-
-async fn api_tokens(
-    State(state): State<AppState>,
-    Extension(ctx): Extension<AuthCtx>,
-) -> ApiResult {
-    let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT json_build_object('id', t.id, 'name', t.name, 'abilities', t.abilities::json, \
-           'last_used_at', t.last_used_at, 'created_at', t.created_at, 'expires_at', t.expires_at)::text \
-         FROM personal_access_tokens t \
-         WHERE t.tokenable_type = 'App\\Models\\User' AND t.tokenable_id = $1 AND t.team_id = $2 ORDER BY t.created_at DESC, t.id DESC",
-    )
-    .bind(ctx.user_id)
-    .bind(ctx.team_id.to_string())
-    .fetch_all(state.db.pool())
-    .await
-    .map_err(|_| ApiError::Internal)?;
-    let tokens: Vec<Value> = rows
-        .iter()
-        .filter_map(|t| serde_json::from_str(t).ok())
-        .collect();
-    let api_enabled: bool =
-        sqlx::query_scalar("SELECT is_api_enabled FROM instance_settings WHERE id = 0")
-            .fetch_optional(state.db.pool())
-            .await
-            .map_err(|_| ApiError::Internal)?
-            .unwrap_or(true);
-    let instance_admin =
-        coolify_db::instance_settings::is_instance_admin(&state.db, ctx.user_id).await?;
-    Ok(ok(json!({
-        "tokens": tokens,
-        "elevated": ctx.is_team_admin(),
-        "api_enabled": api_enabled,
-        "instance_admin": instance_admin,
-    }))
-    .into_response())
-}
-
-/// `addNewToken`.
-async fn create_api_token(
-    State(state): State<AppState>,
-    Extension(ctx): Extension<AuthCtx>,
-    meta: Meta,
-    Json(body): Json<Value>,
-) -> ApiResult {
-    let description = body_str(&body, "description");
-    let mut errors = Vec::new();
-    if blank(body.get("description")) {
-        errors.push("The description field is required.".to_owned());
-    } else {
-        let n = description.chars().count();
-        if n < 3 {
-            errors.push("The description field must be at least 3 characters.".to_owned());
-        }
-        if n > 255 {
-            errors
-                .push("The description field must not be greater than 255 characters.".to_owned());
-        }
-    }
-    let days = body.get("expires_in_days").filter(|v| !blank(Some(v)));
-    let days_number = days.and_then(|v| {
-        v.as_i64()
-            .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
-    });
-    if days.is_some() {
-        match days_number {
-            None => {
-                errors.push("The expires in days field must be an integer.".to_owned());
-                errors.push("The selected expires in days is invalid.".to_owned());
-            }
-            Some(d) if ![7, 30, 60, 90, 365].contains(&d) => {
-                errors.push("The selected expires in days is invalid.".to_owned());
-            }
-            _ => {}
-        }
-    }
-    let permissions: Vec<String> = body
-        .get("permissions")
-        .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    if permissions.is_empty() {
-        errors.push("The permissions field is required.".to_owned());
-    }
-    for (i, p) in permissions.iter().enumerate() {
-        if !ABILITIES.contains(&p.as_str()) {
-            errors.push(format!("The selected permissions.{i} is invalid."));
-        }
-    }
-    if let Some(r) = validation_failed(&errors) {
-        return Ok(r);
-    }
-    let elevated = ctx.is_team_admin();
-    let has = |p: &str| permissions.iter().any(|x| x == p);
-    let denied = if has("root") && !elevated {
-        Some("You do not have permission to create tokens with root permissions.")
-    } else if (has("write") || has("write:sensitive")) && !elevated {
-        Some("You do not have permission to create tokens with write permissions.")
-    } else if has("deploy") && !elevated {
-        Some("You do not have permission to create tokens with deploy permissions.")
-    } else if has("read:sensitive") && !elevated {
-        Some("You do not have permission to create tokens with read:sensitive permissions.")
-    } else {
-        None
-    };
-    if let Some(m) = denied {
-        return Ok(toast_error(StatusCode::FORBIDDEN, m));
-    }
-    let now = state.now();
-    let expires = days_number.map(|d| now + chrono::Duration::days(d));
-    // `User::createToken`.
-    let entropy: String = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(40)
-        .map(char::from)
-        .collect();
-    let plain = format!("{entropy}{}", crc32b(entropy.as_bytes()));
-    let hash = Sha256::digest(plain.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO personal_access_tokens (tokenable_type, tokenable_id, name, token, abilities, expires_at, team_id, created_at, updated_at) \
-         VALUES ('App\\Models\\User', $1, $2, $3, $4, $5, $6, $7, $7) RETURNING id",
-    )
-    .bind(ctx.user_id)
-    .bind(description)
-    .bind(hash)
-    .bind(serde_json::to_string(&permissions).map_err(|_| ApiError::Internal)?)
-    .bind(expires)
-    .bind(ctx.team_id.to_string())
-    .bind(now)
-    .fetch_one(state.db.pool())
-    .await
-    .map_err(|_| ApiError::Internal)?;
-    crate::audit::log(
-        &state,
-        &ctx,
-        &meta,
-        "ui.api_token.created",
-        json!({
-            "team_id": ctx.team_id,
-            "api_token_name": description,
-            "abilities": permissions,
-            "expires_at": expires.map(iso8601),
-        }),
-        "info",
-    )
-    .await;
-    Ok(ok(json!({"token": format!("{id}|{plain}")})).into_response())
-}
-
-/// `revoke`.
-async fn revoke_api_token(
-    State(state): State<AppState>,
-    Extension(ctx): Extension<AuthCtx>,
-    meta: Meta,
-    Path(id): Path<i64>,
-) -> ApiResult {
-    let name: Option<String> = sqlx::query_scalar(
-        "DELETE FROM personal_access_tokens WHERE id = $1 AND tokenable_type = 'App\\Models\\User' AND tokenable_id = $2 AND team_id = $3 RETURNING name",
-    )
-    .bind(id)
-    .bind(ctx.user_id)
-    .bind(ctx.team_id.to_string())
-    .fetch_optional(state.db.pool())
-    .await
-    .map_err(|_| ApiError::Internal)?;
-    let Some(name) = name else {
-        return Err(ApiError::Message(StatusCode::NOT_FOUND, "Not found."));
-    };
-    crate::audit::log(
-        &state,
-        &ctx,
-        &meta,
-        "ui.api_token.revoked",
-        json!({"team_id": ctx.team_id, "api_token_name": name}),
-        "info",
-    )
-    .await;
-    Ok(ok(json!({})).into_response())
-}
-
-// ── Cloud tokens ────────────────────────────────────────────────────────
 
 fn present_cloud_token(r: &Record) -> Value {
     json!({
@@ -1328,15 +1100,6 @@ async fn refresh_zones(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn crc32b_matches_php() {
-        // Checked with PHP `hash("crc32b", ...)`.
-        assert_eq!(
-            crc32b(b"The quick brown fox jumped over the lazy dog."),
-            "82a34642"
-        );
-    }
 
     #[test]
     fn base_url_for_audit_strips_credentials() {

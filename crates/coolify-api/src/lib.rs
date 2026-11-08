@@ -24,6 +24,7 @@ pub mod session;
 pub mod state;
 pub mod terminal_ws;
 pub mod ui;
+pub mod ui_api_tokens;
 pub mod ui_applications;
 pub mod ui_auth;
 pub mod ui_boarding;
