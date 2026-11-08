@@ -21,6 +21,7 @@ use crate::response::{ApiError, ApiResult, created, ok};
 use crate::routes::databases::present;
 use crate::state::AppState;
 use crate::validation::{Field, Messages, Rule, patterns, validate};
+use coolify_domain::grants::AccessLevel;
 
 const NOT_FOUND: ApiError = ApiError::Message(StatusCode::NOT_FOUND, "Database not found.");
 
@@ -137,10 +138,6 @@ pub async fn create(
     Extension(ctx): Extension<AuthCtx>,
     body: axum::body::Bytes,
 ) -> ApiResult {
-    // `createAnyResource`: admins and owners.
-    if !ctx.is_team_admin() {
-        return Err(ApiError::Unauthorized);
-    }
     let input: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     let s = |k: &str| {
         input
@@ -167,6 +164,10 @@ pub async fn create(
             StatusCode::NOT_FOUND,
             "Environment not found.",
         ))?;
+    // `createAnyResource` in the environment.
+    if !ctx.can_create_in(Some(env.id)) {
+        return Err(ApiError::Unauthorized);
+    }
     let (destination_id, _server_id) =
         dbs::team_destination(&state.db, ctx.team_id, &s("destination_uuid"))
             .await?
@@ -215,7 +216,7 @@ pub async fn state(
     // `Database\Configuration::mount`: a running database without a hash gets one.
     if d.str("status").unwrap_or_default().starts_with("running")
         && d.str("config_hash").is_none()
-        && ctx.is_team_admin()
+        && ctx.can_db(AccessLevel::Write, &d)
     {
         let hash = crate::routes::databases::config_hash(&state, &d).await?;
         dbs::update_if_changed(
@@ -244,7 +245,7 @@ pub async fn state(
     let creds = crate::routes::databases::credentials(&state, &d).await?;
     let shared = |key: &str| creds.variables.iter().any(|v| v.key == key && v.is_shared);
     let mut form = json!({"credential_locked": creds.locked});
-    if d.kind == Kind::Redis && ctx.is_team_admin() {
+    if d.kind == Kind::Redis && ctx.can_db(AccessLevel::Write, &d) {
         form["redis_username"] = json!(creds.redis_username());
         form["redis_password"] = if creds.locked {
             Value::Null
@@ -285,7 +286,7 @@ pub async fn state(
         "activity": activity,
         "flushable": matches!(d.kind, Kind::Redis | Kind::Keydb | Kind::Dragonfly),
         "configuration_changed": configuration_changed,
-        "can_update": ctx.is_team_admin(),
+        "can_update": ctx.can_db(AccessLevel::Write, &d),
         "kind": d.kind.name_prefix(),
         "form": form,
     }))
@@ -683,7 +684,7 @@ pub async fn update(
     let d = dbs::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     if !d.kind.ported() {
@@ -970,7 +971,7 @@ pub async fn flush(
     if !matches!(d.kind, Kind::Redis | Kind::Keydb | Kind::Dragonfly) {
         return Err(NOT_FOUND);
     }
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let input: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
@@ -1017,7 +1018,7 @@ pub async fn delete(
             "The provided password is incorrect.",
         ));
     }
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Delete, &d) {
         return Err(ApiError::Unauthorized);
     }
     // `Shared\Danger::delete` refuses a SQLite database that applications still mount.

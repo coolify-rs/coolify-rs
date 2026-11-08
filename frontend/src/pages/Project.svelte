@@ -76,8 +76,8 @@
   const paginated = $derived(filtered.slice((page - 1) * pageSize, page * pageSize));
 
   const href = (e: E) => `/project/${uuid}/environment/${e.uuid}`;
-  const settingsHref = (e: E) => (data?.can_update ? `/project/${uuid}/environment/${e.uuid}/edit` : null);
-  const addResourceHref = (e: E) => (data?.can_create ? `/project/${uuid}/environment/${e.uuid}/new` : null);
+  const settingsHref = (e: E) => ((e.can_update ?? data?.can_update) ? `/project/${uuid}/environment/${e.uuid}/edit` : null);
+  const addResourceHref = (e: E) => ((e.can_create ?? data?.can_create) ? `/project/${uuid}/environment/${e.uuid}/new` : null);
   const iconLink =
     'flex items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-black dark:text-fg-faint dark:hover:bg-white/[0.06] dark:hover:text-fg';
 

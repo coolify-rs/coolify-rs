@@ -196,7 +196,17 @@ export const uiApi = {
 /** `GET /ui/projects/{uuid}` (coolify-rs read model for project pages). */
 export interface ProjectPageData {
   project: { uuid: string; name: string; description: string | null };
-  environments: { uuid: string; name: string; description: string | null; created_at: string | null; resources: number }[];
+  environments: {
+    uuid: string;
+    name: string;
+    description: string | null;
+    created_at: string | null;
+    resources: number;
+    /** `can('update', $environment)`. */
+    can_update?: boolean;
+    /** `can('createAnyResource', [$environment])`. */
+    can_create?: boolean;
+  }[];
   projects: { uuid: string; name: string }[];
   can_update: boolean;
   can_create: boolean;

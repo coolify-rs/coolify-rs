@@ -136,6 +136,7 @@ pub async fn private_key_count(db: &Db, team_id: TeamId) -> DbResult<i64> {
 
 #[derive(Debug, Clone)]
 pub struct EnvSummary {
+    pub id: i64,
     pub uuid: String,
     pub name: String,
     pub description: Option<String>,
@@ -164,6 +165,7 @@ pub async fn environments(db: &Db, project_id: i64) -> DbResult<Vec<EnvSummary>>
         .into_iter()
         .filter(|r| crate::access::environment_visible(r.0))
         .map(|(id, uuid, name, description, created_at)| EnvSummary {
+            id,
             resources: counts.get(&id).copied().unwrap_or(0),
             uuid,
             name,

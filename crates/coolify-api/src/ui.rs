@@ -291,10 +291,13 @@ async fn project_data(
             "description": e.description,
             "created_at": e.created_at,
             "resources": e.resources,
+            // `can('update', $environment)` and `can('createAnyResource', [$environment])`.
+            "can_update": ctx.can(coolify_domain::AccessLevel::Write, &coolify_domain::Target::environment(e.id)),
+            "can_create": ctx.can_create_in(Some(e.id)),
         })).collect::<Vec<_>>(),
         "projects": projects.iter().map(|(uuid, name)| json!({"uuid": uuid, "name": name})).collect::<Vec<_>>(),
-        "can_update": ctx.role.is_admin(),
-        "can_create": ctx.role.is_admin(),
+        "can_update": ctx.can(coolify_domain::AccessLevel::Write, &coolify_domain::Target::project(project.id)),
+        "can_create": ctx.allows_team_wide(coolify_domain::AccessLevel::Write),
     }))
     .into_response())
 }

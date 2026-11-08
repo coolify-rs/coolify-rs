@@ -281,7 +281,7 @@
         <div class="min-w-0">
           <div class="flex min-w-0 items-center gap-1.5">
             <h1 class="truncate text-[24px]! leading-7! font-semibold! tracking-tight!">{environment.name}</h1>
-            {#if data.can_update}
+            {#if environment?.can_update ?? data.can_update}
               <a
                 href="/project/{uuid}/environment/{env}/edit"
                 use:link
@@ -316,7 +316,7 @@
             <Reicon name="variables" class="size-3.5" />
             Shared variables
           </a>
-          {#if data.can_create}
+          {#if environment?.can_create ?? data.can_create}
             <a href="/project/{uuid}/environment/{env}/new" use:link class="button whitespace-nowrap button-highlighted">
               <Reicon name="plus" class="size-3.5" />
               New resource
@@ -328,7 +328,7 @@
       {#if isEmpty}
         <Empty title="No resources yet" description="Add an application, database, or service to this environment." iconName="layers">
           {#snippet contents()}
-            {#if data?.can_create}
+            {#if environment?.can_create ?? data?.can_create}
               <a href="/project/{uuid}/environment/{env}/new" use:link class="button">
                 <Reicon name="plus" class="size-3.5" />
                 Add resource
