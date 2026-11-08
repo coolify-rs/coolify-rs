@@ -357,6 +357,71 @@ async fn sqlite_and_tags_are_created() {
     f.h.finish().await;
 }
 
+/// `Postgresql\General::save_init_script` (Coolify v4.6.0): a new script or a renamed one must
+/// have a safe filename, so a filename cannot leave `docker-entrypoint-initdb.d`.
+#[tokio::test]
+async fn init_script_filenames_cannot_traverse_paths() {
+    let f = fixture().await;
+    let h = &f.h;
+    let body = json!({"server_uuid": f.server, "project_uuid": f.project, "environment_name": "production"});
+    let created = h
+        .call("POST", "/api/v1/databases/postgresql", W, Some(body))
+        .await;
+    assert_eq!(created.status, 201, "{}", created.body);
+    let uuid = created.json()["uuid"].as_str().unwrap().to_owned();
+    let (cookie, csrf) = h.ui_login("alice@example.test").await;
+    let headers = [("cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+    let path = format!("/ui/databases/{uuid}/init-scripts");
+    let scripts = || async {
+        let v: Option<String> = sqlx::query_scalar(
+            "SELECT init_scripts::text FROM standalone_postgresqls WHERE uuid = $1",
+        )
+        .bind(&uuid)
+        .fetch_one(h.tdb.db.pool())
+        .await
+        .unwrap();
+        v.unwrap_or_default()
+    };
+    let save = |filename: &str, original: &str| {
+        h.request(
+            "POST",
+            &path,
+            &headers,
+            Some(json!({"action": "save", "filename": filename, "original_filename": original, "content": "SELECT 1;"})),
+        )
+    };
+    let toast_type = |r: &common::Resp| {
+        r.json()["toasts"][0]["type"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+
+    // A save without an existing script used to skip the check.
+    for bad in [
+        "../../../etc/cron.d/x",
+        "a/b.sql",
+        "..",
+        "x\\y.sql",
+        "a b.sql",
+    ] {
+        let r = save(bad, "").await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(toast_type(&r), "error", "{bad}: {}", r.body);
+        assert!(!scripts().await.contains("SELECT 1;"), "{bad} was saved");
+    }
+    let r = save("init.sql", "").await;
+    assert_eq!(toast_type(&r), "success", "{}", r.body);
+    assert!(scripts().await.contains("init.sql"));
+    // Saving it again under its own name needs no check; renaming it does.
+    let r = save("init.sql", "init.sql").await;
+    assert_eq!(toast_type(&r), "success", "{}", r.body);
+    let r = save("../init.sql", "init.sql").await;
+    assert_eq!(toast_type(&r), "error", "{}", r.body);
+    assert!(!scripts().await.contains("../init.sql"));
+    f.h.finish().await;
+}
+
 #[tokio::test]
 async fn redis_create_and_start() {
     let f = fixture().await;
