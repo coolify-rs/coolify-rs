@@ -69,6 +69,12 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 
 ## UI
 
+- **Member access grants on resource pages.** The API checks the grants of members and tokens on every project,
+  environment and resource endpoint, and the UI hides what a member cannot see and blocks team-level pages. Resource
+  pages of applications and databases follow the grants; the pages of services, environment variables, storages,
+  scheduled tasks, backups, previews and shared variables still need an owner or admin to change anything, as before
+  4.6.0 (a member with write, deploy or delete grants there uses the API instead). Navigation entries for project
+  and environment shared variables stay visible to a restricted member.
 - **No real-time connection.** Upstream pushes updates over Laravel Echo; coolify-rs pages poll instead. Proxy status
   toasts, scheduled task results and server transfer progress appear on the next poll (the transfer list every 15
   seconds). Canvases show a status change after Refresh, or on the dashboard canvas within five seconds. The "real-time
@@ -85,6 +91,10 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 - **"Configuration changed" warning** on application, database and service pages has no list of the changes.
 - **Remembered list or canvas view** is read in the browser, so a list page shows for an instant before it switches to
   the canvas.
+- **SQLite on the deploy canvas** is offered (v4.6.0) but its create call fails, as upstream: the canvas route group has
+  no `databases/sqlite` route.
+- **Table column sorts** that upstream runs on the server (dashboard, server images and resources, tag deployments) run
+  in the browser on the loaded rows; the order is the same, the header spinner only shows where the page reloads.
 - **Cloud tokens, cloud-init scripts and integration tokens** pages stay empty for a member, where upstream shows its
   403 page.
 - **Application General page instant saves** (site type, labels) store only that setting; upstream also saves unsaved

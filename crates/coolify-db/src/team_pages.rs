@@ -367,14 +367,24 @@ pub struct Invitation {
     pub link: String,
     pub via: String,
     pub created_at: Option<NaiveDateTime>,
+    /// `access` (upstream 4.6.0): the grants the invited member gets, raw JSON.
+    pub access: Option<String>,
 }
 
-const INVITATION_COLUMNS: &str = "id, uuid, team_id, email, role, link, via, created_at";
+fn invitation_columns(db: &Db) -> String {
+    let access = if crate::access::has_invitation_access_column(db) {
+        "access::text"
+    } else {
+        "NULL::text"
+    };
+    format!("id, uuid, team_id, email, role, link, via, created_at, {access} AS access")
+}
 
 /// `TeamInvitation::ownedByCurrentTeam()->get()`.
 pub async fn invitations(db: &Db, team_id: TeamId) -> DbResult<Vec<Invitation>> {
     Ok(sqlx::query_as(&format!(
-        "SELECT {INVITATION_COLUMNS} FROM team_invitations WHERE team_id = $1"
+        "SELECT {} FROM team_invitations WHERE team_id = $1",
+        invitation_columns(db)
     ))
     .bind(team_id)
     .fetch_all(db.pool())
@@ -383,7 +393,8 @@ pub async fn invitations(db: &Db, team_id: TeamId) -> DbResult<Vec<Invitation>> 
 
 pub async fn invitation_in_team(db: &Db, team_id: TeamId, id: i64) -> DbResult<Option<Invitation>> {
     Ok(sqlx::query_as(&format!(
-        "SELECT {INVITATION_COLUMNS} FROM team_invitations WHERE team_id = $1 AND id = $2"
+        "SELECT {} FROM team_invitations WHERE team_id = $1 AND id = $2",
+        invitation_columns(db)
     ))
     .bind(team_id)
     .bind(id)
@@ -397,7 +408,8 @@ pub async fn invitation_by_email(
     email: &str,
 ) -> DbResult<Option<Invitation>> {
     Ok(sqlx::query_as(&format!(
-        "SELECT {INVITATION_COLUMNS} FROM team_invitations WHERE team_id = $1 AND email = $2"
+        "SELECT {} FROM team_invitations WHERE team_id = $1 AND email = $2",
+        invitation_columns(db)
     ))
     .bind(team_id)
     .bind(email)
@@ -407,7 +419,8 @@ pub async fn invitation_by_email(
 
 pub async fn invitation_by_uuid(db: &Db, uuid: &str) -> DbResult<Option<Invitation>> {
     Ok(sqlx::query_as(&format!(
-        "SELECT {INVITATION_COLUMNS} FROM team_invitations WHERE uuid = $1"
+        "SELECT {} FROM team_invitations WHERE uuid = $1",
+        invitation_columns(db)
     ))
     .bind(uuid)
     .fetch_optional(db.pool())
@@ -416,7 +429,8 @@ pub async fn invitation_by_uuid(db: &Db, uuid: &str) -> DbResult<Option<Invitati
 
 pub async fn invitations_by_email(db: &Db, email: &str) -> DbResult<Vec<Invitation>> {
     Ok(sqlx::query_as(&format!(
-        "SELECT {INVITATION_COLUMNS} FROM team_invitations WHERE email = $1"
+        "SELECT {} FROM team_invitations WHERE email = $1",
+        invitation_columns(db)
     ))
     .bind(email)
     .fetch_all(db.pool())
@@ -452,6 +466,20 @@ pub async fn create_invitation(
     Ok(())
 }
 
+/// The `access` of a new invitation (`firstOrCreate(..., ['access' => $access])`).
+pub async fn set_invitation_access(db: &Db, uuid: &str, access: Option<&str>) -> DbResult<()> {
+    if !crate::access::has_invitation_access_column(db) {
+        return Ok(());
+    }
+    db.ensure_writable()?;
+    sqlx::query("UPDATE team_invitations SET access = $2::json WHERE uuid = $1")
+        .bind(uuid)
+        .bind(access)
+        .execute(db.pool())
+        .await?;
+    Ok(())
+}
+
 pub async fn delete_invitation(db: &Db, id: i64) -> DbResult<()> {
     db.ensure_writable()?;
     sqlx::query("DELETE FROM team_invitations WHERE id = $1")
@@ -466,6 +494,30 @@ pub async fn attach_member(db: &Db, team_id: TeamId, user_id: i64, role: &str) -
     db.ensure_writable()?;
     let mut tx = db.pool().begin().await?;
     attach(&mut tx, team_id, user_id, role).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// `$user->teams()->attach($team, $invitation->membershipAttributes())`: grants apply only to the
+/// member role.
+pub async fn attach_invited_member(db: &Db, invitation: &Invitation, user_id: i64) -> DbResult<()> {
+    db.ensure_writable()?;
+    let mut tx = db.pool().begin().await?;
+    attach(&mut tx, invitation.team_id, user_id, &invitation.role).await?;
+    let access = invitation
+        .access
+        .as_deref()
+        .filter(|a| invitation.role == "member" && *a != "null");
+    if let Some(access) = access
+        && crate::access::has_member_access_column(db)
+    {
+        sqlx::query("UPDATE team_user SET access = $3::json WHERE team_id = $1 AND user_id = $2")
+            .bind(invitation.team_id)
+            .bind(user_id)
+            .bind(access)
+            .execute(&mut *tx)
+            .await?;
+    }
     tx.commit().await?;
     Ok(())
 }

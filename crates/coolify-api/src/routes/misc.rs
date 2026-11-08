@@ -31,7 +31,10 @@ pub async fn disable_api(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
 ) -> ApiResult {
-    if ctx.team_id_raw != "0" {
+    // `! $request->user()?->can('update', instanceSettings())` (6f1905b7b): an instance admin.
+    if ctx.team_id_raw != "0"
+        || !coolify_db::instance_settings::is_instance_admin(&state.db, ctx.user_id).await?
+    {
         return Err(ApiError::Message(
             StatusCode::FORBIDDEN,
             "You are not allowed to disable the API.",
@@ -52,7 +55,9 @@ async fn set_mcp(
     } else {
         ("disable", "disabled")
     };
-    if ctx.team_id_raw != "0" {
+    if ctx.team_id_raw != "0"
+        || !coolify_db::instance_settings::is_instance_admin(&state.db, ctx.user_id).await?
+    {
         crate::audit::log(
             state,
             ctx,

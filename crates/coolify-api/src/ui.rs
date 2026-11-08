@@ -220,9 +220,17 @@ async fn dashboard_data(
     Extension(ctx): Extension<AuthCtx>,
 ) -> ApiResult {
     let projects = dashboard::projects(&state.db, ctx.team_id).await?;
-    let servers = dashboard::servers(&state.db, ctx.team_id).await?;
-    let rows = coolify_db::servers::list(&state.db, ctx.team_id).await?;
-    let private_keys = dashboard::private_key_count(&state.db, ctx.team_id).await?;
+    // `$showsTeamSections`: members limited to some projects do not see servers and keys.
+    let team_sections = ctx.covers_whole_team();
+    let (servers, rows, private_keys) = if team_sections {
+        (
+            dashboard::servers(&state.db, ctx.team_id).await?,
+            coolify_db::servers::list(&state.db, ctx.team_id).await?,
+            dashboard::private_key_count(&state.db, ctx.team_id).await?,
+        )
+    } else {
+        (Vec::new(), Vec::new(), 0)
+    };
     let icons = coolify_db::canvas::project_icon_urls(&state.db, ctx.team_id).await?;
     let projects: Vec<Value> = projects
         .iter()
@@ -258,6 +266,7 @@ async fn dashboard_data(
         "servers": servers,
         "private_keys": private_keys,
         "can_create": ctx.role.is_admin(),
+        "shows_team_sections": team_sections,
     }))
     .into_response())
 }
@@ -286,10 +295,13 @@ async fn project_data(
             "description": e.description,
             "created_at": e.created_at,
             "resources": e.resources,
+            // `can('update', $environment)` and `can('createAnyResource', [$environment])`.
+            "can_update": ctx.can(coolify_domain::AccessLevel::Write, &coolify_domain::Target::environment(e.id)),
+            "can_create": ctx.can_create_in(Some(e.id)),
         })).collect::<Vec<_>>(),
         "projects": projects.iter().map(|(uuid, name)| json!({"uuid": uuid, "name": name})).collect::<Vec<_>>(),
-        "can_update": ctx.role.is_admin(),
-        "can_create": ctx.role.is_admin(),
+        "can_update": ctx.can(coolify_domain::AccessLevel::Write, &coolify_domain::Target::project(project.id)),
+        "can_create": ctx.allows_team_wide(coolify_domain::AccessLevel::Write),
     }))
     .into_response())
 }
@@ -452,6 +464,12 @@ async fn team_data(State(state): State<AppState>, Extension(ctx): Extension<Auth
                 }
             }),
             "two_factor": if manage { Value::Bool(m.two_factor) } else { Value::Null },
+            // `Access::summary` under the email, for owners and admins.
+            "access_summary": if manage && m.role == "member" {
+                Value::String(crate::ui_team_access::summary(m.access.as_deref()))
+            } else {
+                Value::Null
+            },
         })).collect::<Vec<_>>(),
         "me": ctx.user_id,
         "my_role": ctx.role.as_str(),

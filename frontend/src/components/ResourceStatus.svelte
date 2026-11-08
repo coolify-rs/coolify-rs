@@ -49,13 +49,26 @@
 </script>
 
 <script lang="ts">
-  let { item }: { item: ResourceStatusInput } = $props();
+  // `onfilter`: the table variant, a button that filters the table by this status.
+  let { item, onfilter }: { item: ResourceStatusInput; onfilter?: () => void } = $props();
 </script>
 
-<span
-  class="inline-flex h-6 max-w-full items-center gap-1.5 whitespace-nowrap rounded-full border border-neutral-200 bg-neutral-100 px-2 text-xs font-medium leading-none text-neutral-700 dark:border-white/[0.12] dark:bg-white/[0.07] dark:text-white"
-  title={statusTitle(item)}
->
-  <span class="size-1.5 shrink-0 rounded-full {statusDotClass(item)}"></span>
-  <span class="truncate">{statusLabel(item)}</span>
-</span>
+{#if onfilter}
+  <button
+    type="button"
+    class="inline-flex h-6 max-w-full items-center gap-1.5 whitespace-nowrap rounded-full border border-neutral-200 bg-neutral-100 px-2 text-xs font-medium leading-none text-neutral-700 dark:border-white/[0.12] dark:bg-white/[0.07] dark:text-white transition-colors table-filter-value table-filter-badge"
+    title="{statusTitle(item)} · Filter by {statusLabel(item)}"
+    onclick={onfilter}
+  >
+    <span class="size-1.5 shrink-0 rounded-full {statusDotClass(item)}"></span>
+    <span class="truncate">{statusLabel(item)}</span>
+  </button>
+{:else}
+  <span
+    class="inline-flex h-6 max-w-full items-center gap-1.5 whitespace-nowrap rounded-full border border-neutral-200 bg-neutral-100 px-2 text-xs font-medium leading-none text-neutral-700 dark:border-white/[0.12] dark:bg-white/[0.07] dark:text-white"
+    title={statusTitle(item)}
+  >
+    <span class="size-1.5 shrink-0 rounded-full {statusDotClass(item)}"></span>
+    <span class="truncate">{statusLabel(item)}</span>
+  </span>
+{/if}

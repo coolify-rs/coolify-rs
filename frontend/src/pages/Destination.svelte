@@ -51,6 +51,7 @@
         label: 'Destinations',
         backTitle: 'Back to Integrations',
         ariaLabel: 'Destination settings',
+        name: d.name,
         groups: [
           [
             { label: 'General', icon: 'settings', href: base, active: section === 'general' },

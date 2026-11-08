@@ -139,10 +139,12 @@
                   <div class="relative h-auto max-w-full inline-flex w-auto">
                     <button
                       type="button"
-                      class="text-[12px] font-medium text-red-600 transition-colors hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+                      class="icon-button shrink-0 text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
+                      title="Delete user"
+                      aria-label="Delete {user.name}"
                       onclick={() => (target = user)}
                     >
-                      Delete
+                      <Reicon name="trash" class="size-3.5" />
                     </button>
                   </div>
                 </div>

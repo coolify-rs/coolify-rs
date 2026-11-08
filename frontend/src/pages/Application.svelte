@@ -114,6 +114,7 @@
             ? 'Application is in degraded state across multiple servers.'
             : undefined,
     });
+    menu.name = r.name ?? undefined;
     page.navContext = backup ? applicationBackupNavContext(base, backup, currentBackupSection, menu) : menu;
   }
 

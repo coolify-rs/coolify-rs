@@ -204,7 +204,8 @@ pub async fn reset_password(
 ) -> DbResult<()> {
     db.ensure_writable()?;
     sqlx::query(
-        "UPDATE users SET password = $1, remember_token = $2, updated_at = $3 WHERE id = $4",
+        // `force_password_reset => false` (96ed09f0c): a reset password clears a forced reset.
+        "UPDATE users SET password = $1, remember_token = $2, force_password_reset = false, updated_at = $3 WHERE id = $4",
     )
     .bind(hash)
     .bind(remember_token)

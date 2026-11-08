@@ -33,6 +33,7 @@ use crate::routes::databases::{
 use crate::serialize::{php_truthy, serialize_record};
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 pub(super) const NOT_FOUND_APPLICATION: ApiError = NOT_FOUND_NO_PERIOD;
 const NOT_FOUND: ApiError = ApiError::Message(StatusCode::NOT_FOUND, "Application not found.");
@@ -1078,9 +1079,6 @@ async fn create_prologue(
 ) -> Result<CreateContext, ApiError> {
     use coolify_domain::Ability;
     let (headers, uri, body) = request;
-    if !ctx.is_team_admin() {
-        return Err(ApiError::Unauthorized);
-    }
     let raw_input = lenient_json(headers, uri, body);
     let instant = raw_input.get("instant_deploy").is_some_and(php_truthy);
     if instant && !(ctx.abilities.can(Ability::Deploy) || ctx.abilities.can(Ability::Root)) {
@@ -1209,6 +1207,10 @@ async fn create_prologue(
         StatusCode::NOT_FOUND,
         "Environment not found.",
     ))?;
+    // `$this->authorize('create', [Application::class, $environment])`.
+    if !ctx.can_create_in(Some(env.id)) {
+        return Err(ApiError::Unauthorized);
+    }
     let server = servers::find(
         &state.db,
         ctx.team_id,
@@ -2293,7 +2295,7 @@ pub async fn start(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Deploy, &a) {
         return Err(ApiError::Unauthorized);
     }
     deployable(&state, &a).await?;
@@ -2337,7 +2339,7 @@ pub async fn restart(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Deploy, &a) {
         return Err(ApiError::Unauthorized);
     }
     deployable(&state, &a).await?;
@@ -2377,7 +2379,7 @@ pub async fn stop(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Deploy, &a) {
         return Err(ApiError::Unauthorized);
     }
     if a.destination.is_none() {
@@ -2401,7 +2403,7 @@ pub async fn delete(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND_NO_PERIOD)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Delete, &a) {
         return Err(ApiError::Unauthorized);
     }
     // `DeleteResourceJob` removes the rows also when the destination is gone.
@@ -2539,7 +2541,7 @@ pub async fn deployment(
     let a = apps::find_by_id(&state.db, d.application_id)
         .await?
         .ok_or(MISSING)?;
-    if a.team_id != ctx.team_id {
+    if a.team_id != ctx.team_id || !apps::visible(&a) {
         return Err(MISSING);
     }
     let Value::Object(mut m) = present_deployment(&ctx, &d, false) else {
@@ -2588,12 +2590,23 @@ pub async fn cancel_deployment(
             StatusCode::NOT_FOUND,
             "Deployment not found.",
         ))?;
-    let a = apps::find_by_id(&state.db, d.application_id).await?;
-    if a.as_ref().is_none_or(|a| a.team_id != ctx.team_id) {
+    // `$deployment->application()->withTrashed()->first()`: in-flight deploys stay cancellable.
+    let a = apps::find_with_trashed(&state.db, d.application_id).await?;
+    // The relation query hides an application the actor has no grant for.
+    if a.as_ref()
+        .is_none_or(|a| a.team_id != ctx.team_id || !apps::visible(a))
+    {
         return Err(ApiError::Message(
             StatusCode::FORBIDDEN,
             "You do not have permission to cancel this deployment.",
         ));
+    }
+    // For an actor limited by access grants: `$this->authorize('deploy', $application)`.
+    if !ctx.covers_whole_team()
+        && a.as_ref()
+            .is_some_and(|a| !ctx.can_app(AccessLevel::Deploy, a))
+    {
+        return Err(ApiError::Unauthorized);
     }
     let message = |status: &str| {
         PhpJson(
@@ -2741,13 +2754,13 @@ async fn deploy_by_tags(
         }
         for row in applications {
             let uuid = row.get("uuid").and_then(Value::as_str).unwrap_or_default();
-            if !ctx.is_team_admin() {
-                messages.push(json!("Unauthorized to deploy this application."));
-                continue;
-            }
             let Some(a) = apps::find_in_team(&state.db, ctx.team_id, uuid).await? else {
                 continue;
             };
+            if !ctx.can_app(AccessLevel::Deploy, &a) {
+                messages.push(json!("Unauthorized to deploy this application."));
+                continue;
+            }
             match deploy_application(state, ctx, meta, &a, force).await? {
                 Deployed::QueueFull(m) => {
                     let mut resp = PhpJson(StatusCode::TOO_MANY_REQUESTS, json!({"message": m}))
@@ -2765,7 +2778,12 @@ async fn deploy_by_tags(
             }
         }
         for row in services {
-            if !ctx.is_team_admin() {
+            let uuid = row.get("uuid").and_then(Value::as_str).unwrap_or_default();
+            let Some(s) = coolify_db::services::find_in_team(&state.db, ctx.team_id, uuid).await?
+            else {
+                continue;
+            };
+            if crate::routes::services::require(ctx, &s, AccessLevel::Deploy).is_err() {
                 messages.push(json!("Unauthorized to deploy this service."));
                 continue;
             }
@@ -2859,7 +2877,7 @@ pub async fn deploy(
             if let Some(s) = coolify_db::services::find_in_team(&state.db, ctx.team_id, u).await? {
                 items.push(if pr != 0 {
                     json!({"message": format!("Pull request {pr} not found for this resource."), "resource_uuid": u})
-                } else if !ctx.is_team_admin() {
+                } else if crate::routes::services::require(&ctx, &s, AccessLevel::Deploy).is_err() {
                     json!({"message": "Unauthorized to deploy this service.", "resource_uuid": u})
                 } else {
                     jobs.spawn_service_start(s.id, false, false);
@@ -2877,7 +2895,7 @@ pub async fn deploy(
             {
                 items.push(if pr != 0 {
                     json!({"message": format!("Pull request {pr} not found for this resource."), "resource_uuid": u})
-                } else if !ctx.is_team_admin() {
+                } else if !ctx.can_db(AccessLevel::Write, &d) {
                     json!({"message": "Unauthorized to start this database.", "resource_uuid": u})
                 } else {
                     json!({
@@ -2910,7 +2928,7 @@ pub async fn deploy(
                 .and_then(Value::as_str)
                 .map(str::to_owned);
         }
-        if !ctx.is_team_admin() {
+        if !ctx.can_app(AccessLevel::Deploy, &a) {
             items.push(
                 json!({"message": "Unauthorized to deploy this application.", "resource_uuid": u}),
             );

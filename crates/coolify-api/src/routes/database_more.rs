@@ -28,6 +28,7 @@ use crate::routes::databases::{
 use crate::serialize::php_truthy;
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 fn can_deploy(ctx: &AuthCtx) -> bool {
     ctx.abilities.can(Ability::Deploy) || ctx.abilities.can(Ability::Root)
@@ -258,7 +259,7 @@ pub async fn update(
         input.0.shift_remove(k);
     }
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     if instant && !can_deploy(&ctx) {
@@ -529,7 +530,7 @@ pub async fn create_tag(
 ) -> ApiResult {
     let input = validated_json(&headers, &uri, &body)?;
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     if input.has("tag_name") && input.has("tag_names") {
@@ -634,7 +635,7 @@ pub async fn delete_tag(
     Path((uuid, tag_uuid)): Path<(String, String)>,
 ) -> ApiResult {
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let tag = parts::tag_id(&state.db, ctx.team_id, &tag_uuid)
@@ -706,7 +707,7 @@ pub async fn move_database(
     body: Bytes,
 ) -> ApiResult {
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let input = lenient_json(&headers, &uri, &body);
@@ -768,8 +769,8 @@ pub async fn migrate(
     Extension(ctx): Extension<AuthCtx>,
     Path(uuid): Path<String>,
 ) -> ApiResult {
-    find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    let d = find(&state, &ctx, &uuid).await?;
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     Err(ApiError::Abort(StatusCode::NOT_FOUND, ""))
@@ -832,7 +833,11 @@ pub async fn clone_database(
         &["destination_uuid", "name", "clone_volumes"],
     )?;
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
+        return Err(ApiError::Unauthorized);
+    }
+    // `$this->authorize('create', [StandalonePostgresql::class, $database->environment])`.
+    if !ctx.can_create_in(d.int("environment_id")) {
         return Err(ApiError::Unauthorized);
     }
     let clone_volumes = crate::routes::databases::input_bool(&input, "clone_volumes");
@@ -960,7 +965,7 @@ pub(crate) async fn upload_database_import(
     d: DatabaseRow,
     mut multipart: Multipart,
 ) -> ApiResult {
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let base = import_data_dir(&state).join("upload-tmp");
@@ -1136,7 +1141,7 @@ pub(crate) async fn start_database_import(
     uri: Uri,
     body: Bytes,
 ) -> ApiResult {
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let input: Input = lenient_json(&headers, &uri, &body);
@@ -1284,6 +1289,7 @@ pub(crate) async fn start_database_import(
         keep_owners: flag("keep_owners"),
         sqlite_database: input.str("sqlite_database").map(str::to_owned),
         restore_mysql_users: flag("restore_mysql_users"),
+        own_backups_only: !ctx.can_use_team_credentials(),
     };
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let (id, status) = match jobs
@@ -1341,7 +1347,7 @@ pub(crate) async fn show_database_import(
     let terminal = status
         .as_str()
         .is_some_and(|s| ["finished", "error", "killed", "cancelled", "closed"].contains(&s));
-    let output = if ctx.can_read_sensitive && ctx.is_team_admin() {
+    let output = if ctx.can_read_sensitive && ctx.can_db(AccessLevel::Write, &d) {
         Value::String(decode_output(&description))
     } else {
         Value::Null

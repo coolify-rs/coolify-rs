@@ -139,7 +139,12 @@ pub async fn find_in_team(
     .bind(team_id)
     .fetch_optional(db.pool())
     .await?;
-    r.as_ref().map(to_row).transpose()
+    Ok(r.as_ref().map(to_row).transpose()?.filter(visible))
+}
+
+/// `VisibleThroughAccessGrants` of the current request.
+pub fn visible(a: &ApplicationRow) -> bool {
+    crate::access::resource_visible(a.int("environment_id"), &a.uuid)
 }
 
 /// `Application::withTrashed()->find($id)`.
@@ -208,19 +213,25 @@ pub async fn list_for_team(db: &Db, team_id: TeamId) -> DbResult<Vec<Application
         .bind(team_id)
         .fetch_all(db.pool())
         .await?;
-    rows.iter().map(to_row).collect()
+    let rows: Vec<ApplicationRow> = rows.iter().map(to_row).collect::<DbResult<_>>()?;
+    Ok(rows.into_iter().filter(visible).collect())
 }
 
 /// Ids of the rows `list_for_team` returns.
 pub async fn ids_for_team(db: &Db, team_id: TeamId) -> DbResult<Vec<i64>> {
-    Ok(sqlx::query_scalar(
-        "SELECT a.id FROM applications a JOIN environments e ON e.id = a.environment_id \
+    let rows: Vec<(i64, String, i64)> = sqlx::query_as(
+        "SELECT a.id, a.uuid, a.environment_id FROM applications a JOIN environments e ON e.id = a.environment_id \
          JOIN projects p ON p.id = e.project_id JOIN teams t ON t.id = p.team_id \
          WHERE a.deleted_at IS NULL AND p.team_id = $1",
     )
     .bind(team_id)
     .fetch_all(db.pool())
-    .await?)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter(|(_, uuid, env)| crate::access::resource_visible(Some(*env), uuid))
+        .map(|(id, _, _)| id)
+        .collect())
 }
 
 /// `Environment::applications()` (table order).
@@ -229,7 +240,8 @@ pub async fn list_for_environment(db: &Db, environment_id: i64) -> DbResult<Vec<
         .bind(environment_id)
         .fetch_all(db.pool())
         .await?;
-    rows.iter().map(to_row).collect()
+    let rows: Vec<ApplicationRow> = rows.iter().map(to_row).collect::<DbResult<_>>()?;
+    Ok(rows.into_iter().filter(visible).collect())
 }
 
 /// `Server::applications()`: applications on the server's standalone Docker destinations.

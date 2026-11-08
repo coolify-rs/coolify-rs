@@ -100,6 +100,8 @@ export interface SessionInfo {
     avatar_url: string | null;
     two_factor_required: boolean;
     two_factor_blocked: boolean;
+    /** `EnsureTeamWideAccess`: false for a member limited to some projects. */
+    covers_whole_team?: boolean;
   } | null;
   csrf_token: string;
   version: string;
@@ -182,6 +184,8 @@ export interface DashboardData {
   }[];
   private_keys: number;
   can_create: boolean;
+  /** `Dashboard::$showsTeamSections`: false for a member limited to some projects. */
+  shows_team_sections?: boolean;
 }
 
 export const uiApi = {
@@ -192,7 +196,17 @@ export const uiApi = {
 /** `GET /ui/projects/{uuid}` (coolify-rs read model for project pages). */
 export interface ProjectPageData {
   project: { uuid: string; name: string; description: string | null };
-  environments: { uuid: string; name: string; description: string | null; created_at: string | null; resources: number }[];
+  environments: {
+    uuid: string;
+    name: string;
+    description: string | null;
+    created_at: string | null;
+    resources: number;
+    /** `can('update', $environment)`. */
+    can_update?: boolean;
+    /** `can('createAnyResource', [$environment])`. */
+    can_create?: boolean;
+  }[];
   projects: { uuid: string; name: string }[];
   can_update: boolean;
   can_create: boolean;
@@ -222,7 +236,16 @@ export interface TeamPageData {
     is_two_factor_required: boolean;
     avatar_url: string | null;
   };
-  members: { id: number; name: string; email: string; role: Role; two_factor: boolean | null; avatar_url: string | null }[];
+  members: {
+    id: number;
+    name: string;
+    email: string;
+    role: Role;
+    two_factor: boolean | null;
+    avatar_url: string | null;
+    /** `Access::summary`, for owners and admins, of members with the member role. */
+    access_summary?: string | null;
+  }[];
   me: number;
   my_role: Role;
   can_update: boolean;
@@ -549,6 +572,7 @@ export interface DeploymentListItem {
   is_api: boolean;
   rollback: boolean;
   pull_request_id: number;
+  server_id: number | null;
   server_name: string | null;
   created_at: string | null;
   finished_at: string | null;

@@ -111,6 +111,10 @@ pub struct DatabaseRow {
 }
 
 impl DatabaseRow {
+    /// The UUID access grants name: the service's for a service database.
+    pub fn access_uuid(&self) -> &str {
+        self.str("__service_uuid").unwrap_or(&self.uuid)
+    }
     pub fn str(&self, key: &str) -> Option<&str> {
         self.raw.get(key).and_then(|v| v.as_str())
     }
@@ -308,7 +312,7 @@ pub async fn service_database_in_team(
 ) -> DbResult<Option<DatabaseRow>> {
     Ok(service_database_row(db, "d.uuid = $1", uuid)
         .await?
-        .filter(|d| d.team_id == team_id))
+        .filter(|d| d.team_id == team_id && visible(d)))
 }
 
 /// A `ServiceDatabase` by id.
@@ -404,10 +408,20 @@ pub async fn find_in_team(db: &Db, team_id: TeamId, uuid: &str) -> DbResult<Opti
         if let Some(j) = r {
             let row = to_row(kind, &j)?;
             // Upstream checks the first match's team and stops either way.
-            return Ok((row.team_id == team_id).then_some(row));
+            return Ok((row.team_id == team_id && visible(&row)).then_some(row));
         }
     }
     Ok(None)
+}
+
+/// `VisibleThroughAccessGrants` of the current request.
+pub fn visible(d: &DatabaseRow) -> bool {
+    crate::access::resource_visible(
+        d.raw
+            .get("environment_id")
+            .and_then(serde_json::Value::as_i64),
+        d.access_uuid(),
+    )
 }
 
 /// A database by kind and id, wherever it belongs.
@@ -433,7 +447,10 @@ pub async fn list_for_team(db: &Db, team_id: TeamId) -> DbResult<Vec<DatabaseRow
                 .fetch_all(db.pool())
                 .await?;
             for j in &rows {
-                out.push(to_row(kind, j)?);
+                let row = to_row(kind, j)?;
+                if visible(&row) {
+                    out.push(row);
+                }
             }
         }
     }
@@ -449,7 +466,10 @@ pub async fn list_for_environment(db: &Db, environment_id: i64) -> DbResult<Vec<
             .fetch_all(db.pool())
             .await?;
         for j in &rows {
-            out.push(to_row(kind, j)?);
+            let row = to_row(kind, j)?;
+            if visible(&row) {
+                out.push(row);
+            }
         }
     }
     Ok(out)

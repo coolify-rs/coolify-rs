@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Loading from './Loading.svelte';
   // Port of the logs panel of upstream livewire/project/application/deployment/show.blade.php
   // (+ Deployment\Show) with livewire/project/application/deployment-navbar.blade.php:
   // polling every 2 s while the deployment runs, follow mode, fullscreen,
@@ -305,7 +306,11 @@
               {/if}
             </div>
             <span class="flex shrink-0 items-center gap-1.5 text-xs font-medium text-neutral-600 dark:text-fg-dim">
-              <span class="size-2 shrink-0 rounded-full {statusDot}"></span>
+              {#if status === 'in_progress'}
+                <Loading compact />
+              {:else}
+                <span class="size-2 shrink-0 rounded-full {statusDot}"></span>
+              {/if}
               {statusLabel}
             </span>
           </div>

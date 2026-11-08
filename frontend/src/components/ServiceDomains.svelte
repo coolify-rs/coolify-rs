@@ -9,6 +9,8 @@
   import Listbox from './Listbox.svelte';
   import Modal from './Modal.svelte';
   import Reicon from './Reicon.svelte';
+  import RowActions from './RowActions.svelte';
+  import RowAction from './RowAction.svelte';
   import DnsMenu from './shared/DnsMenu.svelte';
   import { followDnsJobs, hostOf, type AfterAddDns } from '../lib/dnsAfterAdd';
   import { request } from '../lib/api';
@@ -399,21 +401,13 @@
                     </div>
                     <div class="service-domain-actions flex items-center justify-end gap-1">
                       {#if canUpdate}
-                        <button type="button" class="icon-button shrink-0" title="Check DNS" aria-label="Check DNS" onclick={() => checkDns(row)}>
-                          <Reicon name="refresh" class="size-3.5" />
-                        </button>
-                        <button type="button" class="icon-button shrink-0" title="Domain settings" aria-label="Settings for {row.public_url}" onclick={() => openEdit(row, group.app)}>
-                          <Reicon name="settings" class="size-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          class="icon-button shrink-0 text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
-                          title="Remove domain"
-                          aria-label="Remove domain"
-                          onclick={() => (removing = row)}
-                        >
-                          <Reicon name="trash" class="size-3.5" />
-                        </button>
+                        <RowActions label="Domain actions">
+                          <RowAction onclick={() => checkDns(row)}>Check DNS</RowAction>
+                          <RowAction ariaLabel="Edit {row.public_url}" onclick={() => openEdit(row, group.app)}>Edit</RowAction>
+                          {#snippet danger()}
+                            <RowAction onclick={() => (removing = row)}>Delete</RowAction>
+                          {/snippet}
+                        </RowActions>
                       {/if}
                     </div>
                   </div>

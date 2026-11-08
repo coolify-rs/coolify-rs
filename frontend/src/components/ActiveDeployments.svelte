@@ -55,10 +55,10 @@
     </div>
     <p class="hidden truncate text-[12px] text-neutral-500 @2xl:block dark:text-fg-dim">{path || '-'}</p>
     <p class="hidden truncate text-[12px] text-neutral-500 @2xl:block dark:text-fg-dim">{d.server_name || '-'}</p>
-    <span class="hidden @2xl:block"><StatusBadge label={st[0]} type={st[1]} /></span>
+    <span class="hidden @2xl:block"><StatusBadge label={st[0]} type={st[1]} spinning={d.status === 'in_progress'} /></span>
     <p class="hidden truncate text-[12px] text-neutral-500 @2xl:block dark:text-fg-dim">{diffForHumans(d.created_at) || '-'}</p>
     <div class="mt-3 flex min-w-0 items-center gap-3 @2xl:hidden">
-      <StatusBadge label={st[0]} type={st[1]} />
+      <StatusBadge label={st[0]} type={st[1]} spinning={d.status === 'in_progress'} />
       <p class="min-w-0 truncate text-[11px] text-neutral-500 dark:text-fg-faint">
         {path || '-'}
         <span class="px-1 text-neutral-300 dark:text-white/15">·</span>

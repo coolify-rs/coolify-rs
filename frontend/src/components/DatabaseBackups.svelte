@@ -118,13 +118,16 @@
             <span>Latest run</span>
             <span>S3 storage</span>
             <span>Executions</span>
-            <span class="text-right">Action</span>
+            <span class="text-right">Actions</span>
           </div>
           {#each matching as s (s.uuid)}
             {@const st = latest(s.latest_status)}
             <div class="data-table-row scheduled-backups-table-grid border-b border-neutral-200 last:border-b-0 dark:border-white/[0.06]">
-              <div class="min-w-0">
-                <span class="block truncate text-[12px] font-semibold text-black dark:text-fg">{s.frequency}</span>
+              <div class="flex min-w-0 items-center gap-2">
+                <a use:link href="{base}/backups/{s.uuid}" class="block truncate text-[12px] font-semibold text-black hover:underline dark:text-fg">{s.frequency}</a>
+                {#if !s.enabled}
+                  <StatusBadge label="Disabled" />
+                {/if}
               </div>
               <div class="flex items-center gap-2">
                 <StatusBadge label={st[0]} type={st[1]} />
@@ -136,7 +139,9 @@
                 <a use:link href="{base}/backups/{s.uuid}/executions" class="font-medium hover:underline hover:text-black dark:hover:text-fg">{s.executions_count}</a>
               </div>
               <div class="flex justify-end">
-                <a class="button" use:link href="{base}/backups/{s.uuid}">Manage</a>
+                <a class="icon-button" use:link href="{base}/backups/{s.uuid}" title="Manage backup schedule" aria-label="Manage backup schedule">
+                  <Reicon name="settings" class="size-3.5" />
+                </a>
               </div>
             </div>
           {/each}

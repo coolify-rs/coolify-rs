@@ -31,6 +31,7 @@ use crate::routes::databases::{
 use crate::serialize::{php_truthy, serialize_record};
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 const NOT_FOUND: ApiError = ApiError::Message(StatusCode::NOT_FOUND, "Service not found.");
 const APP_NOT_FOUND: ApiError =
@@ -48,8 +49,11 @@ fn message(status: StatusCode, v: Value) -> ApiResult {
     Ok(PhpJson(status, v).into_response())
 }
 
-fn require_admin(ctx: &AuthCtx) -> Result<(), ApiError> {
-    if ctx.is_team_admin() {
+/// `ServicePolicy` (and the service policies of its applications and databases): the grant
+/// level on the service.
+pub(crate) fn require(ctx: &AuthCtx, s: &ServiceRow, level: AccessLevel) -> Result<(), ApiError> {
+    let env = s.raw.get("environment_id").and_then(Value::as_i64);
+    if ctx.can_resource(level, env, &s.uuid) {
         Ok(())
     } else {
         Err(ApiError::Unauthorized)
@@ -795,7 +799,6 @@ pub async fn create(
     uri: Uri,
     body: Bytes,
 ) -> ApiResult {
-    require_admin(&ctx)?;
     let probe = lenient_json(&headers, &uri, &body);
     if input_bool(&probe, "instant_deploy") && !can_deploy(&ctx) {
         return Err(ApiError::Abort(
@@ -881,6 +884,10 @@ pub async fn create(
             StatusCode::NOT_FOUND,
             "Environment not found.",
         ))?;
+    // `$this->authorize('create', [Service::class, $environment])`.
+    if !ctx.can_create_in(Some(environment_id)) {
+        return Err(ApiError::Unauthorized);
+    }
     let server = servers::find(
         &state.db,
         ctx.team_id,
@@ -1029,6 +1036,14 @@ pub async fn create(
         let compose = decode_compose(input.str("docker_compose_raw"))?;
         jobs_services::compose_parses(&compose).map_err(|_| ApiError::Internal)?;
         injection_check(&compose)?;
+        // `Service::saving`: new shared variable references in the compose file.
+        crate::shared_refs::authorize_added(
+            &ctx,
+            Some(environment_id),
+            None,
+            Some(&compose),
+            "docker_compose_raw",
+        )?;
         let name = match input.str("name") {
             Some(n) => strip_tags(Some(n)),
             None => format!("service-{}", random_str(10)),
@@ -1148,7 +1163,7 @@ pub async fn update(
 ) -> ApiResult {
     let input = validated_json(&headers, &uri, &body)?;
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     if input_bool(&input, "instant_deploy") && !can_deploy(&ctx) {
         return Err(ApiError::Abort(
             StatusCode::FORBIDDEN,
@@ -1186,6 +1201,14 @@ pub async fn update(
         let compose = decode_compose(input.str("docker_compose_raw"))?;
         jobs_services::compose_parses(&compose).map_err(|_| ApiError::Internal)?;
         injection_check(&compose)?;
+        // `Service::saving`: new shared variable references in the compose file.
+        crate::shared_refs::authorize_added(
+            &ctx,
+            s.raw.get("environment_id").and_then(Value::as_i64),
+            s.raw.get("docker_compose_raw").and_then(Value::as_str),
+            Some(&compose),
+            "docker_compose_raw",
+        )?;
         values.push(("docker_compose_raw", ColumnValue::Text(Some(compose))));
     }
     if input.has("name") {
@@ -1283,7 +1306,7 @@ pub async fn delete(
 ) -> ApiResult {
     let input = lenient_json(&headers, &uri, &body);
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Delete)?;
     if query_bool(&uri, &input, "delete_from_coolify_only", false) {
         return Err(ApiError::Message(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1344,7 +1367,7 @@ pub async fn start(
     Path(uuid): Path<String>,
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Deploy)?;
     if service_status(&state, &s)
         .await?
         .unwrap_or_default()
@@ -1367,7 +1390,7 @@ pub async fn stop(
     Path(uuid): Path<String>,
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Deploy)?;
     let status = service_status(&state, &s).await?.unwrap_or_default();
     if status.contains("stopped") || status.contains("exited") {
         return Err(ApiError::Message(
@@ -1391,7 +1414,7 @@ pub async fn restart(
 ) -> ApiResult {
     let input = lenient_json(&headers, &uri, &body);
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Deploy)?;
     let latest = query_bool(&uri, &input, "latest", false);
     jobs_of(&state)?.spawn_service_start(s.id, latest, true);
     tracing::info!(target: "audit", event = "api.service.restarted", team_id = ctx.team_id, service_uuid = %s.uuid, "service restart queued");
@@ -1586,7 +1609,7 @@ pub async fn envs(
     Path(uuid): Path<String>,
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     let mut out = Vec::new();
     for r in svc::env_rows(&state.db, s.id).await? {
         out.push(present_env(&state, &ctx, &s, &r).await?);
@@ -1637,6 +1660,7 @@ fn shared_reference(value: Option<&str>) -> bool {
 /// Creates or updates one variable with the attributes the API accepts.
 async fn env_upsert(
     state: &AppState,
+    ctx: &AuthCtx,
     s: &ServiceRow,
     key: &str,
     input: &Input,
@@ -1646,12 +1670,21 @@ async fn env_upsert(
     let now = state.now();
     let plain = input.str("value").map(|v| v.trim().to_owned());
     let flag = |k: &str| input.has(k).then(|| input_bool(input, k));
+    let environment_id = s.raw.get("environment_id").and_then(Value::as_i64);
     if let Some(row) = svc::env_row_by_key(&state.db, s.id, key).await? {
         let id = row.get("id").and_then(Value::as_i64).unwrap_or_default();
         let mut values: Vec<(&'static str, ColumnValue)> = Vec::new();
         if input.has("value") || create_defaults {
             let old = env_value(enc, &row);
             if old != plain {
+                // The model's `saving` hook: new shared variable references need read access.
+                crate::shared_refs::authorize_added(
+                    ctx,
+                    environment_id,
+                    old.as_deref(),
+                    plain.as_deref(),
+                    "value",
+                )?;
                 values.push((
                     "value",
                     ColumnValue::Text(plain.as_deref().map(|v| enc.encrypt_serialized(v))),
@@ -1679,6 +1712,7 @@ async fn env_upsert(
         }
         svc::env_update_columns(&state.db, id, &values, now).await?;
     } else {
+        crate::shared_refs::authorize_added(ctx, environment_id, None, plain.as_deref(), "value")?;
         let new = coolify_db::compose::NewEnv {
             key: key.to_owned(),
             value_encrypted: plain.as_deref().map(|v| enc.encrypt_serialized(v)),
@@ -1716,7 +1750,7 @@ pub async fn create_env(
     body: Bytes,
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     let input = lenient_json(&headers, &uri, &body);
     env_validate(&input)?;
     let key = env_key_of(&input);
@@ -1726,7 +1760,7 @@ pub async fn create_env(
             "Environment variable already exists. Use PATCH request to update it.",
         ));
     }
-    let row = env_upsert(&state, &s, &key, &input, true).await?;
+    let row = env_upsert(&state, &ctx, &s, &key, &input, true).await?;
     tracing::info!(target: "audit", event = "api.service.env_created", team_id = ctx.team_id, service_uuid = %s.uuid, env_key = %key, "service variable created");
     let absent = [
         "is_preview",
@@ -1747,7 +1781,7 @@ pub async fn update_env(
     body: Bytes,
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     let input = lenient_json(&headers, &uri, &body);
     env_validate(&input)?;
     let key = env_key_of(&input);
@@ -1758,7 +1792,7 @@ pub async fn update_env(
         ));
     }
     // `if ($request->has('value'))`: a request without a value keeps the stored one.
-    let row = env_upsert(&state, &s, &key, &input, false).await?;
+    let row = env_upsert(&state, &ctx, &s, &key, &input, false).await?;
     tracing::info!(target: "audit", event = "api.service.env_updated", team_id = ctx.team_id, service_uuid = %s.uuid, env_key = %key, "service variable updated");
     Ok(created(present_env(&state, &ctx, &s, &row).await?).into_response())
 }
@@ -1773,7 +1807,7 @@ pub async fn bulk_envs(
     body: Bytes,
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     let input = lenient_json(&headers, &uri, &body);
     let Some(Value::Array(items)) = input.get("data").filter(|v| php_truthy(v)) else {
         return Err(ApiError::Message(
@@ -1788,7 +1822,7 @@ pub async fn bulk_envs(
         env_validate(&one)?;
         let key = env_key_of(&one);
         let existed = svc::env_row_by_key(&state.db, s.id, &key).await?.is_some();
-        let row = env_upsert(&state, &s, &key, &one, false).await?;
+        let row = env_upsert(&state, &ctx, &s, &key, &one, false).await?;
         // `updateOrCreate(['key' => $key], $item)`: a new model has only the attributes of the item.
         let mut absent: Vec<&str> = Vec::new();
         if !existed {
@@ -1823,7 +1857,7 @@ pub async fn delete_env(
     Path((uuid, env_uuid)): Path<(String, String)>,
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     let Some(row) = svc::env_row_by_uuid(&state.db, s.id, &env_uuid).await? else {
         return Err(ApiError::Message(
             StatusCode::NOT_FOUND,
@@ -1848,7 +1882,7 @@ pub async fn move_service(
     body: Bytes,
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     let input = lenient_json(&headers, &uri, &body);
     let fields = [field(
         "environment_uuid",
@@ -1903,7 +1937,7 @@ pub async fn migrate(
     Path(uuid): Path<String>,
 ) -> ApiResult {
     find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     Err(ApiError::Abort(StatusCode::NOT_FOUND, ""))
 }
 
@@ -1959,7 +1993,11 @@ pub async fn clone_service(
         &["destination_uuid", "name", "clone_volumes"],
     )?;
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
+    // `$this->authorize('create', [Service::class, $service->environment])`.
+    if !ctx.can_create_in(s.raw.get("environment_id").and_then(Value::as_i64)) {
+        return Err(ApiError::Unauthorized);
+    }
     let clone_volumes = input_bool(&input, "clone_volumes");
     if clone_volumes
         && let Some(r) = deploy_forbidden(
@@ -2077,7 +2115,7 @@ pub async fn create_tag(
 ) -> ApiResult {
     let input = validated_json(&headers, &uri, &body)?;
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     if input.has("tag_name") && input.has("tag_names") {
         let mut m = Map::new();
         m.insert(
@@ -2164,7 +2202,7 @@ pub async fn delete_tag(
     Path((uuid, tag_uuid)): Path<(String, String)>,
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     let Some(tag) = svc::tag_id(&state.db, ctx.team_id, &tag_uuid).await? else {
         return Err(ApiError::Message(StatusCode::NOT_FOUND, "Tag not found."));
     };
@@ -2297,7 +2335,7 @@ pub async fn create_storage(
 ) -> ApiResult {
     let input = validated_json(&headers, &uri, &body)?;
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     let fields = [
         field(
             "type",
@@ -2650,7 +2688,7 @@ pub async fn update_storage(
 ) -> ApiResult {
     let input = validated_json(&headers, &uri, &body)?;
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     let fields = [
         field("uuid", vec![Rule::String]),
         field("id", vec![Rule::Integer]),
@@ -2804,7 +2842,7 @@ pub async fn delete_storage(
     Path((uuid, storage_uuid)): Path<(String, String)>,
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Delete)?;
     let needle = Value::String(storage_uuid.clone());
     let read_only_message = ApiError::Message(
         StatusCode::UNPROCESSABLE_ENTITY,
@@ -2921,7 +2959,7 @@ pub async fn update_application(
 ) -> ApiResult {
     let input = validated_json(&headers, &uri, &body)?;
     let (s, app) = find_app(&state, &ctx, &uuid, &app_uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     let fields = [
         field(
             "url",
@@ -3251,7 +3289,7 @@ pub async fn application_start(
     body: Bytes,
 ) -> ApiResult {
     let (s, app) = find_app(&state, &ctx, &uuid, &app_uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Deploy)?;
     part_guard(&state, &s).await?;
     let input = lenient_json(&headers, &uri, &body);
     jobs_of(&state)?.spawn_sub_deploy(
@@ -3271,7 +3309,7 @@ pub async fn application_restart(
     Path((uuid, app_uuid)): Path<(String, String)>,
 ) -> ApiResult {
     let (s, app) = find_app(&state, &ctx, &uuid, &app_uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Deploy)?;
     part_guard(&state, &s).await?;
     jobs_of(&state)?.spawn_sub_restart(s, app);
     Ok(ok(json!({"message": "Service application restart request queued."})).into_response())
@@ -3284,7 +3322,7 @@ pub async fn application_stop(
     Path((uuid, app_uuid)): Path<(String, String)>,
 ) -> ApiResult {
     let (s, app) = find_app(&state, &ctx, &uuid, &app_uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Deploy)?;
     part_guard(&state, &s).await?;
     jobs_of(&state)?.spawn_sub_stop(s, app);
     Ok(ok(json!({"message": "Service application stop request queued."})).into_response())
@@ -3348,7 +3386,7 @@ pub async fn update_database(
 ) -> ApiResult {
     let input = validated_json(&headers, &uri, &body)?;
     let (s, d) = find_db(&state, &ctx, &uuid, &database_uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     let fields = [
         field(
             "human_name",
@@ -3520,7 +3558,7 @@ pub async fn database_start(
     body: Bytes,
 ) -> ApiResult {
     let (s, d) = find_db(&state, &ctx, &uuid, &database_uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Deploy)?;
     part_guard(&state, &s).await?;
     let input = lenient_json(&headers, &uri, &body);
     jobs_of(&state)?.spawn_sub_deploy(
@@ -3540,7 +3578,7 @@ pub async fn database_restart(
     Path((uuid, database_uuid)): Path<(String, String)>,
 ) -> ApiResult {
     let (s, d) = find_db(&state, &ctx, &uuid, &database_uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Deploy)?;
     part_guard(&state, &s).await?;
     jobs_of(&state)?.spawn_sub_restart(s, d);
     Ok(ok(json!({"message": "Service database restart request queued."})).into_response())
@@ -3553,7 +3591,7 @@ pub async fn database_stop(
     Path((uuid, database_uuid)): Path<(String, String)>,
 ) -> ApiResult {
     let (s, d) = find_db(&state, &ctx, &uuid, &database_uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Deploy)?;
     part_guard(&state, &s).await?;
     jobs_of(&state)?.spawn_sub_stop(s, d);
     Ok(ok(json!({"message": "Service database stop request queued."})).into_response())
@@ -3617,7 +3655,7 @@ pub async fn create_scheduled_task(
     body: Bytes,
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     let input = validated_json(&headers, &uri, &body)?;
     let fields = [
         field("name", vec![Rule::Required, Rule::String, Rule::Max(255)]),
@@ -3669,7 +3707,7 @@ pub async fn update_scheduled_task(
     body: Bytes,
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     let input = validated_json(&headers, &uri, &body)?;
     let fields = [
         field("name", vec![Rule::String, Rule::Max(255)]),
@@ -3736,7 +3774,7 @@ pub async fn delete_scheduled_task(
     Path((uuid, task_uuid)): Path<(String, String)>,
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Delete)?;
     let Some(task) = svc::scheduled_task(&state.db, s.id, &task_uuid).await? else {
         return Err(TASK_NOT_FOUND);
     };
@@ -3780,7 +3818,7 @@ pub async fn execute_scheduled_task(
     Path((uuid, task_uuid)): Path<(String, String)>,
 ) -> ApiResult {
     let s = find(&state, &ctx, &uuid).await?;
-    require_admin(&ctx)?;
+    require(&ctx, &s, AccessLevel::Write)?;
     let Some(task) = svc::scheduled_task(&state.db, s.id, &task_uuid).await? else {
         return Err(TASK_NOT_FOUND);
     };

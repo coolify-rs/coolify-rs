@@ -1,13 +1,76 @@
-// Page endpoints of the keys and tokens screens (crates/coolify-api/src/ui_security.rs).
+// Page endpoints of the keys and tokens screens (crates/coolify-api/src/ui_security.rs,
+// crates/coolify-api/src/ui_api_tokens.rs).
 import { request } from './api';
+
+/** `ApiTokenForm::valuesOf`: what the edit modal opens with. */
+export interface ApiTokenFormValues {
+  id: number;
+  description: string;
+  permissions: string[];
+  scopeMode: 'team' | 'selected';
+  selectedScopes: string[];
+  expiresInDays: string;
+  keepLabel: string;
+}
 
 export interface ApiToken {
   id: number;
   name: string;
   abilities: string[];
+  /** `null`: every resource of the team. */
+  scopes: { scope: string; uuid: string }[] | null;
+  paused: boolean;
   last_used_at: string | null;
   created_at: string;
   expires_at: string | null;
+  own: boolean;
+  edit: ApiTokenFormValues;
+}
+
+/** One option of `ApiTokens::scopeOptions`. */
+export interface ScopeOption {
+  value: string;
+  label: string;
+  header?: boolean;
+  parents?: string[];
+}
+
+/** The `canUse*Permissions` and `canUseTeamScope` flags of the page. */
+export interface TokenPermissionRights {
+  root: boolean;
+  write: boolean;
+  deploy: boolean;
+  sensitive: boolean;
+  delete: boolean;
+  team_scope: boolean;
+}
+
+/** The fields of an `ApiTokenForm`. */
+export interface TokenForm {
+  description: string;
+  expiresInDays: string;
+  permissions: string[];
+  scopeMode: 'team' | 'selected';
+  selectedScopes: string[];
+}
+
+export interface ApiTokensPage {
+  tokens: ApiToken[];
+  api_enabled: boolean;
+  instance_admin: boolean;
+  can_use: TokenPermissionRights;
+  scope_options: ScopeOption[];
+  scope_labels: Record<string, string>;
+  scopes_supported: boolean;
+  pause_supported: boolean;
+}
+
+export interface ApiTokenBody {
+  description: string;
+  expires_in_days: string | null;
+  permissions: string[];
+  scope_mode: 'team' | 'selected';
+  selected_scopes: string[];
 }
 
 export interface CloudTokenRow {
@@ -38,9 +101,11 @@ export interface IntegrationToken {
 const enc = encodeURIComponent;
 
 export const securityUi = {
-  apiTokens: () => request<{ tokens: ApiToken[]; elevated: boolean; api_enabled: boolean; instance_admin: boolean }>('GET', '/ui/security/api-tokens'),
-  createApiToken: (body: { description: string; expires_in_days: string | null; permissions: string[] }) =>
-    request<{ token: string }>('POST', '/ui/security/api-tokens', body),
+  apiTokens: () => request<ApiTokensPage>('GET', '/ui/security/api-tokens'),
+  createApiToken: (body: ApiTokenBody) => request<{ token: string }>('POST', '/ui/security/api-tokens', body),
+  updateApiToken: (id: number, body: ApiTokenBody) => request<{ message: string }>('PATCH', `/ui/security/api-tokens/${id}`, body),
+  setApiTokenPaused: (id: number, paused: boolean) => request<{ message: string }>('POST', `/ui/security/api-tokens/${id}/paused`, { paused }),
+  rollApiToken: (id: number) => request<{ token: string }>('POST', `/ui/security/api-tokens/${id}/roll`, {}),
   revokeApiToken: (id: number) => request<unknown>('DELETE', `/ui/security/api-tokens/${id}`),
 
   cloudTokens: () => request<{ tokens: CloudTokenRow[] }>('GET', '/ui/security/cloud-tokens'),

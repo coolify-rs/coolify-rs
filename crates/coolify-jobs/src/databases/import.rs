@@ -48,6 +48,38 @@ pub struct ImportSource {
     pub keep_owners: bool,
     pub sqlite_database: Option<String>,
     pub restore_mysql_users: bool,
+    /// Set when the user cannot use team credentials (`useTeamCredentials`, write on the whole
+    /// team): server and S3 imports then take only this database's own backups.
+    pub own_backups_only: bool,
+}
+
+/// `StartDatabaseImport::OWN_BACKUPS_ONLY_MESSAGE`.
+pub const OWN_BACKUPS_ONLY_MESSAGE: &str = "You can import only backups of this database. Importing other files needs write access on the whole team.";
+
+/// `StartDatabaseImport::allowsSourcePath` without the team-credentials shortcut: the path is a
+/// backup of this database, in the folders of `DatabaseBackupJob` (S3 keys are the local path
+/// without the leading slash). The folder names end with the team id and the database's uuid
+/// (`name-serviceuuid` for a service database), so a rename keeps old backups importable.
+pub fn is_own_backup_path(d: &DatabaseRow, team_id: i64, path: &str) -> bool {
+    let suffix = match d.str("__service_uuid") {
+        Some(service) => format!("{}-{service}", d.str("name").unwrap_or_default()),
+        None => d.uuid.clone(),
+    };
+    let pattern = format!(
+        "^{}[^/]*-{}/[^/]*-{}/[^/]+$",
+        regex::escape("/data/coolify/backups/databases/"),
+        regex::escape(&team_id.to_string()),
+        regex::escape(&suffix),
+    );
+    let path = format!("/{}", path.trim_start_matches('/'));
+    regex::Regex::new(&pattern).is_ok_and(|re| re.is_match(&path))
+}
+
+fn own_backups_only_error<T>() -> Result<T, ImportError> {
+    Err(ImportError {
+        message: OWN_BACKUPS_ONLY_MESSAGE.to_owned(),
+        status: 403,
+    })
 }
 
 const PRELUDE: &str = r#"fail() { echo "$1" >&2; exit 1; }
@@ -724,6 +756,9 @@ impl Jobs {
                 if path.is_empty() || !path.starts_with('/') || unsafe_path(&path) {
                     return fail("The server path is invalid.");
                 }
+                if source.own_backups_only && !is_own_backup_path(d, team_id, &path) {
+                    return own_backups_only_error();
+                }
                 let stat = format!("stat -c %s -- {}", quote(&path));
                 let size: u64 = self
                     .remote()
@@ -781,6 +816,9 @@ impl Jobs {
                 let name = key.rsplit('/').next().unwrap_or(&key);
                 if key.is_empty() || unsafe_path(&key) || !has_allowed_extension(name) {
                     return fail("The S3 path is invalid.");
+                }
+                if source.own_backups_only && !is_own_backup_path(d, team_id, &key) {
+                    return own_backups_only_error();
                 }
                 let enc = self.0.encrypter.as_ref().ok_or(ImportError {
                     message: "No application encryption key has been specified.".to_owned(),

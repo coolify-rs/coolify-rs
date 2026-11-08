@@ -9,6 +9,8 @@
   import Modal from '../Modal.svelte';
   import MonacoEditor from '../MonacoEditor.svelte';
   import Reicon from '../Reicon.svelte';
+  import RowActions from '../RowActions.svelte';
+  import RowAction from '../RowAction.svelte';
   import SettingsSection from '../SettingsSection.svelte';
   import { ApiError, csrf, request } from '../../lib/api';
   import { resPath, type ResourceKind } from '../../lib/sharedApi';
@@ -56,7 +58,6 @@
   let dialog = $state<Dialog>(null);
   let dialogValue = $state('');
   let newMenu = $state(false);
-  let rowMenu = $state<string | null>(null);
   let dragging = $state(false);
   let uploadInput = $state<HTMLInputElement | undefined>();
 
@@ -137,7 +138,6 @@
   }
 
   async function openEditor(entry: Entry) {
-    rowMenu = null;
     if (isHelperSymlink(entry)) return;
     await run('Opening file...', async () => {
       const r = await request<{ content: string; language: string; editing_path: string }>('POST', `${base}/action`, { ...state_(), op: 'edit', name: entry.name });
@@ -157,7 +157,6 @@
   }
 
   function download(entry: Entry) {
-    rowMenu = null;
     if (isHelperSymlink(entry)) return;
     run(entry.type === 'dir' ? 'Preparing folder download...' : 'Preparing file download...', async () => {
       const r = await request<{ url: string }>('POST', `${base}/download`, { ...state_(), name: entry.name });
@@ -215,7 +214,6 @@
 
   function openDialog(next: Dialog, value = '') {
     newMenu = false;
-    rowMenu = null;
     dialog = next;
     dialogValue = value;
   }
@@ -225,7 +223,6 @@
   onkeydown={(e) => {
     if (e.key === 'Escape') {
       newMenu = false;
-      rowMenu = null;
     }
   }}
 />
@@ -397,40 +394,16 @@
                   <div class="text-right text-coollabs-subtle tabular-nums">{entry.type === 'dir' ? '-' : formatBytes(entry.size)}</div>
                   <div class="text-coollabs-subtle tabular-nums">{modified(entry.mtime)}</div>
                   <div class="flex items-center justify-end">
-                    <div class="relative">
-                      <button
-                        type="button"
-                        title="Actions"
-                        aria-label="Actions"
-                        aria-expanded={rowMenu === entry.name}
-                        onclick={() => (rowMenu = rowMenu === entry.name ? null : entry.name)}
-                        class="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-coollabs-subtle hover:bg-black/5 hover:text-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coollabs/40 dark:hover:bg-white/[0.06] dark:focus-visible:ring-white/30 {rowMenu === entry.name ? 'bg-black/5 text-current dark:bg-white/[0.08]' : ''}"
-                      >
-                        <Reicon name="dots-horizontal" class="size-4" />
-                      </button>
-                      {#if rowMenu === entry.name}
-                        <div class="listbox-panel top-full! right-0! left-auto! mt-1! min-w-52! w-52! z-50!">
-                          {#if entry.type !== 'dir'}
-                            <button type="button" class="listbox-option" onclick={() => openEditor(entry)}>
-                              <Reicon name="file-content" class="size-3.5 shrink-0" />
-                              <span class="min-w-0 flex-1 text-left">Edit</span>
-                            </button>
-                          {/if}
-                          <button type="button" class="listbox-option" onclick={() => download(entry)}>
-                            <Reicon name="download" class="size-3.5 shrink-0" />
-                            <span class="min-w-0 flex-1 text-left">Download</span>
-                          </button>
-                          <button type="button" class="listbox-option" onclick={() => openDialog({ type: 'rename', entry }, entry.name)}>
-                            <Reicon name="edit" class="size-3.5 shrink-0" />
-                            <span class="min-w-0 flex-1 text-left">Rename</span>
-                          </button>
-                          <button type="button" class="listbox-option" onclick={() => openDialog({ type: 'delete', entry })}>
-                            <Reicon name="trash" class="size-3.5 shrink-0 text-red-600 dark:text-red-500" />
-                            <span class="min-w-0 flex-1 text-left text-red-600 dark:text-red-500">Delete</span>
-                          </button>
-                        </div>
+                    <RowActions label="File actions">
+                      {#if entry.type !== 'dir'}
+                        <RowAction onclick={() => openEditor(entry)}>Edit</RowAction>
                       {/if}
-                    </div>
+                      <RowAction onclick={() => download(entry)}>Download</RowAction>
+                      <RowAction onclick={() => openDialog({ type: 'rename', entry }, entry.name)}>Rename</RowAction>
+                      {#snippet danger()}
+                        <RowAction onclick={() => openDialog({ type: 'delete', entry })}>Delete</RowAction>
+                      {/snippet}
+                    </RowActions>
                   </div>
                 </div>
               {/each}

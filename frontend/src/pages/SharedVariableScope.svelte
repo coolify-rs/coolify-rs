@@ -228,7 +228,7 @@
                   <span>Scope</span>
                   <span>{kind === 'server' ? 'Value / comment' : 'Comment'}</span>
                   <span class="text-center">Multiline</span>
-                  <span></span>
+                  <span class="text-right">Actions</span>
                 </div>
                 {#each data.variables as v, i (v.id)}
                   {#if visible.includes(v)}

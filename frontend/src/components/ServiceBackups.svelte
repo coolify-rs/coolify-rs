@@ -3,6 +3,10 @@
   import { untrack } from 'svelte';
   import BackupTargetForm from './BackupTargetForm.svelte';
   import BackupsToolbar from './BackupsToolbar.svelte';
+  import SortHeader from './SortHeader.svelte';
+  import RowActions from './RowActions.svelte';
+  import RowAction from './RowAction.svelte';
+  import { backupSortLastRun, backupSortStatus, sortBackups } from '../lib/backupSort';
   import DatabaseBackupEdit from './DatabaseBackupEdit.svelte';
   import Empty from './Empty.svelte';
   import FormInput from './FormInput.svelte';
@@ -15,7 +19,7 @@
   import VolumeBackups from './shared/VolumeBackups.svelte';
   import { ApiError, type DatabaseRecord } from '../lib/api';
   import { backupsUi, type BackupEdit } from '../lib/databaseApi';
-  import { diffForHumans, parseTimestamp } from '../lib/format';
+  import { diffForHumans } from '../lib/format';
   import { router } from '../lib/router.svelte';
   import { notify } from '../lib/toast.svelte';
   import { scheduleStatus, volumeBackupsUi, type BackupsIndex, type S3Label, type ServiceDatabaseSchedule, type VolumeSchedule } from '../lib/volumeBackupsApi';
@@ -131,18 +135,23 @@
     { value: 'all', label: 'All targets' },
     ...[...new Set([...(data?.backups ?? []).map((b) => b.target_type), 'Database'])].map((t) => ({ value: t.toLowerCase(), label: t })),
   ]);
-  const stamp = (t: string) => parseTimestamp(t)?.getTime() ?? 0;
   const filtered = $derived.by(() => {
     const q = search.toLowerCase();
-    return rows
-      .filter((b) => (!q || b.name.toLowerCase().includes(q) || b.type.toLowerCase().includes(q) || b.frequency.toLowerCase().includes(q)) && (typeFilter === 'all' || b.type.toLowerCase() === typeFilter))
-      .sort((l, r) => {
-        if (sortBy === 'target_desc') return r.name.toLowerCase().localeCompare(l.name.toLowerCase());
-        if (sortBy === 'newest') return stamp(r.created_at) - stamp(l.created_at);
-        if (sortBy === 'oldest') return stamp(l.created_at) - stamp(r.created_at);
-        return l.name.toLowerCase().localeCompare(r.name.toLowerCase());
-      });
+    const list = rows.filter(
+      (b) => (!q || b.name.toLowerCase().includes(q) || b.type.toLowerCase().includes(q) || b.frequency.toLowerCase().includes(q)) && (typeFilter === 'all' || b.type.toLowerCase() === typeFilter),
+    );
+    return sortBackups(list, sortBy, (b) => ({
+      name: b.name.toLowerCase(),
+      type: b.type.toLowerCase(),
+      frequency: b.frequency.toLowerCase(),
+      status: backupSortStatus(b.latest_status, b.enabled),
+      s3: b.save_s3 ? s3Of(b).length : -1,
+      lastRunAt: backupSortLastRun(b.latest_finished_at, b.latest_status),
+      executions: b.count,
+    }));
   });
+  const sortTable = (value: string) => (sortBy = value);
+  const toggleType = (type: string) => (typeFilter = typeFilter === type.toLowerCase() ? 'all' : type.toLowerCase());
 
   const s3Of = (r: Row) => (data ? r.s3.filter((s) => s.team_id === data?.team_id) : []);
   const s3Tooltip = (r: Row) => {
@@ -300,7 +309,7 @@
       </div>
     </SettingsSection>
 
-    <BackupsToolbar bind:search bind:typeFilter bind:sortBy {filterOptions} />
+    <BackupsToolbar bind:search bind:typeFilter {filterOptions} />
 
     <SettingsSection title="Schedules" description="Database, persistent volume, and directory backup schedules for this service." flush={rows.length > 0}>
       {#if rows.length > 0 && filtered.length === 0}
@@ -311,12 +320,12 @@
           <div class="data-table w-full overflow-x-auto">
             <div class="flex min-w-[64rem] flex-col">
               <div class="data-table-header backup-table-grid service-backup-table-grid">
-                <span>Target</span>
-                <span>Type</span>
-                <span>Schedule</span>
-                <span>Status</span>
-                <span>S3</span>
-                <span>Last run</span>
+                <SortHeader label="Target" asc="target_asc" desc="target_desc" current={sortBy} onsort={sortTable} />
+                <SortHeader label="Type" asc="type_asc" desc="type_desc" current={sortBy} onsort={sortTable} />
+                <SortHeader label="Schedule" asc="schedule_asc" desc="schedule_desc" current={sortBy} onsort={sortTable} />
+                <SortHeader label="Status" asc="status_asc" desc="status_desc" current={sortBy} onsort={sortTable} />
+                <SortHeader label="S3" asc="s3_asc" desc="s3_desc" current={sortBy} onsort={sortTable} />
+                <SortHeader label="Last run" asc="lastrun_asc" desc="lastrun_desc" first="desc" current={sortBy} onsort={sortTable} />
                 <span class="text-right">Actions</span>
               </div>
               {#each filtered as r (r.id)}
@@ -330,7 +339,18 @@
                   class="data-table-row backup-table-grid cursor-pointer text-left text-[13px] text-neutral-700 service-backup-table-grid dark:text-fg-dim"
                 >
                   <span class="min-w-0 truncate font-medium text-neutral-950 dark:text-fg" title={r.kind === 'storage' ? r.name : undefined}>{r.name}</span>
-                  <span>{r.type}</span>
+                  <span class="min-w-0">
+                    <button
+                      type="button"
+                      class="table-filter-value"
+                      title="Filter by {r.type}"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        toggleType(r.type);
+                      }}
+                      onkeydown={(e) => e.key === 'Enter' && e.stopPropagation()}>{r.type}</button
+                    >
+                  </span>
                   <span>{r.frequency}</span>
                   <span><StatusBadge label={st[0]} type={st[1]} /></span>
                   <span>
@@ -342,42 +362,22 @@
                     </span>
                   </span>
                   <span>{r.latest_finished_at ? diffForHumans(r.latest_finished_at) : r.latest_status === 'running' ? 'Running now' : 'Never'}</span>
-                  <span class="flex justify-end gap-2">
-                    {#if r.kind === 'database'}
-                      <button
-                        type="button"
-                        class="button"
-                        disabled={!data.can_update || !databaseRunning(r)}
-                        data-tooltip={databaseRunning(r) ? undefined : 'The database must be running to start a backup.'}
-                        onclick={(e) => {
-                          e.stopPropagation();
-                          backupNow(r);
-                        }}>Back up now</button
-                      >
-                    {:else}
-                      <button
-                        type="button"
-                        class="button"
-                        disabled={!data.can_update}
-                        onclick={(e) => {
-                          e.stopPropagation();
-                          backupNow(r);
-                        }}>Back up now</button
-                      >
+                  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+                  <span class="flex justify-end" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Enter' && e.stopPropagation()}>
+                    {#if data.can_update}
+                      <RowActions label="Backup schedule actions">
+                        {#if r.kind === 'database'}
+                          <RowAction
+                            disabled={!databaseRunning(r)}
+                            title={databaseRunning(r) ? undefined : 'The database must be running to start a backup.'}
+                            onclick={() => backupNow(r)}>Back up now</RowAction
+                          >
+                        {:else}
+                          <RowAction onclick={() => backupNow(r)}>Back up now</RowAction>
+                        {/if}
+                        <RowAction onclick={() => openSchedule(r.uuid)}>Edit</RowAction>
+                      </RowActions>
                     {/if}
-                    <button
-                      type="button"
-                      class="icon-button shrink-0"
-                      disabled={!data.can_update}
-                      title="Edit backup schedule"
-                      aria-label="Edit backup schedule"
-                      onclick={(e) => {
-                        e.stopPropagation();
-                        openSchedule(r.uuid);
-                      }}
-                    >
-                      <Reicon name="settings" class="size-4" />
-                    </button>
                   </span>
                 </div>
               {/each}

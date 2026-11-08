@@ -1318,7 +1318,10 @@ impl Notification {
                 token_name,
                 expires_at,
             } => mail(
-                format!("Coolify: API token '{token_name}' expires in 24 hours"),
+                format!(
+                    "Coolify: API token '{token_name}' expires on {}",
+                    expires_at.as_deref().unwrap_or_default()
+                ),
                 views::api_token_expiring(
                     app,
                     token_name,

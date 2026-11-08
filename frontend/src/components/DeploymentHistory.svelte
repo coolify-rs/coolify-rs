@@ -9,7 +9,9 @@
   import Pager from './Pager.svelte';
   import Dropdown from './Dropdown.svelte';
   import StatusBadge from './StatusBadge.svelte';
+  import Loading from './Loading.svelte';
   import SettingsSection from './SettingsSection.svelte';
+  import SortHeader from './SortHeader.svelte';
   import { appUi, type DeploymentListItem, type DeploymentPage } from '../lib/api';
   import { link } from '../lib/router.svelte';
   import { diffForHumans, duration, serverTime } from '../lib/format';
@@ -58,6 +60,7 @@
   let pageSize = $state(untrack(() => (embedded ? 3 : 10)));
   let loading = $state(false);
   let filtering = $state(false);
+  let sorting = $state(false);
   let searching = $state(false);
   let selecting = $state<string | null>(null);
   let tick = $state(0);
@@ -93,13 +96,26 @@
     }
   }
 
-  // Reload when the page, size or order changes.
+  // Reload when the page or size changes.
   $effect(() => {
     void page;
     void pageSize;
-    void sort;
     reload().catch(() => {});
   });
+
+  // `setDeploymentSort()`: back to the first page; the Started header shows a spinner meanwhile.
+  async function setSort(value: string) {
+    if (value !== 'newest' && value !== 'oldest') return;
+    sorting = true;
+    try {
+      await run('loading', () => {
+        sort = value;
+        page = 1;
+      });
+    } finally {
+      sorting = false;
+    }
+  }
 
   // `wire:model.live.debounce.300ms="search"` resets to the first page.
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -172,6 +188,14 @@
     if (d.rollback) return 'Rollback';
     if (d.is_api) return 'API';
     return 'Manual';
+  }
+  // `$sourceKey` of the row: the `source:` filter value.
+  function sourceKey(d: DeploymentListItem): string {
+    if ((d.pull_request_id ?? 0) > 0) return 'pull-request';
+    if (d.is_webhook) return 'webhook';
+    if (d.rollback) return 'rollback';
+    if (d.is_api) return 'api';
+    return 'manual';
   }
   function durationOf(d: DeploymentListItem): string {
     void tick;
@@ -320,6 +344,8 @@
             {/snippet}
           </Dropdown>
         </div>
+        <!-- The Started header sorts the full table; the embedded history has no such header. -->
+        {#if embedded}
         <div class="table-sort">
           <Dropdown panelClass="w-44!">
             {#snippet trigger({ open })}
@@ -336,9 +362,8 @@
                   role="option"
                   aria-selected={sort === value}
                   onclick={() => {
-                    sort = value as 'newest' | 'oldest';
-                    page = 1;
                     close();
+                    void setSort(value);
                   }}
                 >
                   <span>{label}</span>
@@ -348,6 +373,7 @@
             {/snippet}
           </Dropdown>
         </div>
+        {/if}
       </div>
     </div>
 
@@ -366,7 +392,9 @@
             {#if !embedded}<span>Status</span>{/if}
             <span>Source</span>
             <span>Commit</span>
-            {#if !embedded}<span>Started</span>{/if}
+            {#if !embedded}
+              <SortHeader label="Started" asc="oldest" desc="newest" first="desc" current={sort} onsort={setSort} server loading={sorting} />
+            {/if}
             <span>Duration</span>
             <span>Server</span>
             {#if embedded}<span class="text-right">Status</span>{/if}
@@ -384,9 +412,27 @@
               aria-busy={embedded ? selecting === d.deployment_uuid : undefined}
             >
               {#if !embedded}
-                <a href={url} use:rowLink><StatusBadge {label} {type} /></a>
+                <span class="min-w-0">
+                  <StatusBadge
+                    as="button"
+                    {label}
+                    {type}
+                    spinning={d.status === 'in_progress'}
+                    class="table-filter-value table-filter-badge"
+                    title="Filter by {label}"
+                    onclick={() => toggleFilter(`status:${d.status}`)}
+                  />
+                </span>
               {/if}
-              <a href={url} use:rowLink data-select-deployment={embedded ? d.deployment_uuid : undefined}>{source(d)}</a>
+              {#if embedded}
+                <a href={url} use:rowLink data-select-deployment={d.deployment_uuid}>{source(d)}</a>
+              {:else}
+                <span class="min-w-0">
+                  <button type="button" class="table-filter-value truncate" title="Filter by {source(d)}" onclick={() => toggleFilter(`source:${sourceKey(d)}`)}
+                    >{source(d)}</button
+                  >
+                </span>
+              {/if}
               <span class="min-w-0">
                 {#if d.commit}
                   <span class="flex min-w-0 items-center gap-2">
@@ -420,7 +466,15 @@
                 <a href={url} use:rowLink title={serverTime(d.created_at, timezone)}>{ago(d)}</a>
               {/if}
               <a href={url} use:rowLink data-select-deployment={embedded ? d.deployment_uuid : undefined} class="tabular-nums">{durationOf(d)}</a>
-              <a href={url} use:rowLink data-select-deployment={embedded ? d.deployment_uuid : undefined} class="truncate">{server}</a>
+              {#if !embedded && d.server_id}
+                <span class="min-w-0">
+                  <button type="button" class="table-filter-value truncate" title="Filter by {server}" onclick={() => toggleFilter(`server:${d.server_id}`)}
+                    >{server}</button
+                  >
+                </span>
+              {:else}
+                <a href={url} use:rowLink data-select-deployment={embedded ? d.deployment_uuid : undefined} class="truncate">{server}</a>
+              {/if}
               {#if embedded}
                 <a
                   href={url}
@@ -438,6 +492,8 @@
                         d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
                       ></path>
                     </svg>
+                  {:else if d.status === 'in_progress'}
+                    <Loading compact label="Deployment in progress" />
                   {:else}
                     <span
                       class="size-2 shrink-0 rounded-full {{

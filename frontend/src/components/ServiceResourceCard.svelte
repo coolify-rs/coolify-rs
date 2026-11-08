@@ -4,6 +4,8 @@
   import ConfirmModal from './ConfirmModal.svelte';
   import Modal from './Modal.svelte';
   import Reicon from './Reicon.svelte';
+  import RowActions from './RowActions.svelte';
+  import RowAction from './RowAction.svelte';
   import ServiceResourceForm from './ServiceResourceForm.svelte';
   import SkeletonForm from './SkeletonForm.svelte';
   import StatusBadge from './StatusBadge.svelte';
@@ -59,7 +61,7 @@
   }
 
   function rowClick(e: Event) {
-    if ((e.target as HTMLElement).closest('a, button')) return;
+    if ((e.target as HTMLElement).closest('a, button, [role=menu]')) return;
     openSettings();
   }
 
@@ -151,7 +153,23 @@
       <StatusBadge label={statusLabel} type={statusType} />
       {@render limitWarning()}
     </div>
-    <div class="flex items-center justify-end gap-1">{@render shortcuts()}</div>
+    <div class="flex items-center justify-end">
+      {#if showBackups || showDomains}
+        <RowActions label="Resource actions">
+          {#if showBackups}
+            <RowAction href="{base}/storage-backups">Backups</RowAction>
+          {/if}
+          {#if showDomains}
+            <RowAction href="{base}/domains">Domains</RowAction>
+          {/if}
+          <RowAction onclick={openSettings}>Settings</RowAction>
+        </RowActions>
+      {:else}
+        <button type="button" class="icon-button" title="Resource settings" aria-label="Resource settings" onclick={openSettings}>
+          <Reicon name="settings" class="size-4" />
+        </button>
+      {/if}
+    </div>
   </div>
 {/if}
 

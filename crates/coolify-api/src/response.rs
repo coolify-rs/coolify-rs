@@ -51,6 +51,9 @@ pub enum ApiError {
     MissingTeamRole,
     /// 403 `{"message":"Missing required permissions: a, b"}`
     MissingAbilities(Vec<&'static str>),
+    /// 403 `EnsureTokenBelongsToCurrentTeamMember::EXCEEDS_ACCESS_MESSAGE`, with the request
+    /// context for the audit row.
+    TokenExceedsAccess(Box<crate::auth::AuthCtx>),
     /// 403 `{"success":false,"message":"API is disabled."}`
     ApiDisabled,
     /// 403 `{"success":false,"message":"You are not allowed to access the API."}`
@@ -123,6 +126,10 @@ impl IntoResponse for ApiError {
             Self::MissingAbilities(a) => (
                 StatusCode::FORBIDDEN,
                 json!({"message": format!("Missing required permissions: {}", a.join(", "))}),
+            ),
+            Self::TokenExceedsAccess(_) => (
+                StatusCode::FORBIDDEN,
+                json!({"message": crate::auth::EXCEEDS_ACCESS_MESSAGE}),
             ),
             Self::ApiDisabled => (
                 StatusCode::FORBIDDEN,

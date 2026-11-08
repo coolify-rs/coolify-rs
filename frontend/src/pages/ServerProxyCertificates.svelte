@@ -1,4 +1,7 @@
 <script lang="ts">
+  import Reicon from '../components/Reicon.svelte';
+  import RowActions from '../components/RowActions.svelte';
+  import RowAction from '../components/RowAction.svelte';
   // Port of upstream livewire/server/proxy/certificates-show.blade.php and certificates.blade.php.
   import ConfirmModal from '../components/ConfirmModal.svelte';
   import Empty from '../components/Empty.svelte';
@@ -84,7 +87,7 @@
                         <th>Resolver</th>
                         <th>Alternative names</th>
                         <th>Expires</th>
-                        <th><span class="sr-only">Actions</span></th>
+                        <th class="text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -107,9 +110,19 @@
                             {/if}
                           </td>
                           <td>{c.expires_at ?? 'Unknown'}</td>
-                          <td class="text-right">
+                          <td>
                             {#if canEdit}
-                              <button type="button" class="button button-error" onclick={() => (deleting = c)}>Delete</button>
+                              <div class="flex justify-end">
+                                <button
+                                  type="button"
+                                  class="icon-button shrink-0 text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
+                                  title="Delete certificate"
+                                  aria-label="Delete certificate for {c.main_domain}"
+                                  onclick={() => (deleting = c)}
+                                >
+                                  <Reicon name="trash" class="size-3.5" />
+                                </button>
+                              </div>
                             {/if}
                           </td>
                         </tr>
@@ -133,7 +146,7 @@
                           <th>Backup</th>
                           <th>Created</th>
                           <th>Size</th>
-                          <th><span class="sr-only">Actions</span></th>
+                          <th class="text-right">Actions</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -143,9 +156,13 @@
                             <td>{backup.created_at}</td>
                             <td>{formatBytes(backup.size)}</td>
                             <td>
-                              <div class="flex justify-end gap-2">
-                                <button type="button" class="button" onclick={() => (restoring = backup)}>Restore</button>
-                                <button type="button" class="button button-error" onclick={() => (deletingBackup = backup)}>Delete</button>
+                              <div class="flex justify-end">
+                                <RowActions label="Backup actions">
+                                  <RowAction onclick={() => (restoring = backup)}>Restore</RowAction>
+                                  {#snippet danger()}
+                                    <RowAction onclick={() => (deletingBackup = backup)}>Delete</RowAction>
+                                  {/snippet}
+                                </RowActions>
                               </div>
                             </td>
                           </tr>

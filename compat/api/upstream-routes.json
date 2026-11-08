@@ -14,8 +14,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write",
-        "App\\Http\\Middleware\\ApiAbility:deploy"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -30,7 +29,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -60,7 +59,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -75,8 +74,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write",
-        "App\\Http\\Middleware\\ApiAbility:deploy"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -91,7 +89,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -106,7 +104,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -121,7 +119,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -136,7 +134,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -151,7 +149,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -166,7 +164,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -181,8 +179,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write",
-        "App\\Http\\Middleware\\ApiAbility:deploy"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -197,7 +194,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -212,7 +209,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -227,7 +224,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -242,7 +239,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -257,7 +254,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -272,7 +269,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -287,7 +284,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -302,7 +299,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -317,7 +314,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -332,7 +329,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -347,7 +344,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -362,7 +359,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -377,7 +374,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -392,7 +389,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -422,7 +419,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -437,7 +434,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -452,7 +449,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -467,7 +464,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -482,8 +479,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write",
-        "App\\Http\\Middleware\\ApiAbility:deploy"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -513,7 +509,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -528,7 +524,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -543,7 +539,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -558,7 +554,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -573,7 +569,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -588,7 +584,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -603,7 +599,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -4594,7 +4590,8 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:write",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
       ]
     },
     {

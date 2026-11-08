@@ -24,6 +24,7 @@ use crate::routes::databases::{NOT_FOUND, input_bool};
 use crate::serialize::php_truthy;
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 const BACKUP_FIELDS: &[&str] = &[
     "save_s3",
@@ -439,7 +440,7 @@ pub async fn create(
     let d = dbs::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let backup_now = input.get("backup_now").is_some_and(php_truthy);
@@ -555,7 +556,7 @@ pub async fn update(
     let d = dbs::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let backup_now = input.get("backup_now").is_some_and(php_truthy);
@@ -888,7 +889,7 @@ pub async fn delete(
     let d = dbs::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Delete, &d) {
         return Err(ApiError::Unauthorized);
     }
     let row = find_backup(&state, &ctx, &d, &backup_uuid).await?;
@@ -941,7 +942,7 @@ pub async fn delete_execution(
     let d = dbs::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Delete, &d) {
         return Err(ApiError::Unauthorized);
     }
     let row = find_backup(&state, &ctx, &d, &backup_uuid).await?;

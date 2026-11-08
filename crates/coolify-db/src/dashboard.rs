@@ -47,29 +47,30 @@ pub async fn projects(db: &Db, team_id: TeamId) -> DbResult<Vec<DashProject>> {
     .bind(team_id)
     .fetch_all(db.pool())
     .await?;
+    // `VisibleThroughAccessGrants` on the projects, their environments and the counted resources.
+    let rows: Vec<NamedRow> = rows
+        .into_iter()
+        .filter(|r| crate::access::project_visible(r.0))
+        .collect();
     let ids: Vec<i64> = rows.iter().map(|r| r.0).collect();
 
-    let envs: Vec<(i64, String, String)> = sqlx::query_as(
-        "SELECT project_id, uuid, name FROM environments WHERE project_id = ANY($1)",
+    let envs: Vec<(i64, String, String, i64)> = sqlx::query_as(
+        "SELECT project_id, uuid, name, id FROM environments WHERE project_id = ANY($1)",
     )
     .bind(&ids)
     .fetch_all(db.pool())
     .await?;
+    let envs: Vec<(i64, String, String, i64)> = envs
+        .into_iter()
+        .filter(|e| crate::access::environment_visible(e.3))
+        .collect();
 
-    let union = RESOURCE_TABLES
-        .iter()
-        .map(|t| format!("SELECT environment_id FROM {t} WHERE deleted_at IS NULL"))
-        .collect::<Vec<_>>()
-        .join(" UNION ALL ");
-    let counts: Vec<(i64, i64)> = sqlx::query_as(&format!(
-        "SELECT e.project_id, count(*) FROM ({union}) r \
-         JOIN environments e ON e.id = r.environment_id \
-         WHERE e.project_id = ANY($1) GROUP BY e.project_id"
-    ))
-    .bind(&ids)
-    .fetch_all(db.pool())
-    .await?;
-    let counts: HashMap<i64, i64> = counts.into_iter().collect();
+    let mut counts: HashMap<i64, i64> = HashMap::new();
+    for (project, environment, uuid) in resource_rows(db, "e.project_id = ANY($1)", &ids).await? {
+        if crate::access::resource_visible(Some(environment), &uuid) {
+            *counts.entry(project).or_default() += 1;
+        }
+    }
 
     Ok(rows
         .into_iter()
@@ -87,6 +88,22 @@ pub async fn projects(db: &Db, team_id: TeamId) -> DbResult<Vec<DashProject>> {
             created_at,
         })
         .collect())
+}
+
+/// `(project_id, environment_id, uuid)` of the undeleted resources of the matching environments.
+async fn resource_rows(db: &Db, filter: &str, ids: &[i64]) -> DbResult<Vec<(i64, i64, String)>> {
+    let union = RESOURCE_TABLES
+        .iter()
+        .map(|t| format!("SELECT environment_id, uuid FROM {t} WHERE deleted_at IS NULL"))
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
+    Ok(sqlx::query_as(&format!(
+        "SELECT e.project_id, r.environment_id, r.uuid::text FROM ({union}) r \
+         JOIN environments e ON e.id = r.environment_id WHERE {filter}"
+    ))
+    .bind(ids)
+    .fetch_all(db.pool())
+    .await?)
 }
 
 /// `Server::ownedByCurrentTeam()` with the settings the dashboard reads.
@@ -119,6 +136,7 @@ pub async fn private_key_count(db: &Db, team_id: TeamId) -> DbResult<i64> {
 
 #[derive(Debug, Clone)]
 pub struct EnvSummary {
+    pub id: i64,
     pub uuid: String,
     pub name: String,
     pub description: Option<String>,
@@ -136,23 +154,18 @@ pub async fn environments(db: &Db, project_id: i64) -> DbResult<Vec<EnvSummary>>
     .bind(project_id)
     .fetch_all(db.pool())
     .await?;
-    let union = RESOURCE_TABLES
-        .iter()
-        .map(|t| format!("SELECT environment_id FROM {t} WHERE deleted_at IS NULL"))
-        .collect::<Vec<_>>()
-        .join(" UNION ALL ");
-    let counts: Vec<(i64, i64)> = sqlx::query_as(&format!(
-        "SELECT r.environment_id, count(*) FROM ({union}) r \
-         JOIN environments e ON e.id = r.environment_id \
-         WHERE e.project_id = $1 GROUP BY r.environment_id"
-    ))
-    .bind(project_id)
-    .fetch_all(db.pool())
-    .await?;
-    let counts: HashMap<i64, i64> = counts.into_iter().collect();
+    let mut counts: HashMap<i64, i64> = HashMap::new();
+    for (_, environment, uuid) in resource_rows(db, "e.project_id = ANY($1)", &[project_id]).await?
+    {
+        if crate::access::resource_visible(Some(environment), &uuid) {
+            *counts.entry(environment).or_default() += 1;
+        }
+    }
     Ok(rows
         .into_iter()
+        .filter(|r| crate::access::environment_visible(r.0))
         .map(|(id, uuid, name, description, created_at)| EnvSummary {
+            id,
             resources: counts.get(&id).copied().unwrap_or(0),
             uuid,
             name,
@@ -164,10 +177,14 @@ pub async fn environments(db: &Db, project_id: i64) -> DbResult<Vec<EnvSummary>>
 
 /// `$team->projects()->get()`: the team's projects in table order.
 pub async fn project_names(db: &Db, team_id: TeamId) -> DbResult<Vec<(String, String)>> {
-    Ok(
-        sqlx::query_as("SELECT uuid, name FROM projects WHERE team_id = $1")
+    let rows: Vec<(String, String, i64)> =
+        sqlx::query_as("SELECT uuid, name, id FROM projects WHERE team_id = $1")
             .bind(team_id)
             .fetch_all(db.pool())
-            .await?,
-    )
+            .await?;
+    Ok(rows
+        .into_iter()
+        .filter(|r| crate::access::project_visible(r.2))
+        .map(|(uuid, name, _)| (uuid, name))
+        .collect())
 }
