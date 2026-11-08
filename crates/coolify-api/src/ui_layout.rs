@@ -67,7 +67,8 @@ const DEPLOYMENT_SELECT: &str = "SELECT json_build_object(
         'id', q.id, 'application_name', q.application_name, 'deployment_url', q.deployment_url,
         'deployment_uuid', q.deployment_uuid, 'pull_request_id', q.pull_request_id,
         'server_name', q.server_name, 'status', q.status, 'created_at', q.created_at,
-        'application_uuid', a.uuid, 'project', p.name, 'environment', e.name)::text
+        'application_uuid', a.uuid, 'project', p.name, 'environment', e.name,
+        'environment_id', e.id)::text
     FROM application_deployment_queues q
     JOIN applications a ON a.id::text = q.application_id
     JOIN environments e ON e.id = a.environment_id
@@ -82,7 +83,22 @@ async fn queue_rows(state: &AppState, sql: String, team: i64) -> Result<Vec<Valu
         .map_err(|_| ApiError::Internal)?;
     Ok(rows
         .iter()
-        .filter_map(|r| serde_json::from_str(r).ok())
+        .filter_map(|r| serde_json::from_str::<Value>(r).ok())
+        // `visibleToCurrentActor()`: deployments of applications the actor can see.
+        .filter(|v| {
+            coolify_db::access::resource_visible(
+                v.get("environment_id").and_then(Value::as_i64),
+                v.get("application_uuid")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+        })
+        .map(|mut v| {
+            if let Value::Object(m) = &mut v {
+                m.remove("environment_id");
+            }
+            v
+        })
         .collect())
 }
 
@@ -101,15 +117,25 @@ async fn recent_deployments(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
 ) -> ApiResult {
+    // A restricted member's rows are filtered before the limit, as the query scope does.
+    let limit = if ctx.covers_whole_team() {
+        " LIMIT 5"
+    } else {
+        ""
+    };
     let active = format!(
-        "{DEPLOYMENT_SELECT} AND q.status IN ('in_progress', 'queued') ORDER BY q.status, q.id LIMIT 5"
+        "{DEPLOYMENT_SELECT} AND q.status IN ('in_progress', 'queued') ORDER BY q.status, q.id{limit}"
     );
     let recent = format!(
-        "{DEPLOYMENT_SELECT} AND q.status NOT IN ('in_progress', 'queued') ORDER BY q.id DESC LIMIT 5"
+        "{DEPLOYMENT_SELECT} AND q.status NOT IN ('in_progress', 'queued') ORDER BY q.id DESC{limit}"
     );
+    let mut active = queue_rows(&state, active, ctx.team_id).await?;
+    let mut recent = queue_rows(&state, recent, ctx.team_id).await?;
+    active.truncate(5);
+    recent.truncate(5);
     Ok(ok(json!({
-        "active": queue_rows(&state, active, ctx.team_id).await?,
-        "recent": queue_rows(&state, recent, ctx.team_id).await?,
+        "active": active,
+        "recent": recent,
     }))
     .into_response())
 }
