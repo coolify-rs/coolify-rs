@@ -47,6 +47,9 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 
 ## API
 
+- **No MCP server.** Upstream serves an MCP endpoint at `/mcp` (`routes/ai.php`, `App\Mcp\Servers\CoolifyServer` and
+  its tools). coolify-rs does not: `/mcp` and the MCP tools are not ported. Only the `POST /api/v1/mcp/enable` and
+  `/mcp/disable` switch exists, which stores the setting and changes nothing else.
 - **No API rate limiting.** Upstream applies `throttle:api` (200 requests a minute, `X-RateLimit-*` headers).
   coolify-rs has none; only sign-in is throttled.
 - **Errors for clients that do not ask for JSON** get the JSON body upstream sends to JSON clients, instead of
