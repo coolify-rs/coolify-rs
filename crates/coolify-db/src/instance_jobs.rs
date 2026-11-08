@@ -106,13 +106,22 @@ pub async fn record_missed_cleanup(
     Ok(())
 }
 
-/// `failInterruptedExecutions()`: `(id, server id)`.
-pub async fn running_cleanups_before(db: &Db, before: NaiveDateTime) -> DbResult<Vec<(i64, i64)>> {
+/// `failInterruptedExecutions()`: `(id, server id)`, one `chunkById` page: at most `limit` rows
+/// with an id above `after_id`.
+pub async fn running_cleanups_before(
+    db: &Db,
+    before: NaiveDateTime,
+    after_id: i64,
+    limit: i64,
+) -> DbResult<Vec<(i64, i64)>> {
     Ok(sqlx::query_as(
         "SELECT id, server_id FROM docker_cleanup_executions \
-         WHERE status = 'running' AND finished_at IS NULL AND created_at < $1 ORDER BY id",
+         WHERE status = 'running' AND finished_at IS NULL AND created_at < $1 AND id > $2 \
+         ORDER BY id LIMIT $3",
     )
     .bind(before)
+    .bind(after_id)
+    .bind(limit)
     .fetch_all(db.pool())
     .await?)
 }

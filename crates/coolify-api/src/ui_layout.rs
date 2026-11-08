@@ -96,7 +96,27 @@ async fn deployments(
     Ok(ok(json!({"deployments": queue_rows(&state, sql, ctx.team_id).await?})).into_response())
 }
 
-/// `ActiveDeployments::refreshDeployments`.
+/// `ActiveDeployments::recentDeployments()` on PostgreSQL: the five newest finished deployments of
+/// each of the team's applications (`idx_deployment_queues_app_id`), then the five newest of those,
+/// instead of scanning the primary key backwards.
+const RECENT_DEPLOYMENTS: &str = "SELECT json_build_object(
+        'id', q.id, 'application_name', q.application_name, 'deployment_url', q.deployment_url,
+        'deployment_uuid', q.deployment_uuid, 'pull_request_id', q.pull_request_id,
+        'server_name', q.server_name, 'status', q.status, 'created_at', q.created_at,
+        'application_uuid', a.uuid, 'project', p.name, 'environment', e.name)::text
+    FROM applications a
+    JOIN environments e ON e.id = a.environment_id
+    JOIN projects p ON p.id = e.project_id
+    CROSS JOIN LATERAL (
+        SELECT id, application_name, deployment_url, deployment_uuid, pull_request_id, server_name,
+               status, created_at
+          FROM application_deployment_queues
+         WHERE application_id = a.id::text AND status NOT IN ('in_progress', 'queued')
+         ORDER BY id DESC LIMIT 5) q
+    WHERE p.team_id = $1
+    ORDER BY q.id DESC LIMIT 5";
+
+/// `ActiveDeployments::activeDeployments()` and `recentDeployments()`.
 async fn recent_deployments(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -104,9 +124,7 @@ async fn recent_deployments(
     let active = format!(
         "{DEPLOYMENT_SELECT} AND q.status IN ('in_progress', 'queued') ORDER BY q.status, q.id LIMIT 5"
     );
-    let recent = format!(
-        "{DEPLOYMENT_SELECT} AND q.status NOT IN ('in_progress', 'queued') ORDER BY q.id DESC LIMIT 5"
-    );
+    let recent = RECENT_DEPLOYMENTS.to_owned();
     Ok(ok(json!({
         "active": queue_rows(&state, active, ctx.team_id).await?,
         "recent": queue_rows(&state, recent, ctx.team_id).await?,

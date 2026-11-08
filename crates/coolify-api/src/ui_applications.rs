@@ -626,7 +626,7 @@ pub async fn deployments(
         .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
         .filter_map(|v| v.parse().ok())
         .collect();
-    let (all, _) = apps::deployments_for_application(&state.db, a.id, 0, i64::MAX).await?;
+    let all = apps::deployment_history(&state.db, a.id).await?;
     let mut rows: Vec<&apps::Deployment> = all
         .iter()
         .filter(|d| {

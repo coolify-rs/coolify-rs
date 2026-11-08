@@ -878,6 +878,22 @@ pub async fn deployments_for_application(
     ))
 }
 
+/// Every deployment of an application for the history list (`Deployment\Index::HISTORY_COLUMNS`):
+/// no logs and no configuration payloads, newest first.
+pub async fn deployment_history(db: &Db, application_id: i64) -> DbResult<Vec<Deployment>> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT row_to_json(q)::text FROM (\
+           SELECT id, application_id, deployment_uuid, pull_request_id, status, commit, commit_message, \
+                  is_webhook, is_api, rollback, server_id, server_name, created_at, updated_at, finished_at \
+             FROM application_deployment_queues WHERE application_id = $1 \
+            ORDER BY created_at DESC, id DESC) q",
+    )
+    .bind(application_id.to_string())
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter().map(|t| deployment(t)).collect()
+}
+
 /// Queued and in-progress deployments of the team's servers.
 pub async fn running_for_servers(db: &Db, server_ids: &[i64]) -> DbResult<Vec<Deployment>> {
     let ids: Vec<i32> = server_ids.iter().map(|v| *v as i32).collect();

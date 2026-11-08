@@ -30,6 +30,8 @@ const MISSED_OCCURRENCE_NOTIFICATION_INTERVAL_MINUTES: i64 = 60;
 /// `DockerCleanupJob::INTERRUPTED_MESSAGE`.
 const CLEANUP_INTERRUPTED: &str =
     "Docker cleanup was interrupted: its worker stopped before the cleanup finished.";
+/// `DockerCleanupJob::INTERRUPTED_EXECUTIONS_CHUNK_SIZE`.
+const INTERRUPTED_EXECUTIONS_CHUNK_SIZE: i64 = 100;
 
 /// `notifyMissedOccurrence()`: at most one missed-run notification per schedule each hour.
 pub(crate) async fn notify_missed_occurrence(
@@ -457,14 +459,36 @@ fn setting_bool(row: &ServerRow, key: &str) -> bool {
 }
 
 impl Jobs {
-    /// `DockerCleanupJob::failInterruptedExecutions()`.
+    /// `DockerCleanupJob::failInterruptedExecutions()`, `chunkById` pages of
+    /// `INTERRUPTED_EXECUTIONS_CHUNK_SIZE`.
     async fn fail_interrupted_cleanups(&self) -> Result<(), String> {
         let db = &self.0.db;
         let lock = i64::try_from(cleanup::OVERLAP_LOCK_SECONDS).unwrap_or(i64::MAX);
         let before = Jobs::now() - chrono::Duration::seconds(lock);
-        let executions = queries::running_cleanups_before(db, before)
+        let mut after_id = 0;
+        loop {
+            let chunk = queries::running_cleanups_before(
+                db,
+                before,
+                after_id,
+                INTERRUPTED_EXECUTIONS_CHUNK_SIZE,
+            )
             .await
             .map_err(|e| e.to_string())?;
+            let Some(&(last, _)) = chunk.last() else {
+                return Ok(());
+            };
+            let full = chunk.len() == INTERRUPTED_EXECUTIONS_CHUNK_SIZE as usize;
+            after_id = last;
+            self.fail_interrupted_chunk(chunk).await?;
+            if !full {
+                return Ok(());
+            }
+        }
+    }
+
+    async fn fail_interrupted_chunk(&self, executions: Vec<(i64, i64)>) -> Result<(), String> {
+        let db = &self.0.db;
         for (id, server_id) in executions {
             if !allowed(&format!("docker-cleanup:{server_id}")) {
                 continue;
