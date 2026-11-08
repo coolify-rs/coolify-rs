@@ -8,6 +8,7 @@
     first = 'asc',
     value = $bindable(),
     onsort,
+    class: klass = '',
   }: {
     label: string;
     asc: string;
@@ -17,6 +18,7 @@
     value: string | null;
     /** `then` (or `action` for a server-side sort): runs after the change. */
     onsort?: (next: string) => void;
+    class?: string;
   } = $props();
 
   const firstValue = $derived(first === 'desc' ? desc : asc);
@@ -27,7 +29,7 @@
 
 <button
   type="button"
-  class="table-sort-header group {sorted ? 'is-sorted' : ''}"
+  class="table-sort-header group {sorted ? 'is-sorted' : ''} {klass}"
   aria-label={ariaBase + (value === asc ? ', sorted ascending' : value === desc ? ', sorted descending' : '')}
   onclick={() => {
     const next = value === firstValue ? otherValue : firstValue;

@@ -1129,6 +1129,30 @@ struct AuditQuery {
     source: Option<String>,
     per_page: Option<i64>,
     page: Option<i64>,
+    /// `$sort` such as `actor-asc`; `time-desc` is the default order.
+    sort: Option<String>,
+}
+
+/// `AuditLog::SORT_COLUMNS` and `setSort`: an unknown value keeps the default.
+fn audit_sort(sort: Option<&str>) -> (String, Option<(&'static str, &'static str)>) {
+    let Some((column, direction)) = sort.and_then(|s| s.split_once('-')) else {
+        return ("time-desc".into(), None);
+    };
+    let col = match column {
+        "time" => "created_at",
+        "actor" => "actor_name",
+        "activity" => "description",
+        "source" => "source",
+        _ => return ("time-desc".into(), None),
+    };
+    let dir = match direction {
+        "asc" => "asc",
+        "desc" => "desc",
+        _ => return ("time-desc".into(), None),
+    };
+    let value = format!("{column}-{direction}");
+    let order = (value != "time-desc").then_some((col, dir));
+    (value, order)
 }
 
 /// `Team\AuditLog::render`.
@@ -1153,7 +1177,8 @@ async fn audit_log(
         source: opt(&q.source),
         search_sensitive: true,
     };
-    let (total, rows) = coolify_db::audit::page(
+    let (sort, order) = audit_sort(q.sort.as_deref());
+    let (total, rows) = coolify_db::audit::page_sorted(
         &state.db,
         ctx.team_id,
         instance,
@@ -1173,10 +1198,12 @@ async fn audit_log(
         ],
         per_page,
         page,
+        order,
     )
     .await?;
     let events: Vec<Value> = rows.into_iter().map(|r| present_row(&state, r)).collect();
     Ok(ok(json!({
+        "sort": sort,
         "actions": actions.iter().map(|a| json!({"value": a, "label": coolify_db::audit::headline(a)})).collect::<Vec<_>>(),
         "events": events,
         "total": total,

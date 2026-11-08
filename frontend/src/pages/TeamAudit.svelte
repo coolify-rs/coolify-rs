@@ -1,4 +1,5 @@
 <script lang="ts">
+  import TableSortHeader from '../components/TableSortHeader.svelte';
   // Port of upstream livewire/team/audit-log.blade.php (App\Livewire\Team\AuditLog).
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
@@ -16,19 +17,21 @@
   let source = $state('all');
   let page = $state(1);
   let perPage = $state(25);
+  /** `AuditLog::$sort`. */
+  let sort = $state<string | null>('time-desc');
   let expanded = $state<Record<number, boolean>>({});
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   async function load() {
     try {
-      data = await teamsUi.audit({ search, action, source, per_page: perPage, page });
+      data = await teamsUi.audit({ search, action, source, per_page: perPage, page, sort: sort ?? 'time-desc' });
     } catch {
       router.go('/', true);
     }
   }
 
   $effect(() => {
-    void [action, source, page, perPage];
+    void [action, source, page, perPage, sort];
     load();
   });
 
@@ -114,10 +117,10 @@
           <div class="overflow-x-auto">
             <div class="data-table transition-opacity">
               <div class="grid min-w-[760px] grid-cols-[14rem_minmax(0,1fr)_12rem_9rem] gap-4 border-b border-neutral-200 px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-neutral-500 dark:border-white/[0.07] dark:text-fg-faint">
-                <span>Actor</span>
-                <span>Activity</span>
-                <span>Source</span>
-                <span class="text-right">Time</span>
+                <TableSortHeader label="Actor" asc="actor-asc" desc="actor-desc" bind:value={sort} onsort={() => (page = 1)} />
+                <TableSortHeader label="Activity" asc="activity-asc" desc="activity-desc" bind:value={sort} onsort={() => (page = 1)} />
+                <TableSortHeader label="Source" asc="source-asc" desc="source-desc" bind:value={sort} onsort={() => (page = 1)} />
+                <TableSortHeader label="Time" asc="time-asc" desc="time-desc" first="desc" class="justify-self-end" bind:value={sort} onsort={() => (page = 1)} />
               </div>
               {#each data.events as event (event.id)}
                 {@const changes = event.changes && Object.keys(event.changes).length ? event.changes : null}

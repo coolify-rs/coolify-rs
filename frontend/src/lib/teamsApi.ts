@@ -82,6 +82,7 @@ export interface AuditData {
   total: number;
   per_page: number;
   page: number;
+  sort?: string;
 }
 
 export interface AdminData {
@@ -157,7 +158,8 @@ export const teamsUi = {
   invitationAccess: (rows: AccessRow[]) => request<{ access: StoredGrant[]; summary: string }>('POST', '/ui/team/invitation-access', { rows }),
   revoke: (id: number) => request<{ message: string }>('DELETE', `/ui/team/invitations/${id}`),
   removeAvatar: () => request<{ message: string }>('DELETE', '/ui/team/avatar'),
-  audit: (params: { search: string; action: string; source: string; per_page: number; page: number }) => request<AuditData>('GET', `/ui/team/audit-log?${query(params)}`),
+  audit: (params: { search: string; action: string; source: string; per_page: number; page: number; sort: string }) =>
+    request<AuditData>('GET', `/ui/team/audit-log?${query(params)}`),
   admin: (params: { search: string; team_filter: string; sort: string; per_page: number; page: number }) => request<AdminData>('GET', `/ui/team/admin?${query(params)}`),
   adminDelete: (id: number, password: string) => request<{ message: string }>('POST', `/ui/team/admin/${id}/delete`, { password }),
   invitation: (uuid: string) => request<InvitationView>('GET', `/ui/invitations/${encodeURIComponent(uuid)}`),
