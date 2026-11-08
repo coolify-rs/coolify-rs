@@ -62,7 +62,7 @@ async fn find_resource(
     };
     let res = match crate::ui_shared::find(state, ctx, kind, uuid).await {
         Ok(res) => res,
-        Err(ApiError::Message(StatusCode::NOT_FOUND, _)) => {
+        Err(ApiError::Message(status, _)) if status == StatusCode::NOT_FOUND => {
             return Err(ApiError::Message(StatusCode::NOT_FOUND, name));
         }
         Err(e) => return Err(e),

@@ -385,18 +385,18 @@ fn validate_body(
     let mut add = |field: &str, text: String| {
         errors.insert(field.to_owned(), json!([text]));
     };
-    for (field, required) in fields {
+    for &(field, required) in fields {
         let attribute = field.replace('_', " ");
-        match body.get(*field) {
-            None | Some(Value::Null) if *required => {
+        match body.get(field) {
+            None | Some(Value::Null) if required => {
                 add(field, "This field is required.".to_owned())
             }
-            Some(Value::String(s)) if *required && s.trim().is_empty() => {
+            Some(Value::String(s)) if required && s.trim().is_empty() => {
                 add(field, "This field is required.".to_owned())
             }
             None | Some(Value::Null) => {}
             Some(Value::String(s)) => {
-                if *field == "hostname" && s.chars().count() > 255 {
+                if field == "hostname" && s.chars().count() > 255 {
                     add(
                         field,
                         format!("The {attribute} field must not be greater than 255 characters."),
@@ -407,7 +407,7 @@ fn validate_body(
         }
     }
     for k in body.keys() {
-        if !fields.iter().any(|(f, _)| f == k) {
+        if !fields.iter().any(|(f, _)| *f == k.as_str()) {
             errors.insert(k.clone(), json!(["This field is not allowed."]));
         }
     }

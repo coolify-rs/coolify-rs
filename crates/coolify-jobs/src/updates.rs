@@ -180,7 +180,7 @@ pub fn newest_update_channel(channels: &Value, settings: &UpdateChannel, running
     };
     let version_of_channel = |c: &str| channels.get(c).and_then(version_of);
     let mut newest = "stable";
-    for (i, channel) in CHANNELS.iter().enumerate() {
+    for (i, &channel) in CHANNELS.iter().enumerate() {
         let Some(version) = version_of_channel(channel) else {
             continue;
         };
