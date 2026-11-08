@@ -80,6 +80,9 @@ enum Cmd {
 #[derive(Debug)]
 struct Config {
     listen: SocketAddr,
+    /// Second listener for `/terminal/ws` only: Coolify's terminal server port, which the proxy
+    /// configuration of an instance with a domain points at (`coolify:6002`).
+    terminal_listen: Option<SocketAddr>,
     db: DbConfig,
     version: String,
     trusted_proxies: TrustedProxies,
@@ -153,6 +156,14 @@ impl Config {
                 .unwrap_or_else(|| "0.0.0.0:8080".into())
                 .parse()
                 .context("COOLIFY_RS_LISTEN must be host:port")?,
+            terminal_listen: match env("COOLIFY_RS_TERMINAL_LISTEN").as_deref() {
+                Some("" | "off") => None,
+                Some(v) => Some(
+                    v.parse()
+                        .context("COOLIFY_RS_TERMINAL_LISTEN must be host:port or off")?,
+                ),
+                None => Some(SocketAddr::from(([0, 0, 0, 0], 6002))),
+            },
             db: DbConfig {
                 url: database_url()?,
                 max_connections: env("COOLIFY_RS_DB_MAX_CONNECTIONS")
@@ -255,6 +266,30 @@ fn app(state: AppState) -> Router {
         .layer(SetRequestIdLayer::new(request_id, MakeRequestUuid))
         .layer(axum::middleware::from_fn(request_timeout))
         .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
+}
+
+/// Serves `/terminal/ws` on Coolify's terminal server port too. With an instance domain, Coolify's
+/// proxy configuration sends `/terminal/ws` to `coolify:6002`, while everything else goes to the
+/// main port. Nothing else is served there. A port already taken (several dev instances on one
+/// host) only logs a warning: the main port still serves the terminal.
+async fn spawn_terminal_listener(addr: SocketAddr, state: AppState) {
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!(%addr, error = %e, "could not open the terminal port; /terminal/ws stays on the main port only");
+            return;
+        }
+    };
+    tracing::info!(%addr, "terminal websocket listening");
+    let router = coolify_api::terminal_ws::router(state).layer(TraceLayer::new_for_http());
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, router)
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+        {
+            tracing::warn!(error = %e, "terminal port stopped");
+        }
+    });
 }
 
 async fn shutdown_signal() {
@@ -592,6 +627,9 @@ async fn run() -> Result<()> {
                 }
             }
             let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
+            if let Some(addr) = cfg.terminal_listen {
+                spawn_terminal_listener(addr, state.clone()).await;
+            }
             if let (Some(seeded), Some(jobs)) = (seeded, &state.jobs) {
                 let lookup = state.clone();
                 tokio::spawn(async move {
