@@ -88,6 +88,7 @@ export function backupNavContext(base: string, backup: string, section: string, 
     label: 'Database',
     backTitle: 'Back to the database menu',
     ariaLabel: 'Backup settings',
+    name: 'Backup',
     parent,
     groups: [
       [

@@ -136,14 +136,17 @@
     data = d;
     const titleSuffix = section === 'storage-backups' ? 'Backups' : section === 'import-backup' ? 'Import Backup' : 'Configuration';
     document.title = `${d.service.name.slice(0, 10)} > ${titleSuffix} | coolify-rs`;
-    page.navContext = serviceNavContext(base, section, {
+    page.navContext = {
+      ...serviceNavContext(base, section, {
       isDeployable: d.is_deployable,
       canAccessTerminal: d.can_access_terminal,
       storageSections:
         section === 'storages'
           ? [...d.applications, ...d.databases].map((p) => ({ id: `storage-service-${p.uuid}`, label: headline(p.name) }))
           : [],
-    });
+      }),
+      name: d.service.name,
+    };
     if (section === 'storages') storages = (await servicesApi.storages(service)).parts;
     uiApi.project(uuid).then((p) => setProjectCrumbs(p, env));
     dbUi

@@ -71,6 +71,7 @@
       label: 'S3 Storage',
       backTitle: 'Back to Integrations',
       ariaLabel: 'S3 storage settings',
+      name: d.name,
       groups: [
         [
           { label: 'General', icon: 'settings', href: base, active: section === 'general' },
