@@ -128,6 +128,8 @@ pub(crate) async fn model_array(
         r.shift_remove("docker_compose");
         r.shift_remove("docker_compose_raw");
     }
+    // `serializeApiResource()`: `redactLockedApiResourceValues()`.
+    super::locked_values::redact_service(state, s, &mut r).await;
     r.insert(
         "laravel_through_key".into(),
         s.project.get("id").cloned().unwrap_or(Value::Null),
@@ -249,6 +251,8 @@ async fn present_service_as(
         r.shift_remove("docker_compose");
         r.shift_remove("docker_compose_raw");
     }
+    // `redactLockedApiResourceValues()`.
+    super::locked_values::redact_service(state, s, &mut r).await;
     r.insert(
         "server_status".into(),
         Value::Bool(server.as_ref().is_some_and(server_functional)),

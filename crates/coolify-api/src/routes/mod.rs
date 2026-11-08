@@ -19,6 +19,7 @@ pub mod databases;
 pub mod env_vars;
 pub mod instance_email;
 pub mod integration_tokens;
+pub mod locked_values;
 pub mod misc;
 pub mod notifications;
 pub mod plugin_registry;

@@ -26,6 +26,7 @@ const INSPECTED_TABLES: &[&str] = &[
     "project_settings",
     "environments",
     "private_keys",
+    "applications",
 ];
 
 pub fn supported_migrations() -> BTreeSet<String> {

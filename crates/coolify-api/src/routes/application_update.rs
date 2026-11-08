@@ -46,6 +46,8 @@ const ALLOWED: &[&str] = &[
     "git_repository",
     "git_branch",
     "git_commit_sha",
+    "git_https_username",
+    "git_https_password",
     "docker_registry_image_name",
     "docker_registry_image_tag",
     "build_pack",
@@ -221,6 +223,19 @@ async fn is_deploy_key(state: &AppState, a: &ApplicationRow) -> Result<bool, Api
         return Ok(false);
     }
     Ok(key == Some(0))
+}
+
+/// `Application::deploymentType() === 'other'`: no deploy key and no Git source.
+async fn is_other_deployment(state: &AppState, a: &ApplicationRow) -> Result<bool, ApiError> {
+    if a.int("private_key_id").is_some_and(|k| k > 0) {
+        return Ok(false);
+    }
+    if let (Some(source_type), Some(source_id)) = (a.str("source_type"), a.int("source_id"))
+        && apps::source_exists(&state.db, source_type, source_id).await?
+    {
+        return Ok(false);
+    }
+    Ok(a.int("private_key_id") != Some(0))
 }
 
 /// `GithubApp::isConnected()`.
@@ -437,6 +452,24 @@ pub async fn update(
         github_app = Some(app);
     }
 
+    if input.has("git_https_username") || input.has("git_https_password") {
+        if !is_other_deployment(&state, &found).await? {
+            return Err(field_error(
+                "git_https_password",
+                "HTTPS credentials can only be used by applications that clone a repository without a Git source or deploy key.",
+            ));
+        }
+        if input.filled("git_https_username")
+            && !input.filled("git_https_password")
+            && decrypted(enc, &found, "git_https_password")?.is_none_or(|p| p.trim().is_empty())
+        {
+            return Err(field_error(
+                "git_https_password",
+                "The git_https_password is required with git_https_username.",
+            ));
+        }
+    }
+
     let app_settings = fields::settings_from_request(&input);
     fields::check_container_name_prefix(&state, &app_settings, server_id, Some(found.id)).await?;
     fields::check_custom_internal_name(&app_settings)?;
@@ -643,6 +676,40 @@ async fn apply(
             ports_dirty = true;
         }
         p.set(col, value);
+    }
+    // fill() with `git_https_username` / `git_https_password`, then the explicit password write:
+    // an empty or null password removes the credentials.
+    if state
+        .db
+        .schema()
+        .has_column("applications", "git_https_password")
+    {
+        if let Some(v) = input.get("git_https_username") {
+            p.set(
+                "git_https_username",
+                ColumnValue::Text(fields::php_text(v)?),
+            );
+        }
+        if input.has("git_https_password") {
+            let plain = if input.filled("git_https_password") {
+                input
+                    .get("git_https_password")
+                    .map(fields::php_text)
+                    .transpose()?
+                    .flatten()
+            } else {
+                None
+            };
+            if decrypted(enc, &original, "git_https_password")? != plain {
+                p.set(
+                    "git_https_password",
+                    ColumnValue::Text(plain.as_deref().map(|v| enc.encrypt_string(v))),
+                );
+            }
+            if plain.is_none() {
+                p.set("git_https_username", ColumnValue::Text(None));
+            }
+        }
     }
     let proxy_runs = fields::proxy_should_run(&server);
     let has_domains = input.has("domains");

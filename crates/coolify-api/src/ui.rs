@@ -61,6 +61,10 @@ pub fn routes(state: AppState) -> Router<AppState> {
             post(crate::ui_applications::source::change),
         )
         .route(
+            "/ui/applications/{uuid}/source/https-credentials",
+            axum::routing::delete(crate::ui_applications::source::remove_git_https_credential),
+        )
+        .route(
             "/ui/applications/{uuid}/state",
             get(crate::ui_applications::state),
         )

@@ -214,6 +214,11 @@ pub async fn show(
     let private_github = source
         .as_ref()
         .filter(|r| morph == GITHUB && r.get("is_public").and_then(Value::as_bool) == Some(false));
+    // `deploymentType() === 'other'`: the HTTPS credentials section.
+    let other = !key_id.is_some_and(|k| k > 0) && source.is_none() && key_id != Some(0);
+    let has_password = a
+        .str("git_https_password")
+        .is_some_and(|c| !c.trim().is_empty());
     Ok(ok(json!({
         "git_repository": a.str("git_repository"),
         "git_branch": a.str("git_branch"),
@@ -227,6 +232,9 @@ pub async fn show(
         "current_source": source.as_ref().map(|r| card(&morph, r, true)),
         "sources": sources,
         "can_update": can_update,
+        "deployment_type_other": other,
+        "git_https_username": a.str("git_https_username"),
+        "has_git_https_password": has_password,
     }))
     .into_response())
 }
@@ -266,6 +274,21 @@ pub async fn update(
     if sha.is_empty() {
         sha = "HEAD".into();
     }
+    // The HTTPS credentials (write-only password): kept as sent, not trimmed.
+    let raw = |k: &str| m.get(k).and_then(Value::as_str).map(str::to_owned);
+    let https_username = raw("git_https_username");
+    let https_password = raw("git_https_password").filter(|p| !p.trim().is_empty());
+    let has_password = a
+        .str("git_https_password")
+        .is_some_and(|c| !c.trim().is_empty());
+    if https_username
+        .as_deref()
+        .is_some_and(|u| !u.trim().is_empty())
+        && https_password.is_none()
+        && !has_password
+    {
+        return failure("Enter the password or token for this username.".into());
+    }
     let mut errors: Vec<String> = Vec::new();
     if repository.is_empty() {
         errors.push("The git repository field is required.".into());
@@ -278,6 +301,24 @@ pub async fn update(
     if !COMMIT_SHA.is_match(&sha) {
         errors.push("The git commit sha field format is invalid.".into());
     }
+    if let Some(u) = &https_username {
+        if u.chars().count() > 255 {
+            errors.push(
+                "The git https username field must not be greater than 255 characters.".into(),
+            );
+        } else if !crate::routes::applications::GIT_HTTPS_USERNAME.is_match(u) {
+            errors.push("The git https username field format is invalid.".into());
+        }
+    }
+    if let Some(p) = raw("git_https_password") {
+        if p.chars().count() > 2048 {
+            errors.push(
+                "The git https password field must not be greater than 2048 characters.".into(),
+            );
+        } else if !crate::routes::applications::GIT_HTTPS_PASSWORD.is_match(&p) {
+            errors.push("The git https password field format is invalid.".into());
+        }
+    }
     if let Some(first) = errors.first() {
         let message = match errors.len() {
             1 => first.clone(),
@@ -286,18 +327,61 @@ pub async fn update(
         };
         return failure(message);
     }
-    apps::update_if_changed(
-        &state.db,
-        a.id,
-        &[
-            ("git_repository", ColumnValue::Text(Some(repository))),
-            ("git_branch", ColumnValue::Text(Some(branch))),
-            ("git_commit_sha", ColumnValue::Text(Some(sha))),
-        ],
-        state.now(),
-    )
-    .await?;
+    let mut columns = vec![
+        ("git_repository", ColumnValue::Text(Some(repository))),
+        ("git_branch", ColumnValue::Text(Some(branch))),
+        ("git_commit_sha", ColumnValue::Text(Some(sha))),
+    ];
+    if state
+        .db
+        .schema()
+        .has_column("applications", "git_https_password")
+    {
+        // An untouched empty field keeps a null username.
+        let username =
+            https_username.filter(|u| !u.is_empty() || a.str("git_https_username").is_some());
+        if let Some(password) = https_password {
+            let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+            columns.push(("git_https_username", ColumnValue::Text(username)));
+            columns.push((
+                "git_https_password",
+                ColumnValue::Text(Some(enc.encrypt_string(&password))),
+            ));
+        } else if has_password {
+            columns.push(("git_https_username", ColumnValue::Text(username)));
+        }
+    }
+    apps::update_if_changed(&state.db, a.id, &columns, state.now()).await?;
     Ok(ok(json!({"message": "Application source updated!"})).into_response())
+}
+
+/// `Source::removeGitHttpsCredential()`.
+pub async fn remove_git_https_credential(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    let a = find(&state, &ctx, &uuid).await?;
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Unauthorized);
+    }
+    if state
+        .db
+        .schema()
+        .has_column("applications", "git_https_password")
+    {
+        apps::update_if_changed(
+            &state.db,
+            a.id,
+            &[
+                ("git_https_username", ColumnValue::Text(None)),
+                ("git_https_password", ColumnValue::Text(None)),
+            ],
+            state.now(),
+        )
+        .await?;
+    }
+    Ok(ok(json!({"message": "HTTPS credentials removed."})).into_response())
 }
 
 /// `Source::setPrivateKey()` (`private_key_id`) and `Source::changeSource()` (`source_id` +

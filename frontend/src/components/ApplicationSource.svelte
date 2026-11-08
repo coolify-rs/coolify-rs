@@ -15,10 +15,11 @@
 
   let { uuid, onsaved }: { uuid: string; onsaved: () => Promise<void> } = $props();
 
-  type Form = { gitRepository: string; gitBranch: string; gitCommitSha: string };
+  type Form = { gitRepository: string; gitBranch: string; gitCommitSha: string; gitHttpsUsername: string; gitHttpsPassword: string };
+  const empty: Form = { gitRepository: '', gitBranch: '', gitCommitSha: '', gitHttpsUsername: '', gitHttpsPassword: '' };
   let data = $state<ApplicationSource | null>(null);
-  let form = $state<Form>({ gitRepository: '', gitBranch: '', gitCommitSha: '' });
-  let saved = $state<Form>({ gitRepository: '', gitBranch: '', gitCommitSha: '' });
+  let form = $state<Form>({ ...empty });
+  let saved = $state<Form>({ ...empty });
   let saving = $state(false);
   let changing = $state<SourceCard | null>(null);
   const dirty = $derived(JSON.stringify(form) !== JSON.stringify(saved));
@@ -31,7 +32,13 @@
   async function load() {
     const d = await appUi.source(uuid);
     data = d;
-    const next = { gitRepository: d.git_repository ?? '', gitBranch: d.git_branch ?? '', gitCommitSha: d.git_commit_sha ?? '' };
+    const next = {
+      gitRepository: d.git_repository ?? '',
+      gitBranch: d.git_branch ?? '',
+      gitCommitSha: d.git_commit_sha ?? '',
+      gitHttpsUsername: d.git_https_username ?? '',
+      gitHttpsPassword: '',
+    };
     form = { ...next };
     saved = { ...next };
   }
@@ -49,6 +56,8 @@
         git_repository: form.gitRepository,
         git_branch: form.gitBranch,
         git_commit_sha: form.gitCommitSha,
+        git_https_username: form.gitHttpsUsername,
+        git_https_password: form.gitHttpsPassword,
       });
       notify.success(r.message);
       await load();
@@ -57,6 +66,18 @@
       notify.failure(e instanceof ApiError ? e.message : String(e));
     } finally {
       saving = false;
+    }
+  }
+
+  /** `removeGitHttpsCredential()`. */
+  async function removeGitHttpsCredential() {
+    try {
+      const r = await appUi.removeGitHttpsCredential(uuid);
+      notify.success(r.message);
+      await load();
+      await onsaved();
+    } catch (e) {
+      notify.failure(e instanceof ApiError ? e.message : String(e));
     }
   }
 
@@ -170,6 +191,38 @@
           <FormInput placeholder="HEAD" id="gitCommitSha" label="Commit SHA" disabled={!canUpdate} bind:value={form.gitCommitSha} />
         </div>
       </SettingsSection>
+
+      {#if data.deployment_type_other}
+        <SettingsSection
+          title="HTTPS credentials"
+          description="The username and password or access token coolify-rs uses to clone a private repository from a custom Git host (Azure DevOps, Bitbucket, Gitea, and others) over HTTP(S). coolify-rs sends them only to the host of the repository URL and never shows the saved password or token."
+        >
+          {#snippet actions()}
+            {#if data?.has_git_https_password && canUpdate}
+              <button type="button" class="button button-error" onclick={removeGitHttpsCredential}>Remove credentials</button>
+            {/if}
+          {/snippet}
+          <div class="grid gap-4 lg:grid-cols-2">
+            <FormInput
+              id="gitHttpsUsername"
+              label="Username"
+              autocomplete="off"
+              helper="Some hosts accept any username with an access token (for example Azure DevOps)."
+              disabled={!canUpdate}
+              bind:value={form.gitHttpsUsername}
+            />
+            <FormInput
+              id="gitHttpsPassword"
+              type="password"
+              label="Password or token"
+              autocomplete="new-password"
+              placeholder={data.has_git_https_password ? 'Saved. Enter a new value to replace it.' : ''}
+              disabled={!canUpdate}
+              bind:value={form.gitHttpsPassword}
+            />
+          </div>
+        </SettingsSection>
+      {/if}
     </form>
 
     {#if data.private_key_id != null}

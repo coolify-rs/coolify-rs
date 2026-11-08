@@ -163,6 +163,8 @@ struct BuildState {
     port: String,
     branch: String,
     full_repo_url: String,
+    /// `gitHttpsCredentialConfigOption()` of the application.
+    git_https_option: Option<String>,
     github_token: Option<String>,
     coolify_variables: String,
     production_image: String,
@@ -937,7 +939,7 @@ impl Jobs {
         server_id: i64,
         include_preview: bool,
     ) -> (Vec<String>, Vec<String>) {
-        self.application_log_redaction_secrets(app, server_id, include_preview, true)
+        self.application_log_redaction_secrets(app, Some(server_id), include_preview, true)
             .await
     }
 
@@ -949,14 +951,50 @@ impl Jobs {
         server_id: i64,
         include_preview: bool,
     ) -> (Vec<String>, Vec<String>) {
-        self.application_log_redaction_secrets(app, server_id, include_preview, false)
+        self.application_log_redaction_secrets(app, Some(server_id), include_preview, false)
             .await
+    }
+
+    /// `logRedactionSecretsFor($application, includePreview: true, resolveRemoteSecrets: false)['locked']`
+    /// (`redactLockedValuesInGeneratedCompose()`).
+    pub async fn application_locked_values(
+        &self,
+        app: &ApplicationRow,
+        server_id: Option<i64>,
+    ) -> Vec<String> {
+        self.application_log_redaction_secrets(app, server_id, true, false)
+            .await
+            .1
+    }
+
+    /// `logRedactionSecretsFor($service, resolveRemoteSecrets: false)['locked']`.
+    pub async fn service_locked_values(
+        &self,
+        service_id: i64,
+        team_id: i64,
+        server_id: Option<i64>,
+    ) -> Vec<String> {
+        let Ok(Some((environment_id, project_id, redact_all))) =
+            coolify_db::scheduled_tasks::service_log_context(&self.0.db, service_id).await
+        else {
+            return Vec::new();
+        };
+        let owner = Owner {
+            morph: "App\\Models\\Service",
+            id: service_id,
+            team_id,
+            project_id,
+            environment_id,
+        };
+        self.owner_log_redaction_secrets(&owner, redact_all, server_id, false, false)
+            .await
+            .1
     }
 
     async fn application_log_redaction_secrets(
         &self,
         app: &ApplicationRow,
-        server_id: i64,
+        server_id: Option<i64>,
         include_preview: bool,
         resolve_remote: bool,
     ) -> (Vec<String>, Vec<String>) {
@@ -972,14 +1010,28 @@ impl Jobs {
             .get("redact_all_env_values_in_logs")
             .and_then(Value::as_bool)
             != Some(false);
-        self.owner_log_redaction_secrets(
-            &owner,
-            redact_all,
-            Some(server_id),
-            include_preview,
-            resolve_remote,
-        )
-        .await
+        let (known, locked) = self
+            .owner_log_redaction_secrets(
+                &owner,
+                redact_all,
+                server_id,
+                include_preview,
+                resolve_remote,
+            )
+            .await;
+        // The HTTPS credential of the repository and its Basic auth header value come first.
+        let mut all = Vec::new();
+        if let Some(password) =
+            git::git_https_password(app, self.0.encrypter.as_ref()).filter(|p| !p.trim().is_empty())
+        {
+            all.push(git::git_https_basic_token(
+                app.str("git_https_username"),
+                &password,
+            ));
+            all.insert(0, password);
+        }
+        all.extend(locked);
+        (known, all)
     }
 
     /// `logRedactionSecretsFor($service)`.

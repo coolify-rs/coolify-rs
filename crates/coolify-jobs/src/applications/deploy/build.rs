@@ -898,6 +898,8 @@ impl Run {
         self.b.kind = kind;
         self.b.repository = repo;
         self.b.port = port;
+        self.b.git_https_option =
+            git::application_git_https_option(&self.app, kind, self.jobs.0.encrypter.as_ref());
         Ok(())
     }
 
@@ -958,6 +960,7 @@ impl Run {
             source_key: source_key.as_deref(),
             pull_request_id: self.b.pull_request_id,
             git_type: self.b.git_type.as_deref(),
+            https_option: self.b.git_https_option.as_deref(),
         })
         .map_err(Fail::new)?;
         self.b.branch = import.branch.clone();
@@ -1143,8 +1146,13 @@ impl Run {
     /// `gitLsRemoteCommand($ref, $identityFile)`.
     fn ls_remote_command(&self, reference: &str, identity: Option<&str>) -> String {
         let ssh = git::git_ssh_command(&self.b.port, identity, true);
+        let git = self
+            .b
+            .git_https_option
+            .as_ref()
+            .map_or_else(|| "git".to_owned(), |o| format!("git {o}"));
         format!(
-            "GIT_SSH_COMMAND=\"{ssh}\" git ls-remote {} {}",
+            "GIT_SSH_COMMAND=\"{ssh}\" {git} ls-remote {} {}",
             quote(&self.b.full_repo_url),
             quote(reference)
         )
