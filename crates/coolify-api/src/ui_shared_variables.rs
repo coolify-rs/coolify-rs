@@ -165,6 +165,21 @@ async fn scope_data(
     let Some(res) = resolve(&state, &ctx, &q).await? else {
         return Ok(ok(json!({"found": false})).into_response());
     };
+    // `viewSharedVariables`: team and server variables need team-wide read (`access.team-wide` on
+    // their pages), project and environment variables read access there.
+    let readable = crate::routes::shared_envs::scope_allows(
+        &ctx,
+        res.scope,
+        coolify_domain::AccessLevel::Read,
+    );
+    if !readable {
+        return Err(match res.scope {
+            Scope::Team | Scope::Server(_) => {
+                ApiError::Message(StatusCode::FORBIDDEN, crate::auth::TEAM_WIDE_DENIED_MESSAGE)
+            }
+            Scope::Project(_) | Scope::Environment(_) => ApiError::Unauthorized,
+        });
+    }
     let rows = sv::list(&state.db, ctx.team_id, res.scope).await?;
     let mut variables = Vec::new();
     for r in &rows {

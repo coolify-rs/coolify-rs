@@ -396,6 +396,17 @@ pub(super) async fn show(
         Ok(o) => o,
         Err(r) => return Ok(r),
     };
+    // `authorize('viewSharedVariables', $owner)` (fb854a7cf).
+    let id = int(&o.row, "id");
+    let read = coolify_domain::AccessLevel::Read;
+    let allowed = match scope.as_str() {
+        "project" => ctx.can(read, &coolify_domain::Target::project(id)),
+        "environment" => ctx.can(read, &coolify_domain::Target::environment(id)),
+        _ => ctx.allows_team_wide(read),
+    };
+    if !allowed {
+        return Err(ApiError::Unauthorized);
+    }
     Ok(ok(payload(&state, &ctx, &scope, &o, &base(&headers)).await?).into_response())
 }
 
