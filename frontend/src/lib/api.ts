@@ -226,7 +226,16 @@ export interface TeamPageData {
     is_two_factor_required: boolean;
     avatar_url: string | null;
   };
-  members: { id: number; name: string; email: string; role: Role; two_factor: boolean | null; avatar_url: string | null }[];
+  members: {
+    id: number;
+    name: string;
+    email: string;
+    role: Role;
+    two_factor: boolean | null;
+    avatar_url: string | null;
+    /** `Access::summary`, for owners and admins, of members with the member role. */
+    access_summary?: string | null;
+  }[];
   me: number;
   my_role: Role;
   can_update: boolean;
