@@ -144,3 +144,28 @@ async fn executions_record_the_worker_host_when_the_column_exists() {
     db.pool().close().await;
     tdb.drop_db().await;
 }
+
+/// `CleanupHelperContainersJob`: only helper containers named after a deployment that is not
+/// queued or in progress are removed; backups, imports and file browsers keep theirs.
+#[tokio::test]
+async fn only_finished_deployment_helpers_are_cleaned_up() {
+    let tdb = TestDb::new(SEED).await;
+    tdb.db
+        .pool()
+        .execute(
+            "INSERT INTO application_deployment_queues (application_id, deployment_uuid, status) VALUES \
+             ('1', 'done', 'finished'), ('1', 'failed', 'failed'), ('1', 'running', 'in_progress'), ('1', 'waiting', 'queued')",
+        )
+        .await
+        .unwrap();
+    let names: Vec<String> = ["done", "failed", "running", "waiting", "backup-helper"]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    let mut finished = coolify_db::instance_jobs::finished_deployment_uuids(&tdb.db, &names)
+        .await
+        .unwrap();
+    finished.sort();
+    assert_eq!(finished, vec!["done".to_owned(), "failed".to_owned()]);
+    tdb.drop_db().await;
+}

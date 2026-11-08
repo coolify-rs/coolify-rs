@@ -554,13 +554,13 @@ pub async fn application_id_with_trashed(db: &Db, uuid: &str) -> DbResult<Option
     )
 }
 
-/// The active deployments of `CleanupHelperContainersJob`.
-pub async fn active_deployment_uuids(db: &Db, server_id: i64) -> DbResult<Vec<String>> {
+/// `CleanupHelperContainersJob`: the names that are UUIDs of deployments not queued or in progress.
+pub async fn finished_deployment_uuids(db: &Db, names: &[String]) -> DbResult<Vec<String>> {
     Ok(sqlx::query_scalar(
         "SELECT deployment_uuid FROM application_deployment_queues \
-         WHERE server_id = $1 AND status IN ('in_progress', 'queued')",
+         WHERE deployment_uuid = ANY($1) AND status NOT IN ('in_progress', 'queued')",
     )
-    .bind(server_id)
+    .bind(names)
     .fetch_all(db.pool())
     .await?)
 }

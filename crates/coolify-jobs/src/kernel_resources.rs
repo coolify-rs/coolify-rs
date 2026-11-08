@@ -22,7 +22,7 @@ use crate::scheduler::allowed;
 use crate::server::ServerInfo;
 
 /// `CleanupHelperContainersJob::helperContainersCommand`.
-const HELPER_CONTAINERS_COMMAND: &str = r#"docker container ps --format '{{json .}}' | jq -s 'map(select(.Image|test("(^|/)coollabsio/coolify-helper(:|$)")))'"#;
+const HELPER_CONTAINERS_COMMAND: &str = r#"docker container ps --format '{{json .}}' | jq -s 'map(select(.Image|test("(^|/)coollabsio/coolify-helper(:|@)")))'"#;
 
 /// `ServerCloudProviderStatusCheckJob::$timeout`.
 const PROVIDER_CHECK_TIMEOUT: Duration = Duration::from_secs(120);
@@ -266,12 +266,11 @@ impl Jobs {
         });
     }
 
-    /// `CleanupHelperContainersJob::handle`.
+    /// `CleanupHelperContainersJob::handle`: removes helper containers of finished deployments.
+    /// Backups, imports and file browsers also run in helper containers, so a container is removed
+    /// only when its name is the UUID of a deployment that is not queued or in progress.
     pub async fn cleanup_helper_containers(&self, row: &ServerRow) -> Result<(), String> {
         let db = &self.0.db;
-        let active = queries::active_deployment_uuids(db, row.id)
-            .await
-            .map_err(|e| e.to_string())?;
         let server = ServerInfo::from_row(row);
         let target = server.target(self).await?;
         let output = self
@@ -283,19 +282,38 @@ impl Jobs {
             )
             .await
             .unwrap_or_default();
-        let containers: Vec<Value> = serde_json::from_str(&output).unwrap_or_default();
-        for c in containers {
-            let name = c.get("Names").and_then(Value::as_str).unwrap_or_default();
-            let id = c.get("ID").and_then(Value::as_str).unwrap_or_default();
-            if id.is_empty() || active.iter().any(|d| name.contains(d.as_str())) {
+        let containers: Vec<(String, String)> = serde_json::from_str::<Vec<Value>>(&output)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|c| {
+                let id = c
+                    .get("ID")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())?;
+                let name = c
+                    .get("Names")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())?;
+                Some((id.to_owned(), name.to_owned()))
+            })
+            .collect();
+        if containers.is_empty() {
+            return Ok(());
+        }
+        let names: Vec<String> = containers.iter().map(|(_, name)| name.clone()).collect();
+        let finished = queries::finished_deployment_uuids(db, &names)
+            .await
+            .map_err(|e| e.to_string())?;
+        for (id, name) in containers {
+            if !finished.contains(&name) {
                 continue;
             }
             tracing::info!(
-                container = name,
-                id,
-                "CleanupHelperContainersJob - Removing orphaned helper container"
+                container = %name,
+                id = %id,
+                "CleanupHelperContainersJob - Removing orphaned deployment helper container"
             );
-            let command = format!("docker container rm -f {id}");
+            let command = format!("docker container rm -f {}", quote(&id));
             let _ = self
                 .remote()
                 .run_quiet(
