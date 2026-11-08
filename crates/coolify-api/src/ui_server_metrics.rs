@@ -11,6 +11,8 @@ use coolify_jobs::server::ServerInfo;
 use coolify_jobs::server_ops::{Srv, sentinel};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::audit::Meta;
 use crate::auth::AuthCtx;
@@ -216,74 +218,176 @@ fn endpoint(container: Option<&str>, kind: &str, from: &str, mins: i64) -> Strin
     }
 }
 
-/// `HasMetrics::prefetchMetrics`: `None` when the round trip failed.
+/// What `SentinelMetricsClient::fetchOverSsh()` keeps per server: the cooldown of an unavailable
+/// server, the short response cache and the one read in flight.
+#[derive(Default)]
+struct SshFetches {
+    unavailable_until: HashMap<i64, Instant>,
+    responses: HashMap<String, (Instant, String)>,
+    inflight_until: HashMap<i64, Instant>,
+}
+
+static SSH_FETCHES: LazyLock<Mutex<SshFetches>> =
+    LazyLock::new(|| Mutex::new(SshFetches::default()));
+
+/// How long a server stays unavailable after a failed metrics read.
+const UNAVAILABLE_COOLDOWN: Duration = Duration::from_secs(60);
+/// How long a metrics response is shared.
+const RESPONSE_TTL: Duration = Duration::from_secs(10);
+/// The expiry of the in-flight lock.
+const INFLIGHT_LOCK: Duration = Duration::from_secs(15);
+/// `instant_remote_process(..., timeout: 8, maxAttempts: 1)`.
+const SSH_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Releases the in-flight lock of a server.
+struct Inflight(i64);
+
+impl Drop for Inflight {
+    fn drop(&mut self) {
+        if let Ok(mut state) = SSH_FETCHES.lock() {
+            state.inflight_until.remove(&self.0);
+        }
+    }
+}
+
+/// `SentinelMetricsClient::fetchOverSsh`: optional charts do not wait for the general SSH
+/// timeout. One in-flight read per server, a short shared response cache and a cooldown keep
+/// repeated dashboard refreshes from reconnecting to an unavailable server. `None`: no answer.
+pub(crate) async fn fetch_over_ssh(
+    srv: &Srv,
+    commands: &[String],
+    cache_key: &str,
+) -> Option<String> {
+    let id = srv.row.id;
+    let response_key = format!("{id}:{cache_key}");
+    let lock = {
+        let mut state = SSH_FETCHES.lock().ok()?;
+        let now = Instant::now();
+        if state.unavailable_until.get(&id).is_some_and(|t| *t > now) {
+            return None;
+        }
+        if let Some((until, body)) = state.responses.get(&response_key)
+            && *until > now
+        {
+            return Some(body.clone());
+        }
+        if state.inflight_until.get(&id).is_some_and(|t| *t > now) {
+            return None;
+        }
+        state.inflight_until.insert(id, now + INFLIGHT_LOCK);
+        Inflight(id)
+    };
+    let response = srv
+        .run_once(commands, "server.metrics", SSH_TIMEOUT)
+        .await
+        .ok()
+        .flatten()
+        .filter(|r| !r.trim().is_empty());
+    let mut state = SSH_FETCHES.lock().ok()?;
+    let now = Instant::now();
+    let answer = match response {
+        Some(body) => {
+            state.responses.retain(|_, (until, _)| *until > now);
+            state
+                .responses
+                .insert(response_key, (now + RESPONSE_TTL, body.clone()));
+            Some(body)
+        }
+        None => {
+            state
+                .unavailable_until
+                .insert(id, now + UNAVAILABLE_COOLDOWN);
+            None
+        }
+    };
+    drop(state);
+    drop(lock);
+    answer
+}
+
+/// `docker exec` of a Sentinel read: `curl` reads the token from stdin (`-H @-`), so it is not a
+/// process argument. The token only has letters, digits and `._-+/=`, so it cannot end the heredoc.
+fn sentinel_curl(url: &str, token: &str) -> String {
+    format!(
+        "curl -sS --connect-timeout 2 --max-time 3 -H @- \"{url}\" <<'COOLIFY_SENTINEL_AUTH'\nAuthorization: Bearer {token}\nCOOLIFY_SENTINEL_AUTH"
+    )
+}
+
+fn sentinel_script(script: &str) -> String {
+    format!(
+        "docker exec -i coolify-sentinel sh -s <<'COOLIFY_SENTINEL_SCRIPT'\n{script}\nCOOLIFY_SENTINEL_SCRIPT"
+    )
+}
+
+/// The `static::class.':'.$this->uuid` part of the `fetchOverSsh` cache key.
+fn owner_key(srv: &Srv, container: Option<&str>) -> String {
+    match container {
+        Some(uuid) => format!("container:{uuid}"),
+        None => format!("App\\Models\\Server:{}", srv.row.uuid),
+    }
+}
+
+/// `$prefetchedMetricResponses`: a type maps to `None` when its prefetch failed, so its getter
+/// does not try the unavailable server again.
+pub(crate) type Prefetched = HashMap<&'static str, Option<String>>;
+
+/// `HasMetrics::prefetchMetrics`: several types in one SSH round trip, separated by 0x1E.
 pub(crate) async fn prefetch(
     srv: &Srv,
     types: &[&'static str],
     container: Option<&str>,
     mins: i64,
-) -> Option<HashMap<&'static str, String>> {
+) -> Prefetched {
+    let mut answers: Prefetched = types.iter().map(|t| (*t, None)).collect();
     let from = (chrono::Utc::now() - chrono::Duration::minutes(mins))
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
-    let token = sentinel::ensure_valid_token(srv).await.ok()?;
+    let Ok(token) = sentinel::ensure_valid_token(srv).await else {
+        return answers;
+    };
     let script = types
         .iter()
-        .map(|t| {
-            format!(
-                "curl -s -H @- \"{}\" <<'COOLIFY_SENTINEL_AUTH'\nAuthorization: Bearer {token}\nCOOLIFY_SENTINEL_AUTH",
-                endpoint(container, t, &from, mins)
-            )
-        })
+        .map(|t| sentinel_curl(&endpoint(container, t, &from, mins), &token))
         .collect::<Vec<_>>()
         .join("\nprintf '\\036'\n");
-    let output = srv
-        .run_quiet(
-            &[format!(
-                "docker exec -i coolify-sentinel sh -s <<'COOLIFY_SENTINEL_SCRIPT'\n{script}\nCOOLIFY_SENTINEL_SCRIPT"
-            )],
-            "server.metrics",
-        )
-        .await?;
+    let key = format!("{}:{}:{mins}", owner_key(srv, container), types.join(","));
+    let Some(output) = fetch_over_ssh(srv, &[sentinel_script(&script)], &key).await else {
+        return answers;
+    };
     let parts: Vec<&str> = output.split('\u{1e}').collect();
     if parts.len() != types.len() {
-        return None;
+        return answers;
     }
-    Some(
-        types
-            .iter()
-            .zip(parts)
-            .map(|(t, r)| (*t, r.trim().to_string()))
-            .collect(),
-    )
+    for (t, r) in types.iter().zip(parts) {
+        answers.insert(*t, Some(r.trim().to_string()));
+    }
+    answers
 }
 
-/// `HasMetrics::fetchMetricRows`: the prefetched answer, or one fetch of its own when the prefetch
-/// failed (a large range can exceed what one round trip carries).
+/// `HasMetrics::fetchMetricRows`: the prefetched answer, or one fetch of its own. `Ok(None)` when
+/// there is no answer (the getters then return `null`).
 async fn fetch_rows(
     srv: &Srv,
-    answers: &Option<HashMap<&'static str, String>>,
-    kind: &str,
+    answers: &mut Prefetched,
+    kind: &'static str,
     container: Option<&str>,
     mins: i64,
-) -> Result<Vec<Value>, String> {
-    if let Some(answers) = answers {
-        return rows(answers.get(kind));
+) -> Result<Option<Vec<Value>>, String> {
+    let response = if let Some(prefetched) = answers.remove(kind) {
+        prefetched
+    } else {
+        let from = (chrono::Utc::now() - chrono::Duration::minutes(mins))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        let token = sentinel::ensure_valid_token(srv).await?;
+        let url = endpoint(container, kind, &from, mins);
+        let key = format!("{}:{kind}:{mins}", owner_key(srv, container));
+        fetch_over_ssh(srv, &[sentinel_script(&sentinel_curl(&url, &token))], &key).await
+    };
+    match response {
+        None => Ok(None),
+        Some(r) => rows(Some(&r)).map(Some),
     }
-    let from = (chrono::Utc::now() - chrono::Duration::minutes(mins))
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
-    let token = sentinel::ensure_valid_token(srv).await?;
-    let url = endpoint(container, kind, &from, mins);
-    let response = srv
-        .run_quiet(
-            &[format!(
-                "docker exec coolify-sentinel sh -c 'curl -H \"Authorization: Bearer {token}\" \"{url}\"'"
-            )],
-            "server.metrics",
-        )
-        .await;
-    rows(response.as_ref())
 }
 
 /// `HasMetrics::fetchMetricRows`: an error in the answer is an error, an empty answer has no rows.
@@ -400,20 +504,21 @@ async fn data(
         .unwrap_or(5);
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let srv = Srv::from_row(jobs, s);
-    let answers = prefetch(&srv, &TYPES, None, mins).await;
+    let mut answers = prefetch(&srv, &TYPES, None, mins).await;
     let series = |f: &str, rows_: &[Value]| series_json(&map_rows(rows_, f, mins));
-    let cpu = match fetch_rows(&srv, &answers, "cpu", None, mins).await {
-        Ok(r) => series("percent", &r),
+    let cpu = match fetch_rows(&srv, &mut answers, "cpu", None, mins).await {
+        Ok(r) => r.map_or(Value::Null, |r| series("percent", &r)),
         Err(e) => return toast_error(e),
     };
-    let memory = match fetch_rows(&srv, &answers, "memory", None, mins).await {
-        Ok(r) => series("usedPercent", &r),
+    let memory = match fetch_rows(&srv, &mut answers, "memory", None, mins).await {
+        Ok(r) => r.map_or(Value::Null, |r| series("usedPercent", &r)),
         Err(e) => return toast_error(e),
     };
     // Disk, network and load arrived in a later Sentinel: an older one answers 404 and still shows CPU and memory.
-    let disk = fetch_rows(&srv, &answers, "disk", None, mins)
+    let disk = fetch_rows(&srv, &mut answers, "disk", None, mins)
         .await
         .ok()
+        .flatten()
         .map(|r| {
             // `SentinelMetricsClient::rootMountName`, as the Fleet page picks it.
             let root: Vec<Value> = if r.iter().any(|row| row.get("mount").is_some()) {
@@ -426,11 +531,15 @@ async fn data(
             };
             series("usedPercent", &root)
         });
-    let load = fetch_rows(&srv, &answers, "load", None, mins)
+    let load = fetch_rows(&srv, &mut answers, "load", None, mins)
         .await
         .ok()
+        .flatten()
         .map(|r| series("load1", &r));
-    let network = fetch_rows(&srv, &answers, "network", None, mins).await.ok();
+    let network = fetch_rows(&srv, &mut answers, "network", None, mins)
+        .await
+        .ok()
+        .flatten();
     let (rx, tx) = network.map_or((json!([]), json!([])), |r| {
         (series("rxBytesPerSec", &r), series("txBytesPerSec", &r))
     });
@@ -483,16 +592,18 @@ async fn resource_data(
         .unwrap_or(5);
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let srv = Srv::from_row(jobs, server);
-    let answers = prefetch(&srv, &["cpu", "memory"], Some(&res.uuid), mins).await;
-    let cpu = match fetch_rows(&srv, &answers, "cpu", Some(&res.uuid), mins).await {
-        Ok(r) => map_rows(&r, "percent", mins),
+    let mut answers = prefetch(&srv, &["cpu", "memory"], Some(&res.uuid), mins).await;
+    let cpu = match fetch_rows(&srv, &mut answers, "cpu", Some(&res.uuid), mins).await {
+        Ok(r) => r.map_or(Value::Null, |r| series_json(&map_rows(&r, "percent", mins))),
         Err(e) => return toast_error(e),
     };
-    let memory = match fetch_rows(&srv, &answers, "memory", Some(&res.uuid), mins).await {
-        Ok(r) => bytes_to_megabytes(&map_rows(&r, "used", mins)),
+    let memory = match fetch_rows(&srv, &mut answers, "memory", Some(&res.uuid), mins).await {
+        Ok(r) => r.map_or(Value::Null, |r| {
+            series_json(&bytes_to_megabytes(&map_rows(&r, "used", mins)))
+        }),
         Err(e) => return toast_error(e),
     };
-    Ok(ok(json!({"cpu": series_json(&cpu), "memory": series_json(&memory)})).into_response())
+    Ok(ok(json!({"cpu": cpu, "memory": memory})).into_response())
 }
 
 /// `Dashboard\ServerMetricsChart::loadData`: `null` when nothing is dispatched.
@@ -510,14 +621,13 @@ async fn dashboard_chart(
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let srv = Srv::from_row(jobs, s);
-    let answers = prefetch(&srv, &["cpu", "memory"], None, 10).await;
-    match (
-        fetch_rows(&srv, &answers, "cpu", None, 10).await,
-        fetch_rows(&srv, &answers, "memory", None, 10).await,
-    ) {
+    let mut answers = prefetch(&srv, &["cpu", "memory"], None, 10).await;
+    let cpu = fetch_rows(&srv, &mut answers, "cpu", None, 10).await;
+    let memory = fetch_rows(&srv, &mut answers, "memory", None, 10).await;
+    match (cpu, memory) {
         (Ok(cpu), Ok(memory)) => Ok(ok(json!({
-            "cpu": series_json(&map_rows(&cpu, "percent", 10)),
-            "memory": series_json(&map_rows(&memory, "usedPercent", 10)),
+            "cpu": cpu.map_or(Value::Null, |r| series_json(&map_rows(&r, "percent", 10))),
+            "memory": memory.map_or(Value::Null, |r| series_json(&map_rows(&r, "usedPercent", 10))),
         }))
         .into_response()),
         // `report($e)`: the chart keeps what it shows.
