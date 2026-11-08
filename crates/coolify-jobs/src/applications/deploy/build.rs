@@ -773,9 +773,22 @@ impl Run {
         let mut vars = env::load_raw_for(&self.jobs.0.db, enc, &owner, Some(self.server.id))
             .await
             .map_err(Fail::new)?;
+        self.apply_exact_escaping(&mut vars);
         self.resolve_remote_secrets(&mut vars).await?;
         self.b.variables = Some(vars.clone());
         Ok(vars)
+    }
+
+    /// `Application::useExactEscaping()`: the application parses its Compose file when it uses the
+    /// Docker Compose build pack without a raw Compose deployment.
+    pub(super) fn apply_exact_escaping(&self, vars: &mut [Var]) {
+        let parses_compose = self.app.str("build_pack") == Some("dockercompose")
+            && !self.app.setting_bool("is_raw_compose_deployment_enabled");
+        env::apply_resource_exact_escaping(
+            vars,
+            parses_compose,
+            self.app.str("docker_compose_raw"),
+        );
     }
 
     /// `$this->application->environment_variables()->withoutBuildpackControlVariables()->where('is_buildtime', true)`,

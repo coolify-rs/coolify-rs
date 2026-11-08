@@ -259,7 +259,9 @@ impl Jobs {
             }
         }
         let server_id = s.server_id();
-        let variables = vars::load_for(&self.0.db, enc, &owner(s), server_id).await?;
+        let mut variables = vars::load_for(&self.0.db, enc, &owner(s), server_id).await?;
+        // `Service::useExactEscaping()`: a service always parses its Compose file.
+        vars::apply_resource_exact_escaping(&mut variables, true, s.str("docker_compose_raw"));
         let rank = |v: &vars::Var| {
             if v.key.starts_with("SERVICE_") {
                 return 1;

@@ -1690,6 +1690,7 @@ impl Run {
                 env::load_raw_for(&self.jobs.0.db, enc, &owner, Some(self.main_server.id))
                     .await
                     .map_err(Fail::new)?;
+            self.apply_exact_escaping(&mut vars);
             self.resolve_remote_secrets(&mut vars).await?;
             vars
         };
