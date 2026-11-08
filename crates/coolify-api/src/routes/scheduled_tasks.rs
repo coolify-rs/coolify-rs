@@ -22,6 +22,7 @@ use crate::routes::storages::can_deploy;
 use crate::serialize::serialize_record;
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 const TASK_NOT_FOUND: ApiError =
     ApiError::Message(StatusCode::NOT_FOUND, "Scheduled task not found.");
@@ -43,6 +44,8 @@ pub struct Resource {
     /// `'application'` or `'service'`, for the audit log.
     pub kind: &'static str,
     pub uuid: String,
+    /// The resource's environment, for its access grants.
+    pub environment_id: Option<i64>,
 }
 
 /// `resolveApplication()`.
@@ -53,6 +56,7 @@ async fn application(state: &AppState, ctx: &AuthCtx, uuid: &str) -> Result<Reso
     Ok(Resource {
         owner: Owner::Application(a.id),
         kind: "application",
+        environment_id: a.int("environment_id"),
         uuid: a.uuid,
     })
 }
@@ -115,9 +119,9 @@ fn uuid_of(task: &Record) -> &str {
     task.get("uuid").and_then(Value::as_str).unwrap_or_default()
 }
 
-/// `$this->authorize('update', $resource)`.
-fn authorize_update(ctx: &AuthCtx) -> Result<(), ApiError> {
-    if ctx.is_team_admin() {
+/// `$this->authorize('update' | 'delete', $resource)`: the grant level on the resource.
+fn authorize(ctx: &AuthCtx, resource: &Resource, level: AccessLevel) -> Result<(), ApiError> {
+    if ctx.can_resource(level, resource.environment_id, &resource.uuid) {
         Ok(())
     } else {
         Err(ApiError::Unauthorized)
@@ -184,7 +188,7 @@ pub async fn create_task(
     uri: &Uri,
     body: &[u8],
 ) -> ApiResult<PhpJson> {
-    authorize_update(ctx)?;
+    authorize(ctx, resource, AccessLevel::Write)?;
     let input = validated_json(headers, uri, body)?;
     validate(
         &input,
@@ -245,7 +249,7 @@ pub async fn update_task(
     uri: &Uri,
     body: &[u8],
 ) -> ApiResult<PhpJson> {
-    authorize_update(ctx)?;
+    authorize(ctx, resource, AccessLevel::Write)?;
     let input = validated_json(headers, uri, body)?;
     validate(
         &input,
@@ -308,7 +312,7 @@ pub async fn delete_task(
     resource: &Resource,
     task_uuid: &str,
 ) -> ApiResult<PhpJson> {
-    authorize_update(ctx)?;
+    authorize(ctx, resource, AccessLevel::Delete)?;
     let task = tasks::find(&state.db, resource.owner, task_uuid)
         .await?
         .ok_or(TASK_NOT_FOUND)?;
@@ -342,7 +346,7 @@ pub async fn execute_task(
     resource: &Resource,
     task_uuid: &str,
 ) -> ApiResult<PhpJson> {
-    authorize_update(ctx)?;
+    authorize(ctx, resource, AccessLevel::Write)?;
     let task = tasks::find(&state.db, resource.owner, task_uuid)
         .await?
         .ok_or(TASK_NOT_FOUND)?;

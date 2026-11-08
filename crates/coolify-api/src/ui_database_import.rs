@@ -25,6 +25,7 @@ use crate::auth::AuthCtx;
 use crate::response::{ApiError, ApiResult, ok};
 use crate::state::AppState;
 use crate::ui_database_general::{server_of, toasts};
+use coolify_domain::grants::AccessLevel;
 
 const NOT_FOUND: ApiError = ApiError::Message(StatusCode::NOT_FOUND, "Database not found.");
 
@@ -68,6 +69,7 @@ fn source_from(input: &Value, kind: &str) -> ImportSource {
         keep_owners: flag("keep_owners"),
         sqlite_database: text("sqlite_database"),
         restore_mysql_users: flag("restore_mysql_users"),
+        own_backups_only: false,
     }
 }
 
@@ -173,7 +175,7 @@ async fn check_file(
     body: Bytes,
 ) -> ApiResult {
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let input: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
@@ -189,6 +191,10 @@ async fn check_file(
             "error",
             "Invalid file path. Path must be absolute and contain only safe characters (alphanumerics, dots, dashes, underscores, slashes).",
         ));
+    }
+    // `StartDatabaseImport::allowsSourcePath`.
+    if !ctx.can_use_team_credentials() && !import::is_own_backup_path(&d, d.team_id, path) {
+        return Ok(toast("error", import::OWN_BACKUPS_ONLY_MESSAGE));
     }
     let Some(server) = server_of(&state, &d).await? else {
         return Ok(toast("error", "Server not found. Please refresh the page."));
@@ -234,7 +240,7 @@ async fn check_s3(
     body: Bytes,
 ) -> ApiResult {
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let input: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
@@ -255,6 +261,10 @@ async fn check_s3(
             "error",
             "Invalid S3 path. Path must contain only safe characters (alphanumerics, dots, dashes, underscores, slashes).",
         ));
+    }
+    // `StartDatabaseImport::allowsSourcePath`.
+    if !ctx.can_use_team_credentials() && !import::is_own_backup_path(&d, d.team_id, clean) {
+        return Ok(toast("error", import::OWN_BACKUPS_ONLY_MESSAGE));
     }
     let Some(row) = parts::s3_by_id(&state.db, storage_id)
         .await?
@@ -317,7 +327,7 @@ async fn run_import(
             "The provided password is incorrect.",
         ));
     }
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let kind = input
@@ -331,7 +341,8 @@ async fn run_import(
         return Ok(toast("error", "Server not found. Please refresh the page."));
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
-    let source = source_from(&input, kind);
+    let mut source = source_from(&input, kind);
+    source.own_backups_only = !ctx.can_use_team_credentials();
     let replace = source.replace_existing;
     let data_dir = crate::routes::database_more::import_data_dir(&state);
     let id = match jobs

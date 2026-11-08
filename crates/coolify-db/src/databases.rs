@@ -111,6 +111,10 @@ pub struct DatabaseRow {
 }
 
 impl DatabaseRow {
+    /// The UUID access grants name: the service's for a service database.
+    pub fn access_uuid(&self) -> &str {
+        self.str("__service_uuid").unwrap_or(&self.uuid)
+    }
     pub fn str(&self, key: &str) -> Option<&str> {
         self.raw.get(key).and_then(|v| v.as_str())
     }
@@ -308,7 +312,7 @@ pub async fn service_database_in_team(
 ) -> DbResult<Option<DatabaseRow>> {
     Ok(service_database_row(db, "d.uuid = $1", uuid)
         .await?
-        .filter(|d| d.team_id == team_id))
+        .filter(|d| d.team_id == team_id && visible(d)))
 }
 
 /// A `ServiceDatabase` by id.
@@ -416,7 +420,7 @@ pub fn visible(d: &DatabaseRow) -> bool {
         d.raw
             .get("environment_id")
             .and_then(serde_json::Value::as_i64),
-        &d.uuid,
+        d.access_uuid(),
     )
 }
 

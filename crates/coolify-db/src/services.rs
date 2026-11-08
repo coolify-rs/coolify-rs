@@ -1408,7 +1408,7 @@ pub async fn project_environment(
             .bind(name)
             .fetch_optional(db.pool())
             .await?;
-    if let Some((id,)) = by_name {
+    if let Some((id,)) = by_name.filter(|(id,)| crate::access::environment_visible(*id)) {
         return Ok(Some(id));
     }
     let by_uuid: Option<(i64,)> =
@@ -1417,7 +1417,9 @@ pub async fn project_environment(
             .bind(uuid)
             .fetch_optional(db.pool())
             .await?;
-    Ok(by_uuid.map(|r| r.0))
+    Ok(by_uuid
+        .map(|r| r.0)
+        .filter(|id| crate::access::environment_visible(*id)))
 }
 
 /// A team's destination by uuid: `(id, morph, server_id)` (`StandaloneDocker`, then `SwarmDocker`).

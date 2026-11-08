@@ -24,6 +24,7 @@ use crate::routes::databases::NOT_FOUND;
 use crate::serialize::serialize_record;
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 /// `ValidationPatterns::ENVIRONMENT_VARIABLE_KEY_PATTERN`.
 static KEY: LazyLock<Regex> =
@@ -278,7 +279,7 @@ pub async fn create(
     body: Bytes,
 ) -> ApiResult {
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let mut input = lenient_json(&headers, &uri, &body);
@@ -334,7 +335,7 @@ pub async fn update(
     body: Bytes,
 ) -> ApiResult {
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let mut input = lenient_json(&headers, &uri, &body);
@@ -398,7 +399,7 @@ pub async fn bulk(
     body: Bytes,
 ) -> ApiResult {
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let input = lenient_json(&headers, &uri, &body);
@@ -497,7 +498,7 @@ pub async fn delete(
     Path((uuid, env_uuid)): Path<(String, String)>,
 ) -> ApiResult {
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let row = parts::variable_by_uuid(&state.db, d.kind.morph(), d.id, &env_uuid)

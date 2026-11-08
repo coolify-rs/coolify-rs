@@ -61,6 +61,30 @@ impl AuthCtx {
         self.can(level, &Target::resource(environment_id, uuid))
     }
 
+    /// `canAccess` on an application.
+    pub fn can_app(
+        &self,
+        level: AccessLevel,
+        a: &coolify_db::applications::ApplicationRow,
+    ) -> bool {
+        self.can_resource(level, a.int("environment_id"), &a.uuid)
+    }
+
+    /// `canAccess` on a standalone database (`DatabasePolicy::allows`: the instance database,
+    /// id 0 of the root team, needs an owner or admin of the root team).
+    pub fn can_db(&self, level: AccessLevel, d: &coolify_db::databases::DatabaseRow) -> bool {
+        if d.id == 0 && d.team_id == coolify_domain::ROOT_TEAM_ID {
+            return self.team_id == coolify_domain::ROOT_TEAM_ID && self.is_team_admin();
+        }
+        self.can_resource(
+            level,
+            d.raw
+                .get("environment_id")
+                .and_then(serde_json::Value::as_i64),
+            d.access_uuid(),
+        )
+    }
+
     /// `AccessResolver::coversWholeTeam`.
     pub fn covers_whole_team(&self) -> bool {
         self.access.covers_whole_team()

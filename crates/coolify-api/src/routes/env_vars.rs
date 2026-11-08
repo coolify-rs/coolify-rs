@@ -25,6 +25,7 @@ use crate::response::{ApiError, ApiResult, created, ok};
 use crate::serialize::{php_truthy, serialize_record};
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 /// `ValidationPatterns::ENVIRONMENT_VARIABLE_KEY_PATTERN`.
 static KEY_PATTERN: LazyLock<Regex> =
@@ -565,7 +566,7 @@ pub async fn application_create(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(APP_NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let input = lenient_json(&headers, &uri, &body);
@@ -588,7 +589,7 @@ pub async fn application_update(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(APP_NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let scope = ResourceScope::application(&a);
@@ -610,7 +611,7 @@ pub async fn application_bulk(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(APP_NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let scope = ResourceScope::application(&a);
@@ -628,7 +629,7 @@ pub async fn application_delete(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(APP_NOT_FOUND_PERIOD)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let scope = ResourceScope::application(&a);

@@ -21,6 +21,7 @@ use crate::routes::servers::input_bool;
 use crate::serialize::{php_truthy, serialize_record};
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
+use coolify_domain::grants::{AccessLevel, Target};
 
 const ENV_NOT_FOUND: ApiError =
     ApiError::Message(StatusCode::NOT_FOUND, "Environment variable not found.");
@@ -109,7 +110,28 @@ fn fields(require_key: bool) -> Vec<Field> {
     ]
 }
 
+/// `SharedEnvironmentVariablePolicy::allows`: project and environment variables follow the
+/// grants on their project or environment; team and server variables need team-wide read to be
+/// read and an owner or admin to be changed.
+pub(crate) fn scope_allows(ctx: &AuthCtx, scope: Scope, level: AccessLevel) -> bool {
+    match scope {
+        Scope::Project(p) => ctx.can(level, &Target::project(p)),
+        Scope::Environment(e) => ctx.can(level, &Target::environment(e)),
+        Scope::Team | Scope::Server(_) => {
+            if level == AccessLevel::Read {
+                ctx.allows_team_wide(AccessLevel::Read)
+            } else {
+                ctx.is_team_admin()
+            }
+        }
+    }
+}
+
 async fn list(state: &AppState, ctx: &AuthCtx, scope: Scope) -> ApiResult {
+    // `viewSharedVariables` of the team, project, environment or server.
+    if !scope_allows(ctx, scope, AccessLevel::Read) {
+        return Err(ApiError::Unauthorized);
+    }
     let rows = sv::list(&state.db, ctx.team_id, scope).await?;
     let items = rows
         .into_iter()
@@ -126,7 +148,13 @@ async fn create_env(
     input: &Input,
 ) -> ApiResult {
     validate(input, &fields(true), CUSTOM_API_MESSAGES, ALLOWED)?;
-    if !ctx.is_team_admin() {
+    // Team and server variables: `create` (owner or admin). Project and environment variables:
+    // `update` on the project or environment.
+    let allowed = match scope {
+        Scope::Team | Scope::Server(_) => ctx.is_team_admin(),
+        Scope::Project(_) | Scope::Environment(_) => scope_allows(ctx, scope, AccessLevel::Write),
+    };
+    if !allowed {
         return Err(ApiError::Unauthorized);
     }
     let key = input.str("key").unwrap_or_default().to_string();
@@ -204,7 +232,7 @@ async fn update_env(
     let current = sv::find(&state.db, ctx.team_id, scope, id)
         .await?
         .ok_or(ENV_NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !scope_allows(ctx, scope, AccessLevel::Write) {
         return Err(ApiError::Unauthorized);
     }
     let input = validated_json(headers, uri, body)?;
@@ -312,7 +340,7 @@ async fn delete_env(
     let current = sv::find(&state.db, ctx.team_id, scope, id)
         .await?
         .ok_or(ENV_NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !scope_allows(ctx, scope, AccessLevel::Write) {
         return Err(ApiError::Unauthorized);
     }
     coolify_db::server_ops::delete_shared_env(&state.db, id).await?;
@@ -380,6 +408,7 @@ async fn environment_scope(
     .fetch_optional(state.db.pool())
     .await
     .map_err(coolify_db::DbError::from)?;
+    let id = id.filter(|id| coolify_db::access::environment_visible(*id));
     Ok(Scope::Environment(id.ok_or(ENV_SCOPE_NOT_FOUND)?))
 }
 

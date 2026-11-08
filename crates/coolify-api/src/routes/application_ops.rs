@@ -28,6 +28,7 @@ use crate::routes::servers::effective_role_is_build;
 use crate::routes::storages::{can_deploy, file_storage};
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 pub(crate) const NOT_FOUND: ApiError =
     ApiError::Message(StatusCode::NOT_FOUND, "Application not found.");
@@ -182,7 +183,7 @@ pub async fn move_to_environment(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let input = lenient_json(&headers, &uri, &body);
@@ -272,10 +273,10 @@ pub async fn migrate(
     Extension(ctx): Extension<AuthCtx>,
     Path(uuid): Path<String>,
 ) -> ApiResult {
-    apps::find_in_team(&state.db, ctx.team_id, &uuid)
+    let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     Err(ApiError::Message(StatusCode::NOT_FOUND, ""))
@@ -330,7 +331,11 @@ pub async fn clone(
     let source = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &source) {
+        return Err(ApiError::Unauthorized);
+    }
+    // `$this->authorize('create', [Application::class, $application->environment])`.
+    if !ctx.can_create_in(source.int("environment_id")) {
         return Err(ApiError::Unauthorized);
     }
     let clone_volumes = input_bool(&input, "clone_volumes");
@@ -602,7 +607,7 @@ pub async fn rollback(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Deploy, &a) {
         return Err(ApiError::Unauthorized);
     }
     let commit = validate_git_ref(input.str("commit").unwrap_or_default(), "rollback commit")
@@ -739,7 +744,7 @@ pub async fn add_destination(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let destination = ops::standalone_docker_in_team(
@@ -792,7 +797,7 @@ pub async fn remove_destination(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let destination = ops::standalone_docker_in_team(&state.db, ctx.team_id, &destination_uuid)

@@ -28,6 +28,7 @@ use crate::response::{ApiError, ApiResult, created, ok};
 use crate::routes::databases::{NOT_FOUND, input_bool};
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 static VOLUME_NAME: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*\n?\z").unwrap_or_else(|_| unreachable!())
@@ -135,7 +136,7 @@ pub async fn create(
 ) -> ApiResult {
     let input = validated_json(&headers, &uri, &body)?;
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     validate(
@@ -392,7 +393,7 @@ pub async fn update(
 ) -> ApiResult {
     let input = validated_json(&headers, &uri, &body)?;
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     validate(
@@ -569,7 +570,7 @@ pub async fn delete(
     Path((uuid, storage_uuid)): Path<(String, String)>,
 ) -> ApiResult {
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Delete, &d) {
         return Err(ApiError::Unauthorized);
     }
     let morph = d.kind.morph();

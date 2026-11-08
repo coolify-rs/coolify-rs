@@ -17,6 +17,7 @@ use crate::auth::AuthCtx;
 use crate::input::{Input, validated_json};
 use crate::response::{ApiError, ApiResult, created, ok};
 use crate::state::AppState;
+use coolify_domain::grants::AccessLevel;
 
 const TOO_SHORT: &str = "Each tag name must be at least 2 characters after sanitization.";
 
@@ -273,7 +274,7 @@ pub async fn application_create(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(APP_NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let tags = create_tag(&state, apps::MORPH, a.id, ctx.team_id, &input).await?;
@@ -289,7 +290,7 @@ pub async fn application_delete(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(APP_NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let message = remove_tag(&state, apps::MORPH, a.id, ctx.team_id, &tag_uuid).await?;

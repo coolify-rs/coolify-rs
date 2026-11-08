@@ -31,6 +31,7 @@ use crate::routes::databases::input_bool;
 use crate::serialize::php_truthy;
 use crate::state::AppState;
 use crate::validation::{Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 /// `$allowedFields` of `update_by_uuid` plus `APPLICATION_SETTING_FIELDS`.
 const ALLOWED: &[&str] = &[
@@ -329,8 +330,8 @@ pub async fn update(
     let found = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND_APPLICATION)?;
-    // `update`, `manageEnvironment` and `deploy` are the same check.
-    if !ctx.is_team_admin() {
+    // `update`, `manageEnvironment` and `deploy`: write includes deploy.
+    if !ctx.can_app(AccessLevel::Write, &found) {
         return Err(ApiError::Unauthorized);
     }
     let instant = input.get("instant_deploy").is_some_and(php_truthy);
