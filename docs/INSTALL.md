@@ -22,7 +22,7 @@ curl -fsSL https://github.com/coolify-rs/coolify-rs/releases/latest/download/ins
 This installs the newest release. To install a particular one, pass its version:
 
 ```bash
-curl -fsSL https://github.com/coolify-rs/coolify-rs/releases/latest/download/install.sh | sudo bash -s 4.6.0-rs.1
+curl -fsSL https://github.com/coolify-rs/coolify-rs/releases/latest/download/install.sh | sudo bash -s 4.6.0-rs.2
 ```
 
 When the script finishes, open `http://<your-server>:8000` and register. The first account owns the instance.
