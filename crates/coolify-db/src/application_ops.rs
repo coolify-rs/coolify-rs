@@ -757,8 +757,8 @@ pub async fn clone_application(
     .await?;
 
     let preview_vars: Vec<i64> = sqlx::query_scalar(
-        "SELECT id FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 AND is_preview = true \
-         ORDER BY CASE WHEN is_required = true THEN 1 WHEN LOWER(key) LIKE 'service_%' THEN 2 ELSE 3 END, LOWER(key) ASC",
+        // `environment_variables_preview` has no order since v4.6.0.
+        "SELECT id FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 AND is_preview = true",
     )
     .bind(MORPH)
     .bind(c.source_id)
