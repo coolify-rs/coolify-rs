@@ -1324,7 +1324,12 @@ impl Jobs {
                 if let Some(p) = first("POSTGRES_PASSWORD") {
                     secrets.insert("postgres_password", p);
                 }
-                Some(first("POSTGRES_DB").unwrap_or(user))
+                // The databases picked in the backup settings come first, as for standalone databases.
+                Some(
+                    configured()
+                        .or_else(|| first("POSTGRES_DB"))
+                        .unwrap_or(user),
+                )
             }
             Kind::Mysql | Kind::Mariadb => {
                 let maria = d.kind == Kind::Mariadb;
@@ -1348,7 +1353,7 @@ impl Jobs {
                 } else {
                     first("MYSQL_DATABASE")
                 };
-                match database.or_else(configured) {
+                match configured().or(database) {
                     Some(n) => Some(n),
                     None => {
                         let env_names = if maria {
