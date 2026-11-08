@@ -666,6 +666,9 @@ impl Kind {
     }
 }
 
+/// The image of a new SQLite database (`create_standalone_sqlite`).
+pub const SQLITE_IMAGE: &str = "peakimages/sqlite:3.54.1-v0.2.0";
+
 /// `create_standalone_*` plus the model's `created` hook (data volumes) and, for
 /// Redis, its variables, in one transaction.
 pub async fn create(
@@ -684,8 +687,13 @@ pub async fn create(
         ("uuid", ColumnValue::Text(Some(uuid.clone()))),
         ("name", ColumnValue::Text(Some(name))),
     ];
-    if let Some(image) = &n.image {
-        cols.push(("image", ColumnValue::Text(Some(image.clone()))));
+    // `create_standalone_sqlite` sets its image itself; from Coolify v4.6.0 the column has no default.
+    let image = n
+        .image
+        .clone()
+        .or_else(|| (kind == Kind::Sqlite).then(|| SQLITE_IMAGE.to_owned()));
+    if let Some(image) = image {
+        cols.push(("image", ColumnValue::Text(Some(image))));
     }
     for (c, v) in &n.secrets {
         cols.push((c, ColumnValue::Text(Some(v.clone()))));

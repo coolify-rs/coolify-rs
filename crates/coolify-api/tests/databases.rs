@@ -343,12 +343,17 @@ async fn sqlite_and_tags_are_created() {
         .call("GET", &format!("/api/v1/databases/{uuid}/tags"), ROOT, None)
         .await;
     assert_eq!(tags.json()[0]["name"], "prod");
-    assert_eq!(
-        h.call("POST", "/api/v1/databases/sqlite", W, Some(base))
-            .await
-            .status,
-        201
-    );
+    let sqlite = h
+        .call("POST", "/api/v1/databases/sqlite", W, Some(base))
+        .await;
+    assert_eq!(sqlite.status, 201);
+    // `create_standalone_sqlite` sets the image itself (Coolify v4.6.0 drops the column default).
+    let image: String = sqlx::query_scalar("SELECT image FROM standalone_sqlites WHERE uuid = $1")
+        .bind(sqlite.json()["uuid"].as_str().unwrap())
+        .fetch_one(h.tdb.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(image, "peakimages/sqlite:3.54.1-v0.2.0");
     f.h.finish().await;
 }
 
