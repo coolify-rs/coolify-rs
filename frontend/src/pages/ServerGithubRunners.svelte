@@ -167,7 +167,6 @@
       error = failure(e);
       // A failed request also syncs the form, so the bar closes.
       saved = { ...form };
-      if (error?.field('docker_mode')) sysbox = false;
     } finally {
       saving = false;
     }
@@ -353,7 +352,8 @@
                 <FormInput id="runnerImage" label="Runner image" disabled={!canEdit} placeholder={RUNNER_IMAGE} helper="Empty uses the latest official runner image, which coolify-rs pulls for every runner. Set a tag, for example ghcr.io/actions/actions-runner:2.337.0, to pin a version, or use a custom image based on the official one to add tools. GitHub stops sending jobs to runners that are more than 30 days old." bind:value={form.runnerImage} error={error?.field('runner_image')} />
               </div>
               {#if form.dockerMode === 'sysbox'}
-                <div class="mt-4">
+                <!-- `<livewire:server.sysbox-status>`: its own component, so a check keeps the unsaved form. -->
+                <div class="mt-4"><div>
                   {#if sysbox === true}
                     <Callout type="success" title="Sysbox is installed">Jobs get a private Docker daemon in an unprivileged container.</Callout>
                   {:else if sysbox === false}
@@ -368,7 +368,7 @@
                   {:else}
                     <Callout type="info" title="Checking Sysbox">coolify-rs checks if Sysbox is installed on this server.</Callout>
                   {/if}
-                </div>
+                </div></div>
               {/if}
             </SettingsSection>
 
