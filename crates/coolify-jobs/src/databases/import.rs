@@ -795,10 +795,10 @@ impl Jobs {
                     _ => return fail("The S3 backup was not found or exceeds the 10 GiB limit."),
                 }
                 let helper = format!("s3-restore-{operation}");
-                self.start_s3_helper(&s3, &t, &helper, &network).await?;
+                let resolve = self.start_s3_helper(&s3, &t, &helper, &network).await?;
                 let source_arg = quote(&format!("s3temp/{}/{key}", s3.bucket));
                 commands.push(format!(
-                    "docker exec {} mc cp {source_arg} /tmp/restore",
+                    "docker exec {} mc cp{resolve} {source_arg} /tmp/restore",
                     quote(&helper)
                 ));
                 commands.extend(stream_from_helper(&helper, &container, &container_path));
@@ -1019,16 +1019,18 @@ impl Jobs {
     /// keys reach mc on its stdin, so they are not in the arguments of any process or in the
     /// helper's environment. Upstream pipes them into a separate ssh process; here they travel
     /// inside the script (like every command input of coolify-rs) through the shell's builtin
-    /// `echo`. The helper is removed when either step fails.
+    /// `echo`. The helper is removed when either step fails. Returns the mc `--resolve` option that
+    /// pins the endpoint host.
     async fn start_s3_helper(
         &self,
         s3: &S3Target,
         t: &Target,
         helper: &str,
         network: &str,
-    ) -> Result<(), ImportError> {
+    ) -> Result<String, ImportError> {
         use base64::Engine as _;
-        let image = quote(&helper_image(self));
+        let raw_image = helper_image(self);
+        let image = quote(&raw_image);
         let start = [
             format!("docker rm -f {} 2>/dev/null || true", quote(helper)),
             format!(
@@ -1040,23 +1042,34 @@ impl Jobs {
         ];
         let refs: Vec<&str> = start.iter().map(String::as_str).collect();
         let keys = format!("{}\n{}\n", s3.key, s3.secret);
-        let alias = format!(
-            "echo '{}' | base64 -d | docker exec -i {} mc alias set{} s3temp {} >/dev/null",
-            base64::engine::general_purpose::STANDARD.encode(keys.as_bytes()),
-            quote(helper),
-            super::s3::minio_client_alias_options(s3.path_style),
-            quote(&s3.endpoint)
-        );
-        let started = self
+        let mut resolve = String::new();
+        let mut started = self
             .remote()
             .run(t, &refs, RunOptions::op("database.import"))
             .await
-            .is_ok()
-            && self
+            .is_ok();
+        if started {
+            resolve = super::s3::minio_client_resolve_options(
+                self,
+                t,
+                &s3.endpoint,
+                &raw_image,
+                Some(network),
+            )
+            .await;
+            let alias = format!(
+                "echo '{}' | base64 -d | docker exec -i {} mc alias set{resolve}{} s3temp {} >/dev/null",
+                base64::engine::general_purpose::STANDARD.encode(keys.as_bytes()),
+                quote(helper),
+                super::s3::minio_client_alias_options(s3.path_style),
+                quote(&s3.endpoint)
+            );
+            started = self
                 .remote()
                 .run(t, &[alias.as_str()], RunOptions::op("database.import"))
                 .await
                 .is_ok();
+        }
         if !started {
             let remove = format!("docker rm -f {} 2>/dev/null || true", quote(helper));
             self.remote()
@@ -1064,7 +1077,7 @@ impl Jobs {
                 .await;
             return fail("Unable to start the S3 restore helper.");
         }
-        Ok(())
+        Ok(resolve)
     }
 }
 

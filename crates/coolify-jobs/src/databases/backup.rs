@@ -19,7 +19,7 @@ use serde_json::Value;
 
 use super::common::{helper_image, now, slug};
 use super::connection as conn;
-use super::s3::{S3Target, minio_resolve_options};
+use super::s3::{S3Target, minio_client_resolve_options};
 use crate::Jobs;
 use crate::compose_parser::validate::validate_shell_safe_path;
 use crate::server::ServerInfo;
@@ -939,17 +939,15 @@ impl Jobs {
         let path_style = self.test_s3_connection(row).await?;
         let helper = format!("backup-of-{uuid}");
         let mount = quote(&format!("{location}:{location}:ro"));
-        let resolve = minio_resolve_options(&s3.endpoint)
-            .await
-            .iter()
-            .map(|o| format!("--resolve {}", quote(o)))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let resolve = if resolve.is_empty() {
-            String::new()
-        } else {
-            format!(" {resolve}")
-        };
+        // `$s3->minioClientResolveOptions($this->server, $fullImageName, $network)`.
+        let resolve = minio_client_resolve_options(
+            self,
+            &run.target,
+            &s3.endpoint,
+            &helper_image(self),
+            Some(network),
+        )
+        .await;
         let destination = quote(&format!("temporary/{}{}/", s3.bucket, run.backup_dir));
         let commands = [
             format!("docker rm -f {helper} >/dev/null 2>&1 || true"),
