@@ -32,7 +32,7 @@ mod plugin_cli;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// The upstream release whose API contract and schema this build implements.
-const UPSTREAM_COMPAT_VERSION: &str = "4.5.3";
+const UPSTREAM_COMPAT_VERSION: &str = "4.6.0";
 
 #[derive(Parser)]
 #[command(name = "coolify-rs", version, about)]
@@ -482,13 +482,23 @@ async fn run() -> Result<()> {
             Ok(())
         }
         Cmd::CheckSchema => {
+            // The verdict for this build: `boot` first runs the upstream migrations it knows, so
+            // those are reported apart instead of as missing (a Coolify v4.5.3 database).
+            let boot: Vec<&str> = coolify_db::bootstrap::MIGRATIONS
+                .iter()
+                .map(|m| m.name)
+                .collect();
+            let (after, on_boot) = schema.after_migrations(&boot, cfg.db.allow_unknown_schema);
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
                     "applied_migrations": schema.applied,
-                    "unknown_migrations": schema.unknown,
-                    "missing_migrations": schema.missing,
-                    "read_only_reason": schema.read_only_reason,
+                    "unknown_migrations": after.unknown,
+                    "missing_migrations": after.missing,
+                    "applied_on_boot": on_boot,
+                    // Names upstream renamed or deleted after they ran: known, nothing to do.
+                    "historical_migrations": after.historical.len(),
+                    "read_only_reason": after.read_only_reason,
                 }))?
             );
             Ok(())

@@ -20,7 +20,7 @@ pub const ACME: i64 = 1;
 pub const APP_KEY: &str = "base64:hPAFGDXpvHW0ZnwoP/YKkC1WJ+9Bv2jZCwc1hGGaI3s=";
 /// Password of every fixture user (bcrypt cost 4 hash in SEED).
 pub const PASSWORD: &str = "secret-password";
-pub const VERSION: &str = "4.5.3";
+pub const VERSION: &str = "4.6.0";
 pub const OTHER: i64 = 2;
 
 /// Fixture mirroring compat/reference/seed-fixtures.php.

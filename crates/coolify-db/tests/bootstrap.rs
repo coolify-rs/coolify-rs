@@ -63,7 +63,7 @@ async fn empty_database_gets_the_baseline() {
         bootstrap::prepare(&db.url()).await.unwrap(),
         Prepared::Created
     );
-    assert_eq!(db.count("SELECT count(*) FROM migrations").await, 478);
+    assert_eq!(db.count("SELECT count(*) FROM migrations").await, 493);
     assert_eq!(
         db.count(
             "SELECT count(*) FROM pg_constraint WHERE contype = 'c' AND conrelid <> 0 AND pg_get_constraintdef(oid) LIKE '%ANY ((ARRAY[%::text[]%'"
@@ -74,7 +74,7 @@ async fn empty_database_gets_the_baseline() {
     );
     assert_eq!(
         db.count("SELECT last_value FROM migrations_id_seq").await,
-        478
+        493
     );
     assert_eq!(
         db.count("SELECT count(*) FROM migrations WHERE batch <> 1")
@@ -98,7 +98,7 @@ async fn empty_database_gets_the_baseline() {
         bootstrap::prepare(&db.url()).await.unwrap(),
         Prepared::Existing
     );
-    assert_eq!(db.count("SELECT count(*) FROM migrations").await, 478);
+    assert_eq!(db.count("SELECT count(*) FROM migrations").await, 493);
     db.drop_db().await;
 }
 
@@ -191,7 +191,7 @@ async fn two_starts_at_once_create_it_once() {
     let mut outcomes = [a.unwrap(), b.unwrap()];
     outcomes.sort_by_key(|o| *o == Prepared::Existing);
     assert_eq!(outcomes, [Prepared::Created, Prepared::Existing]);
-    assert_eq!(db.count("SELECT count(*) FROM migrations").await, 478);
+    assert_eq!(db.count("SELECT count(*) FROM migrations").await, 493);
     db.drop_db().await;
 }
 
@@ -199,10 +199,10 @@ async fn two_starts_at_once_create_it_once() {
 async fn later_schema_changes_run_once_and_a_failure_rolls_back() {
     let db = Empty::new().await;
     bootstrap::prepare(&db.url()).await.unwrap();
-    let good = [Migration {
-        name: "9999_01_01_000000_add_upgrade_probe",
-        sql: "CREATE TABLE public.upgrade_probe (id int)",
-    }];
+    let good = [Migration::new(
+        "9999_01_01_000000_add_upgrade_probe",
+        "CREATE TABLE public.upgrade_probe (id int)",
+    )];
     assert_eq!(
         bootstrap::apply_migrations(&db.url(), &good).await.unwrap(),
         vec![good[0].name.to_owned()]
@@ -219,17 +219,42 @@ async fn later_schema_changes_run_once_and_a_failure_rolls_back() {
             .is_empty()
     );
 
-    let bad = [Migration {
-        name: "9999_01_01_000001_broken",
-        sql: "CREATE TABLE public.half_done (id int); SELECT * FROM does_not_exist",
-    }];
+    let bad = [Migration::new(
+        "9999_01_01_000001_broken",
+        "CREATE TABLE public.half_done (id int); SELECT * FROM does_not_exist",
+    )];
     assert!(bootstrap::apply_migrations(&db.url(), &bad).await.is_err());
     assert_eq!(
         db.count("SELECT count(*) FROM pg_tables WHERE tablename = 'half_done'")
             .await,
         0
     );
-    assert_eq!(db.count("SELECT count(*) FROM migrations").await, 479);
+    assert_eq!(db.count("SELECT count(*) FROM migrations").await, 494);
+
+    // `$withinTransaction = false`: each statement on its own, so `CONCURRENTLY` is accepted.
+    let concurrent = [Migration::without_transaction(
+        "9999_01_01_000002_add_probe_indexes",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_probe_a ON public.upgrade_probe (id); \
+         CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_probe_b ON public.upgrade_probe (id DESC)",
+    )];
+    assert_eq!(
+        bootstrap::apply_migrations(&db.url(), &concurrent)
+            .await
+            .unwrap(),
+        vec![concurrent[0].name.to_owned()]
+    );
+    assert_eq!(
+        db.count("SELECT count(*) FROM pg_indexes WHERE tablename = 'upgrade_probe'")
+            .await,
+        2
+    );
+    assert!(
+        bootstrap::apply_migrations(&db.url(), &concurrent)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(db.count("SELECT count(*) FROM migrations").await, 495);
     db.drop_db().await;
 }
 
@@ -327,12 +352,11 @@ INSERT INTO s3_storages (id, uuid, name, region, key, secret, bucket, endpoint, 
 "#;
 
 /// A coolify-rs install created at upstream `main` @ b5823c7 upgrades itself on `boot`: the five
-/// v4.5.3 migrations run, the schema equals a fresh v4.5.3 install's, and writes are allowed.
+/// v4.5.3 migrations and the fifteen of v4.6.0 run, the schema equals a fresh v4.6.0 install's,
+/// and writes are allowed.
 #[tokio::test]
-async fn a_b5823c7_database_upgrades_to_4_5_3() {
-    use coolify_db::testing::{
-        BASELINE_MIGRATIONS, BASELINE_SCHEMA, MIGRATIONS_B5823C7, SCHEMA_B5823C7,
-    };
+async fn a_b5823c7_database_upgrades_to_4_6_0() {
+    use coolify_db::testing::{MIGRATIONS_B5823C7, SCHEMA_B5823C7};
 
     let old = TestDb::with_baseline(SCHEMA_B5823C7, MIGRATIONS_B5823C7, UPGRADE_SEED).await;
     let url = url_of(&old.name);
@@ -340,7 +364,7 @@ async fn a_b5823c7_database_upgrades_to_4_5_3() {
         old.db.schema().read_only_reason.is_some(),
         "an un-upgraded database lacks the v4.5.3 migrations"
     );
-    assert_eq!(old.db.schema().missing.len(), 5);
+    assert_eq!(old.db.schema().missing.len(), 20);
 
     // `coolify-rs boot`: prepare, the log drains to stop, then the schema changes.
     assert_eq!(bootstrap::prepare(&url).await.unwrap(), Prepared::Existing);
@@ -409,7 +433,7 @@ async fn a_b5823c7_database_upgrades_to_4_5_3() {
             .fetch_all(&mut conn)
             .await
             .unwrap();
-    assert_eq!(batches.len(), 5);
+    assert_eq!(batches.len(), 20);
     assert!(batches.iter().all(|(_, b)| *b == 2));
     conn.close().await.ok();
 
@@ -419,24 +443,140 @@ async fn a_b5823c7_database_upgrades_to_4_5_3() {
     assert!(upgraded.schema().unknown.is_empty());
     upgraded.pool().close().await;
 
-    let fresh = TestDb::with_baseline(BASELINE_SCHEMA, BASELINE_MIGRATIONS, "").await;
+    assert_same_schema_as_baseline(&url).await;
+    old.drop_db().await;
+}
+
+/// The schema at `url` equals a fresh v4.6.0 install's (the baseline).
+async fn assert_same_schema_as_baseline(url: &str) {
+    let fresh = TestDb::new("").await;
     let expected = fingerprint(&url_of(&fresh.name)).await;
     assert!(expected.iter().any(|r| r.contains("logdrain_axiom_domain")));
-    let actual = fingerprint(&url).await;
+    assert!(expected.iter().any(|r| r.contains("update_channel")));
+    let actual = fingerprint(url).await;
     let only_upgraded: Vec<&String> = actual.iter().filter(|r| !expected.contains(r)).collect();
     let only_fresh: Vec<&String> = expected.iter().filter(|r| !actual.contains(r)).collect();
     assert!(
         only_upgraded.is_empty() && only_fresh.is_empty(),
-        "schema differs from v4.5.3: upgraded has {only_upgraded:#?}, v4.5.3 has {only_fresh:#?}"
+        "schema differs from v4.6.0: upgraded has {only_upgraded:#?}, v4.6.0 has {only_fresh:#?}"
     );
     assert_eq!(actual, expected);
     fresh.drop_db().await;
+}
+
+/// API tokens and an invitation as Coolify v4.5.3 writes them (`json_encode` of the abilities).
+const TOKENS_SEED: &str = r#"
+INSERT INTO users (id, name, email, password) VALUES (1, 'u', 'u@example.test', 'x');
+INSERT INTO teams (id, name, personal_team) VALUES (1, 'acme', false);
+INSERT INTO team_user (team_id, user_id, role) VALUES (1, 1, 'owner');
+INSERT INTO team_invitations (id, uuid, team_id, email, link) VALUES (1, 'inv', 1, 'v@example.test', 'https://x.test/i');
+INSERT INTO personal_access_tokens (id, tokenable_type, tokenable_id, name, token, team_id, abilities, updated_at) VALUES
+  (1, 'App\Models\User', 1, 'root', 't1', '1', '["root"]', '2026-01-02 03:04:05'),
+  (2, 'App\Models\User', 1, 'write', 't2', '1', '["write"]', '2026-01-02 03:04:05'),
+  (3, 'App\Models\User', 1, 'read-write', 't3', '1', '["read","write","deploy"]', '2026-01-02 03:04:05'),
+  (4, 'App\Models\User', 1, 'has-delete', 't4', '1', '["write","delete"]', '2026-01-02 03:04:05'),
+  (5, 'App\Models\User', 1, 'read', 't5', '1', '["read","read:sensitive"]', '2026-01-02 03:04:05'),
+  (6, 'App\Models\User', 1, 'null', 't6', '1', NULL, '2026-01-02 03:04:05'),
+  (7, 'App\Models\User', 1, 'broken', 't7', '1', 'not json', '2026-01-02 03:04:05'),
+  (8, 'App\Models\User', 1, 'spaced', 't8', '1', '[ "write", "a/b" ]', '2026-01-02 03:04:05');
+"#;
+
+/// coolify-rs 4.5.3-rs.N (a database Coolify v4.5.3 created) upgrades itself on `boot`: the fifteen
+/// v4.6.0 migrations run, write tokens get the new delete ability, the schema equals a fresh v4.6.0
+/// install's, and writes are allowed.
+#[tokio::test]
+async fn a_4_5_3_database_upgrades_to_4_6_0() {
+    use coolify_db::testing::{MIGRATIONS_4_5_3, SCHEMA_4_5_3};
+
+    let old = TestDb::with_baseline(SCHEMA_4_5_3, MIGRATIONS_4_5_3, TOKENS_SEED).await;
+    let url = url_of(&old.name);
+    assert!(old.db.schema().read_only_reason.is_some());
+    assert_eq!(old.db.schema().missing.len(), 15);
+    assert!(
+        !old.db
+            .schema()
+            .has_column("personal_access_tokens", "scopes")
+    );
+    // What `check-schema` reports for it: nothing left missing once `boot` has run.
+    let names: Vec<&str> = bootstrap::MIGRATIONS.iter().map(|m| m.name).collect();
+    let (after, on_boot) = old.db.schema().after_migrations(&names, false);
+    assert_eq!(on_boot.len(), 15);
+    assert!(after.read_only_reason.is_none(), "{after:?}");
+
+    assert_eq!(bootstrap::prepare(&url).await.unwrap(), Prepared::Existing);
+    let ran = bootstrap::apply_migrations(&url, bootstrap::MIGRATIONS)
+        .await
+        .unwrap();
+    assert_eq!(ran, on_boot);
+    assert!(ran.iter().all(|m| m.as_str() < "2026_11_02"));
+    assert!(
+        bootstrap::apply_migrations(&url, bootstrap::MIGRATIONS)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut conn = PgConnection::connect(&url).await.unwrap();
+    let tokens: Vec<(i64, Option<String>, String)> = sqlx::query_as(
+        "SELECT id, abilities, updated_at::text FROM personal_access_tokens ORDER BY id",
+    )
+    .fetch_all(&mut conn)
+    .await
+    .unwrap();
+    let abilities: Vec<(i64, Option<&str>)> = tokens
+        .iter()
+        .map(|(id, a, _)| (*id, a.as_deref()))
+        .collect();
+    assert_eq!(
+        abilities,
+        vec![
+            (1, Some(r#"["root"]"#)),
+            (2, Some(r#"["write","delete"]"#)),
+            (3, Some(r#"["read","write","deploy","delete"]"#)),
+            (4, Some(r#"["write","delete"]"#)),
+            (5, Some(r#"["read","read:sensitive"]"#)),
+            (6, None),
+            (7, Some("not json")),
+            // `json_encode` writes it compact, with `/` escaped.
+            (8, Some(r#"["write","a\/b","delete"]"#)),
+        ]
+    );
+    assert!(tokens.iter().all(|(_, _, u)| u == "2026-01-02 03:04:05"));
+    // Existing invitations and memberships get no grants (full access, as before).
+    let access: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT (SELECT access::text FROM team_invitations WHERE id = 1), \
+                (SELECT access::text FROM team_user WHERE user_id = 1)",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .unwrap();
+    assert_eq!(access, (None, None));
+    let batches: Vec<i32> = sqlx::query_scalar("SELECT batch FROM migrations WHERE id > 478")
+        .fetch_all(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(batches, vec![2; 15]);
+    conn.close().await.ok();
+
+    let upgraded = guard(&url).await;
+    assert!(upgraded.schema().read_only_reason.is_none());
+    assert!(upgraded.schema().missing.is_empty());
+    assert!(upgraded.schema().unknown.is_empty());
+    assert!(
+        upgraded
+            .schema()
+            .has_column("personal_access_tokens", "scopes")
+    );
+    assert!(upgraded.schema().has_column("team_user", "access"));
+    upgraded.pool().close().await;
+
+    assert_same_schema_as_baseline(&url).await;
     old.drop_db().await;
 }
 
-/// A database Coolify v4.5.3 created is writable as it is, and boot changes nothing in it.
+/// A database Coolify v4.6.0 created is writable as it is, and boot changes nothing in it.
 #[tokio::test]
-async fn a_4_5_3_database_is_writable() {
+async fn a_4_6_0_database_is_writable() {
     let test = TestDb::new("").await;
     let url = url_of(&test.name);
     assert!(test.db.schema().read_only_reason.is_none());
@@ -458,12 +598,12 @@ async fn a_4_5_3_database_is_writable() {
     test.drop_db().await;
 }
 
-/// A newer Coolify (4.6.0) has migrations this build does not know: it stays read-only.
+/// A newer Coolify (4.7.0) has migrations this build does not know: it stays read-only.
 #[tokio::test]
 async fn a_newer_coolify_database_is_read_only() {
     let test = TestDb::new(
         "INSERT INTO migrations (migration, batch) VALUES \
-         ('2026_11_20_120000_a_coolify_4_6_0_migration', 2);",
+         ('2026_11_20_120000_a_coolify_4_7_0_migration', 2);",
     )
     .await;
     let reason = test.db.schema().read_only_reason.clone();
@@ -473,7 +613,51 @@ async fn a_newer_coolify_database_is_read_only() {
     );
     assert_eq!(
         test.db.schema().unknown,
-        vec!["2026_11_20_120000_a_coolify_4_6_0_migration".to_owned()]
+        vec!["2026_11_20_120000_a_coolify_4_7_0_migration".to_owned()]
     );
+    test.drop_db().await;
+}
+
+/// The four rows a real, long-lived Coolify 4.6.0 installation has beyond the v4.6.0 tree:
+/// migrations upstream renamed or deleted after they ran.
+const HISTORICAL_ROWS: &str = "INSERT INTO migrations (migration, batch) VALUES \
+     ('2018_08_08_100000_create_telescope_entries_table', 1), \
+     ('2025_10_10_120000_create_cloud_init_scripts_table', 30), \
+     ('2025_10_10_120000_create_webhook_notification_settings_table', 30), \
+     ('2025_10_10_120001_populate_webhook_notification_settings_for_existing_teams', 30);";
+
+/// Those names are known: the database is writable, and boot changes nothing.
+#[tokio::test]
+async fn a_long_lived_coolify_database_is_writable() {
+    let test = TestDb::new(HISTORICAL_ROWS).await;
+    let url = url_of(&test.name);
+    let schema = test.db.schema();
+    assert!(schema.read_only_reason.is_none(), "{schema:?}");
+    assert!(schema.unknown.is_empty());
+    assert!(schema.missing.is_empty());
+    assert_eq!(schema.historical.len(), 4);
+    assert_eq!(schema.applied, 497);
+    test.db.ensure_writable().unwrap();
+    assert!(
+        bootstrap::apply_migrations(&url, bootstrap::MIGRATIONS)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    test.drop_db().await;
+
+    // A truly unknown name next to them still makes it read-only, and is the one reported.
+    let test = TestDb::new(&format!(
+        "{HISTORICAL_ROWS} INSERT INTO migrations (migration, batch) VALUES \
+         ('2026_11_20_120000_a_coolify_4_7_0_migration', 31);"
+    ))
+    .await;
+    assert!(test.db.schema().read_only_reason.is_some());
+    assert!(test.db.ensure_writable().is_err());
+    assert_eq!(
+        test.db.schema().unknown,
+        vec!["2026_11_20_120000_a_coolify_4_7_0_migration".to_owned()]
+    );
+    assert_eq!(test.db.schema().historical.len(), 4);
     test.drop_db().await;
 }

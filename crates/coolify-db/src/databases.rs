@@ -666,6 +666,9 @@ impl Kind {
     }
 }
 
+/// The image `create_standalone_sqlite` gives a new SQLite database (v4.6.0, f780d7429).
+pub const SQLITE_IMAGE: &str = "peakimages/sqlite:3.54.1-v0.2.0";
+
 /// `create_standalone_*` plus the model's `created` hook (data volumes) and, for
 /// Redis, its variables, in one transaction.
 pub async fn create(
@@ -686,6 +689,10 @@ pub async fn create(
     ];
     if let Some(image) = &n.image {
         cols.push(("image", ColumnValue::Text(Some(image.clone()))));
+    } else if kind == Kind::Sqlite {
+        // `create_standalone_sqlite`: `$database->image = ...`. The column has no default since
+        // v4.6.0 (`2026_10_30_171359_drop_image_default_from_standalone_sqlites_table`).
+        cols.push(("image", ColumnValue::Text(Some(SQLITE_IMAGE.to_owned()))));
     }
     for (c, v) in &n.secrets {
         cols.push((c, ColumnValue::Text(Some(v.clone()))));
