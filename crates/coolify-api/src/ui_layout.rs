@@ -212,7 +212,8 @@ async fn resources(state: &AppState, team: i64) -> Result<Vec<Value>, ApiError> 
         state,
         "SELECT json_build_object('id', a.id, 'name', a.name, 'uuid', a.uuid, 'description', a.description,
             'fqdn', a.fqdn, 'build_pack', a.build_pack, 'docker_compose_domains', a.docker_compose_domains,
-            'project', p.name, 'project_uuid', p.uuid, 'environment', e.name, 'environment_uuid', e.uuid)::text
+            'project', p.name, 'project_uuid', p.uuid, 'environment', e.name, 'environment_uuid', e.uuid,
+            'environment_id', e.id)::text
          FROM applications a JOIN environments e ON e.id = a.environment_id JOIN projects p ON p.id = e.project_id
          WHERE p.team_id = $1 AND a.deleted_at IS NULL ORDER BY a.name",
         team,
@@ -247,6 +248,7 @@ async fn resources(state: &AppState, team: i64) -> Result<Vec<Value>, ApiError> 
             "uuid": a.get("uuid"),
             "description": a.get("description"),
             "link": format!("/project/{}/environment/{}/application/{}", s(&a, "project_uuid"), s(&a, "environment_uuid"), s(&a, "uuid")),
+            "environment_id": a.get("environment_id"),
             "project": a.get("project"),
             "environment": a.get("environment"),
             "fqdns": fqdns.iter().take(2).cloned().collect::<Vec<_>>().join(", "),
@@ -262,6 +264,7 @@ async fn resources(state: &AppState, team: i64) -> Result<Vec<Value>, ApiError> 
         state,
         "SELECT json_build_object('id', v.id, 'name', v.name, 'uuid', v.uuid, 'description', v.description,
             'project', p.name, 'project_uuid', p.uuid, 'environment', e.name, 'environment_uuid', e.uuid,
+            'environment_id', e.id,
             'fqdns', (SELECT coalesce(json_agg(sa.fqdn ORDER BY sa.id), '[]') FROM service_applications sa WHERE sa.service_id = v.id AND sa.deleted_at IS NULL),
             'apps', (SELECT coalesce(string_agg(sa.name, ' ' ORDER BY sa.id), '') FROM service_applications sa WHERE sa.service_id = v.id AND sa.deleted_at IS NULL),
             'dbs', (SELECT coalesce(string_agg(sd.name, ' ' ORDER BY sd.id), '') FROM service_databases sd WHERE sd.service_id = v.id AND sd.deleted_at IS NULL))::text
@@ -289,6 +292,7 @@ async fn resources(state: &AppState, team: i64) -> Result<Vec<Value>, ApiError> 
             "uuid": v.get("uuid"),
             "description": v.get("description"),
             "link": format!("/project/{}/environment/{}/service/{}", s(&v, "project_uuid"), s(&v, "environment_uuid"), s(&v, "uuid")),
+            "environment_id": v.get("environment_id"),
             "project": v.get("project"),
             "environment": v.get("environment"),
             "fqdns": fqdns.iter().take(2).cloned().collect::<Vec<_>>().join(", "),
@@ -312,7 +316,8 @@ async fn resources(state: &AppState, team: i64) -> Result<Vec<Value>, ApiError> 
     ] {
         let sql = format!(
             "SELECT json_build_object('id', d.id, 'name', d.name, 'uuid', d.uuid, 'description', d.description,
-                'project', p.name, 'project_uuid', p.uuid, 'environment', e.name, 'environment_uuid', e.uuid)::text
+                'project', p.name, 'project_uuid', p.uuid, 'environment', e.name, 'environment_uuid', e.uuid,
+                'environment_id', e.id)::text
              FROM {table} d JOIN environments e ON e.id = d.environment_id JOIN projects p ON p.id = e.project_id
              WHERE p.team_id = $1 AND d.deleted_at IS NULL ORDER BY d.name"
         );
@@ -325,6 +330,7 @@ async fn resources(state: &AppState, team: i64) -> Result<Vec<Value>, ApiError> 
                 "uuid": d.get("uuid"),
                 "description": d.get("description"),
                 "link": format!("/project/{}/environment/{}/database/{}", s(&d, "project_uuid"), s(&d, "environment_uuid"), s(&d, "uuid")),
+                "environment_id": d.get("environment_id"),
                 "project": d.get("project"),
                 "environment": d.get("environment"),
                 "search_text": lower(format!(
@@ -440,8 +446,27 @@ async fn search_items(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
 ) -> ApiResult {
+    let mut items = resources(&state, ctx.team_id).await?;
+    // Members limited to some projects: the index of the queries the access grants filter,
+    // without servers (`searchableResources(includeServers: false)`).
+    if !ctx.covers_whole_team() {
+        items.retain(|i| {
+            let id = i.get("id").and_then(Value::as_i64).unwrap_or_default();
+            let env = i.get("environment_id").and_then(Value::as_i64);
+            let uuid = i.get("uuid").and_then(Value::as_str).unwrap_or_default();
+            match i.get("type").and_then(Value::as_str).unwrap_or_default() {
+                "application" | "service" | "database" => {
+                    coolify_db::access::resource_visible(env, uuid)
+                }
+                "project" => coolify_db::access::project_visible(id),
+                "environment" => coolify_db::access::environment_visible(id),
+                _ => false,
+            }
+        });
+    }
     Ok(ok(json!({
-        "resources": resources(&state, ctx.team_id).await?,
+        "team_wide": ctx.covers_whole_team(),
+        "resources": items,
         "services": if ctx.is_team_admin() { services() } else { Vec::new() },
     }))
     .into_response())
