@@ -106,8 +106,6 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 
 ## Deployments
 
-- **Laravel applications built with Nixpacks** (`IS_LARAVEL` set) fail with "Laravel applications built with Nixpacks
-  are not supported by coolify-rs yet."
 - **Compose files with a parsing version below 3** (resources created by old Coolify releases) cannot be parsed or
   deployed.
 - **Preview domains have no DNS check.** "Check DNS" and "Check all DNS" say checks are not available, and a new

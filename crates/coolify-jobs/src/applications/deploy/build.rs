@@ -9,6 +9,7 @@ use regex::Regex;
 use serde_json::{Map, Value};
 
 use coolify_db::applications as apps;
+use coolify_db::environment_variables as env_store;
 use coolify_db::git_sources;
 use coolify_db::servers::ColumnValue;
 use coolify_remote::shell::quote;
@@ -2330,6 +2331,61 @@ impl Run {
     }
 
     /// `generate_nixpacks_confs()`.
+    /// `laravel_finetunes()`: the application's `NIXPACKS_PHP_FALLBACK_PATH` and
+    /// `NIXPACKS_PHP_ROOT_DIR` (the preview ones for a pull request), each created with upstream's
+    /// default when missing (`new EnvironmentVariable` + `save()`, with the model's hooks: runtime
+    /// and build time, `is_shared` false, the preview copy of a production variable, `version`).
+    /// Returns their `->value`: decrypted and trimmed, `null` when empty.
+    /// `elixir_finetunes()`: error lines for each of `MIX_ENV`, `SECRET_KEY_BASE` and
+    /// `DATABASE_URL` the application (the preview variables for a pull request) does not have.
+    async fn elixir_finetunes(&mut self) -> Step {
+        let is_preview = self.b.pull_request_id != 0;
+        for key in ["MIX_ENV", "SECRET_KEY_BASE", "DATABASE_URL"] {
+            let found =
+                env_store::first_by_key(&self.jobs.0.db, apps::MORPH, self.app.id, key, is_preview)
+                    .await
+                    .map_err(|e| Fail::new(e.to_string()))?;
+            if found.is_none() {
+                self.log(
+                    &format!("{key} environment variable not found."),
+                    "error",
+                    false,
+                )
+                .await;
+                self.log(
+                    &format!("Please add {key} environment variable and set it to be build time variable if you facing any issues with the deployment."),
+                    "error",
+                    false,
+                )
+                .await;
+            }
+        }
+        Ok(())
+    }
+
+    async fn laravel_finetunes(&mut self) -> Result<[Option<String>; 2], Fail> {
+        let enc = self
+            .jobs
+            .0
+            .encrypter
+            .clone()
+            .ok_or_else(|| Fail::new("No application encryption key has been specified."))?;
+        let (values, created) = laravel_finetunes(
+            &self.jobs.0.db,
+            &enc,
+            self.app.id,
+            self.b.pull_request_id != 0,
+            &self.jobs.version(),
+        )
+        .await
+        .map_err(Fail::new)?;
+        if created {
+            // Later steps (the runtime variables) read the relations again and see the new rows.
+            self.b.variables = None;
+        }
+        Ok(values)
+    }
+
     pub(super) async fn generate_nixpacks_confs(&mut self) -> Step {
         let command = self.nixpacks_build_cmd().await?;
         self.info(&format!(
@@ -2415,14 +2471,24 @@ impl Run {
             Value::Object(merged.into_iter().collect())
         };
         data_set(&mut parsed, &["variables"], vars_value);
-        if parsed.pointer("/variables/IS_LARAVEL").is_some_and(|v| {
-            !matches!(v, Value::Null | Value::Bool(false))
-                && v.as_str() != Some("")
-                && v.as_str() != Some("0")
-        }) {
-            return Err(Fail::new(
-                "Laravel applications built with Nixpacks are not supported by coolify-rs yet.",
-            ));
+        if parsed
+            .pointer("/variables/IS_LARAVEL")
+            .is_some_and(php_truthy_json)
+        {
+            let [fallback_path, root_dir] = self.laravel_finetunes().await?;
+            data_set(
+                &mut parsed,
+                &["variables", "NIXPACKS_PHP_FALLBACK_PATH"],
+                fallback_path.map_or(Value::Null, Value::String),
+            );
+            data_set(
+                &mut parsed,
+                &["variables", "NIXPACKS_PHP_ROOT_DIR"],
+                root_dir.map_or(Value::Null, Value::String),
+            );
+        }
+        if kind == "elixir" {
+            self.elixir_finetunes().await?;
         }
         if kind == "node" && parsed.pointer("/variables/NIXPACKS_NODE_VERSION").is_none() {
             self.info(SEPARATOR).await;
@@ -2589,6 +2655,89 @@ impl Run {
 }
 
 /// `data_set($target, 'a.b.c', $value)` on nested objects (missing levels are created).
+/// The variables `laravel_finetunes()` reads, with the value it gives a missing one.
+const LARAVEL_NIXPACKS_VARIABLES: [(&str, &str); 2] = [
+    ("NIXPACKS_PHP_FALLBACK_PATH", "/index.php"),
+    ("NIXPACKS_PHP_ROOT_DIR", "/app/public"),
+];
+
+/// [`Run::laravel_finetunes`] on the database: the two values, and whether a row was created.
+async fn laravel_finetunes(
+    db: &coolify_db::Db,
+    enc: &coolify_compat::encrypter::Encrypter,
+    application_id: i64,
+    is_preview: bool,
+    version: &str,
+) -> Result<([Option<String>; 2], bool), String> {
+    let mut values: [Option<String>; 2] = [None, None];
+    let mut created = false;
+    for (slot, (key, default)) in values.iter_mut().zip(LARAVEL_NIXPACKS_VARIABLES) {
+        let existing = env_store::first_by_key(db, apps::MORPH, application_id, key, is_preview)
+            .await
+            .map_err(|e| e.to_string())?;
+        *slot = match existing {
+            // `->value`: `trim(decrypt($value))`, null when empty.
+            Some(row) => match row.get("value").and_then(Value::as_str) {
+                Some(raw) if !raw.is_empty() => {
+                    let plain = enc
+                        .decrypt_maybe_serialized(raw)
+                        .map_err(|_| "The payload is invalid.".to_owned())?;
+                    Some(php_trim(&plain).to_owned())
+                }
+                _ => None,
+            },
+            // `new EnvironmentVariable` with `key`, `value`, `resourceable_*`, `is_preview`, then
+            // `save()`: the model's `$attributes` (runtime and build time), the `saving` hook
+            // (`is_shared` of a value without a `{{` reference: false) and the `created` hooks.
+            None => {
+                let value = env_store::NewResourceVariable {
+                    key: key.to_owned(),
+                    value_encrypted: Some(enc.encrypt_serialized(default)),
+                    is_preview,
+                    is_literal: false,
+                    is_multiline: false,
+                    is_shown_once: false,
+                    is_runtime: true,
+                    is_buildtime: true,
+                    comment: None,
+                    is_shared: false,
+                };
+                let copy = enc.encrypt_serialized(default);
+                env_store::create_on_resource(
+                    db,
+                    (apps::MORPH, application_id),
+                    &value,
+                    Some(&copy),
+                    version,
+                    now(),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+                created = true;
+                Some(default.to_owned())
+            }
+        };
+    }
+    Ok((values, created))
+}
+
+/// A decoded JSON value in a PHP `if`: `null`, `false`, `0`, `0.0`, `""`, `"0"` and `[]` are false.
+fn php_truthy_json(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
+        Value::String(s) => !(s.is_empty() || s == "0"),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+    }
+}
+
+/// `trim()` with PHP's default character list.
+fn php_trim(s: &str) -> &str {
+    s.trim_matches([' ', '\t', '\n', '\r', '\0', '\x0B'])
+}
+
 fn data_set(target: &mut Value, path: &[&str], value: Value) {
     let Some((last, parents)) = path.split_last() else {
         return;
@@ -2680,5 +2829,118 @@ mod tests {
         );
         assert!(validate_path("/Dockerfile", "dockerfile_location").is_ok());
         assert!(validate_path("/../x", "dockerfile_location").is_err());
+    }
+
+    #[test]
+    fn is_laravel_is_read_as_php_does() {
+        use serde_json::json;
+        for v in [
+            json!(null),
+            json!(false),
+            json!(0),
+            json!(""),
+            json!("0"),
+            json!([]),
+        ] {
+            assert!(!php_truthy_json(&v), "{v}");
+        }
+        for v in [
+            json!(true),
+            json!(1),
+            json!("1"),
+            json!("true"),
+            json!(["x"]),
+        ] {
+            assert!(php_truthy_json(&v), "{v}");
+        }
+    }
+
+    /// `laravel_finetunes()` against the test database: existing variables are read (decrypted,
+    /// trimmed), missing ones are created as the model saves them, a production one with its
+    /// preview copy; a pull request reads and creates the preview ones.
+    #[tokio::test]
+    async fn laravel_finetunes_reads_and_creates_the_variables() {
+        use coolify_compat::encrypter::Encrypter;
+        use coolify_db::testing::TestDb;
+
+        let tdb = TestDb::new(
+            r"INSERT INTO teams (id, name, personal_team) VALUES (1, 'acme', false);
+              INSERT INTO projects (id, uuid, name, team_id) VALUES (1, 'p', 'P', 1);
+              INSERT INTO environments (id, uuid, name, project_id) VALUES (1, 'e', 'production', 1);
+              INSERT INTO applications (id, uuid, name, environment_id, build_pack, git_branch, git_repository,
+                                        destination_type, destination_id)
+                   VALUES (1, 'a1', 'laravel', 1, 'nixpacks', 'main', 'r', 'App\Models\StandaloneDocker', 0);",
+        )
+        .await;
+        let db = &tdb.db;
+        let enc = Encrypter::new("base64:hPAFGDXpvHW0ZnwoP/YKkC1WJ+9Bv2jZCwc1hGGaI3s=").unwrap();
+        sqlx::query(
+            "INSERT INTO environment_variables (uuid, key, value, resourceable_type, resourceable_id, is_preview) \
+             VALUES ('kept', 'NIXPACKS_PHP_ROOT_DIR', $1, 'App\\Models\\Application', 1, false)",
+        )
+        .bind(enc.encrypt_serialized(" /srv/www/public\n"))
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let (values, created) = laravel_finetunes(db, &enc, 1, false, "4.6.0")
+            .await
+            .unwrap();
+        assert!(created);
+        assert_eq!(
+            values,
+            [Some("/index.php".into()), Some("/srv/www/public".into())]
+        );
+        let rows: Vec<(String, bool, bool, bool, bool, bool, bool, bool, Option<String>, String)> =
+            sqlx::query_as(
+                "SELECT key, is_preview, is_runtime, is_buildtime, is_literal, is_multiline, is_shown_once, \
+                        is_shared, version, value FROM environment_variables WHERE uuid <> 'kept' ORDER BY id",
+            )
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        let plain = |v: &str| enc.decrypt_maybe_serialized(v).unwrap();
+        assert_eq!(
+            rows.len(),
+            2,
+            "the production variable and its preview copy"
+        );
+        for (row, preview) in rows.iter().zip([false, true]) {
+            assert_eq!(row.0, "NIXPACKS_PHP_FALLBACK_PATH");
+            assert_eq!(row.1, preview);
+            assert!(row.2 && row.3, "runtime and build time");
+            assert!(!row.4 && !row.5 && !row.6 && !row.7);
+            assert_eq!(row.8.as_deref(), Some("4.6.0"));
+            assert_eq!(plain(&row.9), "/index.php");
+        }
+
+        // Nothing more to create for production.
+        let (values, created) = laravel_finetunes(db, &enc, 1, false, "4.6.0")
+            .await
+            .unwrap();
+        assert!(!created);
+        assert_eq!(
+            values,
+            [Some("/index.php".into()), Some("/srv/www/public".into())]
+        );
+
+        // A pull request: the preview fallback path exists (the copy), the root dir does not.
+        let (values, created) = laravel_finetunes(db, &enc, 1, true, "4.6.0").await.unwrap();
+        assert!(created);
+        assert_eq!(
+            values,
+            [Some("/index.php".into()), Some("/app/public".into())]
+        );
+        let previews: Vec<String> = sqlx::query_scalar(
+            "SELECT key FROM environment_variables WHERE is_preview ORDER BY id",
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            previews,
+            vec!["NIXPACKS_PHP_FALLBACK_PATH", "NIXPACKS_PHP_ROOT_DIR"]
+        );
+        tdb.drop_db().await;
     }
 }
