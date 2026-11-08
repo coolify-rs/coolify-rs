@@ -493,7 +493,8 @@ async fn save_member_access(
         ));
     }
     let stored = Grant::list_to_json(&grants);
-    coolify_db::teams::set_member_access(&state.db, ctx.team_id, m.id, Some(stored.as_str())).await?;
+    coolify_db::teams::set_member_access(&state.db, ctx.team_id, m.id, Some(stored.as_str()))
+        .await?;
     crate::audit::log(
         &state,
         &ctx,
