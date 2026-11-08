@@ -800,6 +800,52 @@ pub fn json_column(r: &Record, key: &str) -> Option<Value> {
     }
 }
 
+/// `VolumeCloneJob::composeVolumeLabels()`'s project: the `--project-name` of the volume's
+/// resource, which is the service UUID for a service application or database, else the resource
+/// UUID. `None` when the resource (or its service) is gone.
+pub async fn compose_project_of_volume(db: &Db, volume_id: i64) -> DbResult<Option<String>> {
+    let owner: Option<(Option<String>, Option<i64>)> = sqlx::query_as(
+        "SELECT resource_type, resource_id FROM local_persistent_volumes WHERE id = $1",
+    )
+    .bind(volume_id)
+    .fetch_optional(db.pool())
+    .await?;
+    let Some((Some(morph), Some(id))) = owner else {
+        return Ok(None);
+    };
+    let sql = match morph.as_str() {
+        r"App\Models\ServiceApplication" | r"App\Models\ServiceDatabase" => {
+            let table = if morph.ends_with("ServiceApplication") {
+                "service_applications"
+            } else {
+                "service_databases"
+            };
+            format!(
+                "SELECT s.uuid FROM {table} r JOIN services s ON s.id = r.service_id \
+                 WHERE r.id = $1 AND r.deleted_at IS NULL AND s.deleted_at IS NULL"
+            )
+        }
+        r"App\Models\Application" => {
+            "SELECT uuid FROM applications WHERE id = $1 AND deleted_at IS NULL".to_owned()
+        }
+        other => match crate::databases::Kind::ALL
+            .iter()
+            .find(|k| k.morph() == other)
+        {
+            Some(kind) => format!(
+                "SELECT uuid FROM {} WHERE id = $1 AND deleted_at IS NULL",
+                kind.table()
+            ),
+            None => return Ok(None),
+        },
+    };
+    let uuid: Option<String> = sqlx::query_scalar(&sql)
+        .bind(id)
+        .fetch_optional(db.pool())
+        .await?;
+    Ok(uuid.filter(|u| !u.trim().is_empty()))
+}
+
 /// The `ignores_compose_driver_options` flag `VolumeCloneJob` sets on the new volume.
 pub async fn set_ignores_driver_options(db: &Db, volume_id: i64) -> DbResult<()> {
     db.ensure_writable()?;

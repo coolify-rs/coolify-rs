@@ -169,3 +169,41 @@ async fn only_finished_deployment_helpers_are_cleaned_up() {
     assert_eq!(finished, vec!["done".to_owned(), "failed".to_owned()]);
     tdb.drop_db().await;
 }
+
+/// `VolumeCloneJob::composeVolumeLabels()`: the Compose project of a cloned volume is the service
+/// UUID for a service application, else the resource UUID; a deleted resource has none.
+#[tokio::test]
+async fn cloned_volumes_belong_to_the_compose_project_of_their_resource() {
+    let tdb = TestDb::new(SEED).await;
+    tdb.db
+        .pool()
+        .execute(
+            r"INSERT INTO projects (id, uuid, name, team_id) VALUES (1, 'p', 'p', 1);
+INSERT INTO environments (id, uuid, name, project_id) VALUES (1, 'e', 'production', 1);
+INSERT INTO standalone_dockers (id, uuid, name, network, server_id) VALUES (1, 'd1', 'd', 'coolify', 1);
+INSERT INTO applications (id, uuid, name, environment_id, build_pack, git_branch, git_repository, destination_type, destination_id) VALUES
+  (1, 'app-uuid', 'a', 1, 'dockerimage', 'main', 'r', 'App\Models\StandaloneDocker', 1),
+  (2, 'gone-app', 'b', 1, 'dockerimage', 'main', 'r', 'App\Models\StandaloneDocker', 1);
+UPDATE applications SET deleted_at = now() WHERE id = 2;
+INSERT INTO services (id, uuid, name, environment_id, docker_compose_raw) VALUES (1, 'svc-uuid', 's', 1, 'services: {}');
+INSERT INTO service_applications (id, uuid, name, service_id) VALUES (1, 'sa-uuid', 'web', 1);
+INSERT INTO local_persistent_volumes (id, name, mount_path, uuid, resource_type, resource_id) VALUES
+  (1, 'v1', '/data', 'lv1', 'App\Models\Application', 1),
+  (2, 'v2', '/data', 'lv2', 'App\Models\ServiceApplication', 1),
+  (3, 'v3', '/data', 'lv3', 'App\Models\Application', 2),
+  (4, 'v4', '/data', 'lv4', NULL, NULL);",
+        )
+        .await
+        .unwrap();
+    let project = async |id: i64| {
+        coolify_db::application_ops::compose_project_of_volume(&tdb.db, id)
+            .await
+            .unwrap()
+    };
+    assert_eq!(project(1).await.as_deref(), Some("app-uuid"));
+    assert_eq!(project(2).await.as_deref(), Some("svc-uuid"));
+    assert_eq!(project(3).await, None);
+    assert_eq!(project(4).await, None);
+    assert_eq!(project(99).await, None);
+    tdb.drop_db().await;
+}
