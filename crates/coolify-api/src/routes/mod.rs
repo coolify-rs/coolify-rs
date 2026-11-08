@@ -307,7 +307,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/security/integration-tokens/{uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "POST",
@@ -716,7 +716,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/{resource_type}/{uuid}/secret-manager",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -759,7 +759,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/applications/{uuid}/dns/{hostname}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -784,7 +784,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/services/{uuid}/dns/{hostname}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
