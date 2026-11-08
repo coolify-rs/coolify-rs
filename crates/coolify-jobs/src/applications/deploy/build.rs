@@ -2891,7 +2891,21 @@ mod tests {
             values,
             [Some("/index.php".into()), Some("/srv/www/public".into())]
         );
-        let rows: Vec<(String, bool, bool, bool, bool, bool, bool, bool, Option<String>, String)> =
+        /// key, is_preview, is_runtime, is_buildtime, is_literal, is_multiline, is_shown_once,
+        /// is_shared, version, value
+        type Row = (
+            String,
+            bool,
+            bool,
+            bool,
+            bool,
+            bool,
+            bool,
+            bool,
+            Option<String>,
+            String,
+        );
+        let rows: Vec<Row> =
             sqlx::query_as(
                 "SELECT key, is_preview, is_runtime, is_buildtime, is_literal, is_multiline, is_shown_once, \
                         is_shared, version, value FROM environment_variables WHERE uuid <> 'kept' ORDER BY id",
