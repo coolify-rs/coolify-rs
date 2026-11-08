@@ -10,6 +10,7 @@ pub mod dns;
 pub mod fallback;
 pub mod git_urls;
 pub mod input;
+pub mod integration_token_actions;
 pub mod ip;
 pub mod laravel_url;
 mod plugin_bridge;

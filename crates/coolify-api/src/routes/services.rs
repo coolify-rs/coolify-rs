@@ -1210,6 +1210,17 @@ pub async fn update(
             values.push((key, ColumnValue::Bool(input_bool(&input, key))));
         }
     }
+    // `serviceApplicationDnsHostnames($service)` before the save.
+    let mut previous_dns_hostnames = Vec::new();
+    for sub in svc::subs(&state.db, SubKind::Application, s.id).await? {
+        let previous = crate::ui_shared::dns::previous_hostnames(
+            &state,
+            "App\\Models\\ServiceApplication",
+            sub.id,
+        )
+        .await;
+        previous_dns_hostnames.push((sub.id, previous));
+    }
     svc::update(&state.db, s.id, &values, state.now()).await?;
     jobs_of(&state)?
         .parse_service(s.id)
@@ -1218,32 +1229,24 @@ pub async fn update(
     let fresh = svc::find_by_id(&state.db, s.id)
         .await?
         .ok_or(ApiError::Internal)?;
-    // `queueReleaseOfRemovedServiceHostnames`.
-    let mut previous_dns_hostnames = Vec::new();
-    if input.has("urls") {
-        for sub in svc::subs(&state.db, SubKind::Application, s.id).await? {
-            let previous = crate::ui_shared::dns::previous_hostnames(
+    let url_failure = match input.get("urls") {
+        Some(Value::Array(urls)) => {
+            apply_service_urls(
                 &state,
-                "App\\Models\\ServiceApplication",
-                sub.id,
+                &fresh,
+                urls,
+                ctx.team_id,
+                input_bool(&input, "force_domain_override"),
             )
-            .await;
-            previous_dns_hostnames.push((sub.id, previous));
+            .await?
         }
-    }
-    if let Some(Value::Array(urls)) = input.get("urls")
-        && let Some(failure) = apply_service_urls(
-            &state,
-            &fresh,
-            urls,
-            ctx.team_id,
-            input_bool(&input, "force_domain_override"),
-        )
-        .await?
-    {
-        return failure.response();
-    }
+        _ => None,
+    };
+    // URLs of some containers can be saved before a later container fails, so release before any
+    // error response (`queueReleaseOfRemovedServiceHostnames`), then `queueAutomaticRecords()`.
+    let mut all_previous: Vec<String> = Vec::new();
     for (id, previous) in previous_dns_hostnames {
+        all_previous.extend(previous.iter().cloned());
         crate::ui_shared::dns::queue_release_of_removed_hostnames(
             &state,
             "App\\Models\\ServiceApplication",
@@ -1251,6 +1254,16 @@ pub async fn update(
             previous,
             ctx.team_id,
         );
+    }
+    crate::routes::dns_records::queue_automatic_records(
+        &state,
+        crate::routes::dns_records::Kind::Service,
+        s.id,
+        &all_previous,
+    )
+    .await;
+    if let Some(failure) = url_failure {
+        return failure.response();
     }
     if input_bool(&input, "instant_deploy") {
         jobs_of(&state)?.spawn_service_start(s.id, false, false);

@@ -16,6 +16,7 @@ pub mod database_envs;
 pub mod database_more;
 pub mod database_storages;
 pub mod databases;
+pub mod dns_records;
 pub mod env_vars;
 pub mod instance_email;
 pub mod integration_tokens;
@@ -275,10 +276,47 @@ pub const ROUTES: &[RouteSpec] = &[
         abilities: R,
     },
     RouteSpec {
+        method: "GET",
+        uri: "api/v1/security/integration-tokens",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
         method: "POST",
         uri: "api/v1/security/integration-tokens",
         group: Group::Main,
         abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/security/integration-tokens/{uuid}",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/security/integration-tokens/{uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    // v4.6.0 `api.ability:delete` (access grants); write until that ability is ported.
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/security/integration-tokens/{uuid}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/security/integration-tokens/{uuid}/sync-zones",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/dns/zones",
+        group: Group::Main,
+        abilities: R,
     },
     RouteSpec {
         method: "POST",
@@ -659,8 +697,89 @@ pub const ROUTES: &[RouteSpec] = &[
         abilities: D,
     },
     RouteSpec {
+        method: "GET",
+        uri: "api/v1/{resource_type}/{uuid}/secret-manager",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
         method: "PATCH",
-        uri: "api/v1/applications/{uuid}/secret-manager",
+        uri: "api/v1/{resource_type}/{uuid}/secret-manager",
+        group: Group::Main,
+        abilities: W,
+    },
+    // v4.6.0 `api.ability:delete` (access grants); write until that ability is ported.
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/{resource_type}/{uuid}/secret-manager",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/{resource_type}/{uuid}/secret-manager/keys",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/{resource_type}/{uuid}/secret-manager/references",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/{resource_type}/{uuid}/secret-manager/import",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/applications/{uuid}/dns",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/applications/{uuid}/dns",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/applications/{uuid}/dns/replace",
+        group: Group::Main,
+        abilities: W,
+    },
+    // v4.6.0 `api.ability:delete` (access grants); write until that ability is ported.
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/applications/{uuid}/dns/{hostname}",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/dns",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/dns",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/services/{uuid}/dns/replace",
+        group: Group::Main,
+        abilities: W,
+    },
+    // v4.6.0 `api.ability:delete` (access grants); write until that ability is ported.
+    RouteSpec {
+        method: "DELETE",
+        uri: "api/v1/services/{uuid}/dns/{hostname}",
         group: Group::Main,
         abilities: W,
     },
@@ -2159,10 +2278,36 @@ pub fn router(state: AppState) -> Router {
         ("DELETE", "api/v1/tags/{uuid}", del(tags::delete)),
         ("GET", "api/v1/audit-events", on_get(audit_events::index)),
         (
+            "GET",
+            "api/v1/security/integration-tokens",
+            on_get(integration_tokens::index),
+        ),
+        (
             "POST",
             "api/v1/security/integration-tokens",
             on_post(integration_tokens::store),
         ),
+        (
+            "GET",
+            "api/v1/security/integration-tokens/{uuid}",
+            on_get(integration_tokens::show),
+        ),
+        (
+            "PATCH",
+            "api/v1/security/integration-tokens/{uuid}",
+            patch(integration_tokens::update),
+        ),
+        (
+            "DELETE",
+            "api/v1/security/integration-tokens/{uuid}",
+            del(integration_tokens::destroy),
+        ),
+        (
+            "POST",
+            "api/v1/security/integration-tokens/{uuid}/sync-zones",
+            on_post(integration_tokens::sync_zones),
+        ),
+        ("GET", "api/v1/dns/zones", on_get(dns_records::zones)),
         ("POST", "api/v1/mcp/enable", on_post(misc::enable_mcp)),
         ("POST", "api/v1/mcp/disable", on_post(misc::disable_mcp)),
         ("POST", "api/feedback", on_post(misc::feedback)),
@@ -2364,12 +2509,74 @@ pub fn router(state: AppState) -> Router {
             on_post(scheduled_tasks::application_execute),
         ),
         (
+            "GET",
+            "api/v1/{resource_type}/{uuid}/secret-manager",
+            on_get(secret_manager::show),
+        ),
+        (
             "PATCH",
-            "api/v1/applications/{uuid}/secret-manager",
-            on(
-                axum::routing::MethodFilter::PATCH,
-                secret_manager::application_update,
-            ),
+            "api/v1/{resource_type}/{uuid}/secret-manager",
+            patch(secret_manager::update),
+        ),
+        (
+            "DELETE",
+            "api/v1/{resource_type}/{uuid}/secret-manager",
+            del(secret_manager::destroy),
+        ),
+        (
+            "GET",
+            "api/v1/{resource_type}/{uuid}/secret-manager/keys",
+            on_get(secret_manager::keys),
+        ),
+        (
+            "POST",
+            "api/v1/{resource_type}/{uuid}/secret-manager/references",
+            on_post(secret_manager::add_reference),
+        ),
+        (
+            "POST",
+            "api/v1/{resource_type}/{uuid}/secret-manager/import",
+            on_post(secret_manager::import),
+        ),
+        (
+            "GET",
+            "api/v1/applications/{uuid}/dns",
+            on_get(dns_records::application_status),
+        ),
+        (
+            "POST",
+            "api/v1/applications/{uuid}/dns",
+            on_post(dns_records::create_application_record),
+        ),
+        (
+            "POST",
+            "api/v1/applications/{uuid}/dns/replace",
+            on_post(dns_records::replace_application_record),
+        ),
+        (
+            "DELETE",
+            "api/v1/applications/{uuid}/dns/{hostname}",
+            del(dns_records::release_application_record),
+        ),
+        (
+            "GET",
+            "api/v1/services/{uuid}/dns",
+            on_get(dns_records::service_status),
+        ),
+        (
+            "POST",
+            "api/v1/services/{uuid}/dns",
+            on_post(dns_records::create_service_record),
+        ),
+        (
+            "POST",
+            "api/v1/services/{uuid}/dns/replace",
+            on_post(dns_records::replace_service_record),
+        ),
+        (
+            "DELETE",
+            "api/v1/services/{uuid}/dns/{hostname}",
+            del(dns_records::release_service_record),
         ),
         (
             "GET",
@@ -3593,10 +3800,21 @@ pub fn router(state: AppState) -> Router {
                 }))
             }
         };
+        // `Route::whereIn('resource_type', [...])`: one axum path per allowed value.
+        let paths: Vec<String> = if uri.contains("{resource_type}") {
+            ["applications", "services", "databases"]
+                .iter()
+                .map(|t| uri.replace("{resource_type}", t))
+                .collect()
+        } else {
+            vec![uri.to_string()]
+        };
         if s.group == Group::Main {
             let bridged = with_abilities(mr.clone())
                 .route_layer(from_fn_with_state(state.clone(), crate::session::ui_guard));
-            add(format!("{UI_PREFIX}{uri}"), bridged);
+            for path in &paths {
+                add(format!("{UI_PREFIX}{path}"), bridged.clone());
+            }
             if let Some(path) = crate::ui_canvas::bridge_path(method, uri) {
                 let canvas = with_abilities(mr.clone()).route_layer(from_fn_with_state(
                     state.clone(),
@@ -3616,7 +3834,9 @@ pub fn router(state: AppState) -> Router {
                 crate::auth::disable_guard,
             )),
         };
-        add(uri.to_string(), mr);
+        for path in paths {
+            add(path, mr.clone());
+        }
     }
 
     let mut router = Router::new();

@@ -1007,7 +1007,7 @@ fn bool_of(body: &Value, key: &str, default: bool) -> bool {
 }
 
 /// `$resource->environment_variables()->create(['key' => $key, 'value' => $value])`.
-pub(super) async fn create_plain(
+pub(crate) async fn create_plain(
     state: &AppState,
     ctx: &AuthCtx,
     meta: &Meta,

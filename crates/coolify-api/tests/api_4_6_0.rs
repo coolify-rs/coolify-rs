@@ -345,3 +345,461 @@ async fn locked_values_are_hidden_in_generated_compose() {
     assert!(!r.body.contains("shown-once-value") && !r.body.contains("https-token-1"));
     h.finish().await;
 }
+
+/// An integration token row of the Acme team, as `IntegrationToken::create()` stores it.
+async fn insert_token(
+    h: &Harness,
+    uuid: &str,
+    provider: &str,
+    capabilities: &str,
+    metadata: Option<&str>,
+) -> i64 {
+    let enc = coolify_compat::Encrypter::new(common::APP_KEY).unwrap();
+    sqlx::query_scalar(
+        "INSERT INTO integration_tokens (uuid, team_id, provider, name, token, capabilities, metadata, created_at, updated_at) \
+         VALUES ($1, 1, $2, $3, $4, $5::json, $6::json, '2026-11-01 10:00:00', '2026-11-01 10:00:00') RETURNING id",
+    )
+    .bind(uuid)
+    .bind(provider)
+    .bind(format!("{provider} token"))
+    .bind(enc.encrypt_string("secret-token-value"))
+    .bind(capabilities)
+    .bind(metadata)
+    .fetch_one(h.tdb.db.pool())
+    .await
+    .unwrap()
+}
+
+/// `IntegrationTokensController` (v4.6.0): list, show, update, delete and the zone sync, and the
+/// rules of create. No provider is contacted: every request here fails or succeeds before that.
+#[tokio::test]
+async fn integration_token_endpoints() {
+    let h = Harness::new().await;
+    let r = h
+        .get("/api/v1/security/integration-tokens", "acme_owner_read")
+        .await;
+    r.assert(200, "[]");
+    // Admins and owners only.
+    let r = h
+        .get("/api/v1/security/integration-tokens", "acme_member_read")
+        .await;
+    assert_eq!(r.status, 403, "{}", r.body);
+
+    insert_token(
+        &h,
+        "vaulttoken000000000000001",
+        "vault",
+        r#"["secrets"]"#,
+        Some(r#"{"base_url":"https://vault.example.test","namespace":"ns"}"#),
+    )
+    .await;
+    let cf = insert_token(
+        &h,
+        "cftoken000000000000000001",
+        "cloudflare",
+        r#"["dns"]"#,
+        Some(r#"{"automatic_dns":false,"zones_synced_at":"2026-11-01T10:00:00+00:00"}"#),
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO dns_provider_zones (uuid, integration_token_id, provider_zone_id, name, account_id, account_name, created_at, updated_at) \
+         VALUES ('zone00000000000000000001', $1, 'z1', 'example.test', 'a1', 'Acme account', now(), now())",
+    )
+    .bind(cf)
+    .execute(h.tdb.db.pool())
+    .await
+    .unwrap();
+
+    // The secret and the provider settings never come back.
+    let r = h
+        .get(
+            "/api/v1/security/integration-tokens/vaulttoken000000000000001",
+            "acme_owner_read",
+        )
+        .await;
+    r.assert(
+        200,
+        r#"{"uuid":"vaulttoken000000000000001","name":"vault token","provider":"vault","capabilities":["secrets"],"created_at":"2026-11-01T10:00:00.000000Z","updated_at":"2026-11-01T10:00:00.000000Z"}"#,
+    );
+    let r = h
+        .get(
+            "/api/v1/security/integration-tokens/cftoken000000000000000001",
+            "acme_owner_read",
+        )
+        .await;
+    r.assert(
+        200,
+        r#"{"uuid":"cftoken000000000000000001","name":"cloudflare token","provider":"cloudflare","capabilities":["dns"],"automatic_dns":false,"proxied_dns":false,"dns_zones_count":1,"zones_synced_at":"2026-11-01T10:00:00+00:00","created_at":"2026-11-01T10:00:00.000000Z","updated_at":"2026-11-01T10:00:00.000000Z"}"#,
+    );
+    let r = h
+        .get(
+            "/api/v1/security/integration-tokens/nope",
+            "acme_owner_read",
+        )
+        .await;
+    r.assert(404, r#"{"message":"Integration token not found."}"#);
+    assert!(
+        !h.get("/api/v1/security/integration-tokens", "acme_owner_read")
+            .await
+            .body
+            .contains("secret-token-value")
+    );
+
+    // Create: the settings only for a secret manager, the DNS switches only for Cloudflare.
+    let r = h
+        .call(
+            "POST",
+            "/api/v1/security/integration-tokens",
+            W,
+            Some(json!({"provider": "cloudflare", "name": "cf", "token": "t", "metadata": {}, "automatic_dns": "x", "extra": 1})),
+        )
+        .await;
+    r.assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"metadata":["The metadata field is prohibited."],"automatic_dns":["The automatic dns field must be true or false."],"extra":["This field is not allowed."]}}"#,
+    );
+    let r = h
+        .call(
+            "POST",
+            "/api/v1/security/integration-tokens",
+            W,
+            Some(json!({"provider": "doppler", "name": "d", "token": "nope", "proxied_dns": true})),
+        )
+        .await;
+    r.assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"token":["The token field format is invalid."],"proxied_dns":["The proxied dns field is prohibited."]}}"#,
+    );
+
+    // Update: a connection setting needs the secret again (checked before the provider).
+    let path = "/api/v1/security/integration-tokens/vaulttoken000000000000001";
+    let r = h
+        .call(
+            "PATCH",
+            path,
+            W,
+            Some(json!({"metadata": {"base_url": "https://other.example.test"}})),
+        )
+        .await;
+    r.assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"token":["Enter the token again when you change the base URL or the namespace."]}}"#,
+    );
+    // A rename alone is not checked with the provider.
+    let r = h
+        .call("PATCH", path, W, Some(json!({"name": "Renamed"})))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["name"], "Renamed");
+
+    // Zones are Cloudflare's.
+    let r = h.call("POST", &format!("{path}/sync-zones"), W, None).await;
+    r.assert(
+        422,
+        r#"{"message":"Only Cloudflare tokens have DNS zones."}"#,
+    );
+
+    // The DNS zones of the team.
+    let r = h.get("/api/v1/dns/zones", "acme_owner_read").await;
+    r.assert(
+        200,
+        r#"[{"zone":"example.test","account_name":"Acme account","integration_token_uuid":"cftoken000000000000000001","integration_token_name":"cloudflare token","managed_records_count":0}]"#,
+    );
+
+    // Delete.
+    let r = h.call("DELETE", path, W, None).await;
+    r.assert(200, r#"{"message":"Integration token deleted."}"#);
+    let r = h.call("DELETE", path, W, None).await;
+    r.assert(404, r#"{"message":"Integration token not found."}"#);
+    h.finish().await;
+}
+
+/// `SecretManagerController` (v4.6.0) on applications and databases, without fetching secrets.
+#[tokio::test]
+async fn secret_manager_endpoints() {
+    let h = Harness::new().await;
+    let t = team(&h).await;
+    let uuid = uuid_of(
+        &h.call(
+            "POST",
+            "/api/v1/applications/public",
+            W,
+            Some(public_body(
+                &t,
+                "https://git.example.test/o/r.git",
+                json!({}),
+            )),
+        )
+        .await,
+    );
+    let token = insert_token(
+        &h,
+        "vaulttoken000000000000002",
+        "vault",
+        r#"["secrets"]"#,
+        Some(r#"{"base_url":"https://vault.example.test"}"#),
+    )
+    .await;
+    let path = format!("/api/v1/applications/{uuid}/secret-manager");
+
+    let r = h.get(&path, "acme_owner_read").await;
+    r.assert(
+        200,
+        r#"{"linked":false,"integration_token_uuid":null,"provider":null,"settings":null,"available_tokens":[{"uuid":"vaulttoken000000000000002","name":"vault token","provider":"vault"}]}"#,
+    );
+    let r = h.call("DELETE", &path, W, None).await;
+    r.assert(
+        404,
+        r#"{"message":"The resource has no secret manager source."}"#,
+    );
+    let r = h.get(&format!("{path}/keys"), "acme_owner_write").await;
+    r.assert(
+        404,
+        r#"{"message":"The resource has no secret manager source."}"#,
+    );
+
+    let r = h
+        .call(
+            "PATCH",
+            &path,
+            W,
+            Some(json!({"integration_token_uuid": "nope"})),
+        )
+        .await;
+    r.assert(
+        404,
+        r#"{"message":"Secret manager integration token not found."}"#,
+    );
+    let r = h
+        .call(
+            "PATCH",
+            &path,
+            W,
+            Some(json!({"integration_token_uuid": "vaulttoken000000000000002", "settings": {"mount": "kv"}, "x": 1})),
+        )
+        .await;
+    r.assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"settings.path":["This field is required."],"x":["This field is not allowed."]}}"#,
+    );
+    let r = h
+        .call(
+            "PATCH",
+            &path,
+            W,
+            Some(json!({"integration_token_uuid": "vaulttoken000000000000002", "settings": {"mount": "kv", "path": "app", "other": "dropped"}})),
+        )
+        .await;
+    r.assert(
+        200,
+        r#"{"integration_token_uuid":"vaulttoken000000000000002","provider":"vault","settings":{"mount":"kv","path":"app"}}"#,
+    );
+    let linked: i64 = sqlx::query_scalar(
+        "SELECT integration_token_id FROM secret_manager_links WHERE resourceable_type = 'App\\Models\\Application'",
+    )
+    .fetch_one(h.tdb.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(linked, token);
+    let r = h.get(&path, "acme_owner_read").await;
+    assert_eq!(r.json()["linked"], true, "{}", r.body);
+    assert_eq!(r.json()["settings"], json!({"mount": "kv", "path": "app"}));
+    // A used token cannot be deleted.
+    let r = h
+        .call(
+            "DELETE",
+            "/api/v1/security/integration-tokens/vaulttoken000000000000002",
+            W,
+            None,
+        )
+        .await;
+    r.assert(
+        409,
+        r#"{"message":"This token is used by one or more resources as a secret manager source. Remove those links first."}"#,
+    );
+    let r = h.call("DELETE", &path, W, None).await;
+    r.assert(
+        200,
+        r#"{"message":"Secret manager source removed. Existing {{vault.*}} variables fail the next deployment until they are removed."}"#,
+    );
+
+    let r = h
+        .get("/api/v1/databases/nope/secret-manager", "acme_owner_read")
+        .await;
+    r.assert(404, r#"{"message":"Database not found."}"#);
+    let r = h
+        .get("/api/v1/services/nope/secret-manager", "acme_owner_read")
+        .await;
+    r.assert(404, r#"{"message":"Service not found."}"#);
+    // The old application-only route is gone with its controller; the generic one answers.
+    let r = h
+        .call(
+            "PATCH",
+            "/api/v1/applications/nope/secret-manager",
+            W,
+            Some(json!({})),
+        )
+        .await;
+    r.assert(404, r#"{"message":"Application not found."}"#);
+    h.finish().await;
+}
+
+/// `DnsController` (v4.6.0) for an application, without a Cloudflare call.
+#[tokio::test]
+async fn application_dns_endpoints() {
+    let h = Harness::new().await;
+    let t = team(&h).await;
+    let uuid = uuid_of(
+        &h.call(
+            "POST",
+            "/api/v1/applications/public",
+            W,
+            Some(public_body(
+                &t,
+                "https://git.example.test/o/r.git",
+                json!({}),
+            )),
+        )
+        .await,
+    );
+    sqlx::query("UPDATE applications SET fqdn = 'https://App.example.test' WHERE uuid = $1")
+        .bind(&uuid)
+        .execute(h.tdb.db.pool())
+        .await
+        .unwrap();
+    let cf = insert_token(
+        &h,
+        "cftoken000000000000000002",
+        "cloudflare",
+        r#"["dns"]"#,
+        None,
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO dns_provider_zones (uuid, integration_token_id, provider_zone_id, name, created_at, updated_at) \
+         VALUES ('zone00000000000000000002', $1, 'z2', 'example.test', now(), now())",
+    )
+    .bind(cf)
+    .execute(h.tdb.db.pool())
+    .await
+    .unwrap();
+    let path = format!("/api/v1/applications/{uuid}/dns");
+
+    // 203.0.113.0/24 is a documentation range: the server has no public address.
+    let r = h.get(&path, "acme_owner_read").await;
+    r.assert(
+        200,
+        r#"{"default_address":null,"public_addresses":[],"hostnames":[{"hostname":"app.example.test","providers":[{"integration_token_uuid":"cftoken000000000000000002","integration_token_name":"cloudflare token","zone":"example.test","automatic_dns":true,"proxied_dns":false}],"records":[]}]}"#,
+    );
+
+    let r = h
+        .call(
+            "POST",
+            &path,
+            W,
+            Some(json!({"hostname": "other.example.test"})),
+        )
+        .await;
+    r.assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"hostname":["other.example.test is not a domain of this resource."]}}"#,
+    );
+    let r = h
+        .call(
+            "POST",
+            &path,
+            W,
+            Some(json!({"hostname": "APP.example.test."})),
+        )
+        .await;
+    r.assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"address":["The server has no public IP address; add the DNS record manually."]}}"#,
+    );
+    let r = h.call("POST", &path, W, Some(json!({"name": "x"}))).await;
+    r.assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"hostname":["This field is required."],"name":["This field is not allowed."]}}"#,
+    );
+    let r = h
+        .call(
+            "POST",
+            &format!("{path}/replace"),
+            W,
+            Some(json!({"hostname": "app.example.test"})),
+        )
+        .await;
+    r.assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"record_id":["This field is required."],"current":["This field is required."]}}"#,
+    );
+
+    // Release: only a hostname the resource no longer uses, and only with a record of it.
+    let r = h
+        .call("DELETE", &format!("{path}/app.example.test"), W, None)
+        .await;
+    r.assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"hostname":["The resource still uses app.example.test. Remove the domain first; its DNS record is then released."]}}"#,
+    );
+    let r = h
+        .call("DELETE", &format!("{path}/gone.example.test"), W, None)
+        .await;
+    r.assert(
+        404,
+        r#"{"message":"No managed DNS record of this resource for gone.example.test."}"#,
+    );
+
+    let r = h.get("/api/v1/services/nope/dns", "acme_owner_read").await;
+    r.assert(404, r#"{"message":"Service not found."}"#);
+    h.finish().await;
+}
+
+/// `fix(api): accept the same port mappings as the UI` (v4.6.0).
+#[tokio::test]
+async fn port_mappings_like_the_ui() {
+    let h = Harness::new().await;
+    let t = team(&h).await;
+    let ok_body = public_body(
+        &t,
+        "https://git.example.test/o/r.git",
+        json!({"ports_mappings": "8080:80/udp,127.0.0.1:8080:80,:3000,[::1]::81"}),
+    );
+    let r = h
+        .call("POST", "/api/v1/applications/public", W, Some(ok_body))
+        .await;
+    assert_eq!(r.status, 201, "{}", r.body);
+    let r = h
+        .call(
+            "POST",
+            "/api/v1/applications/public",
+            W,
+            Some(public_body(
+                &t,
+                "https://git.example.test/o/r.git",
+                json!({"ports_mappings": "8080:80,8080:81"}),
+            )),
+        )
+        .await;
+    r.assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"ports_mappings":"Each host IP, port, and protocol can only be used once."}}"#,
+    );
+    let r = h
+        .call(
+            "POST",
+            "/api/v1/applications/public",
+            W,
+            Some(public_body(
+                &t,
+                "https://git.example.test/o/r.git",
+                json!({"ports_mappings": "abc"}),
+            )),
+        )
+        .await;
+    r.assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"ports_mappings":["The ports mappings field format is invalid."]}}"#,
+    );
+    h.finish().await;
+}

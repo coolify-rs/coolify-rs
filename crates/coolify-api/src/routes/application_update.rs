@@ -826,9 +826,17 @@ async fn apply(
         state,
         apps::MORPH,
         original.id,
-        previous_dns_hostnames,
+        previous_dns_hostnames.clone(),
         ctx.team_id,
     );
+    // `ResourceDnsRecords::queueAutomaticRecords()` (v4.6.0).
+    crate::routes::dns_records::queue_automatic_records(
+        state,
+        crate::routes::dns_records::Kind::Application,
+        original.id,
+        &previous_dns_hostnames,
+    )
+    .await;
     if delete_service_variables {
         apps::delete_service_url_variables(&state.db, original.id).await?;
     }
