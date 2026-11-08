@@ -93,7 +93,7 @@ pub struct ActiveDeployment {
 
 /// `DeploymentsIndicator::deployments`: `ownedByTeam` goes through the application, also a deleted one.
 pub async fn active_deployments(db: &Db, team_id: i64) -> DbResult<Vec<ActiveDeployment>> {
-    Ok(sqlx::query_as(
+    Ok(sqlx::query_as::<_, ActiveDeployment>(
         "SELECT q.id, a.uuid AS application_uuid, q.application_name, q.deployment_url, q.pull_request_id, \
                 q.server_name, q.status, p.name AS project_name, e.name AS environment_name, \
                 e.id AS environment_id \
