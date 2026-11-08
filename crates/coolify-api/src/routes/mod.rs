@@ -85,6 +85,9 @@ const WS: &[&[Ability]] = &[&[Ability::WriteSensitive]];
 const D: &[&[Ability]] = &[&[Deploy]];
 /// `api.ability:write` then `api.ability:deploy`.
 const WD: &[&[Ability]] = &[&[Write], &[Deploy]];
+/// `api.ability:delete`: every DELETE route since upstream 4.6.0, where delete became its own
+/// ability (`add_access_grants_to_team_members_and_tokens` gave it to tokens that could write).
+const DEL: &[&[Ability]] = &[&[Ability::Delete]];
 
 pub const ROUTES: &[RouteSpec] = &[
     RouteSpec {
@@ -193,7 +196,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/team/envs/{env_id}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -217,7 +220,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/projects/{uuid}/envs/{env_id}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -241,7 +244,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/projects/{uuid}/environments/{environment_name_or_uuid}/envs/{env_id}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -265,7 +268,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/tags/{uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -403,7 +406,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/projects/{uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -427,7 +430,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/projects/{uuid}/environments/{environment_name_or_uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -463,7 +466,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/security/keys/{uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -511,7 +514,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/servers/{uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "PATCH",
@@ -589,7 +592,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/applications/{uuid}/destinations/{destination_uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -619,7 +622,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/applications/{uuid}/previews/{pull_request_id}",
         group: Group::Main,
-        abilities: WD,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -643,7 +646,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -691,7 +694,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/applications/{uuid}/envs/{env_uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -715,7 +718,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/applications/{uuid}/storages/{storage_uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -733,7 +736,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/applications/{uuid}/tags/{tag_uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -769,7 +772,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/github-apps/{github_app_id}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -805,7 +808,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/gitlab-apps/{gitlab_app_id}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "POST",
@@ -847,7 +850,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/applications/{uuid}",
         group: Group::Main,
-        abilities: WD,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -973,7 +976,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/databases/{uuid}",
         group: Group::Main,
-        abilities: WD,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -1045,7 +1048,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/databases/{uuid}/backups/{scheduled_backup_uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -1057,7 +1060,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/databases/{uuid}/backups/{scheduled_backup_uuid}/executions/{execution_uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -1087,7 +1090,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/databases/{uuid}/envs/{env_uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -1111,7 +1114,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/databases/{uuid}/storages/{storage_uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -1129,7 +1132,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/databases/{uuid}/tags/{tag_uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -1201,7 +1204,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/s3-storages/{uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "POST",
@@ -1249,7 +1252,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/services/{uuid}",
         group: Group::Main,
-        abilities: WD,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -1285,7 +1288,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/applications/{uuid}/storages/{storage_uuid}/backups",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "PUT",
@@ -1303,7 +1306,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/databases/{uuid}/storages/{storage_uuid}/backups",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "PUT",
@@ -1321,13 +1324,13 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/services/{uuid}/storages/{storage_uuid}/backups",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "DELETE",
         uri: "api/v1/services/{uuid}/storages/{storage_uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -1357,7 +1360,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/services/{uuid}/envs/{env_uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -1381,7 +1384,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/services/{uuid}/tags/{tag_uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "POST",
@@ -1585,7 +1588,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -1633,7 +1636,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/servers/{uuid}/envs/{env_id}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -1729,7 +1732,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/destinations/{uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -1759,13 +1762,13 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "POST",
         uri: "api/v1/servers/{uuid}/registries/{registry}/check",
         group: Group::Main,
-        abilities: W,
+        abilities: WD,
     },
     RouteSpec {
         method: "DELETE",
         uri: "api/v1/servers/{uuid}/registries/{registry}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",
@@ -1837,7 +1840,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/cloud-tokens/{uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "POST",
@@ -1873,7 +1876,7 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "DELETE",
         uri: "api/v1/cloud-init-scripts/{uuid}",
         group: Group::Main,
-        abilities: W,
+        abilities: DEL,
     },
     RouteSpec {
         method: "GET",

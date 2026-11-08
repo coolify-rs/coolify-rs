@@ -57,6 +57,14 @@ fn reader(team_id: i64) -> AuthCtx {
         role: Role::Member,
         abilities: Abilities::new(vec![Ability::Read.as_str().to_owned()]),
         can_read_sensitive: false,
+        // A member without stored grants: team-wide read.
+        access: std::sync::Arc::new(coolify_domain::Access {
+            layers: vec![coolify_domain::AccessGrants {
+                team_levels: coolify_domain::grants::expand(&[coolify_domain::AccessLevel::Read]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
     }
 }
 
@@ -170,6 +178,9 @@ async fn deploy(state: AppState, r: &DeployRequest) -> Result<String, String> {
         (Actor::Caller { .. }, None) => return Err("Missing required team role.".into()),
     };
     let abilities = Abilities::new(abilities);
+    let access = coolify_db::access::for_user(&state.db, r.team_id, user_id, None)
+        .await
+        .map_err(unavailable)?;
     // `api.ability:deploy` of the route.
     if !(abilities.can(Ability::Deploy) || abilities.can(Ability::Root)) {
         return Err("Missing required permissions: deploy".into());
@@ -182,6 +193,7 @@ async fn deploy(state: AppState, r: &DeployRequest) -> Result<String, String> {
         role,
         abilities,
         can_read_sensitive: false,
+        access: std::sync::Arc::new(access),
     };
     let mut headers = HeaderMap::new();
     headers.insert(

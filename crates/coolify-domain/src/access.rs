@@ -42,6 +42,8 @@ pub enum Ability {
     Write,
     WriteSensitive,
     Deploy,
+    /// Its own ability since upstream 4.6.0 (`add_access_grants_to_team_members_and_tokens`).
+    Delete,
     Root,
 }
 
@@ -53,6 +55,7 @@ impl Ability {
             Self::Write => "write",
             Self::WriteSensitive => "write:sensitive",
             Self::Deploy => "deploy",
+            Self::Delete => "delete",
             Self::Root => "root",
         }
     }

@@ -210,7 +210,17 @@ pub async fn find_in_team(db: &Db, team_id: TeamId, uuid: &str) -> DbResult<Opti
     .bind(team_id)
     .fetch_optional(db.pool())
     .await?;
-    r.as_ref().map(to_row).transpose()
+    Ok(r.as_ref().map(to_row).transpose()?.filter(visible))
+}
+
+/// `VisibleThroughAccessGrants` of the current request.
+pub fn visible(s: &ServiceRow) -> bool {
+    crate::access::resource_visible(
+        s.raw
+            .get("environment_id")
+            .and_then(serde_json::Value::as_i64),
+        &s.uuid,
+    )
 }
 
 pub async fn find_by_id(db: &Db, id: i64) -> DbResult<Option<ServiceRow>> {
@@ -234,7 +244,10 @@ pub async fn list_for_team(db: &Db, team_id: TeamId) -> DbResult<Vec<ServiceRow>
             .fetch_all(db.pool())
             .await?;
         for r in &rows {
-            out.push(to_row(r)?);
+            let row = to_row(r)?;
+            if visible(&row) {
+                out.push(row);
+            }
         }
     }
     Ok(out)
@@ -1457,7 +1470,8 @@ pub async fn list_for_environment(db: &Db, environment_id: i64) -> DbResult<Vec<
         .bind(environment_id)
         .fetch_all(db.pool())
         .await?;
-    rows.iter().map(to_row).collect()
+    let rows: Vec<ServiceRow> = rows.iter().map(to_row).collect::<DbResult<_>>()?;
+    Ok(rows.into_iter().filter(visible).collect())
 }
 
 /// `$part->delete()`: the `deleting` hook, then the soft delete.

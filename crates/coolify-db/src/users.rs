@@ -92,9 +92,16 @@ pub struct Membership {
     pub show_boarding: bool,
     pub avatar_path: Option<String>,
     pub updated_at: Option<NaiveDateTime>,
+    /// Raw `team_user.access` (upstream 4.6.0): the member's access grants, `None` for the default.
+    pub access: Option<String>,
 }
 
 impl Membership {
+    /// `AccessResolver::memberGrants`: `None` for owners and admins.
+    pub fn grants(&self) -> Option<Vec<coolify_domain::Grant>> {
+        crate::access::member_grants_of(Some((self.role.as_str(), self.access.as_deref())))
+    }
+
     /// `team_avatar_url`.
     pub fn avatar_url(&self) -> Option<String> {
         self.avatar_path.as_ref().map(|_| {
@@ -124,9 +131,14 @@ pub async fn memberships(db: &Db, user_id: i64) -> DbResult<Vec<Membership>> {
     } else {
         "false"
     };
+    let access = if crate::access::has_member_access_column(db) {
+        "tu.access::text"
+    } else {
+        "NULL::text"
+    };
     #[allow(clippy::type_complexity)]
-    let rows: Vec<(i64, String, String, bool, bool, Option<String>, Option<NaiveDateTime>)> = sqlx::query_as(&format!(
-        "SELECT t.id, t.name, tu.role, {flag}, {boarding}, {avatar}, t.updated_at FROM team_user tu JOIN teams t ON t.id = tu.team_id \
+    let rows: Vec<(i64, String, String, bool, bool, Option<String>, Option<NaiveDateTime>, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT t.id, t.name, tu.role, {flag}, {boarding}, {avatar}, t.updated_at, {access} FROM team_user tu JOIN teams t ON t.id = tu.team_id \
          WHERE tu.user_id = $1 ORDER BY tu.id"
     ))
     .bind(user_id)
@@ -143,6 +155,7 @@ pub async fn memberships(db: &Db, user_id: i64) -> DbResult<Vec<Membership>> {
                 show_boarding,
                 avatar_path,
                 updated_at,
+                access,
             )| {
                 Some(Membership {
                     team_id,
@@ -152,6 +165,7 @@ pub async fn memberships(db: &Db, user_id: i64) -> DbResult<Vec<Membership>> {
                     show_boarding,
                     avatar_path,
                     updated_at,
+                    access,
                 })
             },
         )
