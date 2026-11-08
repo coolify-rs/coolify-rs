@@ -723,9 +723,77 @@ pub(crate) fn session_id(headers: &HeaderMap) -> Option<String> {
 const TEAM_2FA_REQUIRED: &str =
     "Your team requires two-factor authentication. Configure it to continue.";
 
+/// The requests behind upstream's `access.team-wide` pages (servers, keys, sources,
+/// destinations, notifications, storages, tags, settings, team pages, fleet analytics and
+/// metrics, the deploy canvas, the terminal page and the team and server shared variables).
+const TEAM_WIDE_UI_PREFIXES: &[&str] = &[
+    "/ui/analytics",
+    "/ui/metrics",
+    "/ui/canvas/deploy",
+    "/ui/tags",
+    "/ui/notifications",
+    "/ui/storages",
+    "/ui/settings",
+    "/ui/subscription",
+    "/ui/team/members",
+    "/ui/team/invitations",
+    "/ui/team/audit-log",
+    "/ui/team/admin",
+    "/ui/team/danger",
+    "/ui/team/avatar",
+    "/ui/terminal",
+    "/ui/servers",
+    "/ui/server-page",
+    "/ui/destination-list",
+    "/ui/keys",
+    "/ui/security/cloud-tokens",
+    "/ui/security/cloud-init-scripts",
+    "/ui/security/integration-tokens",
+    "/ui/sources",
+    "/ui/cloud",
+    "/ui/shared-variables/overview",
+    "/ui/shared-variables/owners",
+    "/ui/plugins/team",
+];
+
+/// The `canvas/api` routes with `access.team-wide` (`routes/web.php`).
+fn is_team_wide_canvas_path(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/canvas/api/") else {
+        return false;
+    };
+    [
+        "tags/",
+        "shared-variables/team/",
+        "dashboard/",
+        "github-apps",
+        "security/keys",
+    ]
+    .iter()
+    .any(|p| rest.starts_with(p))
+        || rest == "servers"
+        || rest.starts_with("servers/")
+}
+
+/// `EnsureTeamWideAccess` for a JSON request of a team-level page.
+pub(crate) fn is_team_wide_ui_path(path: &str) -> bool {
+    path == "/ui/team"
+        || TEAM_WIDE_UI_PREFIXES.iter().any(|p| {
+            path == *p
+                || path
+                    .strip_prefix(p)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
+}
+
 /// The team context of a browser session behind the web gates.
 fn web_ctx(live: &Live, path: &str) -> Result<AuthCtx, ApiError> {
     web_gates(live, path)?;
+    if is_team_wide_ui_path(path) && !live.access.covers_whole_team() {
+        return Err(ApiError::Message(
+            StatusCode::FORBIDDEN,
+            crate::auth::TEAM_WIDE_DENIED_MESSAGE,
+        ));
+    }
     let m = live
         .memberships
         .iter()
@@ -842,6 +910,13 @@ pub async fn canvas_guard(State(state): State<AppState>, mut req: Request, next:
         } else {
             membership_access(&state, &live.memberships, team).await?
         };
+        // `access.team-wide` on the team-level canvas routes.
+        if !access.covers_whole_team() && is_team_wide_canvas_path(&path) {
+            return Err(ApiError::Message(
+                StatusCode::FORBIDDEN,
+                crate::auth::TEAM_WIDE_DENIED_MESSAGE,
+            ));
+        }
         Ok(AuthCtx {
             token_id: 0,
             user_id: live.user.id,

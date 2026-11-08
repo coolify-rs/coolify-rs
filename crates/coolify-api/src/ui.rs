@@ -216,9 +216,17 @@ async fn dashboard_data(
     Extension(ctx): Extension<AuthCtx>,
 ) -> ApiResult {
     let projects = dashboard::projects(&state.db, ctx.team_id).await?;
-    let servers = dashboard::servers(&state.db, ctx.team_id).await?;
-    let rows = coolify_db::servers::list(&state.db, ctx.team_id).await?;
-    let private_keys = dashboard::private_key_count(&state.db, ctx.team_id).await?;
+    // `$showsTeamSections`: members limited to some projects do not see servers and keys.
+    let team_sections = ctx.covers_whole_team();
+    let (servers, rows, private_keys) = if team_sections {
+        (
+            dashboard::servers(&state.db, ctx.team_id).await?,
+            coolify_db::servers::list(&state.db, ctx.team_id).await?,
+            dashboard::private_key_count(&state.db, ctx.team_id).await?,
+        )
+    } else {
+        (Vec::new(), Vec::new(), 0)
+    };
     let icons = coolify_db::canvas::project_icon_urls(&state.db, ctx.team_id).await?;
     let projects: Vec<Value> = projects
         .iter()
@@ -254,6 +262,7 @@ async fn dashboard_data(
         "servers": servers,
         "private_keys": private_keys,
         "can_create": ctx.role.is_admin(),
+        "shows_team_sections": team_sections,
     }))
     .into_response())
 }

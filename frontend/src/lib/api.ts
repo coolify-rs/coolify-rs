@@ -100,6 +100,8 @@ export interface SessionInfo {
     avatar_url: string | null;
     two_factor_required: boolean;
     two_factor_blocked: boolean;
+    /** `EnsureTeamWideAccess`: false for a member limited to some projects. */
+    covers_whole_team?: boolean;
   } | null;
   csrf_token: string;
   version: string;
@@ -182,6 +184,8 @@ export interface DashboardData {
   }[];
   private_keys: number;
   can_create: boolean;
+  /** `Dashboard::$showsTeamSections`: false for a member limited to some projects. */
+  shows_team_sections?: boolean;
 }
 
 export const uiApi = {

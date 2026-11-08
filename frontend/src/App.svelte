@@ -215,6 +215,19 @@
     const to = canvasRedirect(router.current.name, router.current.params);
     if (to) router.go(to, true);
   });
+  // `access.team-wide` (`EnsureTeamWideAccess`): team-level pages for a member limited to some projects.
+  const teamWidePages = new Set([
+    'settings-general', 'settings-advanced', 'settings-updates', 'settings-email', 'settings-backup', 'settings-oauth',
+    'analytics', 'metrics', 'subscription', 'subscription-new',
+    'canvas-deploy', 'canvas-tags', 'canvas-dashboard', 'canvas-servers', 'canvas-server', 'canvas-team-variables', 'canvas-server-variables',
+    'keys', 'key', 'team', 'members', 'team-danger', 'team-audit', 'team-admin',
+    'registries', 'destinations', 'destination', 'sources', 'source-github', 'source-gitlab', 'source-gitea',
+    'notification-email', 'notification-channel', 'terminal', 'tags',
+    'shared-overview', 'shared-team', 'shared-servers', 'shared-server', 'storages', 'storage',
+    'cloud-tokens', 'cloud-token', 'cloud-init-scripts', 'cloud-init-script', 'integration-tokens',
+    'servers', 'server-new', 'server-new-type', 'server', 'server-section',
+  ]);
+  const teamWideDenied = $derived(!!session.info && !session.coversWholeTeam && teamWidePages.has(router.current.name));
   // `can.access.terminal` on the terminal page of a resource or server.
   const isTerminalSection = $derived(params.section === 'terminal' && /-section$|^server/.test(router.current.name));
 </script>
@@ -263,6 +276,8 @@
 {:else if router.current.name === 'admin' && !((session.info.features.cloud || session.info.features.dev) && (session.info.user.id === 0 || session.info.features.impersonating))}
   <!-- `Admin\\Index::mount`: abort(403). -->
   <ErrorPage code={403} />
+{:else if teamWideDenied}
+  <ErrorPage code={403} description="Your access in this team is limited to some projects." />
 {:else if (router.current.name === 'team-danger' && !session.isOwner) || ((router.current.name === 'team-audit' || router.current.name === 'terminal' || isTerminalSection) && !session.isAdmin)}
   <ErrorPage code={403} />
 {:else}

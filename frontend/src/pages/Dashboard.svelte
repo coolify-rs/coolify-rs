@@ -166,6 +166,7 @@
           {/if}
         </section>
 
+        {#if !data || data.shows_team_sections !== false}
         <section class="@container mb-0! min-w-0">
           <SectionHeading title="Servers" href={data && data.servers.length > limit ? '/servers' : null}>
             {#snippet titleAction()}
@@ -292,6 +293,7 @@
             {/if}
           {/if}
         </section>
+        {/if}
 
         <!-- coolify-rs plugins (ADR 0013): nothing unless the team has a dashboard panel. -->
         <PluginPanels slot="dashboard" />
