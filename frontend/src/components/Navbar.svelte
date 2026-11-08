@@ -18,6 +18,7 @@
       isAdmin: session.isAdmin,
       isOwner: session.isOwner,
       isInstanceAdmin: session.isInstanceAdmin,
+      teamWide: session.coversWholeTeam,
       isCloud: session.info?.features.cloud,
       pluginSettings: pluginNav.settings,
       pluginTeam: pluginNav.team,

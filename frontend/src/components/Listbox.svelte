@@ -29,6 +29,7 @@
     allowCustom = false,
     multiple = false,
     values = $bindable([]),
+    countLabel,
     error,
     onchange,
   }: {
@@ -40,6 +41,8 @@
     value?: V;
     multiple?: boolean;
     values?: V[];
+    /** With `multiple`: always show a count such as "3 resources" instead of the selected labels. */
+    countLabel?: string;
     disabled?: boolean;
     placeholder?: string;
     emptyText?: string;
@@ -78,6 +81,7 @@
     if (multiple) {
       const labels = options.filter((o) => isSelected(o)).map((o) => o.label);
       if (labels.length === 0) return placeholder;
+      if (countLabel) return `${labels.length} ${labels.length === 1 ? countLabel : `${countLabel}s`}`;
       return labels.length <= 2 ? labels.join(', ') : `${labels.length} selected`;
     }
     return options.find((o) => String(o.value) === String(value))?.label ?? (allowCustom && value ? String(value) : placeholder);
