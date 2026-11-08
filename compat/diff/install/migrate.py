@@ -121,6 +121,11 @@ HISTORICAL_MIGRATIONS = [
 
 
 def stage_seed():
+    # From 4.6.0 on, Coolify on this offline VM marks the proxy "starting" after validation but never starts it, so
+    # start it the way the dashboard's Start Proxy button does. The migration must then leave it running.
+    code, out = vm("docker", "exec", "coolify", "php", "artisan", "tinker", "--execute",
+                   'App\\Actions\\Proxy\\StartProxy::run(App\\Models\\Server::find(0), async: false); echo "started";')
+    check("Coolify's proxy", "started" in out, out.strip()[-200:])
     show("deployments on Coolify", *run("python3", HERE / "deploy_check.py", VM, PORT, timeout=1500), tail=14)
     values = ", ".join(f"('{m}', (SELECT max(batch) FROM migrations))" for m in HISTORICAL_MIGRATIONS)
     code, out = vm("docker", "exec", "coolify-db", "psql", "-U", "coolify", "-d", "coolify", "-Atc",
