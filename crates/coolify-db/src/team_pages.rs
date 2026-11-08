@@ -340,8 +340,10 @@ pub async fn set_team_avatar(
 ) -> DbResult<()> {
     db.ensure_writable()?;
     sqlx::query(
+        // A new upload is `fill(...)->touch()` (v4.6.0): `updated_at`, which the avatar URL carries,
+        // changes even when the path stays the same. A removal saves only a change.
         "UPDATE teams SET avatar_path = $2, avatar_storage_type = $3, avatar_s3_storage_id = NULL, updated_at = $4 \
-         WHERE id = $1 AND (avatar_path IS DISTINCT FROM $2 OR avatar_storage_type IS DISTINCT FROM $3 OR avatar_s3_storage_id IS NOT NULL)",
+         WHERE id = $1 AND ($2::text IS NOT NULL OR avatar_path IS DISTINCT FROM $2 OR avatar_storage_type IS DISTINCT FROM $3 OR avatar_s3_storage_id IS NOT NULL)",
     )
     .bind(team_id)
     .bind(path)

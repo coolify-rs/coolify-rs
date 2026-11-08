@@ -866,3 +866,46 @@ async fn shared_docker_image_names_are_rejected() {
     assert_eq!(r.status, 200, "{}", r.body);
     h.finish().await;
 }
+
+/// `fix(avatar): change avatar URL when an existing avatar is replaced` (v4.6.0): storing the same
+/// path again still moves `updated_at`, which the avatar URL carries; a removal saves only a change.
+#[tokio::test]
+async fn replaced_avatar_touches_updated_at() {
+    let h = Harness::new().await;
+    let at = |s: &str| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap();
+    let updated = |table: &'static str| {
+        let pool = h.tdb.db.pool().clone();
+        async move {
+            sqlx::query_scalar::<_, chrono::NaiveDateTime>(&format!(
+                "SELECT updated_at FROM {table} WHERE id = 1"
+            ))
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let db = &h.tdb.db;
+    coolify_db::profile::set_avatar(db, 1, Some("avatars/1.png"), at("2026-11-01 10:00:00"))
+        .await
+        .unwrap();
+    coolify_db::profile::set_avatar(db, 1, Some("avatars/1.png"), at("2026-11-02 10:00:00"))
+        .await
+        .unwrap();
+    assert_eq!(updated("users").await, at("2026-11-02 10:00:00"));
+    coolify_db::profile::set_avatar(db, 1, None, at("2026-11-03 10:00:00"))
+        .await
+        .unwrap();
+    coolify_db::profile::set_avatar(db, 1, None, at("2026-11-04 10:00:00"))
+        .await
+        .unwrap();
+    assert_eq!(updated("users").await, at("2026-11-03 10:00:00"));
+
+    coolify_db::team_pages::set_team_avatar(db, 1, Some("teams/1.png"), at("2026-11-01 10:00:00"))
+        .await
+        .unwrap();
+    coolify_db::team_pages::set_team_avatar(db, 1, Some("teams/1.png"), at("2026-11-05 10:00:00"))
+        .await
+        .unwrap();
+    assert_eq!(updated("teams").await, at("2026-11-05 10:00:00"));
+    h.finish().await;
+}
