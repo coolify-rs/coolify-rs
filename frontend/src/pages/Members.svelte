@@ -267,7 +267,7 @@
                           />
                         </svg>
                       {:else}
-                        <Reicon name="x" class="size-4 shrink-0" />
+                        <span class="text-[12px]" aria-hidden="true">Off</span>
                       {/if}
                       <span class="sr-only">Two-factor authentication is {m.two_factor ? 'enabled' : 'disabled'}</span>
                     </span>

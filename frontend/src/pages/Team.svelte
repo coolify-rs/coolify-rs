@@ -6,7 +6,6 @@
   import SettingsSection from '../components/SettingsSection.svelte';
   import TeamLayout from '../components/TeamLayout.svelte';
   import TeamAvatar from '../components/TeamAvatar.svelte';
-  import NewTeamModal from '../components/NewTeamModal.svelte';
   import { compressAvatar, teamsUi, uploadImage } from '../lib/teamsApi';
   import { teamUi, ApiError, type TeamPageData } from '../lib/api';
   import { session } from '../lib/session.svelte';
@@ -19,7 +18,6 @@
   let saved = $state<Form | null>(null);
   let saving = $state(false);
   let error = $state<ApiError | null>(null);
-  let creating = $state(false);
   let processing = $state(false);
   let uploadError = $state<string | null>(null);
   let avatarInput: HTMLInputElement | undefined = $state();
@@ -105,13 +103,6 @@
         >
           <UnsavedBar {dirty} {saving} onsave={save} onreset={() => ((form = { ...saved! }), (error = null))} />
           <SettingsSection title="General" description="Manage this team's identity and shared API access.">
-            {#snippet actions()}
-              <div class="relative h-auto w-auto">
-                <button type="button" class="button" onclick={() => (creating = true)}>
-                  New team
-                </button>
-              </div>
-            {/snippet}
             <div class="grid gap-4 lg:grid-cols-2">
               <div class="lg:col-span-2">
                 <div class="mb-2 text-sm font-medium leading-4">Avatar</div>
@@ -183,6 +174,3 @@
   </TeamLayout>
 </div>
 
-{#if creating}
-  <NewTeamModal onclose={() => (creating = false)} />
-{/if}
