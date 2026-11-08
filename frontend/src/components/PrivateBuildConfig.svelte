@@ -345,7 +345,7 @@
       {#if buildPack === 'dockercompose'}
         <RepositoryPaths class="sm:grid-cols-2" bind:base={baseDirectory} bind:file={dockerComposeLocation} showFile fileLabel="Compose file" defaultFile="/docker-compose.yaml" />
       {:else}
-        <FormInput id="base_directory" label="Base directory" helper="Repository directory used as the build root." bind:value={baseDirectory} />
+        <FormInput id="base_directory" label="Base directory" placeholder="/" helper="Repository directory used as the build root." bind:value={baseDirectory} />
       {/if}
 
 {/snippet}

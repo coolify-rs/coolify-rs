@@ -69,6 +69,92 @@ pub(super) fn deployment_type(a: &ApplicationRow, source: Option<&Source>) -> De
     }
 }
 
+/// `parse_url($this->git_repository)` reduced to `scheme://host[:port]/` for an http(s) URL with a
+/// host (`gitHttpsCredentialOrigin()`).
+pub(crate) fn git_https_credential_origin(repository: &str) -> Option<String> {
+    let (scheme, rest) = repository.split_once("://")?;
+    let scheme = scheme.to_lowercase();
+    if !matches!(scheme.as_str(), "http" | "https") {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let (host, port) = if let Some(end) = host_port.strip_prefix('[').and_then(|r| r.find(']')) {
+        let host = &host_port[..end + 2];
+        let port = host_port[end + 2..].strip_prefix(':');
+        (host, port)
+    } else {
+        match host_port.rsplit_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (host_port, None),
+        }
+    };
+    if host.trim().is_empty() {
+        return None;
+    }
+    // `isset($url['port'])`: parse_url drops an empty port and fails on a non-numeric one.
+    let port = match port {
+        Some("") | None => String::new(),
+        Some(p) if p.bytes().all(|b| b.is_ascii_digit()) => format!(":{}", p.parse::<u32>().ok()?),
+        Some(_) => return None,
+    };
+    Some(format!("{scheme}://{host}{port}/"))
+}
+
+/// `gitHttpsCredentialBasicToken()`: `base64(username:password)`.
+pub(crate) fn git_https_basic_token(username: Option<&str>, password: &str) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .encode(format!("{}:{password}", username.unwrap_or_default()))
+}
+
+/// `gitHttpsCredentialConfigOption()`: a `git -c` option that sends the HTTPS credential as a Basic
+/// auth header, only to the host of the repository, when the application clones from a custom Git
+/// host (`deploymentType() === 'other'`). `password` is the decrypted `git_https_password`.
+pub(crate) fn git_https_config_option(
+    repository: Option<&str>,
+    other_deployment: bool,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> Option<String> {
+    let password = password.filter(|p| !p.trim().is_empty())?;
+    if !other_deployment {
+        return None;
+    }
+    let origin = git_https_credential_origin(repository.unwrap_or_default())?;
+    Some(format!(
+        "-c {}",
+        quote(&format!(
+            "http.{origin}.extraHeader=Authorization: Basic {}",
+            git_https_basic_token(username, password)
+        ))
+    ))
+}
+
+/// The decrypted `git_https_password` of an application (`encrypted` cast); `None` when the
+/// column is missing, null or does not decrypt.
+pub(crate) fn git_https_password(
+    a: &ApplicationRow,
+    enc: Option<&coolify_compat::Encrypter>,
+) -> Option<String> {
+    let cipher = a.str("git_https_password")?;
+    enc?.decrypt_string(cipher).ok()
+}
+
+/// `$application->gitHttpsCredentialConfigOption()` of a deployment.
+pub(super) fn application_git_https_option(
+    a: &ApplicationRow,
+    kind: DeploymentType,
+    enc: Option<&coolify_compat::Encrypter>,
+) -> Option<String> {
+    git_https_config_option(
+        a.str("git_repository"),
+        kind == DeploymentType::Other,
+        a.str("git_https_username"),
+        git_https_password(a, enc).as_deref(),
+    )
+}
+
 /// `parseScpStyleGitUrl()`: `(user, host, port, path)`.
 pub(super) fn parse_scp(repo: &str) -> Option<(String, String, Option<String>, String)> {
     static RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -322,6 +408,8 @@ pub(super) struct ImportInput<'a> {
     pub source_key: Option<&'a str>,
     pub pull_request_id: i64,
     pub git_type: Option<&'a str>,
+    /// `gitHttpsCredentialConfigOption()` ("other" type with HTTPS credentials).
+    pub https_option: Option<&'a str>,
 }
 
 fn hidden(command: String) -> Cmd {
@@ -393,8 +481,10 @@ fn pull_request_clone(
     clone: String,
     ssh_prefix: &str,
     ssh: &str,
+    git_config: Option<&str>,
     commands: &mut Vec<Cmd>,
 ) -> (String, String) {
+    let git = git_config.map_or_else(|| "git".to_owned(), |o| format!("git {o}"));
     if i.pull_request_id == 0 {
         return (clone, i.branch.to_owned());
     }
@@ -403,8 +493,8 @@ fn pull_request_clone(
     let echo = |branch: &str| hidden(in_docker(i.dep, &format!("echo 'Checking out {branch}'")));
     let fetch = |branch: &str| {
         format!(
-            "{clone} && cd {dir} && {ssh_prefix} git fetch origin {branch} && {}",
-            git_checkout_command(&pr_branch, i.settings, Some(ssh), None)
+            "{clone} && cd {dir} && {ssh_prefix} {git} fetch origin {branch} && {}",
+            git_checkout_command(&pr_branch, i.settings, Some(ssh), git_config)
         )
     };
     match i.git_type {
@@ -423,7 +513,7 @@ fn pull_request_clone(
             (
                 format!(
                     "{clone} && cd {dir} && {ssh_prefix} {}",
-                    git_checkout_command(i.commit, i.settings, Some(ssh), None)
+                    git_checkout_command(i.commit, i.settings, Some(ssh), git_config)
                 ),
                 i.branch.to_owned(),
             )
@@ -520,7 +610,8 @@ pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImp
             );
             let mut commands = ssh_key_setup(i.dep, &key_b64);
             let prefix = format!("GIT_SSH_COMMAND=\"{ssh}\"");
-            let (command, branch) = pull_request_clone(i, command, &prefix, &ssh, &mut commands);
+            let (command, branch) =
+                pull_request_clone(i, command, &prefix, &ssh, None, &mut commands);
             commands.push(hidden(in_docker(i.dep, &command)));
             Ok(GitImport {
                 commands,
@@ -529,13 +620,24 @@ pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImp
             })
         }
         DeploymentType::Other => {
+            if let Some(option) = i.https_option {
+                clone = clone.replace("git clone", &format!("git {option} clone"));
+            }
             clone = format!("{clone} {} {dir}", quote(i.repository));
-            clone =
-                set_git_import_settings(&clone, i.settings, true, i.commit, None, None, &base_dir);
+            clone = set_git_import_settings(
+                &clone,
+                i.settings,
+                true,
+                i.commit,
+                None,
+                i.https_option,
+                &base_dir,
+            );
             let ssh = git_ssh_command(i.port, Some("/root/.ssh/id_rsa"), false);
             let prefix = format!("GIT_SSH_COMMAND=\"{ssh}\"");
             let mut commands = Vec::new();
-            let (clone, branch) = pull_request_clone(i, clone, &prefix, &ssh, &mut commands);
+            let (clone, branch) =
+                pull_request_clone(i, clone, &prefix, &ssh, i.https_option, &mut commands);
             commands.push(hidden(in_docker(i.dep, &clone)));
             // `gitCommandsAsShellCommand($commands)`: one command joined with `&&`.
             let joined = commands
@@ -881,6 +983,89 @@ pub(super) fn dockerfile_instructions(lines: &[String]) -> Vec<(String, usize, u
 mod tests {
     use super::*;
 
+    /// `gitHttpsCredentialOrigin()` and `gitHttpsCredentialConfigOption()` (v4.6.0).
+    #[test]
+    fn https_credential_option() {
+        let origin = git_https_credential_origin;
+        assert_eq!(
+            origin("https://dev.azure.com/org/p/_git/r").as_deref(),
+            Some("https://dev.azure.com/")
+        );
+        assert_eq!(
+            origin("HTTP://user:pw@git.example.test:8443/a.git").as_deref(),
+            Some("http://git.example.test:8443/")
+        );
+        assert_eq!(
+            origin("https://[::1]:3000/a").as_deref(),
+            Some("https://[::1]:3000/")
+        );
+        assert_eq!(origin("git@git.example.test:o/r.git"), None);
+        assert_eq!(origin("ssh://git@git.example.test/o/r.git"), None);
+        assert_eq!(git_https_basic_token(Some("u"), "p"), "dTpw");
+        assert_eq!(git_https_basic_token(None, "p"), "OnA=");
+        let opt = git_https_config_option(Some("https://h.test/r.git"), true, Some("u"), Some("p"));
+        assert_eq!(
+            opt.as_deref(),
+            Some("-c 'http.https://h.test/.extraHeader=Authorization: Basic dTpw'")
+        );
+        // Only the "other" type, with a password, and an http(s) URL.
+        assert_eq!(
+            git_https_config_option(Some("https://h.test/r.git"), false, Some("u"), Some("p")),
+            None
+        );
+        assert_eq!(
+            git_https_config_option(Some("https://h.test/r.git"), true, Some("u"), Some("")),
+            None
+        );
+        assert_eq!(
+            git_https_config_option(Some("git@h.test:r.git"), true, Some("u"), Some("p")),
+            None
+        );
+    }
+
+    /// The "other" branch of `generateGitImportCommands()` with HTTPS credentials (v4.6.0).
+    #[test]
+    fn https_credential_clone_command() {
+        let option = "-c 'http.https://h.test/.extraHeader=Authorization: Basic dTpw'";
+        let input = |pull_request_id, git_type| ImportInput {
+            dep: "abc",
+            branch: "main",
+            repository: "https://h.test/r.git",
+            port: "22",
+            kind: DeploymentType::Other,
+            source: None,
+            settings: ImportSettings {
+                shallow: false,
+                submodules: true,
+                lfs: false,
+            },
+            commit: "HEAD",
+            private_key: None,
+            github_token: None,
+            oauth_token: None,
+            source_key: None,
+            pull_request_id,
+            git_type,
+            https_option: Some(option),
+        };
+        let g = generate_git_import_commands(&input(0, None)).unwrap();
+        let c = &g.commands[0].command;
+        assert!(
+            c.contains(r#"git -c '\''http.https://h.test/.extraHeader=Authorization: Basic dTpw'\'' clone --recurse-submodules -b '\''main'\'' '\''https://h.test/r.git'\''"#),
+            "{c}"
+        );
+        assert!(
+            c.contains(r#"git -c '\''http.https://h.test/.extraHeader=Authorization: Basic dTpw'\'' submodule sync"#),
+            "{c}"
+        );
+        let g = generate_git_import_commands(&input(5, Some("gitlab"))).unwrap();
+        let c = &g.commands[0].command;
+        assert!(
+            c.contains(r#"git -c '\''http.https://h.test/.extraHeader=Authorization: Basic dTpw'\'' fetch origin merge-requests/5/head:pr-5-coolify && git -c '\''http.https://h.test/.extraHeader=Authorization: Basic dTpw'\'' checkout '\''pr-5-coolify'\''"#),
+            "{c}"
+        );
+    }
+
     #[test]
     fn scp_and_ports() {
         assert_eq!(
@@ -993,6 +1178,7 @@ mod tests {
             source_key: None,
             pull_request_id: 0,
             git_type: None,
+            https_option: None,
         })
         .unwrap();
         assert_eq!(
@@ -1079,6 +1265,7 @@ mod tests {
             source_key: None,
             pull_request_id: 0,
             git_type: None,
+            https_option: None,
         })
         .unwrap();
         assert_eq!(g.full_repo_url, "https://github.com/o/r");

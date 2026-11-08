@@ -256,6 +256,8 @@ pub(crate) async fn present_preloaded(
         }
         r.shift_remove("id");
     }
+    // `redactLockedApiResourceValues()`.
+    super::locked_values::redact_application(state, a, &mut r).await;
     // Accessors and casts.
     r.insert(
         "status".into(),
@@ -401,6 +403,8 @@ const ALLOWED: &[&str] = &[
     "git_repository",
     "git_branch",
     "git_commit_sha",
+    "git_https_username",
+    "git_https_password",
     "private_key_uuid",
     "docker_registry_image_name",
     "docker_registry_image_tag",
@@ -552,9 +556,6 @@ pub(crate) fn is_valid_docker_image_tag(value: &str, allow_variables: bool) -> b
 static PORTS_EXPOSES: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"^(\d+)(,\d+)*$").unwrap_or_else(|_| unreachable!())
 });
-static PORTS_MAPPINGS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"^(\d+:\d+)(,\d+:\d+)*$").unwrap_or_else(|_| unreachable!())
-});
 static HEALTH_PATH: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"^[a-zA-Z0-9/\-_.~%,;]+$").unwrap_or_else(|_| unreachable!())
 });
@@ -565,6 +566,16 @@ static HEALTH_COMMAND: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::
 static GIT_COMMIT_SHA: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"^[a-zA-Z0-9][a-zA-Z0-9._\-/]*$").unwrap_or_else(|_| unreachable!())
 });
+/// `sharedDataApplications()`: `git_https_username` `regex:/^[^:\r\n]*$/`.
+pub(crate) static GIT_HTTPS_USERNAME: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^[^:\r\n]*$").unwrap_or_else(|_| unreachable!())
+    });
+/// `sharedDataApplications()`: `git_https_password` `regex:/^[^\r\n]*$/`.
+pub(crate) static GIT_HTTPS_PASSWORD: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^[^\r\n]*$").unwrap_or_else(|_| unreachable!())
+    });
 /// `ValidationPatterns::SHELL_SAFE_COMMAND_PATTERN`.
 static SHELL_SAFE_COMMAND: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(
@@ -753,6 +764,24 @@ pub(super) fn shared_rules(overrides: Vec<Field>) -> Vec<Field> {
             "git_branch",
             vec![Rule::String, Rule::CustomOwned(git_urls::valid_git_branch)],
         ),
+        field(
+            "git_https_username",
+            vec![
+                Rule::String,
+                Rule::Nullable,
+                Rule::Max(255),
+                Rule::Regex(&GIT_HTTPS_USERNAME),
+            ],
+        ),
+        field(
+            "git_https_password",
+            vec![
+                Rule::String,
+                Rule::Nullable,
+                Rule::Max(2048),
+                Rule::Regex(&GIT_HTTPS_PASSWORD),
+            ],
+        ),
         field("build_pack", vec![Rule::In(BUILD_PACKS)]),
     ];
     for name in [
@@ -880,7 +909,12 @@ pub(super) fn shared_rules(overrides: Vec<Field>) -> Vec<Field> {
         ),
         field(
             "ports_mappings",
-            vec![Rule::String, Rule::Regex(&PORTS_MAPPINGS), Rule::Nullable],
+            // `ValidationPatterns::portMappingRules()` (v4.6.0): the mappings the UI accepts.
+            vec![
+                Rule::Nullable,
+                Rule::String,
+                Rule::Regex(&crate::ui_databases::PORT_MAPPINGS),
+            ],
         ),
         field("custom_network_aliases", vec![Rule::String, Rule::Nullable]),
         field("base_directory", path_rules(255, &DIRECTORY_PATH)),
@@ -1091,6 +1125,12 @@ async fn create_prologue(
     if !extra.is_empty() {
         return Err(ApiError::Validation(extra));
     }
+    if kind != "public" && (input.has("git_https_username") || input.has("git_https_password")) {
+        return Err(field_error(
+            "git_https_password",
+            "HTTPS credentials can only be used with a public or custom Git host repository (POST /applications/public).",
+        ));
+    }
     if input.filled("docker_compose_raw") {
         let raw = input
             .str("docker_compose_raw")
@@ -1253,19 +1293,11 @@ pub(super) async fn validate_data_applications(
             "Argon2id needs a server that runs the Caddy proxy, version 2.11 or newer.",
         ));
     }
-    if let Some(v) = input.get("ports_mappings") {
-        let text = fields::php_text(v)?.unwrap_or_default();
-        let mut seen: Vec<&str> = Vec::new();
-        for m in text.split(',') {
-            let first = m.split(':').next().unwrap_or_default();
-            if seen.contains(&first) {
-                return Err(field_error(
-                    "ports_mappings",
-                    "The first number before : should be unique between mappings.",
-                ));
-            }
-            seen.push(first);
-        }
+    // Each host binding (IP, port, protocol) of `ports_mappings` is unique.
+    if let Some(Value::String(text)) = input.get("ports_mappings")
+        && let Some(message) = duplicate_host_binding(text)
+    {
+        return Err(field_error("ports_mappings", message));
     }
     fields::normalize_custom_labels(input)?;
     if input.has("domains") && fields::proxy_should_run(server) {
@@ -1428,6 +1460,34 @@ const IMAGE_SETTINGS: &[(&str, &str)] = &[
 ];
 
 /// PHP `trim()` (the model's `saving` hook trims git and command columns).
+/// The host binding check of `validateDataApplications()` (v4.6.0): the container port is after
+/// the last `:`, and an empty host port makes Docker pick a free port.
+pub(crate) fn duplicate_host_binding(text: &str) -> Option<&'static str> {
+    static PROTOCOL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"/(tcp|udp|sctp)").unwrap_or_else(|_| unreachable!())
+    });
+    static OTHER_PROTOCOL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"/(udp|sctp)").unwrap_or_else(|_| unreachable!())
+    });
+    let mut seen: Vec<String> = Vec::new();
+    for mapping in text.split(',') {
+        let host = &mapping[..mapping.rfind(':').unwrap_or(0)];
+        let host = PROTOCOL.replace_all(host, "").into_owned();
+        if host.is_empty() || host.ends_with(':') {
+            continue;
+        }
+        let protocol = OTHER_PROTOCOL
+            .captures(mapping)
+            .map_or("tcp".to_owned(), |c| c[1].to_owned());
+        let binding = format!("{host}/{protocol}");
+        if seen.contains(&binding) {
+            return Some("Each host IP, port, and protocol can only be used once.");
+        }
+        seen.push(binding);
+    }
+    None
+}
+
 pub(crate) fn php_trim(s: &str) -> String {
     s.trim_matches([' ', '\t', '\n', '\r', '\0', '\x0B'])
         .to_owned()
@@ -1435,6 +1495,33 @@ pub(crate) fn php_trim(s: &str) -> String {
 
 /// `$application->save()` and the rest of the type branch: the `created` hook, the
 /// generated domain, read-only labels, `isConfigurationChanged(true)`, instant deploy, 201.
+/// `sharedImageNameValidationResponse()` (v4.6.0): another application of the team builds the same
+/// Docker image name.
+pub(crate) async fn shared_image_name_check(
+    state: &AppState,
+    team_id: i64,
+    except: Option<i64>,
+    image_name: Option<&str>,
+    build_pack: Option<&str>,
+) -> Result<(), ApiError> {
+    if let Some((_, other)) = apps::other_application_building_same_image(
+        &state.db, team_id, except, image_name, build_pack,
+    )
+    .await?
+    {
+        let mut errors = Map::new();
+        errors.insert(
+            "docker_registry_image_name".into(),
+            json!([apps::shared_image_name_message(
+                other.as_deref(),
+                image_name.unwrap_or_default()
+            )]),
+        );
+        return Err(ApiError::Validation(errors));
+    }
+    Ok(())
+}
+
 async fn finish_create(
     state: &AppState,
     ctx: &AuthCtx,
@@ -1453,6 +1540,23 @@ async fn finish_create(
             _ => None,
         })
         .unwrap_or_default();
+    // `sharedImageNameValidationResponse($application)` right before `save()` (v4.6.0).
+    let image_name = columns
+        .iter()
+        .rev()
+        .find(|(k, _)| *k == "docker_registry_image_name")
+        .and_then(|(_, v)| match v {
+            ColumnValue::Text(t) => t.clone(),
+            _ => None,
+        });
+    shared_image_name_check(
+        state,
+        ctx.team_id,
+        None,
+        image_name.as_deref(),
+        Some(&build_pack),
+    )
+    .await?;
     let uuid = coolify_domain::new_public_id();
     let now = state.now();
     let id = apps::create(
@@ -1944,6 +2048,41 @@ async fn create_git(
                 !["http", "https", "mailto", "tel"].contains(&p.scheme.to_lowercase().as_str())
             }) {
                 return Err(SERVER_ERROR);
+            }
+            let on_github = parts.as_ref().is_some_and(|p| p.host == "github.com");
+            if cx.input.filled("git_https_password") {
+                if on_github {
+                    return Err(field_error(
+                        "git_https_password",
+                        "HTTPS credentials are not used for github.com. Use a GitHub App (POST /applications/private-github-app) for a private GitHub repository.",
+                    ));
+                }
+            } else if cx.input.filled("git_https_username") {
+                return Err(field_error(
+                    "git_https_password",
+                    "The git_https_password is required with git_https_username.",
+                ));
+            }
+            // fill() takes both from the request; the password goes through the `encrypted` cast.
+            if state
+                .db
+                .schema()
+                .has_column("applications", "git_https_password")
+            {
+                let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+                if let Some(v) = cx.input.get("git_https_username") {
+                    source_columns.push((
+                        "git_https_username",
+                        ColumnValue::Text(fields::php_text(v)?),
+                    ));
+                }
+                if let Some(v) = cx.input.get("git_https_password") {
+                    let plain = fields::php_text(v)?;
+                    source_columns.push((
+                        "git_https_password",
+                        ColumnValue::Text(plain.map(|p| enc.encrypt_string(&p))),
+                    ));
+                }
             }
             if let Some(p) = parts.filter(|p| p.host == "github.com") {
                 let path = p.path_or_root();
@@ -2855,6 +2994,22 @@ mod tests {
         ] {
             assert_eq!(git_repository_slug(input), slug, "{input}");
         }
+    }
+
+    #[test]
+    fn host_bindings_of_port_mappings() {
+        let dup = Some("Each host IP, port, and protocol can only be used once.");
+        assert_eq!(duplicate_host_binding("3000:3000,3001:3000"), None);
+        assert_eq!(duplicate_host_binding("3000:3000,3000:3001"), dup);
+        // Another protocol or IP is another binding; an empty host port is never a duplicate.
+        assert_eq!(duplicate_host_binding("53:53,53:53/udp"), None);
+        assert_eq!(duplicate_host_binding("53/udp:53,53:53/udp"), dup);
+        assert_eq!(
+            duplicate_host_binding("127.0.0.1:80:80,10.0.0.1:80:80"),
+            None
+        );
+        assert_eq!(duplicate_host_binding(":80,:80,[::1]::81,[::1]::81"), None);
+        assert_eq!(duplicate_host_binding("80,80"), None);
     }
 
     #[test]

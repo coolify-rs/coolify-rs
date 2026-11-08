@@ -534,6 +534,10 @@ export interface ApplicationSource {
   current_source: SourceCard | null;
   sources: SourceCard[];
   can_update: boolean;
+  /** `deploymentType() === 'other'`: shows the HTTPS credentials section. */
+  deployment_type_other: boolean;
+  git_https_username: string | null;
+  has_git_https_password: boolean;
 }
 
 export interface DeploymentListItem {
@@ -615,8 +619,12 @@ export const appUi = {
   /** `PublicGitRepository::submit()`. */
   createPublic: (body: Record<string, unknown>) => request<{ uuid: string }>('POST', '/ui/public-repository', body),
   source: (uuid: string) => request<ApplicationSource>('GET', `${appPath(uuid)}/source`),
-  updateSource: (uuid: string, body: { git_repository: string; git_branch: string; git_commit_sha: string }) =>
-    request<{ message: string }>('PATCH', `${appPath(uuid)}/source`, body),
+  updateSource: (
+    uuid: string,
+    body: { git_repository: string; git_branch: string; git_commit_sha: string; git_https_username?: string; git_https_password?: string },
+  ) => request<{ message: string }>('PATCH', `${appPath(uuid)}/source`, body),
+  /** `removeGitHttpsCredential()`. */
+  removeGitHttpsCredential: (uuid: string) => request<{ message: string }>('DELETE', `${appPath(uuid)}/source/https-credentials`),
   changeSource: (uuid: string, body: { source_id?: number; source_type?: string; private_key_id?: number }) =>
     request<{ message: string }>('POST', `${appPath(uuid)}/source/change`, body),
   parseCompose: (uuid: string) => request<{ error?: string; docker_compose?: string | null }>('POST', `${appPath(uuid)}/compose/parse`, {}),

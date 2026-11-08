@@ -13,6 +13,9 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
   from its GitHub releases (`COOLIFY_RS_CDN`, default `https://github.com/coolify-rs/coolify-rs/releases/latest/download`)
   and pulls `ghcr.io/coolify-rs/coolify-rs` (`COOLIFY_RS_REGISTRY`). `REGISTRY_URL` applies to Coolify's helper image
   only. Update checks read coolify-rs's own version file (`COOLIFY_RS_VERSIONS_URL` or `CDN_URL`).
+- **Update channels.** The Preview and Nightly channels of the update settings take a version only from a version
+  file that lists channels (`{"stable": …, "preview": …, "nightly": …}`); with a stable-only file every channel
+  gets the stable release. A custom image tag installs `ghcr.io/coolify-rs/coolify-rs:<tag>`.
 - **Existing Coolify databases.** Each release takes over exactly one Coolify release (4.5.3 for `4.5.3-rs.1`; see
   [MIGRATING.md](MIGRATING.md)). `coolify-rs boot` runs only the upstream migrations that bring its own earlier
   installs up to that release. A database from an older Coolify release is served read-only until Coolify itself is

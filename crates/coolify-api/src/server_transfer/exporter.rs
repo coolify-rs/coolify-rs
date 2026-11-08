@@ -578,6 +578,7 @@ impl<'a> Exporter<'a> {
             let v = &row[f];
             let value = match f {
                 "http_basic_auth_password"
+                | "git_https_password"
                 | "manual_webhook_secret_github"
                 | "manual_webhook_secret_gitlab"
                 | "manual_webhook_secret_bitbucket"

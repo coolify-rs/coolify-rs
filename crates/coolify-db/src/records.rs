@@ -589,8 +589,12 @@ pub static APPLICATION: ModelSpec = ModelSpec {
         "http_basic_auth_bcrypt_cost",
         "http_basic_auth_argon2id_memory_cost",
         "http_basic_auth_argon2id_time_cost",
+        // v4.6.0 (`add_git_https_credentials_to_applications_table`).
+        "git_https_username",
+        "git_https_password",
     ],
-    hidden: &[],
+    // `Application::$hidden`: never made visible, even with `read:sensitive`.
+    hidden: &["git_https_password"],
     timestamps: &[
         "created_at",
         "updated_at",

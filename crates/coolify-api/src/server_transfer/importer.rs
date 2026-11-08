@@ -107,6 +107,8 @@ pub const APPLICATION_FILLABLE: &[&str] = &[
     "git_branch",
     "git_commit_sha",
     "git_full_url",
+    "git_https_username",
+    "git_https_password",
     "docker_registry_image_name",
     "docker_registry_image_tag",
     "build_pack",
@@ -1278,20 +1280,20 @@ impl Import<'_> {
     fn application_setters(&self, attrs: &mut Map<String, Value>) {
         for field in [
             "http_basic_auth_password",
+            "git_https_password",
             "manual_webhook_secret_github",
             "manual_webhook_secret_gitlab",
             "manual_webhook_secret_bitbucket",
             "manual_webhook_secret_gitea",
         ] {
+            let optional = matches!(field, "http_basic_auth_password" | "git_https_password");
             let value = match attrs.get(field) {
                 Some(v) if !v.is_null() => self.encrypt(Some(v)),
                 // `$application->manual_webhook_secret_* ??= Str::random(40)`.
-                _ if field != "http_basic_auth_password" => {
-                    json!(self.enc.encrypt_string(&random_string(40)))
-                }
+                _ if !optional => json!(self.enc.encrypt_string(&random_string(40))),
                 _ => Value::Null,
             };
-            if field != "http_basic_auth_password" || attrs.contains_key(field) {
+            if !optional || attrs.contains_key(field) {
                 attrs.insert(field.to_owned(), value);
             }
         }

@@ -19,7 +19,6 @@ use crate::audit::Meta;
 use crate::auth::AuthCtx;
 use crate::response::{ApiError, ApiResult, PhpJson, ok};
 use crate::routes::cloud_tokens::cloud_init_rule;
-use crate::routes::integration_tokens::{error_message, verify};
 use crate::state::AppState;
 use crate::ui_notifications::{blank, toast_error, unauthorized, validation_failed};
 
@@ -981,57 +980,32 @@ async fn add_integration_token(
         );
     }
     let caps = capabilities_errors(&body, provider, &mut errors);
-    let mut metadata = filtered_metadata(&body);
+    let metadata = filtered_metadata(&body);
     metadata_errors(provider, &metadata, &mut errors);
     if !errors.is_empty() {
         return Ok(field_errors(errors));
     }
-    if provider == "cloudflare" {
-        if !body
-            .get("automatic_dns")
+    // `CreateIntegrationToken::run()`: a Cloudflare token also gets its zones.
+    let uuid = match crate::integration_token_actions::create(
+        &state,
+        ctx.team_id,
+        provider,
+        name,
+        token,
+        &caps,
+        &metadata,
+        body.get("automatic_dns")
             .and_then(Value::as_bool)
-            .unwrap_or(true)
-        {
-            metadata.insert("automatic_dns".into(), json!(false));
-        }
-        if body
-            .get("proxied_dns")
+            .unwrap_or(true),
+        body.get("proxied_dns")
             .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            metadata.insert("proxied_dns".into(), json!(true));
-        }
-    }
-    match verify_with_capabilities(&state.db, provider, token, &caps, &metadata).await {
-        Ok(true) => {}
-        Ok(false) => {
-            return Ok(toast_error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                error_message(provider),
-            ));
-        }
-        Err(message) => return Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, message)),
-    }
-    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-    let uuid = coolify_domain::new_public_id();
-    let cipher = enc.encrypt_string(token);
-    let caps_json = coolify_compat::php_json::encode(&json!(caps));
-    let meta_json = (!metadata.is_empty())
-        .then(|| coolify_compat::php_json::encode(&Value::Object(metadata.clone())));
-    it::create(
-        &state.db,
-        &it::NewToken {
-            uuid: &uuid,
-            team_id: ctx.team_id,
-            provider,
-            name,
-            token_encrypted: &cipher,
-            capabilities: &caps_json,
-            metadata: meta_json.as_deref(),
-        },
-        state.now(),
+            .unwrap_or(false),
     )
-    .await?;
+    .await
+    {
+        Ok(uuid) => uuid,
+        Err(e) => return action_failure(e),
+    };
     crate::audit::log(
         &state,
         &ctx,
@@ -1044,36 +1018,25 @@ async fn add_integration_token(
     Ok(ok(json!({"message": "Integration token added successfully."})).into_response())
 }
 
-/// `IntegrationTokenValidator::validate`.
-async fn verify_with_capabilities(
-    db: &coolify_db::Db,
-    provider: &str,
-    token: &str,
-    caps: &[String],
-    metadata: &Map<String, Value>,
-) -> Result<bool, String> {
-    if provider == "cloudflare" {
-        use coolify_jobs::integrations::cloudflare;
-        // `catch (ConnectionException)`: `connectionErrorMessage`.
-        return cloudflare::validate_token(token, caps)
-            .await
-            .map_err(|_| cloudflare::connection_error_message(provider));
+/// The `catch` blocks of the form and the editor: an error toast.
+fn action_failure(e: crate::integration_token_actions::ActionError) -> ApiResult {
+    use crate::integration_token_actions::ActionError;
+    match e {
+        ActionError::Validation(errors) => {
+            let message = errors
+                .values()
+                .next()
+                .and_then(|v| v.get(0))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, message))
+        }
+        ActionError::Connection(m) | ActionError::Runtime(m) => {
+            Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, m))
+        }
+        ActionError::Api(e) => Err(e),
     }
-    verify(db, provider, token, metadata).await
-}
-
-/// `baseUrlForAudit`.
-fn base_url_for_audit(v: Option<&Value>) -> Value {
-    let Some(url) = v.and_then(Value::as_str).filter(|u| !u.is_empty()) else {
-        return Value::Null;
-    };
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return json!("[invalid-url]");
-    };
-    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let authority = rest[..end].rsplit('@').next().unwrap_or_default();
-    let path_end = rest[end..].find(['?', '#']).map_or(rest.len(), |i| end + i);
-    json!(format!("{scheme}://{authority}{}", &rest[end..path_end]))
 }
 
 /// `IntegrationTokenEditor::save`.
@@ -1103,136 +1066,46 @@ async fn update_integration_token(
         );
     }
     let caps = capabilities_errors(&body, &provider, &mut errors);
-    let mut metadata = filtered_metadata(&body);
+    let metadata = filtered_metadata(&body);
     metadata_errors(&provider, &metadata, &mut errors);
     if !errors.is_empty() {
         return Ok(field_errors(errors));
     }
-    if provider == "cloudflare" {
-        if body
-            .get("automatic_dns")
-            .and_then(Value::as_bool)
-            .unwrap_or(true)
-        {
-            metadata.remove("automatic_dns");
-        } else {
-            metadata.insert("automatic_dns".into(), json!(false));
-        }
-        if body
-            .get("proxied_dns")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            metadata.insert("proxied_dns".into(), json!(true));
-        } else {
-            metadata.remove("proxied_dns");
-        }
-    }
-    let stored = parse_json_column(&r, "metadata");
-    let stored_map = stored.as_object().cloned().unwrap_or_default();
-    let fields: &[&str] = match provider.as_str() {
-        "vault" => &["base_url", "namespace"],
-        "infisical" => &["base_url", "client_id"],
-        _ => &[],
-    };
-    let as_text = |m: &Map<String, Value>, k: &str| match m.get(k) {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Null) | None => String::new(),
-        Some(v) => v.to_string(),
-    };
-    let changed: Vec<&str> = fields
-        .iter()
-        .copied()
-        .filter(|k| as_text(&stored_map, k) != as_text(&metadata, k))
-        .collect();
-    let new_filled = !new_token.trim().is_empty();
-    if !changed.is_empty() && !new_filled {
-        let m = match provider.as_str() {
-            "infisical" => {
-                "Enter the client secret again when you change the base URL or the client ID."
-            }
-            "vault" => "Enter the token again when you change the base URL or the namespace.",
-            _ => "Enter the token again when you change the connection settings.",
-        };
-        let mut e = Map::new();
-        e.insert("new_token".into(), json!([m]));
-        return Ok(field_errors(e));
-    }
-    let mut sorted_new = caps.clone();
-    sorted_new.sort();
-    let mut sorted_old: Vec<String> = parse_json_column(&r, "capabilities")
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    sorted_old.sort();
-    let caps_changed = sorted_new != sorted_old;
-    let meta_changed = Value::Object(metadata.clone()) != Value::Object(stored_map.clone());
-    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-    if new_filled || caps_changed || meta_changed {
-        let current = if new_filled {
-            new_token.to_owned()
-        } else {
-            text(&r, "token")
-                .and_then(|c| enc.decrypt_string(c).ok())
-                .unwrap_or_default()
-        };
-        match verify_with_capabilities(&state.db, &provider, &current, &caps, &metadata).await {
-            Ok(true) => {}
-            Ok(false) => {
-                return Ok(toast_error(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    error_message(&provider),
-                ));
-            }
-            Err(message) => return Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, message)),
-        }
-    }
-    let id = coolify_db::database_parts::id_of(&r);
-    let caps_json = coolify_compat::php_json::encode(&json!(caps));
-    let meta_json = (!metadata.is_empty())
-        .then(|| coolify_compat::php_json::encode(&Value::Object(metadata.clone())));
-    sqlx::query(
-        "UPDATE integration_tokens SET name = $1, capabilities = $2::json, metadata = $3::json, \
-         token = COALESCE($4, token), updated_at = $5 WHERE id = $6",
-    )
-    .bind(name)
-    .bind(&caps_json)
-    .bind(meta_json)
-    .bind(new_filled.then(|| enc.encrypt_string(new_token)))
-    .bind(state.now())
-    .bind(id)
-    .execute(state.db.pool())
-    .await
-    .map_err(|_| ApiError::Internal)?;
-    let mut context = integration_audit(&ctx, &json!(uuid), name, &provider);
-    context["rotated"] = json!(new_filled);
-    context["connection_changed_fields"] = json!(changed);
-    crate::audit::log(
+    // `UpdateIntegrationToken::run()`.
+    let result = crate::integration_token_actions::update(
         &state,
         &ctx,
         &meta,
-        "ui.integration_token.updated",
-        context,
-        "info",
+        &r,
+        crate::integration_token_actions::Update {
+            name,
+            new_token: Some(new_token),
+            capabilities: caps,
+            metadata,
+            automatic_dns: body
+                .get("automatic_dns")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            proxied_dns: body
+                .get("proxied_dns")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            audit_source: "ui",
+        },
     )
     .await;
-    if changed.contains(&"base_url") {
-        let mut context = integration_audit(&ctx, &json!(uuid), name, &provider);
-        context["previous_base_url"] = base_url_for_audit(stored_map.get("base_url"));
-        context["base_url"] = base_url_for_audit(metadata.get("base_url"));
-        crate::audit::log(
-            &state,
-            &ctx,
-            &meta,
-            "ui.integration_token.base_url_changed",
-            context,
-            "warning",
-        )
-        .await;
+    if let Err(e) = result {
+        return match e {
+            // `addError('newToken', ...)`.
+            crate::integration_token_actions::ActionError::Validation(errors)
+                if errors.contains_key("token") =>
+            {
+                let mut e = Map::new();
+                e.insert("new_token".into(), errors["token"].clone());
+                Ok(field_errors(e))
+            }
+            other => action_failure(other),
+        };
     }
     Ok(ok(json!({"message": "Integration token updated successfully."})).into_response())
 }
@@ -1341,13 +1214,18 @@ mod tests {
     #[test]
     fn base_url_for_audit_strips_credentials() {
         assert_eq!(
-            base_url_for_audit(Some(&json!("https://u:p@vault.test:8200/a?x=1#f"))),
+            crate::integration_token_actions::base_url_for_audit(Some(&json!(
+                "https://u:p@vault.test:8200/a?x=1#f"
+            ))),
             json!("https://vault.test:8200/a")
         );
         assert_eq!(
-            base_url_for_audit(Some(&json!("nope"))),
+            crate::integration_token_actions::base_url_for_audit(Some(&json!("nope"))),
             json!("[invalid-url]")
         );
-        assert_eq!(base_url_for_audit(None), Value::Null);
+        assert_eq!(
+            crate::integration_token_actions::base_url_for_audit(None),
+            Value::Null
+        );
     }
 }

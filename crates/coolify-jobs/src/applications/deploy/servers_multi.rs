@@ -155,17 +155,16 @@ impl Run {
     /// `ensureRegistryImageForMultipleServers()`, `warnAboutVolumesOnMultipleServers()` and
     /// `warnAboutMixedProxiesOnMultipleServers()`.
     pub(super) async fn check_multiple_servers(&mut self) -> Step {
-        if self.b.is_preview() {
-            return Ok(());
-        }
         let db = self.jobs.0.db.clone();
-        let additional = ops::additional_networks(&db, self.app.id)
-            .await
-            .map_err(|e| Fail::new(e.to_string()))?;
-        if additional.is_empty() {
-            return Ok(());
-        }
-        if self.build_pack() != "dockercompose"
+        let additional = if self.b.is_preview() {
+            Vec::new()
+        } else {
+            ops::additional_networks(&db, self.app.id)
+                .await
+                .map_err(|e| Fail::new(e.to_string()))?
+        };
+        if !additional.is_empty()
+            && self.build_pack() != "dockercompose"
             && self
                 .app
                 .str("docker_registry_image_name")
@@ -174,6 +173,26 @@ impl Run {
             return Err(Fail::new(
                 "Before deploying to multiple servers, you must set a Docker image in the General tab. More information: https://coolify.io/docs/knowledge-base/server/multiple-servers",
             ));
+        }
+        // `ensureRegistryImageIsNotShared()` (v4.6.0), previews included.
+        let image_name = self.app.str("docker_registry_image_name");
+        if let Some((_, other)) = apps::other_application_building_same_image(
+            &db,
+            self.app.team_id,
+            Some(self.app.id),
+            image_name,
+            self.app.str("build_pack"),
+        )
+        .await
+        .map_err(|e| Fail::new(e.to_string()))?
+        {
+            return Err(Fail::new(apps::shared_image_name_message(
+                other.as_deref(),
+                image_name.unwrap_or_default(),
+            )));
+        }
+        if self.b.is_preview() || additional.is_empty() {
+            return Ok(());
         }
         if !apps::persistent_volumes(&db, self.app.id)
             .await

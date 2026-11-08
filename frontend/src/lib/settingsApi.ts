@@ -31,6 +31,8 @@ export interface UpgradeState {
   available: boolean;
   latest_version: string;
   current_version: string;
+  /** `update_channel === 'custom'`: the full button upgrades to the image tag. */
+  custom?: boolean;
 }
 
 export interface BackupPayload extends ActionResult {

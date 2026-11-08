@@ -1273,20 +1273,67 @@ fn updates_values(row: &Record) -> Value {
         "update_check_frequency": row.get("update_check_frequency"),
         "is_auto_update_enabled": row.get("is_auto_update_enabled"),
         "docker_registry_url": row.get("docker_registry_url").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or("docker.io"),
+        "update_channel": row.get("update_channel").and_then(Value::as_str).unwrap_or("stable"),
+        "update_custom_tag": row.get("update_custom_tag"),
     })
 }
 
-/// `get_latest_version_of_coolify()`, including what `CheckForUpdatesJob` fetched.
-fn latest_version(state: &AppState) -> String {
+/// The `update_channel` and `update_custom_tag` rules of `Settings\Updates` (v4.6.0).
+fn update_channel_errors(v: &Map<String, Value>, errors: &mut Map<String, Value>) {
+    let channel = text(v, "update_channel").filter(|c| !c.is_empty());
+    match channel {
+        None => {
+            errors.insert(
+                "update_channel".into(),
+                json!(["The update channel field is required."]),
+            );
+        }
+        Some(c) if !matches!(c, "stable" | "preview" | "nightly" | "custom") => {
+            errors.insert(
+                "update_channel".into(),
+                json!(["The selected update channel is invalid."]),
+            );
+        }
+        _ => {}
+    }
+    match text(v, "update_custom_tag").filter(|t| !t.is_empty()) {
+        None if channel == Some("custom") => {
+            errors.insert(
+                "update_custom_tag".into(),
+                json!(["The update custom tag field is required when update channel is custom."]),
+            );
+        }
+        None => {}
+        Some(tag) if tag.chars().count() > 128 => {
+            errors.insert(
+                "update_custom_tag".into(),
+                json!(["The update custom tag field must not be greater than 128 characters."]),
+            );
+        }
+        Some(tag) if !CUSTOM_TAG.is_match(tag) => {
+            errors.insert(
+                "update_custom_tag".into(),
+                json!(["The update custom tag field format is invalid."]),
+            );
+        }
+        _ => {}
+    }
+}
+
+static CUSTOM_TAG: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$").unwrap_or_else(|_| unreachable!())
+});
+
+/// `get_latest_version_of_coolify()`, including what `CheckForUpdatesJob` fetched: the version of
+/// the channel this instance follows.
+fn latest_version(state: &AppState, channel: &coolify_jobs::updates::UpdateChannel) -> String {
     let path = data_versions_path(state);
     let data = std::fs::read_to_string(path)
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
         .unwrap_or_else(versions_data);
-    data.pointer("/coolify/v4/version")
-        .and_then(Value::as_str)
-        .unwrap_or("0.0.0")
-        .to_owned()
+    coolify_jobs::updates::latest_in(&data, channel, &state.version)
+        .unwrap_or_else(|| "0.0.0".to_owned())
 }
 
 fn data_versions_path(_state: &AppState) -> std::path::PathBuf {
@@ -1296,9 +1343,19 @@ fn data_versions_path(_state: &AppState) -> std::path::PathBuf {
 
 /// `Upgrade::refreshUpgradeState`.
 async fn refresh_upgrade_state(state: &AppState) -> Result<Value, ApiError> {
-    let latest = latest_version(state);
-    let current = state.version.to_string();
     let row = settings::row(&state.db).await?;
+    let channel = coolify_jobs::updates::UpdateChannel::from_settings(&row);
+    let current = state.version.to_string();
+    // A custom image (v4.6.0): the full button upgrades to the tag, the badge stays off.
+    if channel.is_custom() {
+        return Ok(json!({
+            "available": false,
+            "latest_version": channel.custom_tag.clone().unwrap_or_default(),
+            "current_version": current,
+            "custom": true,
+        }));
+    }
+    let latest = latest_version(state, &channel);
     let newer = version_compare(&latest, &current) == std::cmp::Ordering::Greater;
     let mut flag = row.get("new_version_available") == Some(&json!(true));
     if flag && !newer {
@@ -1343,7 +1400,13 @@ async fn upgrade_status(
     let Some(jobs) = state.jobs.as_ref().filter(|_| ctx.team_id == 0) else {
         return Ok(ok(json!({"status": "none"})).into_response());
     };
-    let latest = latest_version(&state);
+    let row = settings::row(&state.db).await?;
+    let channel = coolify_jobs::updates::UpdateChannel::from_settings(&row);
+    let latest = if channel.is_custom() {
+        channel.custom_tag.clone().unwrap_or_default()
+    } else {
+        latest_version(&state, &channel)
+    };
     Ok(
         ok(coolify_jobs::updates::upgrade_status(jobs, &state.version, &latest).await)
             .into_response(),
@@ -1419,11 +1482,12 @@ async fn updates_action(
                     "Could not check for updates. Try again later.",
                 ));
             };
-            let latest = versions
-                .pointer("/coolify/v4/version")
-                .and_then(Value::as_str)
-                .unwrap_or("0.0.0");
-            let newer = version_compare(latest, &state.version) == std::cmp::Ordering::Greater;
+            let channel = coolify_jobs::updates::UpdateChannel::load(&state.db).await;
+            let latest = coolify_jobs::updates::latest_in(&versions, &channel, &state.version)
+                .unwrap_or_else(|| "0.0.0".to_owned());
+            // A custom image is installed by hand only (v4.6.0).
+            let newer = !channel.is_custom()
+                && version_compare(&latest, &state.version) == std::cmp::Ordering::Greater;
             settings::update(
                 &state.db,
                 &[("new_version_available", ColumnValue::Bool(newer))],
@@ -1463,6 +1527,7 @@ async fn updates_action(
                 json!(["The selected docker registry url is invalid."]),
             );
         }
+        update_channel_errors(&v, &mut field_errors);
         if !field_errors.is_empty() {
             return Ok(ok(json!({"errors": field_errors})).into_response());
         }
@@ -1497,6 +1562,12 @@ async fn updates_action(
     else {
         return Ok(ok(json!({"errors": {"docker_registry_url": ["The selected docker registry url is invalid."]}})).into_response());
     };
+    // `$this->validate([... 'update_channel' ..., 'update_custom_tag' ...])` of `instantSave`.
+    let mut channel_errors = Map::new();
+    update_channel_errors(&v, &mut channel_errors);
+    if !channel_errors.is_empty() {
+        return Ok(ok(json!({"errors": channel_errors})).into_response());
+    }
     // `syncRegistryUrlToEnv`: the write happens before the save, and a failure stops it.
     if let (Some(jobs), Some(server)) = (
         state.jobs.as_ref(),
@@ -1535,7 +1606,43 @@ async fn updates_action(
         ),
         ("docker_registry_url", json!(registry)),
     ];
+    // `switchUpdateChannel()` and `update_custom_tag` (v4.6.0); an older schema has neither column.
+    let stored = coolify_jobs::updates::UpdateChannel::from_settings(&row);
+    let new_channel = text(&v, "update_channel").unwrap_or("stable").to_owned();
+    let new_tag = text(&v, "update_custom_tag")
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned);
+    let mut pairs = pairs;
+    pairs.push(("update_channel", json!(new_channel)));
+    if let Some(previous) = coolify_jobs::updates::previous_after_switch(
+        &stored.channel,
+        &new_channel,
+        stored.previous.as_deref(),
+    ) {
+        pairs.push(("previous_update_channel", json!(previous)));
+    }
+    pairs.push(("update_custom_tag", json!(new_tag)));
+    let channel_changed = row.contains_key("update_channel")
+        && (stored.channel != new_channel || stored.custom_tag != new_tag);
     let (changed, _) = save(&state, &pairs).await?;
+    // `invalidate_versions_cache()` and `(new CheckForUpdatesJob(cdnTries: 1))->handle()`: only
+    // where an update address is set (`CheckForUpdatesJob` is off without one).
+    if channel_changed
+        && std::env::var("COOLIFY_RS_VERSIONS_URL").is_ok_and(|u| !u.is_empty())
+        && let Some(versions) = refresh_versions_file(&state).await
+    {
+        let channel = coolify_jobs::updates::UpdateChannel::load(&state.db).await;
+        let newer = !channel.is_custom()
+            && coolify_jobs::updates::latest_in(&versions, &channel, &state.version).is_some_and(
+                |latest| version_compare(&latest, &state.version) == std::cmp::Ordering::Greater,
+            );
+        settings::update(
+            &state.db,
+            &[("new_version_available", ColumnValue::Bool(newer))],
+            state.now(),
+        )
+        .await?;
+    }
     audit_instance(
         &state,
         &ctx,
@@ -1552,6 +1659,10 @@ async fn updates_action(
     };
     let fresh = settings::row(&state.db).await?;
     let mut res = json!({"settings": updates_values(&fresh), "message": "Settings updated!"});
+    if channel_changed {
+        // `$this->dispatch('updateAvailable')`.
+        res["upgrade"] = refresh_upgrade_state(&state).await?;
+    }
     if let Some(e) = proxy_error {
         res["error"] = json!(e);
     }
