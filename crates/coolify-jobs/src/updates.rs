@@ -277,9 +277,19 @@ pub fn status_from_file(content: &str, running: &str, target: &str, now: DateTim
         return json!({"status": "error", "step": 0, "message": message, "running_version": running, "target_version": target});
     }
     let step: i64 = step.parse().unwrap_or(0);
+    // `hasReachedTargetVersion()`: an image tag that is not a version (v4.6.0) counts as reached.
+    let is_version = {
+        let mut parts = target.splitn(3, '.');
+        let numeric = |p: Option<&str>| {
+            p.is_some_and(|p| p.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        };
+        let first = parts.next();
+        first.is_some_and(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_digit()))
+            && numeric(parts.next())
+    };
     let reached = !running.is_empty()
         && !target.is_empty()
-        && version_compare(running, target) != Ordering::Less;
+        && (!is_version || version_compare(running, target) != Ordering::Less);
     if step >= 6 && !reached {
         return json!({
             "status": "in_progress",
@@ -672,6 +682,14 @@ mod tests {
             "6|Upgrade complete|2026-11-01T10:09:00+00:00",
             "1.0.1",
             "1.0.1",
+            now,
+        );
+        assert_eq!(s["status"], "complete");
+        // A custom image tag is not a version: reached once the script is done (v4.6.0).
+        let s = status_from_file(
+            "6|Upgrade complete|2026-11-01T10:09:00+00:00",
+            "1.0.0",
+            "pr-1234",
             now,
         );
         assert_eq!(s["status"], "complete");
