@@ -317,7 +317,9 @@ pub struct ExpiringToken {
     pub expires_at: NaiveDateTime,
 }
 
-/// The query of `ApiTokenExpirationWarningJob`, with the team and membership checks of its loop.
+/// The query of `ApiTokenExpirationWarningJob`, with the team and membership checks of its loop:
+/// tokens that expire within `WARNING_DAYS` (7). `isDue`: a token that lives 7 days or less is
+/// warned only 24 hours before it expires, so it is not warned right after it is created.
 pub async fn tokens_expiring_within_a_day(
     db: &Db,
     now: NaiveDateTime,
@@ -326,7 +328,8 @@ pub async fn tokens_expiring_within_a_day(
         "SELECT t.id, t.name, tm.id AS team_id, t.expires_at FROM personal_access_tokens t \
          JOIN teams tm ON tm.id::text = t.team_id \
          JOIN team_user tu ON tu.team_id = tm.id AND tu.user_id = t.tokenable_id \
-         WHERE t.expires_at IS NOT NULL AND t.expires_at > $1 AND t.expires_at <= $1 + interval '1 day' \
+         WHERE t.expires_at IS NOT NULL AND t.expires_at > $1 AND t.expires_at <= $1 + interval '7 days' \
+           AND (t.expires_at - t.created_at > interval '7 days' OR t.expires_at <= $1 + interval '1 day') \
            AND t.api_token_expiration_warning_sent_at IS NULL \
            AND t.tokenable_type = 'App\\Models\\User' ORDER BY t.id",
     )
