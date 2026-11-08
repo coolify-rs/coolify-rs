@@ -1623,7 +1623,7 @@ fn uses_exact_escaping(res: &Res, r: &Record, resolved: Option<&str>) -> bool {
             res.str("docker_compose_raw"),
         )
         .iter()
-        .any(|k| Some(k.as_str()) == text(r, "key").as_deref())
+        .any(|k| Some(k.as_str()) == text(r, "key"))
 }
 
 /// `legacyEscapingChangesValue`.

@@ -184,7 +184,7 @@ pub fn rule_errors(
                 }
             }
         }
-        Some(_) => add(
+        _ => add(
             &mut errors,
             "capabilities",
             "The capabilities field must be an array.",

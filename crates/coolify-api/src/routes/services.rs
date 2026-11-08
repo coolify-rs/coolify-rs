@@ -1936,7 +1936,7 @@ pub async fn migrate(
     Extension(ctx): Extension<AuthCtx>,
     Path(uuid): Path<String>,
 ) -> ApiResult {
-    find(&state, &ctx, &uuid).await?;
+    let s = find(&state, &ctx, &uuid).await?;
     require(&ctx, &s, AccessLevel::Write)?;
     Err(ApiError::Abort(StatusCode::NOT_FOUND, ""))
 }

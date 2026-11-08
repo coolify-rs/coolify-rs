@@ -587,8 +587,10 @@ mod tests {
         assert!(!access.resource_visible(Some(20), "other"));
         assert!(access.can_open_project(1) && !access.can_open_project(2));
         // A token layer with only read on the team narrows it further.
-        let mut token = AccessGrants::default();
-        token.team_levels = expand(&[AccessLevel::Read]);
+        let token = AccessGrants {
+            team_levels: expand(&[AccessLevel::Read]),
+            ..AccessGrants::default()
+        };
         access.layers.push(token);
         assert!(access.allows(AccessLevel::Read, &in_project));
         assert!(!access.allows(AccessLevel::Write, &in_project));
@@ -601,8 +603,10 @@ mod tests {
         let owner = Access::unrestricted();
         assert!(owner.allows(AccessLevel::Delete, &Target::resource(Some(1), "a")));
         assert!(owner.covers_whole_team());
-        let mut team_read = AccessGrants::default();
-        team_read.team_levels = expand(&[AccessLevel::Read]);
+        let team_read = AccessGrants {
+            team_levels: expand(&[AccessLevel::Read]),
+            ..AccessGrants::default()
+        };
         let member = Access {
             layers: vec![team_read],
             environment_projects: HashMap::new(),

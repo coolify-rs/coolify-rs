@@ -264,7 +264,7 @@ pub async fn update(
                 }
             }
             Some(Value::String(_)) => {}
-            Some(_) => add(
+            _ => add(
                 &mut errors,
                 &field,
                 format!("The {field} field must be a string."),
@@ -441,7 +441,7 @@ pub async fn add_reference(
             "The key field must not be greater than 255 characters.",
         ),
         Some(Value::String(_)) => {}
-        Some(_) => add(&mut errors, "key", "The key field must be a string."),
+        _ => add(&mut errors, "key", "The key field must be a string."),
     }
     for k in body.keys() {
         if k != "key" {
