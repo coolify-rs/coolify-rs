@@ -1,8 +1,72 @@
-//! `dockerComposeVariablesWithStoredValueBeforeExactEscaping()` (Coolify v4.6.0).
+//! Compose variable helpers of Coolify v4.6.0: `dockerComposeVariablesWithStoredValueBeforeExactEscaping()`
+//! and `dockerComposeBareReferenceDefault()`.
 
 use coolify_compat::yaml::{Key, PhpValue};
 
 use super::{env as cenv, php, validate};
+
+/// `(?<!\$)\$(?:KEY(?![A-Za-z0-9_])|\{KEY\})`: a reference of `key` without a default.
+fn has_bare_reference(compose: &str, key: &str) -> bool {
+    let b = compose.as_bytes();
+    compose.match_indices('$').any(|(i, _)| {
+        if i > 0 && b[i - 1] == b'$' {
+            return false;
+        }
+        let rest = &compose[i + 1..];
+        if let Some(after) = rest.strip_prefix(key)
+            && !after
+                .bytes()
+                .next()
+                .is_some_and(|c| c == b'_' || c.is_ascii_alphanumeric())
+        {
+            return true;
+        }
+        rest.strip_prefix('{')
+            .and_then(|r| r.strip_prefix(key))
+            .is_some_and(|r| r.starts_with('}'))
+    })
+}
+
+/// `dockerComposeBareReferenceDefault($dockerCompose, $key)`: the single default of a variable
+/// that the Compose file also references without a default, otherwise `None`. A `?` operator
+/// (required) means no default.
+pub fn docker_compose_bare_reference_default(compose: &str, key: &str) -> Option<String> {
+    if key.is_empty() || !has_bare_reference(compose, key) {
+        return None;
+    }
+    let needle = format!("${{{key}");
+    let mut defaults: Vec<String> = Vec::new();
+    let mut offset = 0;
+    while let Some(found) = compose[offset..].find(&needle) {
+        let start = offset + found;
+        offset = start + 2;
+        if start > 0 && compose.as_bytes()[start - 1] == b'$' {
+            continue;
+        }
+        let Some((content, _, _)) = cenv::extract_balanced_brace_content(&compose[start..], 0)
+        else {
+            continue;
+        };
+        let Some((variable, operator, default)) = cenv::split_on_operator_outside_nested(&content)
+        else {
+            continue;
+        };
+        if variable != key {
+            continue;
+        }
+        if operator.contains('?') {
+            return None;
+        }
+        if !defaults.contains(&default) {
+            defaults.push(default);
+        }
+    }
+    if defaults.len() == 1 {
+        defaults.pop()
+    } else {
+        None
+    }
+}
 
 /// `\A\$([A-Za-z_][A-Za-z0-9_]*)\z`: a bare `$NAME` reference.
 fn bare_reference(value: &str) -> Option<String> {
@@ -79,6 +143,47 @@ pub fn variables_with_stored_value_before_exact_escaping(compose: Option<&str>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bare_references_get_the_single_compose_default() {
+        let umami = "services:\n  db:\n    environment:\n      - POSTGRES_DB=${POSTGRES_DB:-umami}\n  app:\n    environment:\n      - DATABASE_URL=postgres://db/$POSTGRES_DB\n";
+        assert_eq!(
+            docker_compose_bare_reference_default(umami, "POSTGRES_DB").as_deref(),
+            Some("umami")
+        );
+        // No bare reference: Compose applies the default itself.
+        assert_eq!(
+            docker_compose_bare_reference_default("x: ${A:-1}", "A"),
+            None
+        );
+        // `${A}` counts as bare; `$AB` and `$$A` do not.
+        assert_eq!(
+            docker_compose_bare_reference_default("x: ${A:-1} y: ${A}", "A").as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            docker_compose_bare_reference_default("x: ${A:-1} y: $AB", "A"),
+            None
+        );
+        assert_eq!(
+            docker_compose_bare_reference_default("x: ${A:-1} y: $$A", "A"),
+            None
+        );
+        // Two different defaults, or a required reference: none.
+        assert_eq!(
+            docker_compose_bare_reference_default("${A:-1} ${A:-2} $A", "A"),
+            None
+        );
+        assert_eq!(
+            docker_compose_bare_reference_default("${A:-1} ${A:?missing} $A", "A"),
+            None
+        );
+        // The same default twice is one default.
+        assert_eq!(
+            docker_compose_bare_reference_default("${A:-1} ${A-1} $A", "A").as_deref(),
+            Some("1")
+        );
+    }
 
     #[test]
     fn references_that_got_the_stored_value_before_exact_escaping() {
