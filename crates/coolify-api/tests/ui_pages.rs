@@ -39,7 +39,7 @@ impl Ui<'_> {
 }
 
 async fn exec(h: &Harness, sql: &str) {
-    sqlx::query(sql).execute(h.tdb.db.pool()).await.unwrap();
+    sqlx::raw_sql(sql).execute(h.tdb.db.pool()).await.unwrap();
 }
 
 #[tokio::test]

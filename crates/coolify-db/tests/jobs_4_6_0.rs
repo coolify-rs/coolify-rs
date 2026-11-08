@@ -92,7 +92,14 @@ async fn server_batches_leave_out_the_patch_check_result() {
 /// such column and the insert still works.
 #[tokio::test]
 async fn executions_record_the_worker_host_when_the_column_exists() {
-    let tdb = TestDb::new(SEED).await;
+    // The baseline is v4.6.0: drop the columns to start from a v4.5.3 database.
+    let tdb = TestDb::new(&format!(
+        "{SEED}
+ALTER TABLE scheduled_task_executions DROP COLUMN worker_host;
+ALTER TABLE scheduled_database_backup_executions DROP COLUMN worker_host;
+ALTER TABLE scheduled_volume_backup_executions DROP COLUMN worker_host;"
+    ))
+    .await;
     let now = chrono::Utc::now().naive_utc();
     let old = coolify_db::scheduled_tasks::start_execution(&tdb.db, "old", 1, 0, now)
         .await

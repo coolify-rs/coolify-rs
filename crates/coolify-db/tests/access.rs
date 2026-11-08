@@ -10,7 +10,6 @@ use coolify_db::testing::TestDb;
 use coolify_domain::grants::{AccessLevel, AccessScope, Grant, Target};
 
 const SEED: &str = r#"
-ALTER TABLE team_user ADD COLUMN access json;
 INSERT INTO teams (id, name, personal_team, created_at, updated_at) VALUES
   (1, 'Acme', false, now(), now()), (2, 'Other', false, now(), now());
 INSERT INTO users (id, name, email, password, created_at, updated_at) VALUES

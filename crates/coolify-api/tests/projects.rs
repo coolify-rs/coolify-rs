@@ -344,7 +344,7 @@ async fn teams_expose_two_factor_flag_on_main_schema() {
 
 #[tokio::test]
 async fn older_upstream_database_is_read_only() {
-    // A 4.5.0 database lacks migrations this build expects.
+    // A 4.5.0 database lacks migrations this build expects: the 9 up to v4.5.3 and the 15 of v4.6.0.
     let h = Harness::on_4_5_0().await;
     let reason = h
         .tdb
@@ -353,7 +353,7 @@ async fn older_upstream_database_is_read_only() {
         .read_only_reason
         .clone()
         .unwrap_or_default();
-    assert!(reason.contains("missing 9 upstream migration"), "{reason}");
+    assert!(reason.contains("missing 24 upstream migration"), "{reason}");
     // Reads keep working and adapt to the missing columns.
     let t = h.get("/api/v1/team", "acme_owner_read").await.json();
     assert!(t.get("is_two_factor_required").is_none());

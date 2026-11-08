@@ -1,7 +1,7 @@
 //! Scoped access grants of team members and API tokens (upstream 4.6.0, 2796609e9 and later):
 //! paused tokens, token scopes, the token-within-creator-access check, the `delete` ability,
 //! `VisibleThroughAccessGrants` on projects, and the team-wide gate of the UI. The baseline schema
-//! is 4.5.3, so each test adds the 4.6.0 columns first, as the schema agent's migrations do.
+//! is 4.6.0; the last test drops the 4.6.0 columns to check a database that is not upgraded yet.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -10,14 +10,8 @@ mod common;
 use common::{Harness, Resp};
 use serde_json::{Value, json};
 
-/// The columns of `add_access_grants_to_team_members_and_tokens`,
-/// `add_paused_at_to_personal_access_tokens_table` and `add_access_to_team_invitations_table`,
-/// and two projects of the Acme team.
+/// Two projects of the Acme team.
 const SQL: &str = r#"
-ALTER TABLE team_user ADD COLUMN access json;
-ALTER TABLE personal_access_tokens ADD COLUMN scopes json;
-ALTER TABLE personal_access_tokens ADD COLUMN paused_at timestamp(0) without time zone;
-ALTER TABLE team_invitations ADD COLUMN access json;
 INSERT INTO projects (id, uuid, name, team_id, created_at, updated_at) VALUES
   (101, 'p-one', 'One', 1, now(), now()),
   (102, 'p-two', 'Two', 1, now(), now());
@@ -242,7 +236,7 @@ async fn member_tokens_cannot_exceed_the_member_access() {
         "PATCH",
         "/api/v1/projects/p-one",
         &t,
-        Some(json!({"name": "Bob's"})),
+        Some(json!({"name": "Bob project"})),
     )
     .await;
     assert_eq!(r.status, 201, "{}", r.body);
@@ -384,7 +378,12 @@ async fn making_someone_a_member_resets_their_access() {
 #[tokio::test]
 async fn without_the_4_6_0_columns_nothing_changes() {
     // The 4.5.3 schema: no grants, no scopes, no pause. Members read the whole team.
-    let h = Harness::new().await;
+    let h = Harness::with_extra_sql(
+        "ALTER TABLE team_user DROP COLUMN access; \
+         ALTER TABLE personal_access_tokens DROP COLUMN scopes, DROP COLUMN paused_at; \
+         ALTER TABLE team_invitations DROP COLUMN access;",
+    )
+    .await;
     assert_eq!(
         h.get("/api/v1/projects", "acme_member_read").await.status,
         200
