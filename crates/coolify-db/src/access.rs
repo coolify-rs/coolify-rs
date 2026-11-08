@@ -144,7 +144,7 @@ pub async fn resolve(db: &Db, team_id: TeamId, grants: &[Grant]) -> DbResult<Acc
     }
 
     if let Some(projects) = by_scope.get(&AccessScope::Project) {
-        let uuids: Vec<&String> = projects.keys().collect();
+        let uuids: Vec<String> = projects.keys().cloned().collect();
         let rows: Vec<(i64, String)> =
             sqlx::query_as("SELECT id, uuid FROM projects WHERE team_id = $1 AND uuid = ANY($2)")
                 .bind(team_id)
@@ -165,7 +165,7 @@ pub async fn resolve(db: &Db, team_id: TeamId, grants: &[Grant]) -> DbResult<Acc
     }
 
     if let Some(envs) = by_scope.get(&AccessScope::Environment) {
-        let uuids: Vec<&String> = envs.keys().collect();
+        let uuids: Vec<String> = envs.keys().cloned().collect();
         let rows: Vec<(i64, String, i64)> = sqlx::query_as(
             "SELECT environments.id, environments.uuid, environments.project_id FROM environments \
              JOIN projects ON projects.id = environments.project_id \
@@ -184,7 +184,7 @@ pub async fn resolve(db: &Db, team_id: TeamId, grants: &[Grant]) -> DbResult<Acc
     }
 
     if let Some(resources) = by_scope.get(&AccessScope::Resource) {
-        let uuids: Vec<&String> = resources.keys().collect();
+        let uuids: Vec<String> = resources.keys().cloned().collect();
         let team_envs = team_environment_projects(db, team_id).await?;
         let env_ids: Vec<i64> = team_envs.keys().copied().collect();
         for table in RESOURCE_TABLES {
