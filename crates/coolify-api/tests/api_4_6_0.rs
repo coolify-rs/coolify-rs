@@ -803,3 +803,66 @@ async fn port_mappings_like_the_ui() {
     );
     h.finish().await;
 }
+
+/// `fix(application): reject Docker image names shared by building applications` (v4.6.0).
+#[tokio::test]
+async fn shared_docker_image_names_are_rejected() {
+    let h = Harness::new().await;
+    let t = team(&h).await;
+    let body = |extra: Value| public_body(&t, "https://git.example.test/o/r.git", extra);
+    let first = uuid_of(
+        &h.call(
+            "POST",
+            "/api/v1/applications/public",
+            W,
+            Some(body(
+                json!({"name": "first", "docker_registry_image_name": "registry.example.test/app"}),
+            )),
+        )
+        .await,
+    );
+    let message = "The application first also builds the Docker image registry.example.test/app. Both push the same image tags, so one application can run the image of the other. Set a different Docker image name for each application in the General settings.";
+    let expected = json!({"message": "Validation failed.", "errors": {"docker_registry_image_name": [message]}});
+    let r = h
+        .call(
+            "POST",
+            "/api/v1/applications/public",
+            W,
+            Some(body(
+                json!({"docker_registry_image_name": "registry.example.test/app"}),
+            )),
+        )
+        .await;
+    assert_eq!(r.status, 422, "{}", r.body);
+    assert_eq!(r.json(), expected);
+    // Update: only when the name or the build pack changes, and never against itself.
+    let second = uuid_of(
+        &h.call(
+            "POST",
+            "/api/v1/applications/public",
+            W,
+            Some(body(json!({"name": "second"}))),
+        )
+        .await,
+    );
+    let r = h
+        .call(
+            "PATCH",
+            &format!("/api/v1/applications/{second}"),
+            W,
+            Some(json!({"docker_registry_image_name": "registry.example.test/app"})),
+        )
+        .await;
+    assert_eq!(r.status, 422, "{}", r.body);
+    assert_eq!(r.json(), expected);
+    let r = h
+        .call(
+            "PATCH",
+            &format!("/api/v1/applications/{first}"),
+            W,
+            Some(json!({"docker_registry_image_name": "registry.example.test/app", "description": "same"})),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    h.finish().await;
+}

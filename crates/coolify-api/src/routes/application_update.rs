@@ -472,6 +472,28 @@ pub async fn update(
 
     let app_settings = fields::settings_from_request(&input);
     fields::check_container_name_prefix(&state, &app_settings, server_id, Some(found.id)).await?;
+    // `(clone $application)->fill($request->only(['docker_registry_image_name', 'build_pack']))`:
+    // when either changes, no other application of the team may build the same image (v4.6.0).
+    let requested = |k: &str| match input.get(k) {
+        Some(v) => v.as_str().map(str::to_owned),
+        None => found.str(k).map(str::to_owned),
+    };
+    let (image_name, build_pack) = (
+        requested("docker_registry_image_name"),
+        requested("build_pack"),
+    );
+    if image_name.as_deref() != found.str("docker_registry_image_name")
+        || build_pack.as_deref() != found.str("build_pack")
+    {
+        crate::routes::applications::shared_image_name_check(
+            &state,
+            found.team_id,
+            Some(found.id),
+            image_name.as_deref(),
+            build_pack.as_deref(),
+        )
+        .await?;
+    }
     fields::check_custom_internal_name(&app_settings)?;
     let requested_pack = match input.get("build_pack") {
         Some(v) => v.as_str().map(str::to_owned),

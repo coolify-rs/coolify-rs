@@ -1495,6 +1495,33 @@ pub(crate) fn php_trim(s: &str) -> String {
 
 /// `$application->save()` and the rest of the type branch: the `created` hook, the
 /// generated domain, read-only labels, `isConfigurationChanged(true)`, instant deploy, 201.
+/// `sharedImageNameValidationResponse()` (v4.6.0): another application of the team builds the same
+/// Docker image name.
+pub(crate) async fn shared_image_name_check(
+    state: &AppState,
+    team_id: i64,
+    except: Option<i64>,
+    image_name: Option<&str>,
+    build_pack: Option<&str>,
+) -> Result<(), ApiError> {
+    if let Some((_, other)) = apps::other_application_building_same_image(
+        &state.db, team_id, except, image_name, build_pack,
+    )
+    .await?
+    {
+        let mut errors = Map::new();
+        errors.insert(
+            "docker_registry_image_name".into(),
+            json!([apps::shared_image_name_message(
+                other.as_deref(),
+                image_name.unwrap_or_default()
+            )]),
+        );
+        return Err(ApiError::Validation(errors));
+    }
+    Ok(())
+}
+
 async fn finish_create(
     state: &AppState,
     ctx: &AuthCtx,
@@ -1513,6 +1540,23 @@ async fn finish_create(
             _ => None,
         })
         .unwrap_or_default();
+    // `sharedImageNameValidationResponse($application)` right before `save()` (v4.6.0).
+    let image_name = columns
+        .iter()
+        .rev()
+        .find(|(k, _)| *k == "docker_registry_image_name")
+        .and_then(|(_, v)| match v {
+            ColumnValue::Text(t) => t.clone(),
+            _ => None,
+        });
+    shared_image_name_check(
+        state,
+        ctx.team_id,
+        None,
+        image_name.as_deref(),
+        Some(&build_pack),
+    )
+    .await?;
     let uuid = coolify_domain::new_public_id();
     let now = state.now();
     let id = apps::create(

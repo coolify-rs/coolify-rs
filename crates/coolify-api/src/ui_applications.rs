@@ -1254,6 +1254,39 @@ pub async fn update(
     let previous_dns_hostnames =
         crate::ui_shared::dns::previous_hostnames(&state, apps::MORPH, a.id).await;
     let fx = general::apply(&a, &m, &mut values);
+    // `isDirty(['docker_registry_image_name', 'build_pack'])` after `syncData(toModel: true)`: no
+    // other application of the team may build the same image (v4.6.0).
+    let pending = |k: &str| {
+        values.iter().rev().find(|(c, _)| *c == k).map_or_else(
+            || a.str(k).map(str::to_owned),
+            |(_, v)| match v {
+                ColumnValue::Text(t) => t.clone(),
+                _ => None,
+            },
+        )
+    };
+    let (image_name, pack) = (pending("docker_registry_image_name"), pending("build_pack"));
+    if (image_name.as_deref() != a.str("docker_registry_image_name")
+        || pack.as_deref() != a.str("build_pack"))
+        && let Some((_, other)) = apps::other_application_building_same_image(
+            &state.db,
+            a.team_id,
+            Some(a.id),
+            image_name.as_deref(),
+            pack.as_deref(),
+        )
+        .await?
+    {
+        let message = apps::shared_image_name_message(
+            other.as_deref(),
+            image_name.as_deref().unwrap_or_default(),
+        );
+        return Ok(PhpJson(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"message": message, "errors": {"docker_registry_image_name": [message]}}),
+        )
+        .into_response());
+    }
     // `isDirty('dockerfile')`: the health check and the port come from the new Dockerfile.
     if m.contains_key("dockerfile") && text("dockerfile").as_deref() != a.str("dockerfile") {
         let dockerfile = text("dockerfile");

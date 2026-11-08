@@ -160,6 +160,48 @@ pub async fn find_by_id(db: &Db, id: i64) -> DbResult<Option<ApplicationRow>> {
     r.as_ref().map(to_row).transpose()
 }
 
+/// Build packs that do not build and push an image (`otherApplicationBuildingSameImage()`).
+const NO_PUSHED_IMAGE: &[&str] = &["dockerimage", "dockercompose"];
+
+/// `Application::otherApplicationBuildingSameImage()` (v4.6.0): `(id, name)` of another application
+/// of the team that builds and pushes an image with the same Docker image name. Both push the same
+/// tags, so one application can run the image of the other. `except` is the application itself
+/// when it exists.
+pub async fn other_application_building_same_image(
+    db: &Db,
+    team_id: TeamId,
+    except: Option<i64>,
+    image_name: Option<&str>,
+    build_pack: Option<&str>,
+) -> DbResult<Option<(i64, Option<String>)>> {
+    let Some(image_name) = image_name.filter(|n| !n.trim().is_empty()) else {
+        return Ok(None);
+    };
+    if build_pack.is_some_and(|b| NO_PUSHED_IMAGE.contains(&b)) {
+        return Ok(None);
+    }
+    Ok(sqlx::query_as(
+        "SELECT a.id, a.name FROM applications a JOIN environments e ON e.id = a.environment_id \
+         JOIN projects p ON p.id = e.project_id \
+         WHERE a.deleted_at IS NULL AND p.team_id = $1 AND ($2::bigint IS NULL OR a.id <> $2) \
+         AND a.docker_registry_image_name = $3 AND a.build_pack NOT IN ('dockerimage', 'dockercompose') \
+         ORDER BY a.id LIMIT 1",
+    )
+    .bind(team_id)
+    .bind(except)
+    .bind(image_name)
+    .fetch_optional(db.pool())
+    .await?)
+}
+
+/// `Application::sharedImageNameMessage()`.
+pub fn shared_image_name_message(other_name: Option<&str>, image_name: &str) -> String {
+    format!(
+        "The application {} also builds the Docker image {image_name}. Both push the same image tags, so one application can run the image of the other. Set a different Docker image name for each application in the General settings.",
+        other_name.unwrap_or_default()
+    )
+}
+
 /// `Application::ownedByCurrentTeamAPI($team)->get()`: ordered by name.
 pub async fn list_for_team(db: &Db, team_id: TeamId) -> DbResult<Vec<ApplicationRow>> {
     let rows: Vec<Joined> = sqlx::query_as(&select("p.team_id = $1 ORDER BY a.name"))
