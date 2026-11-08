@@ -462,6 +462,8 @@ async fn invitations(
                 "email": i.email,
                 "via": i.via,
                 "role": i.role,
+                "access_summary": (i.role == "member")
+                    .then(|| crate::ui_team_access::summary(i.access.as_deref())),
                 "link": decrypt_link(&state, &i.link),
             })
         })
@@ -601,6 +603,22 @@ async fn invite(
     if ctx.role == Role::Admin && role == "owner" {
         return Ok(doubled("Admins cannot invite owners."));
     }
+    // `$grants` of the access editor (default: team-wide read), checked again here.
+    let mut access: Option<String> = None;
+    if role == "member" {
+        let grants = match body.get("access") {
+            Some(v) if !v.is_null() => coolify_domain::Grant::list_from(v),
+            _ => coolify_db::access::default_member_grants(),
+        };
+        let valid = crate::ui_team_access::valid_targets(&state, ctx.team_id).await?;
+        for g in &grants {
+            let target = crate::ui_team_access::target_of(g);
+            if g.levels.is_empty() || !valid.contains(&target) {
+                return Ok(doubled("Choose valid member access."));
+            }
+        }
+        access = Some(coolify_domain::Grant::list_to_json(&grants));
+    }
     let email = email.to_lowercase();
     let team_name = coolify_db::teams::find_name(&state.db, ctx.team_id)
         .await?
@@ -619,28 +637,6 @@ async fn invite(
         ));
     };
     let actor = crate::audit::actor(&state, &ctx, &meta).await;
-    let uuid = public_id(32);
-    let mut link = invitation_url(&state, &headers, &format!("/invitations/{uuid}")).await?;
-    if coolify_db::users::find_by_email(&state.db, &email)
-        .await?
-        .is_none()
-    {
-        let password = random_password();
-        let hash = coolify_compat::password::hash(&password).ok_or(ApiError::Internal)?;
-        let name = email.split('@').next().unwrap_or_default();
-        let (_, personal) =
-            tp::create_invited_user(&state.db, name, &email, &hash, state.now()).await?;
-        coolify_db::notification_settings::create_defaults(&state.db, personal).await?;
-        let row = tp::team_row(&state.db, personal).await?;
-        crate::audit::team_mutation(&state, &actor, personal, "created", None, row.as_ref()).await;
-        let token = encrypter.encrypt_string(&format!("{email}@@@{uuid}@@@{password}"));
-        link = invitation_url(
-            &state,
-            &headers,
-            &format!("/auth/link?token={}", query_value(&token)),
-        )
-        .await?;
-    }
     if let Some(existing) = tp::invitation_by_email(&state.db, ctx.team_id, &email).await? {
         if !expired(&state, existing.created_at) {
             return Ok(toast_error(
@@ -649,6 +645,40 @@ async fn invite(
             ));
         }
         delete_invitation_and_invitee(&state, &existing, &actor).await?;
+    }
+    // Look up the user after the expired invitation is removed, because that can delete an unused
+    // account. A user who never set a password cannot log in, so they get a magic link with a new
+    // temporary password.
+    let uuid = public_id(32);
+    let mut link = invitation_url(&state, &headers, &format!("/invitations/{uuid}")).await?;
+    let existing_user = coolify_db::users::find_by_email(&state.db, &email).await?;
+    let unused = match existing_user {
+        Some(_) => tp::is_disposable_invitee(&state.db, &email).await?,
+        None => None,
+    };
+    if existing_user.is_none() || unused.is_some() {
+        let password = random_password();
+        let hash = coolify_compat::password::hash(&password).ok_or(ApiError::Internal)?;
+        if let Some(user_id) = unused {
+            // `$user->forceFill(['password' => ...])->save()` ends that user's sessions.
+            tp::set_password(&state.db, user_id, &hash, state.now()).await?;
+            state.sessions.remove_user(user_id);
+        } else {
+            let name = email.split('@').next().unwrap_or_default();
+            let (_, personal) =
+                tp::create_invited_user(&state.db, name, &email, &hash, state.now()).await?;
+            coolify_db::notification_settings::create_defaults(&state.db, personal).await?;
+            let row = tp::team_row(&state.db, personal).await?;
+            crate::audit::team_mutation(&state, &actor, personal, "created", None, row.as_ref())
+                .await;
+        }
+        let token = encrypter.encrypt_string(&format!("{email}@@@{uuid}@@@{password}"));
+        link = invitation_url(
+            &state,
+            &headers,
+            &format!("/auth/link?token={}", query_value(&token)),
+        )
+        .await?;
     }
     let via = if via_email { "email" } else { "link" };
     if let Err(e) = tp::create_invitation(
@@ -666,6 +696,15 @@ async fn invite(
         tracing::warn!(error = %e, "could not store invitation");
         return Ok(doubled("Invitation already sent."));
     }
+    tp::set_invitation_access(&state.db, &uuid, access.as_deref()).await?;
+    let stored_access: Value = if coolify_db::access::has_invitation_access_column(&state.db) {
+        access
+            .as_deref()
+            .and_then(|a| serde_json::from_str(a).ok())
+            .unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    };
     crate::audit::log(
         &state,
         &ctx,
@@ -677,6 +716,7 @@ async fn invite(
             "invitation_email": email,
             "role": role,
             "via": via,
+            "access": stored_access,
         }),
         "info",
     )
@@ -863,13 +903,7 @@ async fn accept_invitation(
         audit_accepted(&state, &meta, user.user_id, &invitation, true).await;
         return Ok(ok(json!({"message": "ok"})).into_response());
     }
-    tp::attach_member(
-        &state.db,
-        invitation.team_id,
-        user.user_id,
-        &invitation.role,
-    )
-    .await?;
+    tp::attach_invited_member(&state.db, &invitation, user.user_id).await?;
     tp::delete_invitation(&state.db, invitation.id).await?;
     audit_accepted(&state, &meta, user.user_id, &invitation, false).await;
     crate::session::activate_team(&state, &user.id, user.user_id, invitation.team_id).await?;
@@ -997,7 +1031,7 @@ async fn accept_link(
         .await?
         .is_some();
     if !member {
-        tp::attach_member(&state.db, invitation.team_id, user.id, &invitation.role).await?;
+        tp::attach_invited_member(&state.db, &invitation, user.id).await?;
     }
     let random: String = public_id(64);
     let hash = coolify_compat::password::hash(&random).ok_or(ApiError::Internal)?;

@@ -62,6 +62,7 @@ pub mod ui_sources_routes;
 pub mod ui_storages;
 pub mod ui_subscription;
 pub mod ui_tags;
+pub mod ui_team_access;
 pub mod ui_teams;
 pub mod ui_terminal;
 pub mod ui_volume_backups;

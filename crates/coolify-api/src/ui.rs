@@ -457,6 +457,12 @@ async fn team_data(State(state): State<AppState>, Extension(ctx): Extension<Auth
                 }
             }),
             "two_factor": if manage { Value::Bool(m.two_factor) } else { Value::Null },
+            // `Access::summary` under the email, for owners and admins.
+            "access_summary": if manage && m.role == "member" {
+                Value::String(crate::ui_team_access::summary(m.access.as_deref()))
+            } else {
+                Value::Null
+            },
         })).collect::<Vec<_>>(),
         "me": ctx.user_id,
         "my_role": ctx.role.as_str(),

@@ -3638,6 +3638,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::ui_subscription::routes(state.clone()))
         .merge(crate::ui_subscription::admin_routes(state.clone()))
         .merge(crate::ui_teams::routes(state.clone()))
+        .merge(crate::ui_team_access::routes(state.clone()))
         .merge(crate::ui_profile::routes(state.clone()))
         .merge(crate::ui_changelog::routes(state.clone()))
         .merge(crate::ui_security::routes(state.clone()))
