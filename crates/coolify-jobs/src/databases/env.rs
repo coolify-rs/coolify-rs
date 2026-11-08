@@ -66,10 +66,49 @@ pub fn escape_env_variables(v: &str) -> String {
         .replace('\'', "\\'")
 }
 
+/// `useExactEscaping()` of a service or an application (Coolify v4.6.0): a variable saved before
+/// exact escaping keeps the old escaping, except when its old `.env` line is one Docker Compose
+/// cannot read (`legacyEnvFileLineIsUnreadable()`), or when the resource parses its Compose file
+/// and the variable is one whose stored value the old parser wrote into the container
+/// (`dockerComposeVariablesWithStoredValueBeforeExactEscaping()`). Those switch to exact escaping
+/// here, in memory: [`Var::exact`] then answers for the resource.
+pub fn apply_resource_exact_escaping(
+    vars: &mut [Var],
+    parses_compose: bool,
+    compose_raw: Option<&str>,
+) {
+    if !vars.iter().any(|v| v.uses_legacy_escaping) {
+        return;
+    }
+    let stored_value_keys = if parses_compose {
+        crate::compose_parser::legacy_escaping::variables_with_stored_value_before_exact_escaping(
+            compose_raw,
+        )
+    } else {
+        Vec::new()
+    };
+    for v in vars.iter_mut().filter(|v| v.uses_legacy_escaping) {
+        if v.legacy_env_file_line_is_unreadable() || stored_value_keys.contains(&v.key) {
+            v.uses_legacy_escaping = false;
+        }
+    }
+}
+
 impl Var {
-    /// `useExactEscaping`.
+    /// `useExactEscaping`. For a service or an application, after [`apply_resource_exact_escaping`].
     pub fn exact(&self) -> bool {
         !self.uses_legacy_escaping
+    }
+
+    /// `legacyEnvFileLineIsUnreadable()`: the old escaping puts literal and multiline values in
+    /// single quotes without escaping, and Docker Compose ends the value at the next quote.
+    pub fn legacy_env_file_line_is_unreadable(&self) -> bool {
+        if !self.is_literal && !self.is_multiline {
+            return false;
+        }
+        self.resolved
+            .as_deref()
+            .is_some_and(|value| value.contains('\'') && !is_json_container(value, false))
     }
 
     /// `environmentVariableAllowsInterpolation`.
@@ -465,6 +504,34 @@ mod tests {
             preserve_compose_null: false,
             cipher: None,
         }
+    }
+
+    #[test]
+    fn legacy_variables_switch_to_exact_escaping_where_upstream_does() {
+        let named = |key: &str, literal: bool, resolved: &str| Var {
+            key: key.into(),
+            resolved: Some(resolved.into()),
+            ..var(literal, true)
+        };
+        let compose = "services:\n  app:\n    image: nginx\n    environment:\n      - FOO=${FOO:-}\n      - BAR=${BAR}\n";
+        let mut vars = vec![
+            named("FOO", false, "a b"),
+            named("BAR", false, "a b"),
+            named("QUOTED", true, "it's"),
+            named("JSON", true, r#"{"a":"it's"}"#),
+            named("PLAIN", true, "plain"),
+        ];
+        apply_resource_exact_escaping(&mut vars, true, Some(compose));
+        let exact: Vec<bool> = vars.iter().map(Var::exact).collect();
+        assert_eq!(exact, [true, false, true, false, false]);
+
+        // Without Compose parsing only unreadable lines switch.
+        let mut vars = vec![named("FOO", false, "a b"), named("QUOTED", true, "it's")];
+        apply_resource_exact_escaping(&mut vars, false, Some(compose));
+        assert_eq!(
+            vars.iter().map(Var::exact).collect::<Vec<_>>(),
+            [false, true]
+        );
     }
 
     #[test]

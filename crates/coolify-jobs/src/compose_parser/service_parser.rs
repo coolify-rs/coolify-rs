@@ -1144,6 +1144,49 @@ async fn sync_required_state(run: &mut ServiceRun<'_>) -> Result<(), String> {
     Ok(())
 }
 
+/// `fillDockerComposeDefaultsForBareReferences($resource, $existingKeys)`: Docker Compose gives a
+/// bare `$VAR` or `${VAR}` reference no default, and the parser does not store defaults. So for a
+/// new variable without a value, the default is stored when the Compose file has a bare reference
+/// and exactly one default. A nested default (`${A:-${B}}`) stays with Compose.
+async fn fill_defaults_for_bare_references(
+    run: &mut ServiceRun<'_>,
+    existing_keys: &[String],
+) -> Result<(), String> {
+    let compose = run.docker_compose_raw.clone();
+    if compose.trim().is_empty() {
+        return Ok(());
+    }
+    let rows = store::env_list(run.db, MORPH, run.service.id, false)
+        .await
+        .map_err(db_err)?;
+    for row in rows {
+        if row.value_encrypted.is_some() || existing_keys.contains(&row.key) {
+            continue;
+        }
+        let Some(default) =
+            super::legacy_escaping::docker_compose_bare_reference_default(&compose, &row.key)
+        else {
+            continue;
+        };
+        if default.trim().is_empty() || default.contains('$') {
+            continue;
+        }
+        let value = default.trim_matches(PHP_TRIM).to_owned();
+        let shared = ServiceRun::is_shared_reference(Some(value.as_str()));
+        let u = EnvUpdate {
+            value_encrypted: Some(Some(run.enc.encrypt_serialized(&value))),
+            is_shared: (shared != row.is_shared).then_some(shared),
+            preserve_compose_null: row.preserve_compose_null.then_some(false),
+            ..EnvUpdate::default()
+        };
+        store::env_update(run.db, row.id, &u, run.now)
+            .await
+            .map_err(db_err)?;
+    }
+    run.env_cache = None;
+    Ok(())
+}
+
 /// `serviceParser($resource)`.
 #[allow(clippy::too_many_lines)]
 pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, String> {
@@ -1165,6 +1208,13 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
     svc::env_delete_corrupted(run.db, run.service.id)
         .await
         .map_err(db_err)?;
+    // `$resource->environment_variables()->pluck('key')`, before the parser adds any.
+    let existing_keys: Vec<String> = store::env_list(run.db, MORPH, run.service.id, false)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .map(|row| row.key)
+        .collect();
 
     let mut top_volumes: Arr = php::collect(php::get(&yaml, "volumes"));
     let mut top_networks: Arr = php::collect(php::get(&yaml, "networks"));
@@ -2300,6 +2350,7 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
     }
     run.env_cache = None;
     run.save().await?;
+    fill_defaults_for_bare_references(run, &existing_keys).await?;
     sync_required_state(run).await?;
 
     Ok(ParsedCompose {

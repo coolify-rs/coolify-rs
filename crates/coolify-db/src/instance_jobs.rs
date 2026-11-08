@@ -48,18 +48,23 @@ pub async fn record_missed_database_backup(
     now: NaiveDateTime,
 ) -> DbResult<()> {
     db.ensure_writable()?;
-    sqlx::query(
+    let (column, value, host) =
+        crate::worker_host::insert_parts(db.schema(), "scheduled_database_backup_executions", 6);
+    let sql = format!(
         "INSERT INTO scheduled_database_backup_executions \
-         (uuid, database_name, scheduled_database_backup_id, status, message, local_storage_deleted, finished_at, created_at, updated_at) \
-         VALUES ($1, $2, $3, 'failed', $4, false, $5, $5, $5)",
-    )
-    .bind(new_public_id())
-    .bind(database_name)
-    .bind(backup_id)
-    .bind(message)
-    .bind(now)
-    .execute(db.pool())
-    .await?;
+         (uuid, database_name, scheduled_database_backup_id, status, message, local_storage_deleted, finished_at, created_at, updated_at{column}) \
+         VALUES ($1, $2, $3, 'failed', $4, false, $5, $5, $5{value})"
+    );
+    let mut query = sqlx::query(&sql)
+        .bind(new_public_id())
+        .bind(database_name)
+        .bind(backup_id)
+        .bind(message)
+        .bind(now);
+    if let Some(host) = host {
+        query = query.bind(host);
+    }
+    query.execute(db.pool()).await?;
     Ok(())
 }
 
@@ -71,17 +76,22 @@ pub async fn record_missed_volume_backup(
     now: NaiveDateTime,
 ) -> DbResult<()> {
     db.ensure_writable()?;
-    sqlx::query(
+    let (column, value, host) =
+        crate::worker_host::insert_parts(db.schema(), "scheduled_volume_backup_executions", 5);
+    let sql = format!(
         "INSERT INTO scheduled_volume_backup_executions \
-         (uuid, scheduled_volume_backup_id, status, message, finished_at, created_at, updated_at) \
-         VALUES ($1, $2, 'failed', $3, $4, $4, $4)",
-    )
-    .bind(new_public_id())
-    .bind(backup_id)
-    .bind(message)
-    .bind(now)
-    .execute(db.pool())
-    .await?;
+         (uuid, scheduled_volume_backup_id, status, message, finished_at, created_at, updated_at{column}) \
+         VALUES ($1, $2, 'failed', $3, $4, $4, $4{value})"
+    );
+    let mut query = sqlx::query(&sql)
+        .bind(new_public_id())
+        .bind(backup_id)
+        .bind(message)
+        .bind(now);
+    if let Some(host) = host {
+        query = query.bind(host);
+    }
+    query.execute(db.pool()).await?;
     Ok(())
 }
 
@@ -553,13 +563,13 @@ pub async fn application_id_with_trashed(db: &Db, uuid: &str) -> DbResult<Option
     )
 }
 
-/// The active deployments of `CleanupHelperContainersJob`.
-pub async fn active_deployment_uuids(db: &Db, server_id: i64) -> DbResult<Vec<String>> {
+/// `CleanupHelperContainersJob`: the names that are UUIDs of deployments not queued or in progress.
+pub async fn finished_deployment_uuids(db: &Db, names: &[String]) -> DbResult<Vec<String>> {
     Ok(sqlx::query_scalar(
         "SELECT deployment_uuid FROM application_deployment_queues \
-         WHERE server_id = $1 AND status IN ('in_progress', 'queued')",
+         WHERE deployment_uuid = ANY($1) AND status NOT IN ('in_progress', 'queued')",
     )
-    .bind(server_id)
+    .bind(names)
     .fetch_all(db.pool())
     .await?)
 }

@@ -1004,11 +1004,10 @@ async fn server_usage(
     let id = server.id;
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let srv = Srv::from_row(jobs, server);
-    let answers = metrics::prefetch(&srv, &metrics::TYPES, None, 1)
-        .await
-        .unwrap_or_default();
+    // `$server->prefetchMetrics(['cpu', 'memory', 'disk'], 1)`.
+    let answers = metrics::prefetch(&srv, &["cpu", "memory", "disk"], None, 1).await;
     let latest = |kind: &str, field: &str, root_only: bool| -> Value {
-        let Ok(rows) = metrics::rows(answers.get(kind)) else {
+        let Ok(rows) = metrics::rows(answers.get(kind).and_then(Option::as_ref)) else {
             return Value::Null;
         };
         let rows: Vec<Value> = if root_only && rows.iter().any(|r| r.get("mount").is_some()) {

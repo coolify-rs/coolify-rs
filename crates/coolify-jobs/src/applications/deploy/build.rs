@@ -774,9 +774,22 @@ impl Run {
         let mut vars = env::load_raw_for(&self.jobs.0.db, enc, &owner, Some(self.server.id))
             .await
             .map_err(Fail::new)?;
+        self.apply_exact_escaping(&mut vars);
         self.resolve_remote_secrets(&mut vars).await?;
         self.b.variables = Some(vars.clone());
         Ok(vars)
+    }
+
+    /// `Application::useExactEscaping()`: the application parses its Compose file when it uses the
+    /// Docker Compose build pack without a raw Compose deployment.
+    pub(super) fn apply_exact_escaping(&self, vars: &mut [Var]) {
+        let parses_compose = self.app.str("build_pack") == Some("dockercompose")
+            && !self.app.setting_bool("is_raw_compose_deployment_enabled");
+        env::apply_resource_exact_escaping(
+            vars,
+            parses_compose,
+            self.app.str("docker_compose_raw"),
+        );
     }
 
     /// `$this->application->environment_variables()->withoutBuildpackControlVariables()->where('is_buildtime', true)`,
@@ -1533,31 +1546,9 @@ impl Run {
                     ))),
                 );
             }
-            let preview_domains = self.preview_compose_domains();
-            for (service, entry) in crate::compose_parser::php_json_array(if self.b.is_preview() {
-                preview_domains.as_deref()
-            } else {
-                self.app.str("docker_compose_domains")
-            }) {
-                let Some(domain) =
-                    crate::compose_parser::domain_entry_string(&entry).filter(|d| !d.is_empty())
-                else {
-                    continue;
-                };
-                let first = domain.split(',').next().unwrap_or_default().to_owned();
-                let Some(parts) = domains::UrlParts::parse(&first) else {
-                    continue;
-                };
-                let key = crate::compose_parser::normalize_service_name(&service.as_string())
-                    .to_uppercase();
-                dict.put(
-                    &format!("SERVICE_URL_{key}"),
-                    Some(git::bash_env_value(Some(&domains::without_port(&first)))),
-                );
-                dict.put(
-                    &format!("SERVICE_FQDN_{key}"),
-                    Some(git::bash_env_value(Some(&parts.host))),
-                );
+            // `composeServiceUrlVariables()`, port-suffixed forms included.
+            for (key, value) in self.compose_service_url_variables().await? {
+                dict.put(&key, Some(git::bash_env_value(Some(&value))));
             }
         }
         let compose_source = self

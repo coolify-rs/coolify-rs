@@ -72,6 +72,8 @@ struct Cmd {
     command_hidden: bool,
     /// Content upstream sends on the command's stdin.
     input: Option<String>,
+    /// `skip_cancellation_check`: a cleanup command that also runs after a cancel.
+    skip_cancellation_check: bool,
 }
 
 impl Cmd {
@@ -109,6 +111,10 @@ impl Cmd {
     }
     fn input(mut self, input: String) -> Self {
         self.input = Some(input);
+        self
+    }
+    fn skip_cancellation_check(mut self) -> Self {
+        self.skip_cancellation_check = true;
         self
     }
 }
@@ -149,6 +155,9 @@ type Step = Result<(), Fail>;
 /// The build state of a git deployment (`$this->build_pack`, `$this->source`, image names, …).
 #[derive(Default)]
 struct BuildState {
+    /// `$helperBuildSecretEnvironmentKeys`: build-time variables the helper container has in its
+    /// environment for build secrets.
+    helper_build_secret_keys: Vec<String>,
     restart_only: bool,
     rollback: bool,
     force_rebuild: bool,
@@ -402,7 +411,8 @@ impl Run {
     async fn exec(&mut self, commands: Vec<Cmd>) -> Step {
         let batch = BATCH.fetch_add(1, Ordering::SeqCst) + 1;
         for cmd in commands {
-            if self.status().await == "cancelled-by-user" {
+            // Cleanup commands must also run after a cancel.
+            if !cmd.skip_cancellation_check && self.status().await == "cancelled-by-user" {
                 return Err(Fail::Cancelled);
             }
             let script = match &cmd.input {
@@ -524,7 +534,7 @@ impl Run {
                     false,
                 )
                 .await;
-                    if self.status().await == "cancelled-by-user" {
+                    if !cmd.skip_cancellation_check && self.status().await == "cancelled-by-user" {
                         return Err(Fail::Cancelled);
                     }
                     tokio::time::sleep(delay).await;
@@ -607,7 +617,11 @@ impl Run {
 
     /// `graceful_shutdown_container($name, $skipRemove)`.
     async fn graceful_shutdown(&mut self, name: &str, skip_remove: bool) {
-        let stop = Cmd::new(self.stop_command(name)).hidden().ignore_errors();
+        let mut stop = Cmd::new(self.stop_command(name)).hidden().ignore_errors();
+        if skip_remove {
+            // The helper container (started with --rm) must also stop when the deployment was cancelled.
+            stop = stop.skip_cancellation_check();
+        }
         if let Err(Fail::Error { message, .. }) = self.exec(vec![stop]).await {
             self.log(
                 &format!("Error stopping container {name}: {message}"),
@@ -1676,6 +1690,7 @@ impl Run {
                 env::load_raw_for(&self.jobs.0.db, enc, &owner, Some(self.main_server.id))
                     .await
                     .map_err(Fail::new)?;
+            self.apply_exact_escaping(&mut vars);
             self.resolve_remote_secrets(&mut vars).await?;
             vars
         };

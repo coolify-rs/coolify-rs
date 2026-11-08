@@ -3746,6 +3746,8 @@ pub async fn scheduled_task_executions(
         storage_times(&mut x);
         x.shift_remove("id");
         x.shift_remove("scheduled_task_id");
+        // `RecordsWorkerHost` hides it (Coolify v4.6.0).
+        x.shift_remove("worker_host");
         if !ctx.can_read_sensitive {
             x.shift_remove("message");
         }

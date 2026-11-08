@@ -145,7 +145,7 @@
         {/snippet}
 
         <div class="space-y-5">
-          {#if type === 'App\\Models\\StandalonePostgresql' || type === 'App\\Models\\StandaloneMysql' || type === 'App\\Models\\StandaloneMariadb'}
+          {#if type === 'App\\Models\\StandalonePostgresql' || type === 'App\\Models\\StandaloneMysql' || type === 'App\\Models\\StandaloneMariadb' || edit.is_service_sql_database}
             <div class="grid w-full gap-4">
               <Listbox
                 id="dumpAll"
@@ -183,7 +183,13 @@
                       placeholder="Type a database and press Enter"
                     />
                   </div>
-                  <p class="mt-1.5 text-xs text-neutral-500 dark:text-fg-dim">Add one or more database names. Leave empty to include the default database.</p>
+                  <p class="mt-1.5 text-xs text-neutral-500 dark:text-fg-dim">
+                    {#if edit.is_service_sql_database}
+                      Add one or more database names. Leave empty to back up the database that the container env names.
+                    {:else}
+                      Add one or more database names. Leave empty to include the default database.
+                    {/if}
+                  </p>
                 </div>
               {/if}
             </div>

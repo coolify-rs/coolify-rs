@@ -21,7 +21,7 @@ pub const SUPPORTED_MIGRATIONS_FILE: &str =
 pub const HISTORICAL_MIGRATIONS_FILE: &str =
     include_str!("../../../compat/baseline/historical-migrations.txt");
 
-/// Tables whose columns are discovered at startup. The last seven get columns from v4.6.0's
+/// Tables whose columns are discovered at startup. Several get columns from v4.6.0's
 /// migrations, so code can work on a database that has not been upgraded yet.
 const INSPECTED_TABLES: &[&str] = &[
     "teams",
@@ -37,6 +37,7 @@ const INSPECTED_TABLES: &[&str] = &[
     "team_invitations",
     "subscriptions",
     "standalone_sqlites",
+    "server_settings",
     "scheduled_task_executions",
     "scheduled_database_backup_executions",
     "scheduled_volume_backup_executions",

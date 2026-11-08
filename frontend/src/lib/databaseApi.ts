@@ -93,6 +93,8 @@ export interface BackupForm {
 export interface BackupEdit {
   uuid: string;
   database_type: string;
+  /** `$isServiceSqlDatabase` of the view. */
+  is_service_sql_database?: boolean;
   form: BackupForm;
   timezone: string;
   storages: { id: number; name: string; is_usable: boolean }[];

@@ -1549,9 +1549,41 @@ pub fn snake(s: &str) -> String {
     out
 }
 
+/// `useExactEscaping($environmentVariable)` of the resource, with the resolved value. A variable
+/// saved before exact escaping keeps the old escaping, except on a service or an application when
+/// its old line is one Docker Compose cannot read, or when the resource parses its Compose file
+/// and the old parser wrote the stored value into the container.
+fn uses_exact_escaping(res: &Res, r: &Record, resolved: Option<&str>) -> bool {
+    if !flag(r, "uses_legacy_escaping") {
+        return true;
+    }
+    if !res.is_application() && !res.is_service() {
+        return false;
+    }
+    // `legacyEnvFileLineIsUnreadable()`
+    if (flag(r, "is_literal") || flag(r, "is_multiline"))
+        && resolved.is_some_and(|value| {
+            value.contains('\'')
+                && !((value.starts_with('{') || value.starts_with('['))
+                    && serde_json::from_str::<Value>(value).is_ok())
+        })
+    {
+        return true;
+    }
+    let parses_compose = res.is_service()
+        || (res.str("build_pack") == Some("dockercompose")
+            && !res.setting_bool("is_raw_compose_deployment_enabled"));
+    parses_compose
+        && coolify_jobs::compose_parser::legacy_escaping::variables_with_stored_value_before_exact_escaping(
+            res.str("docker_compose_raw"),
+        )
+        .iter()
+        .any(|k| Some(k.as_str()) == text(r, "key").as_deref())
+}
+
 /// `legacyEscapingChangesValue`.
 fn legacy_changes_value(res: &Res, r: &Record, value: Option<&str>) -> bool {
-    if !flag(r, "uses_legacy_escaping") {
+    if uses_exact_escaping(res, r, value) {
         return false;
     }
     let Some(value) = value.filter(|v| !v.trim().is_empty()) else {
@@ -1577,11 +1609,9 @@ fn legacy_changes_value(res: &Res, r: &Record, value: Option<&str>) -> bool {
     }
     let app_or_service = res.is_application() || res.is_service();
     if flag(r, "is_literal") || flag(r, "is_multiline") {
-        return if app_or_service {
-            value.contains('\'')
-        } else {
-            true
-        };
+        // Service and application files strip the old single quotes (values with a quote use exact
+        // escaping); database environment lists keep them.
+        return !app_or_service;
     }
     escape_env_variables(value) != value || (app_or_service && value.contains(" #"))
 }
@@ -1604,12 +1634,14 @@ async fn values(
     };
     let value = plain(&state, &r)?;
     let is_shared = is_shared_reference(value.as_deref());
+    let resolved = real_value(&state, &res, value.as_deref()).await?;
     let real = if is_shared {
         display_real_value(
             &state,
             &res,
             value.as_deref(),
-            flag(&r, "uses_legacy_escaping"),
+            // `getRealValue`: the old escaping only where the resource does not use exact escaping.
+            !uses_exact_escaping(&res, &r, resolved.as_deref()),
             flag(&r, "is_literal"),
             flag(&r, "is_multiline"),
         )
@@ -1623,7 +1655,6 @@ async fn values(
         } else {
             value.as_deref().unwrap_or_default().trim().is_empty()
         };
-    let resolved = real_value(&state, &res, value.as_deref()).await?;
     let legacy = legacy_changes_value(&res, &r, resolved.as_deref());
     let locked = flag(&r, "is_shown_once");
     Ok(ok(json!({

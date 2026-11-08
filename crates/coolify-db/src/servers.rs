@@ -58,6 +58,64 @@ pub async fn all(db: &Db) -> DbResult<Vec<ServerRow>> {
     rows.iter().map(|(s, st)| row(s, st.as_deref())).collect()
 }
 
+/// `ServerSetting::withoutPatchCheckResult()`: the settings subquery without `patch_check_result`,
+/// the full update list of the last patch check (often tens of kilobytes), for instance-wide
+/// server loops that do not read it. The columns come from the schema discovered at startup.
+fn settings_without_patch_check_result(db: &Db) -> String {
+    let columns: Vec<String> = db
+        .schema()
+        .columns
+        .get("server_settings")
+        .map(|cols| {
+            cols.iter()
+                .filter(|c| *c != "patch_check_result")
+                .map(|c| format!("ss.\"{}\"", c.replace('"', "\"\"")))
+                .collect()
+        })
+        .unwrap_or_default();
+    if columns.is_empty() {
+        return SETTINGS.to_owned();
+    }
+    format!(
+        "(SELECT row_to_json(x)::text FROM (SELECT {} FROM server_settings ss WHERE ss.server_id = s.id LIMIT 1) x)",
+        columns.join(", ")
+    )
+}
+
+/// `Server::with(['settings' => withoutPatchCheckResult()])->get()` over all teams
+/// (`ScheduledJobManager::getServersForCleanupQuery()`).
+pub async fn all_without_patch_check_result(db: &Db) -> DbResult<Vec<ServerRow>> {
+    let rows: Vec<(String, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT row_to_json(s)::text, {} FROM servers s WHERE s.deleted_at IS NULL",
+        settings_without_patch_check_result(db)
+    ))
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter().map(|(s, st)| row(s, st.as_deref())).collect()
+}
+
+/// `ServerManagerJob::getServerIds()`: every server id, in order.
+pub async fn ids(db: &Db) -> DbResult<Vec<i64>> {
+    Ok(
+        sqlx::query_scalar("SELECT id FROM servers WHERE deleted_at IS NULL ORDER BY id")
+            .fetch_all(db.pool())
+            .await?,
+    )
+}
+
+/// `Server::with(['settings' => withoutPatchCheckResult()])->whereKey($ids)->orderBy('id')->get()`
+/// (`ServerManagerJob`, one batch).
+pub async fn batch_without_patch_check_result(db: &Db, ids: &[i64]) -> DbResult<Vec<ServerRow>> {
+    let rows: Vec<(String, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT row_to_json(s)::text, {} FROM servers s WHERE s.id = ANY($1) AND s.deleted_at IS NULL ORDER BY s.id",
+        settings_without_patch_check_result(db)
+    ))
+    .bind(ids)
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter().map(|(s, st)| row(s, st.as_deref())).collect()
+}
+
 /// `Server::where('uuid', $uuid)->first()` without a team scope (`SentinelController`).
 pub async fn find_any_team(db: &Db, uuid: &str) -> DbResult<Option<ServerRow>> {
     let r: Option<(String, Option<String>)> = sqlx::query_as(&format!(

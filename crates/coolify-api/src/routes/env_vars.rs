@@ -61,6 +61,11 @@ pub struct ResourceScope {
     pub project_id: Option<i64>,
     /// `$resource->server` or `$resource->destination->server`.
     pub server_id: Option<i64>,
+    /// Whether the application parses its Compose file (Docker Compose build pack, not a raw
+    /// Compose deployment), for `useExactEscaping()`.
+    pub parses_compose: bool,
+    /// `docker_compose_raw`.
+    pub compose_raw: Option<String>,
 }
 
 impl ResourceScope {
@@ -73,7 +78,34 @@ impl ResourceScope {
             environment_id: a.environment.get("id").and_then(Value::as_i64),
             project_id: a.project.get("id").and_then(Value::as_i64),
             server_id: a.server_id(),
+            parses_compose: a.str("build_pack") == Some("dockercompose")
+                && !a.setting_bool("is_raw_compose_deployment_enabled"),
+            compose_raw: a.str("docker_compose_raw").map(str::to_owned),
         }
+    }
+
+    /// `Application::useExactEscaping()` for a variable saved before exact escaping (Coolify
+    /// v4.6.0): a quoted value with a quote that Docker Compose cannot read, or a variable whose
+    /// stored value the old Compose parser wrote into the container.
+    pub fn legacy_variable_uses_exact_escaping(
+        &self,
+        key: &str,
+        quoted: bool,
+        resolved: Option<&str>,
+    ) -> bool {
+        let unreadable = quoted
+            && resolved.is_some_and(|v| {
+                v.contains('\'')
+                    && !((v.starts_with('{') || v.starts_with('['))
+                        && serde_json::from_str::<Value>(v).is_ok())
+            });
+        unreadable
+            || (self.parses_compose
+                && coolify_jobs::compose_parser::legacy_escaping::variables_with_stored_value_before_exact_escaping(
+                    self.compose_raw.as_deref(),
+                )
+                .iter()
+                .any(|k| k == key))
     }
 }
 
@@ -193,17 +225,20 @@ pub async fn present_variable(
 ) -> Result<Value, ApiError> {
     let value = plain_value(state, &row)?;
     let quoted = flag(&row, "is_literal") || flag(&row, "is_multiline");
-    let legacy = flag(&row, "uses_legacy_escaping");
-    let finish = |v: Option<String>| match v {
-        Some(v) if legacy => Some(legacy_escaped_value(&v, quoted)),
-        other => other,
-    };
-    let real = finish(resolve_real_value(state, scope, value.as_deref(), true).await?);
     let key = row
         .get("key")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
+    let resolved = resolve_real_value(state, scope, value.as_deref(), true).await?;
+    // `getRealValue`: the old escaping only where the resource does not use exact escaping.
+    let legacy = flag(&row, "uses_legacy_escaping")
+        && !scope.legacy_variable_uses_exact_escaping(&key, quoted, resolved.as_deref());
+    let finish = |v: Option<String>| match v {
+        Some(v) if legacy => Some(legacy_escaped_value(&v, quoted)),
+        other => other,
+    };
+    let real = finish(resolved);
     let is_required = flag(&row, "is_required");
 
     let mut m = ENVIRONMENT_VARIABLE.present(row);

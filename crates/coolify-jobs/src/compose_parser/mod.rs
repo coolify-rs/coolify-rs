@@ -11,6 +11,7 @@ pub mod application;
 pub mod domains;
 pub mod env;
 pub mod labels;
+pub mod legacy_escaping;
 pub mod load;
 pub mod php;
 pub mod raw;

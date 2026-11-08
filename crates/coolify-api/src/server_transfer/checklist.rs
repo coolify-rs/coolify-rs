@@ -621,6 +621,15 @@ async fn item_app_id(state: &AppState, uuid: &str) -> i64 {
         .unwrap_or(-1)
 }
 
+/// `normalizeIpAddress()`.
+fn normalize_ip_address(value: &str) -> String {
+    let value = value.trim();
+    match value.trim_matches(['[', ']']).parse::<std::net::Ipv6Addr>() {
+        Ok(ip) => ip.to_string(),
+        Err(_) => value.to_owned(),
+    }
+}
+
 /// `checkDomain`.
 async fn check_domain(
     state: &AppState,
@@ -632,7 +641,9 @@ async fn check_domain(
         .fetch_optional(state.db.pool())
         .await
         .unwrap_or(None);
-    let ip = ip.map(|r| r.0).unwrap_or_default();
+    // `normalizeIpAddress($server->ip)`: an IPv6 address without brackets, in its short form.
+    let ip = normalize_ip_address(&ip.map(|r| r.0).unwrap_or_default());
+    // `resolveIps()`: the A and AAAA records, normalized.
     let resolve = |h: String| async move {
         tokio::net::lookup_host(format!("{h}:80"))
             .await
@@ -916,4 +927,17 @@ pub async fn finish(state: &AppState, server_id: i64, user_id: i64) -> Result<us
     finish["skipped"] = json!(skipped);
     save(state, server_id, finish).await?;
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_ip_address;
+
+    #[test]
+    fn server_ips_are_compared_in_normal_form() {
+        assert_eq!(normalize_ip_address(" [2001:DB8::0001] "), "2001:db8::1");
+        assert_eq!(normalize_ip_address("2001:db8:0:0:0:0:0:1"), "2001:db8::1");
+        assert_eq!(normalize_ip_address("10.0.0.1"), "10.0.0.1");
+        assert_eq!(normalize_ip_address("host.example.com"), "host.example.com");
+    }
 }

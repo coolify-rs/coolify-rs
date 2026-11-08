@@ -537,7 +537,9 @@ impl ScheduleSource for DockerCleanupSource {
             if let Err(e) = jobs.fail_interrupted_cleanups().await {
                 tracing::error!(target: "scheduled-errors", error = %e, "Failed to process docker cleanups");
             }
-            let rows = servers::all(&jobs.0.db).await.map_err(|e| e.to_string())?;
+            let rows = servers::all_without_patch_check_result(&jobs.0.db)
+                .await
+                .map_err(|e| e.to_string())?;
             let mut due = Vec::with_capacity(rows.len());
             for row in rows {
                 let schedule_key = format!("docker-cleanup:{}", row.id);

@@ -95,9 +95,13 @@ fn has_cloud_resource(row: &ServerRow) -> bool {
     })
 }
 
-/// `ServerManagerJob::handle`, one run.
+/// `ServerManagerJob::SERVER_BATCH_SIZE`: servers loaded and processed at a time.
+const SERVER_BATCH_SIZE: usize = 500;
+
+/// `ServerManagerJob::handle`, one run. The servers are loaded in batches by id, with their
+/// settings but without `patch_check_result`.
 pub async fn server_manager_tick(jobs: &Jobs, at: DateTime<Utc>) -> Result<(), String> {
-    let rows = servers::all(&jobs.0.db).await.map_err(|e| e.to_string())?;
+    let ids = servers::ids(&jobs.0.db).await.map_err(|e| e.to_string())?;
     let settings = ops::instance_server_settings(&jobs.0.db)
         .await
         .map_err(|e| e.to_string())?;
@@ -106,13 +110,47 @@ pub async fn server_manager_tick(jobs: &Jobs, at: DateTime<Utc>) -> Result<(), S
         .filter(|tz| valid_timezone(tz))
         .unwrap_or_else(|| "UTC".to_string());
 
-    // `dispatchCloudProviderStatusChecks`. The key is one for all servers, so it is read once.
-    if should_run_cron_now(
+    // Decided once per run: these cron keys are global, so a second call in the same run is false.
+    let cloud_provider_checks_due = should_run_cron_now(
         CLOUD_PROVIDER_STATUS_CHECK_CRON,
         &instance_tz,
         "server-cloud-provider-status-checks",
         at,
-    ) {
+    );
+    let connection_checks_due = should_run_cron_now(
+        CHECK_FREQUENCY,
+        &instance_tz,
+        "server-connection-checks",
+        at,
+    );
+
+    for batch in ids.chunks(SERVER_BATCH_SIZE) {
+        let rows = servers::batch_without_patch_check_result(&jobs.0.db, batch)
+            .await
+            .map_err(|e| e.to_string())?;
+        server_manager_batch(
+            jobs,
+            at,
+            &instance_tz,
+            rows,
+            cloud_provider_checks_due,
+            connection_checks_due,
+        );
+    }
+    Ok(())
+}
+
+/// One batch of `ServerManagerJob::handle`.
+fn server_manager_batch(
+    jobs: &Jobs,
+    at: DateTime<Utc>,
+    instance_tz: &str,
+    rows: Vec<ServerRow>,
+    cloud_provider_checks_due: bool,
+    connection_checks_due: bool,
+) {
+    // `dispatchCloudProviderStatusChecks`.
+    if cloud_provider_checks_due {
         for row in rows.iter().filter(|r| allowed(&format!("server:{}", r.id))) {
             let srv = Srv::from_row(jobs, row.clone());
             let has_token = row
@@ -124,14 +162,6 @@ pub async fn server_manager_tick(jobs: &Jobs, at: DateTime<Utc>) -> Result<(), S
             }
         }
     }
-
-    // `dispatchConnectionChecks`: one key for all servers too.
-    let connection_checks_due = should_run_cron_now(
-        CHECK_FREQUENCY,
-        &instance_tz,
-        "server-connection-checks",
-        at,
-    );
 
     for row in rows {
         let id = row.id;
@@ -162,7 +192,7 @@ pub async fn server_manager_tick(jobs: &Jobs, at: DateTime<Utc>) -> Result<(), S
             .as_ref()
             .and_then(|s| s.get("server_timezone"))
             .and_then(Value::as_str)
-            .map_or_else(|| instance_tz.clone(), str::to_string);
+            .map_or_else(|| instance_tz.to_string(), str::to_string);
         let timezone = if valid_timezone(&timezone) {
             timezone
         } else {
@@ -227,7 +257,6 @@ pub async fn server_manager_tick(jobs: &Jobs, at: DateTime<Utc>) -> Result<(), S
             });
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]
