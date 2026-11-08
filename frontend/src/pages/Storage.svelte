@@ -193,16 +193,24 @@
     }
   }
 
-  const rowGrid = 'grid min-w-[780px] grid-cols-[minmax(12rem,1fr)_9rem_7rem_minmax(15rem,1.2fr)]';
+  const rowGrid = 'grid min-w-[780px] grid-cols-[minmax(12rem,1fr)_9rem_7rem_minmax(12rem,1.2fr)_4.5rem]';
 </script>
 
 {#snippet storagePicker(key: string, id: number, volume: boolean)}
   <div class="flex items-end gap-2">
     <Listbox id="selected-{key}" options={storageOptions} bind:value={selected[key] as string} />
     <button type="button" class="button shrink-0" onclick={() => moveBackup(id, volume)}>Move</button>
-    <div>
-      <button type="button" class="button shrink-0 text-error" onclick={() => (disabling = { id, volume })}>Disable</button>
-    </div>
+  </div>
+  <div class="flex justify-end">
+    <button
+      type="button"
+      class="icon-button shrink-0 text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
+      title="Disable storage"
+      aria-label="Remove this storage from the backup schedule"
+      onclick={() => (disabling = { id, volume })}
+    >
+      <Reicon name="trash" class="size-3.5" />
+    </button>
   </div>
 {/snippet}
 
@@ -291,6 +299,7 @@
                       <div>Frequency</div>
                       <div>Status</div>
                       <div>Storage</div>
+                      <div class="text-right">Actions</div>
                     </div>
                     {#each resources.backups as b (b.id)}
                       {#if matchesSearch([b.database.name, b.frequency])}

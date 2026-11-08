@@ -3,6 +3,8 @@
   import ConfirmModal from './ConfirmModal.svelte';
   import Modal from './Modal.svelte';
   import Reicon from './Reicon.svelte';
+  import RowActions from './RowActions.svelte';
+  import RowAction from './RowAction.svelte';
   import RegistryLogin from './RegistryLogin.svelte';
   import StatusBadge from './StatusBadge.svelte';
   import { api } from '../lib/api';
@@ -111,15 +113,15 @@
     {/if}
   {:else}
     <div class="overflow-x-auto">
-      <div class="grid min-w-[760px] grid-cols-[minmax(0,1fr)_9rem_minmax(0,1fr)_14rem] border-b border-neutral-200 px-4 py-2 text-[11px] font-medium text-neutral-500 dark:border-white/[0.07] dark:text-fg-faint">
+      <div class="grid min-w-[760px] grid-cols-[minmax(0,1fr)_9rem_minmax(0,1fr)_4.5rem] border-b border-neutral-200 px-4 py-2 text-[11px] font-medium text-neutral-500 dark:border-white/[0.07] dark:text-fg-faint">
         <div>Registry</div>
         <div>Status</div>
         <div>Used by</div>
-        <div></div>
+        <div class="text-right">Actions</div>
       </div>
       {#each visible as row (row.registry)}
         <div class="min-w-[760px] border-b border-neutral-200 last:border-b-0 dark:border-white/[0.07]">
-          <div class="grid min-h-11 grid-cols-[minmax(0,1fr)_9rem_minmax(0,1fr)_14rem] items-center px-4 py-2 text-[12px]">
+          <div class="grid min-h-11 grid-cols-[minmax(0,1fr)_9rem_minmax(0,1fr)_4.5rem] items-center px-4 py-2 text-[12px]">
             <div class="truncate font-mono">{row.registry}</div>
             <div>
               {#if row.logged_in && checks[row.registry]?.ok === false}
@@ -144,15 +146,27 @@
                 </button>
               {/if}
             </div>
-            <div class="flex justify-end gap-2">
-              {#if row.logged_in}
+            <div class="flex justify-end">
+              {#if row.logged_in && row.source === 'auths'}
+                <RowActions label="Registry actions">
+                  <RowAction title="Run docker login with the saved credentials" onclick={() => test(row.registry)}>Test</RowAction>
+                  <RowAction
+                    onclick={() =>
+                      (modal = {
+                        title: `Edit login for ${row.registry}`,
+                        subtitle: `Runs docker login on ${server.name} again. The new values replace the old login.`,
+                        edit: row.registry,
+                        username: row.username ?? '',
+                      })}>Edit</RowAction
+                  >
+                  {#snippet danger()}
+                    <RowAction onclick={() => (deleting = row.registry)}>Delete</RowAction>
+                  {/snippet}
+                </RowActions>
+              {:else if row.logged_in}
                 <button type="button" class="button w-fit" title="Run docker login with the saved credentials" onclick={() => test(row.registry)}>Test</button>
               {:else if !error && server.functional}
                 <button type="button" class="button" onclick={() => (modal = { title: `Log in to ${row.registry}`, subtitle: `Runs docker login on ${server.name}.`, preset: row.registry })}>Log in</button>
-              {/if}
-              {#if row.logged_in && row.source === 'auths'}
-                <button type="button" class="button" onclick={() => (modal = { title: `Edit login for ${row.registry}`, subtitle: `Runs docker login on ${server.name} again. The new values replace the old login.`, edit: row.registry, username: row.username ?? '' })}>Edit</button>
-                <button type="button" class="button button-error" onclick={() => (deleting = row.registry)}>Delete</button>
               {/if}
             </div>
           </div>
