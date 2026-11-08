@@ -137,7 +137,14 @@ impl Run {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
-        // `$queue->build_server_id` stays in memory: upstream's row keeps it empty.
+        // Saved now: the cancel action looks for the helper container on this server.
+        let _ = apps::update_deployment(
+            &db,
+            self.queue_id,
+            &[("build_server_id", servers::ColumnValue::Int(id))],
+            super::now(),
+        )
+        .await;
         self.info(&format!("Found a suitable build server ({build_name})."))
             .await;
         self.build_server = Some((server, build_name, target));
