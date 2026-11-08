@@ -368,16 +368,33 @@ async fn git_commands(
                 git: format!("{env} git"),
             }
         }
-        Kind::Other => GitCommands {
-            ls_remote: format!("git ls-remote {}", escapeshellarg(&repository)),
-            clone: import(
-                format!("{clone} {} {base}", escapeshellarg(&repository)),
+        Kind::Other => {
+            // `gitHttpsCredentialConfigOption()`.
+            let option = crate::applications::deploy::git::git_https_config_option(
+                app.str("git_repository"),
                 true,
-                None,
-                None,
-            ),
-            git: "git".into(),
-        },
+                app.str("git_https_username"),
+                crate::applications::deploy::git::git_https_password(app, Some(run.encrypter()))
+                    .as_deref(),
+            );
+            let git = option
+                .as_ref()
+                .map_or_else(|| "git".to_owned(), |o| format!("git {o}"));
+            GitCommands {
+                ls_remote: format!("{git} ls-remote {}", escapeshellarg(&repository)),
+                clone: import(
+                    format!(
+                        "{} {} {base}",
+                        clone.replace("git clone", &format!("{git} clone")),
+                        escapeshellarg(&repository)
+                    ),
+                    true,
+                    None,
+                    option.as_deref(),
+                ),
+                git: "git".into(),
+            }
+        }
     };
     // Callers read data from stdout after the checkout, so the checkout's progress goes to stderr.
     Ok(GitCommands {

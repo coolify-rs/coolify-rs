@@ -1,6 +1,6 @@
 //! Per-test databases loaded with an upstream baseline schema (default: Coolify
-//! v4.5.3; upstream `main` @ b5823c7 is kept to test the upgrade of databases
-//! created by earlier coolify-rs builds, 4.5.0 to test older databases).
+//! v4.6.0; v4.5.3 and upstream `main` @ b5823c7 are kept to test the upgrade of
+//! databases created by earlier coolify-rs builds, 4.5.0 to test older databases).
 //!
 //! Requires `COOLIFY_RS_TEST_DATABASE_URL` (an admin connection, e.g. the
 //! `compose.yaml` Postgres). Missing infrastructure is a hard failure, never
@@ -17,8 +17,11 @@ use sqlx::{Connection, Executor, PgConnection};
 use crate::{Db, DbConfig};
 
 pub const BASELINE_SCHEMA: &str =
-    include_str!("../../../compat/baseline/upstream-4.5.3-schema.sql");
+    include_str!("../../../compat/baseline/upstream-4.6.0-schema.sql");
 pub const BASELINE_MIGRATIONS: &str =
+    include_str!("../../../compat/baseline/upstream-4.6.0-migrations.sql");
+pub const SCHEMA_4_5_3: &str = include_str!("../../../compat/baseline/upstream-4.5.3-schema.sql");
+pub const MIGRATIONS_4_5_3: &str =
     include_str!("../../../compat/baseline/upstream-4.5.3-migrations.sql");
 pub const SCHEMA_B5823C7: &str =
     include_str!("../../../compat/baseline/upstream-main-b5823c7-schema.sql");

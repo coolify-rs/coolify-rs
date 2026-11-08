@@ -16,7 +16,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 
 const W: &str = "acme_owner_root";
-const SHELL: &str = r#"PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && if [ -f ~/.profile ]; then . ~/.profile; fi && if [ -n "$SHELL" ] && [ -x "$SHELL" ]; then exec $SHELL; else sh; fi"#;
+const SHELL: &str = r#"PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && if [ -f ~/.profile ]; then . ~/.profile; fi && if [ -n "$SHELL" ] && [ -x "$SHELL" ] && [ "${SHELL##*/}" != nologin ] && [ "${SHELL##*/}" != false ]; then exec $SHELL; elif command -v bash >/dev/null 2>&1; then exec bash; else sh; fi"#;
 
 /// With a terminal on stdin it behaves as a remote shell that echoes lines; otherwise it answers
 /// the checks of `sendTerminalCommand()`.

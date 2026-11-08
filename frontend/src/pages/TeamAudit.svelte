@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SortHeader from '../components/SortHeader.svelte';
   // Port of upstream livewire/team/audit-log.blade.php (App\Livewire\Team\AuditLog).
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
@@ -16,19 +17,25 @@
   let source = $state('all');
   let page = $state(1);
   let perPage = $state(25);
+  /** `AuditLog::$sort`. */
+  let sort = $state('time-desc');
+  /** `wire:loading` of `setSort`: the clicked header shows a spinner while the page reloads. */
+  let sorting = $state<string | null>(null);
   let expanded = $state<Record<number, boolean>>({});
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   async function load() {
     try {
-      data = await teamsUi.audit({ search, action, source, per_page: perPage, page });
+      data = await teamsUi.audit({ search, action, source, per_page: perPage, page, sort });
     } catch {
       router.go('/', true);
+    } finally {
+      sorting = null;
     }
   }
 
   $effect(() => {
-    void [action, source, page, perPage];
+    void [action, source, page, perPage, sort];
     load();
   });
 
@@ -114,10 +121,19 @@
           <div class="overflow-x-auto">
             <div class="data-table transition-opacity">
               <div class="grid min-w-[760px] grid-cols-[14rem_minmax(0,1fr)_12rem_9rem] gap-4 border-b border-neutral-200 px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-neutral-500 dark:border-white/[0.07] dark:text-fg-faint">
-                <span>Actor</span>
-                <span>Activity</span>
-                <span>Source</span>
-                <span class="text-right">Time</span>
+                {#each [['Actor', 'actor', 'asc'], ['Activity', 'activity', 'asc'], ['Source', 'source', 'asc'], ['Time', 'time', 'desc']] as [label, column, first] (column)}
+                  <SortHeader
+                    server
+                    loading={sorting === column}
+                    {label}
+                    asc="{column}-asc"
+                    desc="{column}-desc"
+                    first={first as 'asc' | 'desc'}
+                    class={column === 'time' ? 'justify-self-end' : ''}
+                    current={sort}
+                    onsort={(v) => ((sorting = column), (sort = v), (page = 1))}
+                  />
+                {/each}
               </div>
               {#each data.events as event (event.id)}
                 {@const changes = event.changes && Object.keys(event.changes).length ? event.changes : null}

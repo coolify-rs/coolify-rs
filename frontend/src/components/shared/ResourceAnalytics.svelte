@@ -167,6 +167,8 @@
         <Empty size="sm" title="No analytics data yet" description="We could not load traffic analytics for the selected range. Try a different range or check back shortly." iconName="network" />
       </SettingsSection>
     {:else}
+      <!-- `wire:key="analytics-loaded"` wrapper of v4.6.0 (a Livewire morph fix; same markup here). -->
+      <div class="flex flex-col gap-6">
       <SettingsSection id="analytics-range-section" title="Analytics" description="Inspect traffic statistics reported by Sentinel.">
         {#snippet actions()}
           <div class="flex items-center gap-2">
@@ -284,6 +286,7 @@
       </div>
 
       <BreakdownSection dimension="useragent" label="Top user agents" rows={breakdown('useragent')} helper="Most frequent raw User-Agent strings for the selected range." />
+      </div>
     {/if}
   </div>
 {/if}

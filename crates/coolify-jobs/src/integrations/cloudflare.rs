@@ -171,6 +171,22 @@ fn iso_now() -> String {
     Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
 }
 
+/// Why `syncZones` failed: a request that got no answer (`ConnectionException`), or a
+/// `RuntimeException` with its message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncZonesError {
+    Connection(String),
+    Failed(String),
+}
+
+impl SyncZonesError {
+    pub fn message(&self) -> &str {
+        match self {
+            SyncZonesError::Connection(m) | SyncZonesError::Failed(m) => m,
+        }
+    }
+}
+
 /// `syncZones`: the number of zones.
 pub async fn sync_zones(
     db: &Db,
@@ -178,7 +194,19 @@ pub async fn sync_zones(
     token: &str,
     now: NaiveDateTime,
 ) -> Result<usize, String> {
-    let client = cloudflare_client()?;
+    sync_zones_checked(db, token_id, token, now)
+        .await
+        .map_err(|e| e.message().to_owned())
+}
+
+/// `syncZones`, telling a connection failure from a refusal.
+pub async fn sync_zones_checked(
+    db: &Db,
+    token_id: i64,
+    token: &str,
+    now: NaiveDateTime,
+) -> Result<usize, SyncZonesError> {
+    let client = cloudflare_client().map_err(SyncZonesError::Failed)?;
     let base = api();
     let mut zones: Vec<SyncedZone> = Vec::new();
     let mut page = 1i64;
@@ -187,13 +215,17 @@ pub async fn sync_zones(
             .query(&[("page", page), ("per_page", 50)])
             .send_retrying()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SyncZonesError::Connection(e.to_string()))?;
         let (status, body) = parse(response).await;
         if status == 403 {
-            return Err(missing_permission_message("Zone → Zone → Read"));
+            return Err(SyncZonesError::Failed(missing_permission_message(
+                "Zone → Zone → Read",
+            )));
         }
         if !ok(status) || body.get("success").and_then(Value::as_bool) != Some(true) {
-            return Err("Cloudflare zones could not be synchronized.".to_owned());
+            return Err(SyncZonesError::Failed(
+                "Cloudflare zones could not be synchronized.".to_owned(),
+            ));
         }
         for z in body
             .get("result")
@@ -221,7 +253,7 @@ pub async fn sync_zones(
     }
     store::store_synced_zones(db, token_id, &zones, &iso_now(), now)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| SyncZonesError::Failed(e.to_string()))?;
     Ok(zones.len())
 }
 
@@ -1378,11 +1410,13 @@ pub async fn configure_dns_record_job(
 
 /// `worseResult`.
 pub fn worse(current: Option<Deletion>, next: Option<Deletion>) -> Option<Deletion> {
+    // v4.6.0: any result is worse than none, so a kept record is still reported.
     let rank = |r: Option<Deletion>| match r {
-        Some(Deletion::Failed) => 3,
-        Some(Deletion::Busy) => 2,
-        Some(Deletion::ChangedExternally) => 1,
-        _ => 0,
+        Some(Deletion::Failed) => 4,
+        Some(Deletion::Busy) => 3,
+        Some(Deletion::ChangedExternally) => 2,
+        Some(_) => 1,
+        None => 0,
     };
     if rank(next) > rank(current) {
         next
@@ -1845,6 +1879,32 @@ pub async fn tunnel_tear_down(dns: &Dns<'_>, srv: &Srv) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `worseResult()` of v4.6.0: a kept or deleted record beats no result.
+    #[test]
+    fn worse_result_ranks_any_result_above_none() {
+        assert_eq!(
+            worse(None, Some(Deletion::NotOwned)),
+            Some(Deletion::NotOwned)
+        );
+        assert_eq!(
+            worse(Some(Deletion::Deleted), None),
+            Some(Deletion::Deleted)
+        );
+        assert_eq!(
+            worse(Some(Deletion::Deleted), Some(Deletion::ChangedExternally)),
+            Some(Deletion::ChangedExternally)
+        );
+        assert_eq!(
+            worse(Some(Deletion::Busy), Some(Deletion::Failed)),
+            Some(Deletion::Failed)
+        );
+        // Ties keep the first.
+        assert_eq!(
+            worse(Some(Deletion::Deleted), Some(Deletion::AlreadyGone)),
+            Some(Deletion::Deleted)
+        );
+    }
 
     #[tokio::test]
     async fn only_idempotent_requests_are_sent_again_after_a_connection_failure() {

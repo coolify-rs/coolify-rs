@@ -1172,20 +1172,13 @@ pub async fn setup_dynamic_proxy_configuration(srv: &Srv) -> Result<(), String> 
                         ("rule", PhpValue::Str(host_rule.clone())),
                     ]),
                 ),
+                // Only the `/app/{key}` WebSocket: the Reverb HTTP API is not routed (#12390).
                 (
                     "coolify-reverb-ws".into(),
                     router(
                         "http",
                         "coolify-reverb",
-                        format!("{host_rule} && PathPrefix(`/app`)"),
-                    ),
-                ),
-                (
-                    "coolify-reverb-api".into(),
-                    router(
-                        "http",
-                        "coolify-reverb",
-                        format!("{host_rule} && PathPrefix(`/apps`)"),
+                        format!("{host_rule} && PathPrefix(`/app/`)"),
                     ),
                 ),
                 (
@@ -1216,12 +1209,7 @@ pub async fn setup_dynamic_proxy_configuration(srv: &Srv) -> Result<(), String> 
                     (
                         "coolify-reverb-wss",
                         "coolify-reverb",
-                        format!("{host_rule} && PathPrefix(`/app`)"),
-                    ),
-                    (
-                        "coolify-reverb-api-https",
-                        "coolify-reverb",
-                        format!("{host_rule} && PathPrefix(`/apps`)"),
+                        format!("{host_rule} && PathPrefix(`/app/`)"),
                     ),
                     (
                         "coolify-terminal-wss",
@@ -1304,7 +1292,7 @@ pub async fn setup_dynamic_proxy_configuration(srv: &Srv) -> Result<(), String> 
                 format!("{schema}://{host}")
             };
             let text = format!(
-                "\n{site} {{\n    encode zstd gzip\n    handle /app/* {{\n        reverse_proxy coolify:6001\n    }}\n    handle /apps* {{\n        reverse_proxy coolify:6001\n    }}\n    handle /terminal/ws {{\n        reverse_proxy coolify:6002\n    }}\n    reverse_proxy coolify:8080\n}}"
+                "\n{site} {{\n    encode zstd gzip\n    handle /app/* {{\n        reverse_proxy coolify:6001\n    }}\n    handle /terminal/ws {{\n        reverse_proxy coolify:6002\n    }}\n    reverse_proxy coolify:8080\n}}"
             );
             srv.run(
                 &[format!(

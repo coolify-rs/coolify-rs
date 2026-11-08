@@ -32,6 +32,7 @@ use crate::routes::applications::{field, php_trim};
 use crate::routes::databases::input_bool;
 use crate::state::AppState;
 use crate::validation::{Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 const PREVIEW_NOT_FOUND: ApiError = ApiError::Message(StatusCode::NOT_FOUND, "Preview not found.");
 const GIT_TYPES: &[&str] = &["github", "gitlab", "gitea", "bitbucket"];
@@ -300,7 +301,7 @@ pub async fn store(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Deploy, &a) {
         return Err(ApiError::Unauthorized);
     }
     // git_based() is false for an inline Dockerfile.
@@ -638,7 +639,7 @@ pub async fn update(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let id = parse_pull_request_id(&pull_request_id)?;
@@ -838,7 +839,7 @@ pub async fn delete(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Delete, &a) {
         return Err(ApiError::Unauthorized);
     }
     let id = parse_pull_request_id(&pull_request_id)?;

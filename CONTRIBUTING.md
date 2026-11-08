@@ -16,6 +16,8 @@ Verify claims in those documents against the code and tests before relying on th
   `docs/releases/v<version>.md`, merge into `main`, then push the tag. `.github/workflows/release.yml` checks that
   they agree, builds and pushes the amd64 and arm64 image to `ghcr.io/coolify-rs/coolify-rs`, and publishes the GitHub
   release with the installer files, which is where installs and upgrades fetch them from.
+- After the release, fast-forward `develop` to `main` (`git merge --ff-only main` on `develop`), so `develop` has the
+  release merge commit and the two never diverge.
 
 ## Porting a feature (vertical slice)
 

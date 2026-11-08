@@ -778,28 +778,33 @@ impl Run {
         Ok(())
     }
 
+    /// `composeServiceUrlVariables()` of the deployment's compose domains (the preview's for a
+    /// pull request): `SERVICE_URL_*` and `SERVICE_FQDN_*`, plus the port-suffixed ones the parser
+    /// stored on the application.
+    pub(super) async fn compose_service_url_variables(
+        &mut self,
+    ) -> Result<Vec<(String, String)>, Fail> {
+        // `$this->application->environment_variables()->pluck('key')`.
+        let stored: Vec<String> = self
+            .variables()
+            .await?
+            .iter()
+            .filter(|v| !v.is_preview)
+            .map(|v| v.key.clone())
+            .collect();
+        let domains = if self.b.is_preview() {
+            self.preview_compose_domains()
+        } else {
+            self.app.str("docker_compose_domains").map(str::to_owned)
+        };
+        Ok(compose_service_url_values(domains.as_deref(), &stored))
+    }
+
     /// The Docker Compose part of `generate_runtime_environment_variables()`.
     async fn compose_runtime_env(&mut self) -> Result<ComposeEnv, Fail> {
         let mut lines = Vec::new();
-        let preview_domains = self.preview_compose_domains();
-        let domains = compose_parser::php_json_array(if self.b.is_preview() {
-            preview_domains.as_deref()
-        } else {
-            self.app.str("docker_compose_domains")
-        });
-        for (service, entry) in &domains {
-            let Some(domain) = compose_parser::domain_entry_string(entry).filter(|d| !d.is_empty())
-            else {
-                continue;
-            };
-            let first = domain.split(',').next().unwrap_or_default().to_owned();
-            let Some(parts) = crate::applications::domains::UrlParts::parse(&first) else {
-                continue;
-            };
-            let url = crate::applications::domains::without_port(&first);
-            let key = compose_parser::normalize_service_name(&service.as_string()).to_uppercase();
-            lines.push(format!("SERVICE_URL_{key}={url}"));
-            lines.push(format!("SERVICE_FQDN_{key}={}", parts.host));
+        for (key, value) in self.compose_service_url_variables().await? {
+            lines.push(format!("{key}={value}"));
         }
         let compose_text =
             if self.b.is_preview() || self.app.setting_bool("is_raw_compose_deployment_enabled") {
@@ -874,10 +879,10 @@ impl Run {
         );
         let command = in_docker(
             &self.dep,
-            &format!(
+            &self.without_helper_build_secret_environment(&format!(
                 "{} docker compose --env-file {w}/{ENV_FILE} --project-name {u} --project-directory {w} -f {w}{loc} pull --ignore-buildable {list}",
                 self.b.coolify_variables
-            ),
+            )),
         );
         self.exec(vec![Cmd::new(command).hidden()]).await
     }
@@ -904,9 +909,14 @@ impl Run {
                 self.write_deployment_configurations().await?;
                 let result = self
                     .exec(vec![
-                        Cmd::new(in_docker(&dep, &format!("cd {w} && {start}")))
-                            .kind("stdout")
-                            .command_hidden(),
+                        Cmd::new(in_docker(
+                            &dep,
+                            &self.without_helper_build_secret_environment(&format!(
+                                "cd {w} && {start}"
+                            )),
+                        ))
+                        .kind("stdout")
+                        .command_hidden(),
                     ])
                     .await;
                 return result.map_err(|e| syntax_error(e, "start", &custom));
@@ -940,7 +950,12 @@ impl Run {
                     in_workdir
                 }
             } else {
-                in_docker(&dep, &format!("cd /artifacts/{dep} && {start}"))
+                in_docker(
+                    &dep,
+                    &self.without_helper_build_secret_environment(&format!(
+                        "cd /artifacts/{dep} && {start}"
+                    )),
+                )
             };
             return self
                 .exec(vec![Cmd::new(command).kind("stdout").command_hidden()])
@@ -958,6 +973,7 @@ impl Run {
         let command = format!(
             "{vars} docker compose --env-file {w}/{ENV_FILE} --project-name {u} --project-directory {w} -f {w}{loc} up -d"
         );
+        let command = self.without_helper_build_secret_environment(&command);
         self.exec(vec![
             Cmd::new(in_docker(&dep, &command))
                 .kind("stdout")
@@ -1169,9 +1185,88 @@ fn add_build_fingerprint(compose: &mut ParsedCompose, fingerprint: &str) {
     }
 }
 
+/// `composeServiceUrlVariables($domainsJson)` with the stored keys: per service with a domain,
+/// `SERVICE_URL_<NAME>` (the first URL without its port) and `SERVICE_FQDN_<NAME>` (its host),
+/// and each stored `SERVICE_URL_<NAME>_<PORT>` or `SERVICE_FQDN_<NAME>_<PORT>` with `:<PORT>`
+/// appended. A later key replaces an earlier one in place, as in a PHP array.
+pub(crate) fn compose_service_url_values(
+    domains_json: Option<&str>,
+    stored: &[String],
+) -> Vec<(String, String)> {
+    fn put(out: &mut Vec<(String, String)>, key: String, value: String) {
+        match out.iter_mut().find(|(k, _)| *k == key) {
+            Some(slot) => slot.1 = value,
+            None => out.push((key, value)),
+        }
+    }
+    let mut out = Vec::new();
+    for (service, entry) in compose_parser::php_json_array(domains_json) {
+        let Some(domain) = compose_parser::domain_entry_string(&entry).filter(|d| !d.is_empty())
+        else {
+            continue;
+        };
+        let first = domain.split(',').next().unwrap_or_default().to_owned();
+        let Some(parts) = crate::applications::domains::UrlParts::parse(&first) else {
+            continue;
+        };
+        let url = crate::applications::domains::without_port(&first);
+        let name = compose_parser::normalize_service_name(&service.as_string()).to_uppercase();
+        put(&mut out, format!("SERVICE_URL_{name}"), url.clone());
+        put(&mut out, format!("SERVICE_FQDN_{name}"), parts.host.clone());
+        // `/^SERVICE_(URL|FQDN)_<NAME>_(\d+)$/`
+        for key in stored {
+            let (rest, value) = if let Some(rest) = key.strip_prefix("SERVICE_URL_") {
+                (rest, &url)
+            } else if let Some(rest) = key.strip_prefix("SERVICE_FQDN_") {
+                (rest, &parts.host)
+            } else {
+                continue;
+            };
+            let Some(port) = rest
+                .strip_prefix(name.as_str())
+                .and_then(|r| r.strip_prefix('_'))
+                .filter(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+            else {
+                continue;
+            };
+            put(&mut out, key.clone(), format!("{value}:{port}"));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_url_variables_keep_the_stored_port_suffixed_forms() {
+        let domains = r#"{"my-app":{"domain":"https://app.example.com:8443,https://other.example.com"},"db":{"domain":""}}"#;
+        let stored: Vec<String> = [
+            "SERVICE_URL_MY_APP_3000",
+            "SERVICE_FQDN_MY_APP_3000",
+            "SERVICE_URL_MY_APP",
+            "SERVICE_URL_MY_APPX_3000",
+            "SERVICE_URL_MY_APP_30a",
+            "SERVICE_URL_DB_5432",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let pairs = |v: Vec<(String, String)>| -> Vec<String> {
+            v.into_iter().map(|(k, v)| format!("{k}={v}")).collect()
+        };
+        assert_eq!(
+            pairs(compose_service_url_values(Some(domains), &stored)),
+            [
+                "SERVICE_URL_MY_APP=https://app.example.com",
+                "SERVICE_FQDN_MY_APP=app.example.com",
+                "SERVICE_URL_MY_APP_3000=https://app.example.com:3000",
+                "SERVICE_FQDN_MY_APP_3000=app.example.com:3000",
+            ]
+        );
+        assert!(compose_service_url_values(None, &stored).is_empty());
+    }
 
     #[test]
     fn build_interpolation_keys_leave_out_build_inputs() {

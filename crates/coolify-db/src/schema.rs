@@ -15,7 +15,14 @@ use crate::{DbError, DbResult};
 pub const SUPPORTED_MIGRATIONS_FILE: &str =
     include_str!("../../../compat/baseline/supported-migrations.txt");
 
-/// Tables whose columns are discovered at startup.
+/// Migration names that existed on upstream's v4 line but are not in the supported tree (renamed or
+/// deleted later). Long-lived installations still list some of them. Generated from upstream
+/// history; see the file's header.
+pub const HISTORICAL_MIGRATIONS_FILE: &str =
+    include_str!("../../../compat/baseline/historical-migrations.txt");
+
+/// Tables whose columns are discovered at startup. Several get columns from v4.6.0's
+/// migrations, so code can work on a database that has not been upgraded yet.
 const INSPECTED_TABLES: &[&str] = &[
     "teams",
     "users",
@@ -26,15 +33,30 @@ const INSPECTED_TABLES: &[&str] = &[
     "project_settings",
     "environments",
     "private_keys",
+    "applications",
+    "team_invitations",
+    "subscriptions",
+    "standalone_sqlites",
+    "server_settings",
+    "scheduled_task_executions",
+    "scheduled_database_backup_executions",
+    "scheduled_volume_backup_executions",
 ];
 
-pub fn supported_migrations() -> BTreeSet<String> {
-    SUPPORTED_MIGRATIONS_FILE
-        .lines()
+fn names(file: &str) -> BTreeSet<String> {
+    file.lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .map(str::to_string)
         .collect()
+}
+
+pub fn supported_migrations() -> BTreeSet<String> {
+    names(SUPPORTED_MIGRATIONS_FILE)
+}
+
+pub fn historical_migrations() -> BTreeSet<String> {
+    names(HISTORICAL_MIGRATIONS_FILE)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -42,6 +64,8 @@ pub struct SchemaInfo {
     pub applied: usize,
     /// Applied upstream migrations this build does not know.
     pub unknown: Vec<String>,
+    /// Applied migrations upstream renamed or deleted after they ran: known, not required.
+    pub historical: Vec<String>,
     /// Supported migrations missing from the database (older upstream).
     pub missing: Vec<String>,
     /// Table -> columns in ordinal order.
@@ -66,6 +90,7 @@ pub async fn inspect(pool: &PgPool, allow_unknown: bool) -> DbResult<SchemaInfo>
     let info = evaluate(
         &applied.into_iter().collect(),
         &supported_migrations(),
+        &historical_migrations(),
         allow_unknown,
     );
 
@@ -89,15 +114,32 @@ pub async fn inspect(pool: &PgPool, allow_unknown: bool) -> DbResult<SchemaInfo>
     Ok(SchemaInfo { columns, ..info })
 }
 
-/// Pure decision logic, unit-tested separately from the database.
+/// Pure decision logic, unit-tested separately from the database. A `historical` name is neither
+/// unknown nor required.
 pub fn evaluate(
     applied: &BTreeSet<String>,
     supported: &BTreeSet<String>,
+    historical: &BTreeSet<String>,
     allow_unknown: bool,
 ) -> SchemaInfo {
-    let unknown: Vec<String> = applied.difference(supported).cloned().collect();
+    let (historical, unknown): (Vec<String>, Vec<String>) = applied
+        .difference(supported)
+        .cloned()
+        .partition(|m| historical.contains(m));
     let missing: Vec<String> = supported.difference(applied).cloned().collect();
-    let read_only_reason = if !unknown.is_empty() && !allow_unknown {
+    let read_only_reason = read_only_reason(&unknown, &missing, allow_unknown);
+    SchemaInfo {
+        applied: applied.len(),
+        unknown,
+        historical,
+        missing,
+        columns: BTreeMap::new(),
+        read_only_reason,
+    }
+}
+
+fn read_only_reason(unknown: &[String], missing: &[String], allow_unknown: bool) -> Option<String> {
+    if !unknown.is_empty() && !allow_unknown {
         Some(format!(
             "database has {} upstream migration(s) this coolify-rs build has not been validated against (newest: {}); \
              set COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA=true to override",
@@ -112,13 +154,31 @@ pub fn evaluate(
         ))
     } else {
         None
-    };
-    SchemaInfo {
-        applied: applied.len(),
-        unknown,
-        missing,
-        columns: BTreeMap::new(),
-        read_only_reason,
+    }
+}
+
+impl SchemaInfo {
+    /// The guard's verdict once `migrations` (names `coolify-rs boot` runs, `bootstrap::MIGRATIONS`)
+    /// have been applied, with the missing ones among them. Read-only: nothing is applied here.
+    pub fn after_migrations(
+        &self,
+        migrations: &[&str],
+        allow_unknown: bool,
+    ) -> (Self, Vec<String>) {
+        let (pending, missing): (Vec<String>, Vec<String>) = self
+            .missing
+            .iter()
+            .cloned()
+            .partition(|m| migrations.contains(&m.as_str()));
+        let info = Self {
+            applied: self.applied + pending.len(),
+            unknown: self.unknown.clone(),
+            historical: self.historical.clone(),
+            read_only_reason: read_only_reason(&self.unknown, &missing, allow_unknown),
+            missing,
+            columns: self.columns.clone(),
+        };
+        (info, pending)
     }
 }
 
@@ -133,36 +193,106 @@ mod tests {
     #[test]
     fn embedded_list_is_the_main_baseline() {
         let s = supported_migrations();
-        assert_eq!(s.len(), 478);
+        assert_eq!(s.len(), 493);
         assert!(s.contains("2026_10_25_115811_add_is_two_factor_required_to_teams_table"));
         assert!(
             s.contains("2026_10_28_124421_keep_dockerfile_healthcheck_for_existing_applications")
         );
-        // `bootstrap::MIGRATIONS` only names migrations the guard accepts.
+        assert!(s.contains("2026_11_01_142702_add_update_channel_to_instance_settings_table"));
+        // `bootstrap::MIGRATIONS` only names migrations the guard accepts, in name order.
         for m in crate::bootstrap::MIGRATIONS {
             assert!(s.contains(m.name), "{}", m.name);
         }
+        assert!(
+            crate::bootstrap::MIGRATIONS
+                .windows(2)
+                .all(|w| w[0].name < w[1].name)
+        );
         assert!(s.contains("2014_10_12_000000_create_users_table"));
+    }
+
+    #[test]
+    fn historical_list_is_disjoint_from_the_tree() {
+        let h = historical_migrations();
+        assert_eq!(h.len(), 64);
+        // What a real Coolify 4.6.0 installation lists beyond the v4.6.0 tree.
+        for name in [
+            "2018_08_08_100000_create_telescope_entries_table",
+            "2025_10_10_120000_create_cloud_init_scripts_table",
+            "2025_10_10_120000_create_webhook_notification_settings_table",
+            "2025_10_10_120001_populate_webhook_notification_settings_for_existing_teams",
+        ] {
+            assert!(h.contains(name), "{name}");
+        }
+        assert!(h.is_disjoint(&supported_migrations()));
     }
 
     #[test]
     fn guard_decisions() {
         let sup = set(&["a", "b"]);
+        let none = set(&[]);
         assert!(
-            evaluate(&set(&["a", "b"]), &sup, false)
+            evaluate(&set(&["a", "b"]), &sup, &none, false)
                 .read_only_reason
                 .is_none()
         );
-        let newer = evaluate(&set(&["a", "b", "c"]), &sup, false);
+        let newer = evaluate(&set(&["a", "b", "c"]), &sup, &none, false);
         assert_eq!(newer.unknown, vec!["c"]);
         assert!(newer.read_only_reason.is_some());
         assert!(
-            evaluate(&set(&["a", "b", "c"]), &sup, true)
+            evaluate(&set(&["a", "b", "c"]), &sup, &none, true)
                 .read_only_reason
                 .is_none()
         );
-        let older = evaluate(&set(&["a"]), &sup, true);
+        let older = evaluate(&set(&["a"]), &sup, &none, true);
         assert_eq!(older.missing, vec!["b"]);
         assert!(older.read_only_reason.is_some());
+    }
+
+    #[test]
+    fn historical_names_are_known_but_not_required() {
+        let sup = set(&["a", "b"]);
+        let hist = set(&["old"]);
+        let renamed = evaluate(&set(&["a", "b", "old"]), &sup, &hist, false);
+        assert!(renamed.read_only_reason.is_none());
+        assert!(renamed.unknown.is_empty());
+        assert_eq!(renamed.historical, vec!["old"]);
+        assert_eq!(renamed.applied, 3);
+        // Not required: a database without it is complete.
+        assert!(
+            evaluate(&set(&["a", "b"]), &sup, &hist, false)
+                .read_only_reason
+                .is_none()
+        );
+        // A truly unknown name still makes it read-only.
+        let newer = evaluate(&set(&["a", "b", "old", "c"]), &sup, &hist, false);
+        assert_eq!(newer.unknown, vec!["c"]);
+        assert_eq!(newer.historical, vec!["old"]);
+        assert!(newer.read_only_reason.is_some());
+    }
+
+    #[test]
+    fn verdict_after_boot_migrations() {
+        let sup = set(&["a", "b", "c"]);
+        let older = evaluate(&set(&["a"]), &sup, &set(&[]), false);
+        assert!(older.read_only_reason.is_some());
+        let (after, pending) = older.after_migrations(&["b", "c"], false);
+        assert_eq!(pending, vec!["b", "c"]);
+        assert!(after.missing.is_empty());
+        assert!(after.read_only_reason.is_none());
+        assert_eq!(after.applied, 3);
+        let (after, pending) = older.after_migrations(&["b"], false);
+        assert_eq!(pending, vec!["b"]);
+        assert_eq!(after.missing, vec!["c"]);
+        assert!(after.read_only_reason.is_some());
+        // Unknown names stay unknown.
+        let newer = evaluate(&set(&["a", "b", "z"]), &sup, &set(&[]), false);
+        assert!(
+            newer
+                .after_migrations(&["c"], false)
+                .0
+                .read_only_reason
+                .is_some()
+        );
     }
 }

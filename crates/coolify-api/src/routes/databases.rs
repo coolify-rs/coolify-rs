@@ -26,6 +26,7 @@ use crate::routes::servers::{ip_accessor, user_accessor};
 use crate::serialize::{php_truthy, serialize_record};
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 pub(crate) const NOT_FOUND: ApiError =
     ApiError::Message(StatusCode::NOT_FOUND, "Database not found.");
@@ -628,10 +629,6 @@ async fn create_database(
     kind: Kind,
 ) -> ApiResult {
     use coolify_domain::Ability;
-    // `authorize('create', StandalonePostgresql::class)`: admin of the current team.
-    if !ctx.is_team_admin() {
-        return Err(ApiError::Unauthorized);
-    }
     let raw_input = lenient_json(&headers, &uri, &body);
     let instant = input_bool(&raw_input, "instant_deploy");
     if instant && !(ctx.abilities.can(Ability::Deploy) || ctx.abilities.can(Ability::Root)) {
@@ -698,6 +695,10 @@ async fn create_database(
         StatusCode::UNPROCESSABLE_ENTITY,
         "You need to provide a valid environment_name or environment_uuid.",
     ))?;
+    // `$this->authorize('create', [StandalonePostgresql::class, $environment])`.
+    if !ctx.can_create_in(Some(env.id)) {
+        return Err(ApiError::Unauthorized);
+    }
     let server = servers::find(
         &state.db,
         ctx.team_id,
@@ -1129,7 +1130,7 @@ pub async fn start(
     let d = dbs::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     if d.str("status").unwrap_or_default().contains("running") {
@@ -1157,7 +1158,7 @@ pub async fn stop(
     let d = dbs::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let status = d.str("status").unwrap_or_default();
@@ -1183,7 +1184,7 @@ pub async fn restart(
     let d = dbs::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     prerequisite(&state, &d).await?;
@@ -1216,7 +1217,7 @@ pub async fn delete(
     let d = dbs::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Delete, &d) {
         return Err(ApiError::Unauthorized);
     }
     if d.kind == Kind::Sqlite {

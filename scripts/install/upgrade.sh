@@ -256,7 +256,45 @@ set_env_var() {
     fi
 }
 
+# Quote a value so that Docker Compose and phpdotenv both read it back unchanged (same as install.sh).
+quote_env_value() {
+    local value="$1"
+    case "$value" in
+    *\'*)
+        value=${value//\\/\\\\}
+        value=${value//\"/\\\"}
+        value=${value//\$/\\\$}
+        printf '"%s"' "$value"
+        ;;
+    *)
+        printf "'%s'" "$value"
+        ;;
+    esac
+}
+
+# Installers before Coolify 4.5.1 (and manual edits) wrote root user credentials with spaces without quotes.
+# phpdotenv cannot parse such a line, so Coolify could not read this file back. Only quote lines that
+# phpdotenv rejects: unquoted values that contain whitespace but no comment.
+quote_root_user_env_values() {
+    local key value
+    for key in ROOT_USERNAME ROOT_USER_EMAIL ROOT_USER_PASSWORD; do
+        value=$(grep -m1 "^${key}=" "$ENV_FILE" | cut -d '=' -f2-) || continue
+        # phpdotenv ignores whitespace around an unquoted value (also the \r of CRLF line endings)
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        case "$value" in
+        \"* | \'* | *[[:space:]]\#*) continue ;;
+        *[[:space:]]*) ;;
+        *) continue ;;
+        esac
+        # awk reads the value from the environment, so characters such as | & \ in it stay literal
+        KEY="$key" VALUE="$(quote_env_value "$value")" awk '!done && index($0, ENVIRON["KEY"] "=") == 1 { $0 = ENVIRON["KEY"] "=" ENVIRON["VALUE"]; done = 1 } { print }' "$ENV_FILE" >"$ENV_FILE.tmp" && mv "$ENV_FILE.tmp" "$ENV_FILE"
+        log "Quoted ${key} (its value has spaces)"
+    done
+}
+
 log "Checking environment variables..."
+quote_root_user_env_values
 set_env_var "REGISTRY_URL" "$REGISTRY_URL"
 set_env_var "COOLIFY_RS_REGISTRY" "$COOLIFY_RS_REGISTRY"
 update_env_var "PUSHER_APP_ID" "$(openssl rand -hex 32)"

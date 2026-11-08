@@ -332,13 +332,15 @@
                         <Reicon name="play-circle" class="size-3.5 opacity-70" />
                         {isStopped ? 'Deploy' : 'Redeploy'}
                       </button>
+                      <!-- `!$previewIsStopped || can('delete')`: Delete shows with the same permission here. -->
+                      <div class="my-1 border-t border-neutral-200 dark:border-white/[0.08]"></div>
                       {#if !isStopped}
-                        <button type="button" class="listbox-option justify-start! gap-2.5! text-error!" role="menuitem" onclick={() => (stopping = preview)}>
+                        <button type="button" class="listbox-option justify-start! gap-2.5! text-error! hover:text-error!" role="menuitem" onclick={() => (stopping = preview)}>
                           <Reicon name="stop" class="size-3.5" />
                           Stop
                         </button>
                       {/if}
-                      <button type="button" class="listbox-option justify-start! gap-2.5! text-error!" role="menuitem" onclick={() => (deleting = preview)}>
+                      <button type="button" class="listbox-option justify-start! gap-2.5! text-error! hover:text-error!" role="menuitem" onclick={() => (deleting = preview)}>
                         <Reicon name="trash" class="size-3.5" />
                         Delete
                       </button>

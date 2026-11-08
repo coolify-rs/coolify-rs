@@ -31,6 +31,7 @@ use crate::routes::databases::input_bool;
 use crate::serialize::php_truthy;
 use crate::state::AppState;
 use crate::validation::{Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 /// `$allowedFields` of `update_by_uuid` plus `APPLICATION_SETTING_FIELDS`.
 const ALLOWED: &[&str] = &[
@@ -46,6 +47,8 @@ const ALLOWED: &[&str] = &[
     "git_repository",
     "git_branch",
     "git_commit_sha",
+    "git_https_username",
+    "git_https_password",
     "docker_registry_image_name",
     "docker_registry_image_tag",
     "build_pack",
@@ -223,6 +226,19 @@ async fn is_deploy_key(state: &AppState, a: &ApplicationRow) -> Result<bool, Api
     Ok(key == Some(0))
 }
 
+/// `Application::deploymentType() === 'other'`: no deploy key and no Git source.
+async fn is_other_deployment(state: &AppState, a: &ApplicationRow) -> Result<bool, ApiError> {
+    if a.int("private_key_id").is_some_and(|k| k > 0) {
+        return Ok(false);
+    }
+    if let (Some(source_type), Some(source_id)) = (a.str("source_type"), a.int("source_id"))
+        && apps::source_exists(&state.db, source_type, source_id).await?
+    {
+        return Ok(false);
+    }
+    Ok(a.int("private_key_id") != Some(0))
+}
+
 /// `GithubApp::isConnected()`.
 fn github_app_connected(app: &Map<String, Value>) -> bool {
     let filled = |k: &str| match app.get(k) {
@@ -329,8 +345,8 @@ pub async fn update(
     let found = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND_APPLICATION)?;
-    // `update`, `manageEnvironment` and `deploy` are the same check.
-    if !ctx.is_team_admin() {
+    // `update`, `manageEnvironment` and `deploy`: write includes deploy.
+    if !ctx.can_app(AccessLevel::Write, &found) {
         return Err(ApiError::Unauthorized);
     }
     let instant = input.get("instant_deploy").is_some_and(php_truthy);
@@ -437,8 +453,48 @@ pub async fn update(
         github_app = Some(app);
     }
 
+    if input.has("git_https_username") || input.has("git_https_password") {
+        if !is_other_deployment(&state, &found).await? {
+            return Err(field_error(
+                "git_https_password",
+                "HTTPS credentials can only be used by applications that clone a repository without a Git source or deploy key.",
+            ));
+        }
+        if input.filled("git_https_username")
+            && !input.filled("git_https_password")
+            && decrypted(enc, &found, "git_https_password")?.is_none_or(|p| p.trim().is_empty())
+        {
+            return Err(field_error(
+                "git_https_password",
+                "The git_https_password is required with git_https_username.",
+            ));
+        }
+    }
+
     let app_settings = fields::settings_from_request(&input);
     fields::check_container_name_prefix(&state, &app_settings, server_id, Some(found.id)).await?;
+    // `(clone $application)->fill($request->only(['docker_registry_image_name', 'build_pack']))`:
+    // when either changes, no other application of the team may build the same image (v4.6.0).
+    let requested = |k: &str| match input.get(k) {
+        Some(v) => v.as_str().map(str::to_owned),
+        None => found.str(k).map(str::to_owned),
+    };
+    let (image_name, build_pack) = (
+        requested("docker_registry_image_name"),
+        requested("build_pack"),
+    );
+    if image_name.as_deref() != found.str("docker_registry_image_name")
+        || build_pack.as_deref() != found.str("build_pack")
+    {
+        crate::routes::applications::shared_image_name_check(
+            &state,
+            found.team_id,
+            Some(found.id),
+            image_name.as_deref(),
+            build_pack.as_deref(),
+        )
+        .await?;
+    }
     fields::check_custom_internal_name(&app_settings)?;
     let requested_pack = match input.get("build_pack") {
         Some(v) => v.as_str().map(str::to_owned),
@@ -644,6 +700,40 @@ async fn apply(
         }
         p.set(col, value);
     }
+    // fill() with `git_https_username` / `git_https_password`, then the explicit password write:
+    // an empty or null password removes the credentials.
+    if state
+        .db
+        .schema()
+        .has_column("applications", "git_https_password")
+    {
+        if let Some(v) = input.get("git_https_username") {
+            p.set(
+                "git_https_username",
+                ColumnValue::Text(fields::php_text(v)?),
+            );
+        }
+        if input.has("git_https_password") {
+            let plain = if input.filled("git_https_password") {
+                input
+                    .get("git_https_password")
+                    .map(fields::php_text)
+                    .transpose()?
+                    .flatten()
+            } else {
+                None
+            };
+            if decrypted(enc, &original, "git_https_password")? != plain {
+                p.set(
+                    "git_https_password",
+                    ColumnValue::Text(plain.as_deref().map(|v| enc.encrypt_string(v))),
+                );
+            }
+            if plain.is_none() {
+                p.set("git_https_username", ColumnValue::Text(None));
+            }
+        }
+    }
     let proxy_runs = fields::proxy_should_run(&server);
     let has_domains = input.has("domains");
     let mut fqdn_dirty = false;
@@ -759,9 +849,17 @@ async fn apply(
         state,
         apps::MORPH,
         original.id,
-        previous_dns_hostnames,
+        previous_dns_hostnames.clone(),
         ctx.team_id,
     );
+    // `ResourceDnsRecords::queueAutomaticRecords()` (v4.6.0).
+    crate::routes::dns_records::queue_automatic_records(
+        state,
+        crate::routes::dns_records::Kind::Application,
+        original.id,
+        &previous_dns_hostnames,
+    )
+    .await;
     if delete_service_variables {
         apps::delete_service_url_variables(&state.db, original.id).await?;
     }

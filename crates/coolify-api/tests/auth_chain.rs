@@ -9,6 +9,9 @@ mod common;
 
 use common::Harness;
 
+/// `EnsureTokenBelongsToCurrentTeamMember::EXCEEDS_ACCESS_MESSAGE` (4.6.0).
+const EXCEEDS: &str = r#"{"message":"This API token has more access than you have in this team. Revoke it and create a new token."}"#;
+
 #[tokio::test]
 async fn health_is_public_plain_text() {
     let h = Harness::new().await;
@@ -81,7 +84,7 @@ async fn members_with_elevated_tokens_are_refused() {
     let h = Harness::new().await;
     h.get("/api/v1/projects", "acme_member_write_legacy")
         .await
-        .assert(403, r#"{"message":"Missing required team role."}"#);
+        .assert(403, EXCEEDS);
     // Demoting an owner invalidates their elevated tokens immediately.
     sqlx::query("UPDATE team_user SET role = 'member' WHERE team_id = 1 AND user_id = 1")
         .execute(h.tdb.db.pool())
@@ -89,7 +92,7 @@ async fn members_with_elevated_tokens_are_refused() {
         .unwrap();
     h.get("/api/v1/projects", "acme_owner_root")
         .await
-        .assert(403, r#"{"message":"Missing required team role."}"#);
+        .assert(403, EXCEEDS);
     h.get("/api/v1/projects", "acme_owner_read").await;
     h.finish().await;
 }

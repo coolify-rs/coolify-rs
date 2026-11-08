@@ -20,6 +20,7 @@ use crate::input::{Input, query_param};
 use crate::response::{ApiError, ApiResult, PhpJson, created, ok};
 use crate::state::AppState;
 use crate::validation::{Field, Messages, Rule, patterns, validate};
+use coolify_domain::grants::AccessLevel;
 
 pub mod compose;
 mod general;
@@ -90,9 +91,6 @@ pub async fn create_docker_image(
     Extension(ctx): Extension<AuthCtx>,
     bytes: axum::body::Bytes,
 ) -> ApiResult {
-    if !ctx.is_team_admin() {
-        return Err(ApiError::Unauthorized);
-    }
     let m = body(&bytes);
     let (mut name, mut tag, mut sha) = (
         s(&m, "image_name"),
@@ -205,6 +203,10 @@ pub async fn create_docker_image(
                 StatusCode::NOT_FOUND,
                 "Environment not found.",
             ))?;
+    // `$this->authorize('create', [Application::class, $environment])`.
+    if !ctx.can_create_in(Some(env.id)) {
+        return Err(ApiError::Unauthorized);
+    }
     let (destination_id, server_id) =
         coolify_db::databases::team_destination(&state.db, ctx.team_id, &s(&m, "destination_uuid"))
             .await?
@@ -331,7 +333,7 @@ pub async fn state(
     // General::mount(): Coolify-managed labels are generated when missing.
     if a.str("custom_labels").is_none_or(str::is_empty)
         && a.setting_bool("is_container_label_readonly_enabled")
-        && ctx.is_team_admin()
+        && ctx.can_app(AccessLevel::Write, &a)
         && let Some(server) = match a.server_id() {
             Some(id) => servers::find_by_id(&state.db, id).await?,
             None => None,
@@ -435,13 +437,13 @@ pub async fn state(
         "build_server_fallback": build.1,
         "server_is_swarm": is_swarm,
         "server_can_build": can_build,
-        "can_update": ctx.is_team_admin(),
-        "can_deploy": ctx.is_team_admin(),
+        "can_update": ctx.can_app(AccessLevel::Write, &a),
+        "can_deploy": ctx.can_app(AccessLevel::Deploy, &a),
         "running_deployment_url": running_url,
         "configuration_changed": changed,
         "server_timezone": timezone,
         // `syncData()`: only who can update reads these.
-        "http_basic_auth_password": if ctx.is_team_admin() {
+        "http_basic_auth_password": if ctx.can_app(AccessLevel::Write, &a) {
             state.encrypter.as_ref().and_then(|enc| basic_auth_password(&fresh, enc))
         } else {
             None
@@ -454,7 +456,7 @@ pub async fn state(
         // `$application->additional_servers()->exists()`.
         "has_additional_servers": !coolify_db::application_ops::additional_networks(&state.db, fresh.id).await?.is_empty(),
         // `syncData()`: commands and configuration only for who can update.
-        "custom_labels": if ctx.is_team_admin() { labels_text } else { None },
+        "custom_labels": if ctx.can_app(AccessLevel::Write, &a) { labels_text } else { None },
         "server_ip": server.as_ref().and_then(|s| s.record.get("ip")).cloned().unwrap_or(Value::Null),
         "server_id": server.as_ref().map(|s| s.id),
         "is_swarm": a.str("destination_type") == Some(r"App\Models\SwarmDocker") || server.as_ref().is_some_and(|s| coolify_jobs::server::ServerInfo::from_row(s).is_swarm()),
@@ -500,7 +502,7 @@ async fn queue(
     force: bool,
 ) -> ApiResult {
     let a = find(state, ctx, uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Deploy, &a) {
         return Err(ApiError::Unauthorized);
     }
     if a.destination.is_none() {
@@ -560,7 +562,7 @@ pub async fn stop(
     Path(uuid): Path<String>,
 ) -> ApiResult {
     let a = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Deploy, &a) {
         return Err(ApiError::Unauthorized);
     }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
@@ -626,7 +628,7 @@ pub async fn deployments(
         .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
         .filter_map(|v| v.parse().ok())
         .collect();
-    let (all, _) = apps::deployments_for_application(&state.db, a.id, 0, i64::MAX).await?;
+    let all = apps::deployment_history(&state.db, a.id).await?;
     let mut rows: Vec<&apps::Deployment> = all
         .iter()
         .filter(|d| {
@@ -690,6 +692,7 @@ pub async fn deployments(
                 "is_api": d.bool("is_api"),
                 "rollback": d.bool("rollback"),
                 "pull_request_id": d.int("pull_request_id").unwrap_or(0),
+                "server_id": d.int("server_id"),
                 "server_name": d.str("server_name"),
                 "created_at": d.str("created_at"),
                 "finished_at": d.str("finished_at"),
@@ -811,10 +814,10 @@ pub async fn deployment(
         ))?;
     // `downloadAllLogs()` (`?all=1`) includes the hidden lines for users who can update.
     let all = query_param(&uri, "all").as_deref() == Some("1");
-    if all && !ctx.is_team_admin() {
+    if all && !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
-    let debug = all || (ctx.is_team_admin() && a.setting_bool("is_debug_enabled"));
+    let debug = all || (ctx.can_app(AccessLevel::Write, &a) && a.setting_bool("is_debug_enabled"));
     Ok(ok(json!({
         "deployment_uuid": d.uuid,
         "status": d.status,
@@ -836,7 +839,7 @@ pub async fn toggle_debug(
     Path(uuid): Path<String>,
 ) -> ApiResult {
     let a = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let on = !a.setting_bool("is_debug_enabled");
@@ -857,7 +860,7 @@ pub async fn cancel(
     Path((uuid, dep)): Path<(String, String)>,
 ) -> ApiResult {
     let a = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Deploy, &a) {
         return Err(ApiError::Unauthorized);
     }
     let d = apps::deployment_by_uuid(&state.db, &dep)
@@ -896,7 +899,7 @@ pub async fn force_start(
     Path((uuid, dep)): Path<(String, String)>,
 ) -> ApiResult {
     let a = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Deploy, &a) {
         return Err(ApiError::Unauthorized);
     }
     let d = apps::deployment_by_uuid(&state.db, &dep)
@@ -1067,7 +1070,7 @@ pub async fn update(
     bytes: axum::body::Bytes,
 ) -> ApiResult {
     let a = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Message(
             StatusCode::FORBIDDEN,
             "You need at least admin or owner permissions to update this application.",
@@ -1254,6 +1257,39 @@ pub async fn update(
     let previous_dns_hostnames =
         crate::ui_shared::dns::previous_hostnames(&state, apps::MORPH, a.id).await;
     let fx = general::apply(&a, &m, &mut values);
+    // `isDirty(['docker_registry_image_name', 'build_pack'])` after `syncData(toModel: true)`: no
+    // other application of the team may build the same image (v4.6.0).
+    let pending = |k: &str| {
+        values.iter().rev().find(|(c, _)| *c == k).map_or_else(
+            || a.str(k).map(str::to_owned),
+            |(_, v)| match v {
+                ColumnValue::Text(t) => t.clone(),
+                _ => None,
+            },
+        )
+    };
+    let (image_name, pack) = (pending("docker_registry_image_name"), pending("build_pack"));
+    if (image_name.as_deref() != a.str("docker_registry_image_name")
+        || pack.as_deref() != a.str("build_pack"))
+        && let Some((_, other)) = apps::other_application_building_same_image(
+            &state.db,
+            a.team_id,
+            Some(a.id),
+            image_name.as_deref(),
+            pack.as_deref(),
+        )
+        .await?
+    {
+        let message = apps::shared_image_name_message(
+            other.as_deref(),
+            image_name.as_deref().unwrap_or_default(),
+        );
+        return Ok(PhpJson(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"message": message, "errors": {"docker_registry_image_name": [message]}}),
+        )
+        .into_response());
+    }
     // `isDirty('dockerfile')`: the health check and the port come from the new Dockerfile.
     if m.contains_key("dockerfile") && text("dockerfile").as_deref() != a.str("dockerfile") {
         let dockerfile = text("dockerfile");
@@ -1443,7 +1479,7 @@ pub async fn settings(
     bytes: axum::body::Bytes,
 ) -> ApiResult {
     let a = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let m = body(&bytes);
@@ -1600,7 +1636,7 @@ pub async fn delete(
             "The provided password is incorrect.",
         ));
     }
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Delete, &a) {
         return Err(ApiError::Unauthorized);
     }
     // `DeleteResourceJob` removes the rows also when the destination is gone.

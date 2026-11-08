@@ -514,7 +514,7 @@
               defaultFile="/docker-compose.yaml"
             />
           {:else}
-            <FormInput id="base_directory" label="Base directory" helper="Repository directory used as the build root." bind:value={baseDirectory} />
+            <FormInput id="base_directory" label="Base directory" placeholder="/" helper="Repository directory used as the build root." bind:value={baseDirectory} />
           {/if}
         </div>
       </section>

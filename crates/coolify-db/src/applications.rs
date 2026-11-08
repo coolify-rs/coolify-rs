@@ -139,7 +139,12 @@ pub async fn find_in_team(
     .bind(team_id)
     .fetch_optional(db.pool())
     .await?;
-    r.as_ref().map(to_row).transpose()
+    Ok(r.as_ref().map(to_row).transpose()?.filter(visible))
+}
+
+/// `VisibleThroughAccessGrants` of the current request.
+pub fn visible(a: &ApplicationRow) -> bool {
+    crate::access::resource_visible(a.int("environment_id"), &a.uuid)
 }
 
 /// `Application::withTrashed()->find($id)`.
@@ -160,25 +165,79 @@ pub async fn find_by_id(db: &Db, id: i64) -> DbResult<Option<ApplicationRow>> {
     r.as_ref().map(to_row).transpose()
 }
 
+/// Build packs that do not build and push an image (`otherApplicationBuildingSameImage()`).
+const NO_PUSHED_IMAGE: &[&str] = &["dockerimage", "dockercompose"];
+
+/// `Application::otherApplicationBuildingSameImage()` (v4.6.0): `(id, name)` of another application
+/// of the team that builds and pushes an image with the same Docker image name. Both push the same
+/// tags, so one application can run the image of the other. `except` is the application itself
+/// when it exists.
+pub async fn other_application_building_same_image(
+    db: &Db,
+    team_id: TeamId,
+    except: Option<i64>,
+    image_name: Option<&str>,
+    build_pack: Option<&str>,
+) -> DbResult<Option<(i64, Option<String>)>> {
+    let Some(image_name) = image_name.filter(|n| !n.trim().is_empty()) else {
+        return Ok(None);
+    };
+    if build_pack.is_some_and(|b| NO_PUSHED_IMAGE.contains(&b)) {
+        return Ok(None);
+    }
+    let rows: Vec<(i64, Option<String>, String, i64)> = sqlx::query_as(
+        "SELECT a.id, a.name, a.uuid, a.environment_id FROM applications a \
+         JOIN environments e ON e.id = a.environment_id JOIN projects p ON p.id = e.project_id \
+         WHERE a.deleted_at IS NULL AND p.team_id = $1 AND ($2::bigint IS NULL OR a.id <> $2) \
+         AND a.docker_registry_image_name = $3 AND a.build_pack NOT IN ('dockerimage', 'dockercompose') \
+         ORDER BY a.id",
+    )
+    .bind(team_id)
+    .bind(except)
+    .bind(image_name)
+    .fetch_all(db.pool())
+    .await?;
+    // `Application::query()` carries `VisibleThroughAccessGrants`: a restricted actor does not
+    // learn about applications it has no grant for.
+    Ok(rows
+        .into_iter()
+        .find(|(_, _, uuid, env)| crate::access::resource_visible(Some(*env), uuid))
+        .map(|(id, name, _, _)| (id, name)))
+}
+
+/// `Application::sharedImageNameMessage()`.
+pub fn shared_image_name_message(other_name: Option<&str>, image_name: &str) -> String {
+    format!(
+        "The application {} also builds the Docker image {image_name}. Both push the same image tags, so one application can run the image of the other. Set a different Docker image name for each application in the General settings.",
+        other_name.unwrap_or_default()
+    )
+}
+
 /// `Application::ownedByCurrentTeamAPI($team)->get()`: ordered by name.
 pub async fn list_for_team(db: &Db, team_id: TeamId) -> DbResult<Vec<ApplicationRow>> {
     let rows: Vec<Joined> = sqlx::query_as(&select("p.team_id = $1 ORDER BY a.name"))
         .bind(team_id)
         .fetch_all(db.pool())
         .await?;
-    rows.iter().map(to_row).collect()
+    let rows: Vec<ApplicationRow> = rows.iter().map(to_row).collect::<DbResult<_>>()?;
+    Ok(rows.into_iter().filter(visible).collect())
 }
 
 /// Ids of the rows `list_for_team` returns.
 pub async fn ids_for_team(db: &Db, team_id: TeamId) -> DbResult<Vec<i64>> {
-    Ok(sqlx::query_scalar(
-        "SELECT a.id FROM applications a JOIN environments e ON e.id = a.environment_id \
+    let rows: Vec<(i64, String, i64)> = sqlx::query_as(
+        "SELECT a.id, a.uuid, a.environment_id FROM applications a JOIN environments e ON e.id = a.environment_id \
          JOIN projects p ON p.id = e.project_id JOIN teams t ON t.id = p.team_id \
          WHERE a.deleted_at IS NULL AND p.team_id = $1",
     )
     .bind(team_id)
     .fetch_all(db.pool())
-    .await?)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter(|(_, uuid, env)| crate::access::resource_visible(Some(*env), uuid))
+        .map(|(id, _, _)| id)
+        .collect())
 }
 
 /// `Environment::applications()` (table order).
@@ -187,7 +246,8 @@ pub async fn list_for_environment(db: &Db, environment_id: i64) -> DbResult<Vec<
         .bind(environment_id)
         .fetch_all(db.pool())
         .await?;
-    rows.iter().map(to_row).collect()
+    let rows: Vec<ApplicationRow> = rows.iter().map(to_row).collect::<DbResult<_>>()?;
+    Ok(rows.into_iter().filter(visible).collect())
 }
 
 /// `Server::applications()`: applications on the server's standalone Docker destinations.
@@ -876,6 +936,22 @@ pub async fn deployments_for_application(
             .collect::<DbResult<_>>()?,
         count,
     ))
+}
+
+/// Every deployment of an application for the history list (`Deployment\Index::HISTORY_COLUMNS`):
+/// no logs and no configuration payloads, newest first.
+pub async fn deployment_history(db: &Db, application_id: i64) -> DbResult<Vec<Deployment>> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT row_to_json(q)::text FROM (\
+           SELECT id, application_id, deployment_uuid, pull_request_id, status, commit, commit_message, \
+                  is_webhook, is_api, rollback, server_id, server_name, created_at, updated_at, finished_at \
+             FROM application_deployment_queues WHERE application_id = $1 \
+            ORDER BY created_at DESC, id DESC) q",
+    )
+    .bind(application_id.to_string())
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter().map(|t| deployment(t)).collect()
 }
 
 /// Queued and in-progress deployments of the team's servers.

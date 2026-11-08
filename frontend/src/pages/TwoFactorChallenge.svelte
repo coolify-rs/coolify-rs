@@ -16,6 +16,7 @@
   let submitting = $state(false);
   let throttled = $state(false);
   let code = $state('');
+  let codeFocused = $state(false);
   let recovery = $state('');
   let errors = $state<string[]>([]);
   let status = $state<string | null>(null);
@@ -96,19 +97,36 @@
 
       <form bind:this={form} onsubmit={submit} class="flex flex-col gap-4">
         <div class="flex flex-col gap-3" style:display={showRecovery ? 'none' : null}>
-          <input
-            bind:this={codeInput}
-            type="text"
-            name="code"
-            inputmode="numeric"
-            pattern="[0-9]*"
-            maxlength="6"
-            autocomplete="one-time-code"
-            aria-label="Two-factor authentication code"
-            disabled={showRecovery}
-            oninput={onCodeInput}
-            class="mx-auto h-14 w-64 rounded-md border border-neutral-300 bg-white px-4 text-center text-xl font-semibold tracking-[0.5em] text-neutral-900 transition-colors focus:border-warning focus:outline-none focus:ring-1 focus:ring-warning dark:border-white/10 dark:bg-coolgray-100 dark:text-white"
-          />
+          <!-- 607daf80b: the code shows as six digit boxes over one transparent input. -->
+          <div class="relative mx-auto flex gap-2">
+            {#each [0, 1, 2, 3, 4, 5] as i (i)}
+              <div
+                aria-hidden="true"
+                data-code-digit
+                class="flex h-14 w-11 items-center justify-center rounded-md border bg-white text-xl font-semibold text-neutral-900 transition-colors dark:bg-coolgray-100 dark:text-white {codeFocused &&
+                (code.length === i || (code.length === 6 && i === 5))
+                  ? 'border-coollabs ring-1 ring-coollabs'
+                  : 'border-neutral-300 dark:border-white/10'}"
+              >
+                {code[i] ?? ''}
+              </div>
+            {/each}
+            <input
+              bind:this={codeInput}
+              type="text"
+              name="code"
+              inputmode="numeric"
+              pattern="[0-9]*"
+              maxlength="6"
+              autocomplete="one-time-code"
+              aria-label="Two-factor authentication code"
+              disabled={showRecovery}
+              oninput={onCodeInput}
+              onfocus={() => (codeFocused = true)}
+              onblur={() => (codeFocused = false)}
+              class="absolute inset-0 h-full w-full cursor-text rounded-md border-0 bg-transparent text-transparent caret-transparent opacity-0 focus:outline-none focus:ring-0"
+            />
+          </div>
           <button type="button" class="auth-text-link self-center" onclick={() => toggle(true)}>Use a recovery code</button>
         </div>
 

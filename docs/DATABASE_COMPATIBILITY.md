@@ -2,22 +2,43 @@
 
 coolify-rs **adopts the upstream PostgreSQL schema unchanged** (ADR 0004). It never alters upstream tables on its
 own: a new installation gets the dump of upstream's schema, and `coolify-rs boot` runs the DDL of upstream's own
-migrations (translated from the PHP) to bring a database created by an earlier coolify-rs build to the current
-baseline. The baseline schema is captured from real installs:
+migrations (translated from the PHP) to bring a database created by an earlier coolify-rs build, or by an older
+Coolify, to the current baseline. The baseline schemas:
 
+- `compat/baseline/upstream-4.6.0-schema.sql` + `-migrations.sql`: Coolify v4.6.0 (493 migrations) **current
+  baseline**. Not captured from the official image (the reference stack was not used): it is the v4.5.3 dump below,
+  loaded on Postgres 15.19, with the fifteen v4.6.0 migrations of `bootstrap::MIGRATIONS` applied, then `pg_dump -s`;
+  the `migrations` rows are renumbered in name order in batch 1, as a fresh `php artisan migrate` writes them.
+  `diff` against the v4.5.3 dump shows only the columns and indexes of the table below. Capturing it from
+  `coollabsio/coolify:4.6.0` (the v4.5.3 procedure in UPSTREAM_BASELINE.md) and comparing is a pending check.
 - `compat/baseline/upstream-4.5.3-schema.sql` + `-migrations.sql`: fresh install of `coollabsio/coolify:4.5.3`
-  (478 migrations; `php artisan migrate --force` on an empty Postgres 15.19, captured 2026-11-06) [runtime]:
-  **current baseline**
+  (478 migrations; `php artisan migrate --force` on an empty Postgres 15.19, captured 2026-11-06) [runtime]: the
+  schema coolify-rs 4.5.3-rs.N created; used to test the upgrade to v4.6.0
 - `compat/baseline/upstream-main-b5823c7-schema.sql` + `-migrations.sql`: fresh install of
-  `coollabsio/coolify:sha-b5823c7` (473 migrations) [runtime]: previous baseline, the schema earlier coolify-rs
-  builds created; used to test the upgrade to v4.5.3
+  `coollabsio/coolify:sha-b5823c7` (473 migrations) [runtime]: the schema the first coolify-rs builds created; used
+  to test the upgrade to v4.6.0
 - `compat/baseline/upstream-4.5.0-schema.sql` + `-migrations.sql`: 4.5.0 install (83 tables, 56 FKs, 469 migrations)
   [runtime]: older baseline, used to test that older databases are refused for writes
 
 Upgrading the 4.5.0 reference in place to `sha-b5823c7` produced the same schema as the fresh install except for
 the literal timestamp defaults upstream bakes in at migration time (`servers.sentinel_updated_at`,
 `*.last_online_at`). The same holds for a `sha-b5823c7` database after the v4.5.3 migrations of
-`bootstrap::MIGRATIONS` (`pg_dump -s` compared; the test `a_b5823c7_database_upgrades_to_4_5_3` compares the catalog).
+`bootstrap::MIGRATIONS` (`pg_dump -s` compared). The tests `a_b5823c7_database_upgrades_to_4_6_0` and
+`a_4_5_3_database_upgrades_to_4_6_0` compare the catalog after `boot` with the v4.6.0 baseline.
+
+### v4.6.0 migrations (v4.5.3 → v4.6.0)
+
+| Migration | Change |
+|---|---|
+| `2026_10_25_100000_add_access_grants_to_team_members_and_tokens` | `team_user.access json`, `personal_access_tokens.scopes json`; tokens with `write` and not `delete` get `delete` appended to `abilities` |
+| `2026_10_26_081954_add_git_https_credentials_to_applications_table` | `applications.git_https_username varchar(255)`, `git_https_password text` |
+| `2026_10_27_142736_add_paused_at_to_personal_access_tokens_table` | `personal_access_tokens.paused_at timestamp(0)` |
+| `2026_10_28_204953_add_worker_host_to_scheduled_job_executions` | `worker_host varchar(255)` on the three scheduled execution tables |
+| `2026_10_28_211105` … `2026_10_28_232000` (seven) | indexes `idx_applications_environment_id_all`, `idx_docker_cleanup_executions_server_created_at`, `idx_server_settings_server_id`, `idx_team_user_user_id`, `idx_deployment_queues_app_created_id`, `idx_docker_cleanup_executions_unfinished_status_created`, `idx_github_runner_executions_status_server_id`, `idx_deployment_queues_app_id`, `idx_servers_private_key_id_active`; `CREATE INDEX CONCURRENTLY` outside a transaction, as upstream (`$withinTransaction = false`) |
+| `2026_10_29_221743_add_checkout_reminder_sent_at_to_subscriptions_table` | `subscriptions.stripe_checkout_reminder_sent_at timestamp(0)` (Coolify Cloud only) |
+| `2026_10_30_144551_add_access_to_team_invitations_table` | `team_invitations.access json` |
+| `2026_10_30_171359_drop_image_default_from_standalone_sqlites_table` | `standalone_sqlites.image` loses its default |
+| `2026_11_01_142702_add_update_channel_to_instance_settings_table` | `instance_settings.update_channel varchar(255) NOT NULL DEFAULT 'stable'`, `update_custom_tag`, `previous_update_channel` |
 
 ### v4.5.3 migrations (b5823c7 → v4.5.3)
 
@@ -29,8 +50,9 @@ the literal timestamp defaults upstream bakes in at migration time (`servers.sen
 | `2026_10_28_103619_add_keeps_production_values_to_application_previews_table` | `application_previews.keeps_production_values boolean NOT NULL DEFAULT false`, set to true on existing previews |
 | `2026_10_28_124421_keep_dockerfile_healthcheck_for_existing_applications` | data only: `health_check_enabled = false` where `custom_healthcheck_found` |
 
-`coolify-rs boot` applies them like `php artisan migrate`: each in a transaction with its `migrations` row, under one
-new batch, skipping those already listed. A database created by Coolify v4.5.3 has them all and is left unchanged.
+`coolify-rs boot` applies them like `php artisan migrate`: in name order, each in a transaction with its
+`migrations` row (the index migrations statement by statement, then the row), under one new batch, skipping those
+already listed. A database created by Coolify v4.6.0 has them all and is left unchanged.
 
 Test databases are created from that dump, so Rust tests run against the real upstream schema.
 
@@ -53,8 +75,20 @@ tested against (`compat/baseline/supported-migrations.txt`, generated by `coolif
 
 - DB has migrations unknown to this build → **refuse writes** (read-only mode) unless `COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA=true`.
   This is what happens when upstream ships a new release before coolify-rs has ported it.
-- DB is missing migrations the build knows about (older upstream) → supported only if every missing migration is listed
-  as optional for the queries coolify-rs runs; otherwise refuse to start.
+- DB is missing migrations the build knows about (older upstream) → **refuse writes**. `coolify-rs boot` first applies
+  the missing ones it has in `bootstrap::MIGRATIONS`, so a Coolify v4.5.3 database becomes writable on the first start.
+- DB lists migrations upstream **renamed or deleted** after they ran → accepted: they are known, and not required.
+  Long-lived installations carry such names; a Coolify 4.6.0 that started on an early v4 has, beyond the v4.6.0 tree,
+  `2018_08_08_100000_create_telescope_entries_table`, `2025_10_10_120000_create_cloud_init_scripts_table`,
+  `2025_10_10_120000_create_webhook_notification_settings_table` and
+  `2025_10_10_120001_populate_webhook_notification_settings_for_existing_teams`. The full list,
+  `compat/baseline/historical-migrations.txt` (64 names), is generated from upstream history: every migration file name
+  that ever existed on the v4 line up to v4.6.0 but is not in the v4.6.0 tree (the command is in its header).
+
+`coolify-rs check-schema` prints the verdict as JSON, as it will be after `boot`: `applied_migrations` (rows now),
+`unknown_migrations`, `missing_migrations` (still missing after `boot`), `applied_on_boot` (what `boot` will apply),
+`historical_migrations` (how many renamed or deleted names the table lists; nothing to do about them) and
+`read_only_reason` (`null` when coolify-rs can write).
 
 ## 2. Type conventions (Laravel 12 Postgres grammar, confirmed by the dump)
 

@@ -72,6 +72,8 @@ struct Cmd {
     command_hidden: bool,
     /// Content upstream sends on the command's stdin.
     input: Option<String>,
+    /// `skip_cancellation_check`: a cleanup command that also runs after a cancel.
+    skip_cancellation_check: bool,
 }
 
 impl Cmd {
@@ -109,6 +111,10 @@ impl Cmd {
     }
     fn input(mut self, input: String) -> Self {
         self.input = Some(input);
+        self
+    }
+    fn skip_cancellation_check(mut self) -> Self {
+        self.skip_cancellation_check = true;
         self
     }
 }
@@ -149,6 +155,9 @@ type Step = Result<(), Fail>;
 /// The build state of a git deployment (`$this->build_pack`, `$this->source`, image names, …).
 #[derive(Default)]
 struct BuildState {
+    /// `$helperBuildSecretEnvironmentKeys`: build-time variables the helper container has in its
+    /// environment for build secrets.
+    helper_build_secret_keys: Vec<String>,
     restart_only: bool,
     rollback: bool,
     force_rebuild: bool,
@@ -163,6 +172,8 @@ struct BuildState {
     port: String,
     branch: String,
     full_repo_url: String,
+    /// `gitHttpsCredentialConfigOption()` of the application.
+    git_https_option: Option<String>,
     github_token: Option<String>,
     coolify_variables: String,
     production_image: String,
@@ -402,7 +413,8 @@ impl Run {
     async fn exec(&mut self, commands: Vec<Cmd>) -> Step {
         let batch = BATCH.fetch_add(1, Ordering::SeqCst) + 1;
         for cmd in commands {
-            if self.status().await == "cancelled-by-user" {
+            // Cleanup commands must also run after a cancel.
+            if !cmd.skip_cancellation_check && self.status().await == "cancelled-by-user" {
                 return Err(Fail::Cancelled);
             }
             let script = match &cmd.input {
@@ -524,7 +536,7 @@ impl Run {
                     false,
                 )
                 .await;
-                    if self.status().await == "cancelled-by-user" {
+                    if !cmd.skip_cancellation_check && self.status().await == "cancelled-by-user" {
                         return Err(Fail::Cancelled);
                     }
                     tokio::time::sleep(delay).await;
@@ -607,7 +619,11 @@ impl Run {
 
     /// `graceful_shutdown_container($name, $skipRemove)`.
     async fn graceful_shutdown(&mut self, name: &str, skip_remove: bool) {
-        let stop = Cmd::new(self.stop_command(name)).hidden().ignore_errors();
+        let mut stop = Cmd::new(self.stop_command(name)).hidden().ignore_errors();
+        if skip_remove {
+            // The helper container (started with --rm) must also stop when the deployment was cancelled.
+            stop = stop.skip_cancellation_check();
+        }
         if let Err(Fail::Error { message, .. }) = self.exec(vec![stop]).await {
             self.log(
                 &format!("Error stopping container {name}: {message}"),
@@ -937,7 +953,7 @@ impl Jobs {
         server_id: i64,
         include_preview: bool,
     ) -> (Vec<String>, Vec<String>) {
-        self.application_log_redaction_secrets(app, server_id, include_preview, true)
+        self.application_log_redaction_secrets(app, Some(server_id), include_preview, true)
             .await
     }
 
@@ -949,14 +965,50 @@ impl Jobs {
         server_id: i64,
         include_preview: bool,
     ) -> (Vec<String>, Vec<String>) {
-        self.application_log_redaction_secrets(app, server_id, include_preview, false)
+        self.application_log_redaction_secrets(app, Some(server_id), include_preview, false)
             .await
+    }
+
+    /// `logRedactionSecretsFor($application, includePreview: true, resolveRemoteSecrets: false)['locked']`
+    /// (`redactLockedValuesInGeneratedCompose()`).
+    pub async fn application_locked_values(
+        &self,
+        app: &ApplicationRow,
+        server_id: Option<i64>,
+    ) -> Vec<String> {
+        self.application_log_redaction_secrets(app, server_id, true, false)
+            .await
+            .1
+    }
+
+    /// `logRedactionSecretsFor($service, resolveRemoteSecrets: false)['locked']`.
+    pub async fn service_locked_values(
+        &self,
+        service_id: i64,
+        team_id: i64,
+        server_id: Option<i64>,
+    ) -> Vec<String> {
+        let Ok(Some((environment_id, project_id, redact_all))) =
+            coolify_db::scheduled_tasks::service_log_context(&self.0.db, service_id).await
+        else {
+            return Vec::new();
+        };
+        let owner = Owner {
+            morph: "App\\Models\\Service",
+            id: service_id,
+            team_id,
+            project_id,
+            environment_id,
+        };
+        self.owner_log_redaction_secrets(&owner, redact_all, server_id, false, false)
+            .await
+            .1
     }
 
     async fn application_log_redaction_secrets(
         &self,
         app: &ApplicationRow,
-        server_id: i64,
+        server_id: Option<i64>,
         include_preview: bool,
         resolve_remote: bool,
     ) -> (Vec<String>, Vec<String>) {
@@ -972,14 +1024,28 @@ impl Jobs {
             .get("redact_all_env_values_in_logs")
             .and_then(Value::as_bool)
             != Some(false);
-        self.owner_log_redaction_secrets(
-            &owner,
-            redact_all,
-            Some(server_id),
-            include_preview,
-            resolve_remote,
-        )
-        .await
+        let (known, locked) = self
+            .owner_log_redaction_secrets(
+                &owner,
+                redact_all,
+                server_id,
+                include_preview,
+                resolve_remote,
+            )
+            .await;
+        // The HTTPS credential of the repository and its Basic auth header value come first.
+        let mut all = Vec::new();
+        if let Some(password) =
+            git::git_https_password(app, self.0.encrypter.as_ref()).filter(|p| !p.trim().is_empty())
+        {
+            all.push(git::git_https_basic_token(
+                app.str("git_https_username"),
+                &password,
+            ));
+            all.insert(0, password);
+        }
+        all.extend(locked);
+        (known, all)
     }
 
     /// `logRedactionSecretsFor($service)`.
@@ -1676,6 +1742,7 @@ impl Run {
                 env::load_raw_for(&self.jobs.0.db, enc, &owner, Some(self.main_server.id))
                     .await
                     .map_err(Fail::new)?;
+            self.apply_exact_escaping(&mut vars);
             self.resolve_remote_secrets(&mut vars).await?;
             vars
         };

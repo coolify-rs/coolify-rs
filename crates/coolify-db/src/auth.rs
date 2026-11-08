@@ -19,6 +19,8 @@ pub struct AccessToken {
     /// Raw `team_id` column (a string upstream).
     pub team_id_raw: String,
     pub abilities_raw: Option<String>,
+    /// `scopes` (upstream 4.6.0; absent before): the token's access grants, raw JSON.
+    pub scopes_raw: Option<String>,
 }
 
 impl AccessToken {
@@ -38,10 +40,27 @@ struct TokenRow {
     team_id: String,
     abilities: Option<String>,
     expires_at: Option<NaiveDateTime>,
+    scopes: Option<String>,
+    paused_at: Option<NaiveDateTime>,
 }
 
-const TOKEN_COLUMNS: &str =
-    "id, name, tokenable_type, tokenable_id, token, team_id, abilities, expires_at";
+/// The token columns; `scopes` and `paused_at` exist from upstream 4.6.0 on.
+fn token_columns(db: &Db) -> String {
+    let scopes = if crate::access::has_token_scopes_column(db) {
+        "scopes::text"
+    } else {
+        "NULL::text"
+    };
+    let paused = if crate::access::has_token_paused_column(db) {
+        "paused_at"
+    } else {
+        "NULL::timestamp"
+    };
+    format!(
+        "id, name, tokenable_type, tokenable_id, token, team_id, abilities, expires_at, \
+         {scopes} AS scopes, {paused} AS paused_at"
+    )
+}
 
 /// Sanctum `PersonalAccessToken::findToken` + guard checks (expiry, tokenable).
 pub async fn find_token(
@@ -52,7 +71,8 @@ pub async fn find_token(
     let row: Option<TokenRow> = match parsed.id {
         Some(id) => {
             let row: Option<TokenRow> = sqlx::query_as(&format!(
-                "SELECT {TOKEN_COLUMNS} FROM personal_access_tokens WHERE id = $1"
+                "SELECT {} FROM personal_access_tokens WHERE id = $1",
+                token_columns(db)
             ))
             .bind(id)
             .fetch_optional(db.pool())
@@ -61,7 +81,8 @@ pub async fn find_token(
         }
         None => {
             sqlx::query_as(&format!(
-                "SELECT {TOKEN_COLUMNS} FROM personal_access_tokens WHERE token = $1"
+                "SELECT {} FROM personal_access_tokens WHERE token = $1",
+                token_columns(db)
             ))
             .bind(hash_token(parsed.plaintext))
             .fetch_optional(db.pool())
@@ -73,6 +94,10 @@ pub async fn find_token(
         return Ok(None);
     }
     if row.tokenable_type != USER_MORPH {
+        return Ok(None);
+    }
+    // `Sanctum::authenticateAccessTokensUsing`: a paused token does not authenticate.
+    if row.paused_at.is_some() {
         return Ok(None);
     }
     // The tokenable must still exist.
@@ -89,6 +114,7 @@ pub async fn find_token(
         user_id: row.tokenable_id,
         team_id_raw: row.team_id,
         abilities_raw: row.abilities,
+        scopes_raw: row.scopes,
     }))
 }
 

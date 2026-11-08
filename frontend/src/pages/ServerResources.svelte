@@ -8,9 +8,12 @@
   import ServerFrame from '../components/ServerFrame.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
   import StatusBadge from '../components/StatusBadge.svelte';
+  import SortHeader from '../components/SortHeader.svelte';
+  import RowActions from '../components/RowActions.svelte';
+  import RowAction from '../components/RowAction.svelte';
   import { get, post, failure } from '../lib/serverApi';
   import { link } from '../lib/router.svelte';
-  import { strnatcmp } from '../lib/natsort';
+  import { strnatcasecmp } from '../lib/natsort';
   import { session } from '../lib/session.svelte';
   import { notify } from '../lib/toast.svelte';
 
@@ -36,6 +39,7 @@
   let search = $state('');
   let page = $state(1);
   let pageSize = $state(10);
+  let sort = $state('name_asc');
   let loading = $state<'managed' | 'unmanaged' | null>(null);
   const base = $derived(`/server-page/${encodeURIComponent(uuid)}/resources`);
   const canEdit = $derived(session.isAdmin);
@@ -52,6 +56,7 @@
   async function loadManaged() {
     if (tab !== 'managed') {
       search = '';
+      sort = 'name_asc';
       page = 1;
     }
     tab = 'managed';
@@ -67,6 +72,7 @@
   async function loadUnmanaged() {
     if (tab !== 'unmanaged') {
       search = '';
+      sort = 'name_asc';
       page = 1;
     }
     tab = 'unmanaged';
@@ -94,8 +100,37 @@
   }
 
   const q = $derived(search.trim().toLowerCase());
-  const managedRows = $derived([...resources].sort((a, b) => strnatcmp(a.name ?? '', b.name ?? '')).filter((r) => !q || (r.name ?? '').toLowerCase().includes(q)));
-  const unmanagedRows = $derived([...containers].sort((a, b) => strnatcmp(a.Names ?? '', b.Names ?? '')).filter((c) => !q || (c.Names ?? '').toLowerCase().includes(q)));
+  // `Resources::sortColumns()` of each tab.
+  const managedColumns: Record<string, (r: Resource) => string> = {
+    name: (r) => r.name ?? '',
+    project: (r) => r.project ?? '',
+    environment: (r) => r.environment ?? '',
+    type: (r) => r.type ?? '',
+    status: (r) => r.status ?? '',
+  };
+  const unmanagedColumns: Record<string, (c: Container) => string> = {
+    name: (c) => c.Names ?? '',
+    image: (c) => c.Image ?? '',
+    status: (c) => c.State ?? '',
+  };
+  // `Resources::render()`: by name, then (stable) by the chosen column, natural and case-insensitive.
+  function sorted<T>(list: T[], columns: Record<string, (t: T) => string>): T[] {
+    const [column, direction = 'asc'] = sort.split(/_(.*)/s);
+    const value = columns[column] ?? columns.name;
+    const order = direction === 'desc' ? -1 : 1;
+    return [...list]
+      .sort((a, b) => strnatcasecmp(columns.name(a), columns.name(b)))
+      .sort((a, b) => order * strnatcasecmp(value(a), value(b)));
+  }
+  // `Resources::setSort()`: back to the first page.
+  function setSort(value: string) {
+    const m = /^(\w+)_(asc|desc)$/.exec(value);
+    if (!m || !(m[1] in (tab === 'managed' ? managedColumns : unmanagedColumns))) return;
+    sort = value;
+    page = 1;
+  }
+  const managedRows = $derived(sorted(resources, managedColumns).filter((r) => !q || (r.name ?? '').toLowerCase().includes(q)));
+  const unmanagedRows = $derived(sorted(containers, unmanagedColumns).filter((c) => !q || (c.Names ?? '').toLowerCase().includes(q)));
   const total = $derived(tab === 'managed' ? managedRows.length : unmanagedRows.length);
   $effect(() => {
     const last = Math.max(1, Math.ceil(total / pageSize));
@@ -152,13 +187,13 @@
           <div class="transition-all">
             {#if tab === 'managed'}
               {#if total > 0}
-                <div class="data-table">
+                <div class="data-table transition-opacity">
                   <div class="data-table-header server-resources-managed-table-grid">
-                    <span>Name</span>
-                    <span>Project</span>
-                    <span>Environment</span>
-                    <span>Type</span>
-                    <span>Status</span>
+                    <SortHeader label="Name" asc="name_asc" desc="name_desc" current={sort} onsort={setSort} server />
+                    <SortHeader label="Project" asc="project_asc" desc="project_desc" current={sort} onsort={setSort} server />
+                    <SortHeader label="Environment" asc="environment_asc" desc="environment_desc" current={sort} onsort={setSort} server />
+                    <SortHeader label="Type" asc="type_asc" desc="type_desc" current={sort} onsort={setSort} server />
+                    <SortHeader label="Status" asc="status_asc" desc="status_desc" current={sort} onsort={setSort} server />
                   </div>
                   {#each slice(managedRows) as r (r.type + r.uuid)}
                     <div class="data-table-row server-resources-managed-table-grid border-b border-neutral-200 last:border-b-0 dark:border-white/[0.08]">
@@ -187,12 +222,12 @@
                 </div>
               {/if}
             {:else if total > 0}
-              <div class="data-table">
+              <div class="data-table transition-opacity">
                 <div class="data-table-header server-resources-unmanaged-table-grid">
-                  <span>Name</span>
-                  <span>Image</span>
-                  <span>Status</span>
-                  <span>Actions</span>
+                  <SortHeader label="Name" asc="name_asc" desc="name_desc" current={sort} onsort={setSort} server />
+                  <SortHeader label="Image" asc="image_asc" desc="image_desc" current={sort} onsort={setSort} server />
+                  <SortHeader label="Status" asc="status_asc" desc="status_desc" current={sort} onsort={setSort} server />
+                  <span class="text-right">Actions</span>
                 </div>
                 {#each slice(unmanagedRows) as c (c.ID)}
                   <div class="data-table-row server-resources-unmanaged-table-grid border-b border-neutral-200 last:border-b-0 dark:border-white/[0.08]">
@@ -201,14 +236,28 @@
                     <div>
                       <StatusBadge label={headline(c.State ?? 'unknown')} type={c.State === 'running' ? 'success' : c.State === 'exited' ? 'error' : 'warning'} />
                     </div>
-                    <div class="flex flex-wrap items-center gap-2">
-                      {#if c.State === 'running'}
-                        <button type="button" class="button" disabled={!canEdit} onclick={() => act('restart', c.ID)}>Restart</button>
-                        <button type="button" class="button button-error" disabled={!canEdit} onclick={() => act('stop', c.ID)}>Stop</button>
-                      {:else if c.State === 'exited'}
-                        <button type="button" class="button" disabled={!canEdit} onclick={() => act('start', c.ID)}>Start</button>
-                      {:else if c.State === 'restarting'}
-                        <button type="button" class="button" disabled={!canEdit} onclick={() => act('stop', c.ID)}>Stop</button>
+                    <div class="flex justify-end">
+                      {#if canEdit}
+                        {#if c.State === 'running'}
+                          <RowActions label="Container actions">
+                            <RowAction onclick={() => act('restart', c.ID)}>Restart</RowAction>
+                            <RowAction onclick={() => act('stop', c.ID)}>Stop</RowAction>
+                          </RowActions>
+                        {:else if c.State === 'exited'}
+                          <button type="button" class="icon-button shrink-0" title="Start container" aria-label="Start container" onclick={() => act('start', c.ID)}>
+                            <Reicon name="play-circle" class="size-3.5" />
+                          </button>
+                        {:else if c.State === 'restarting'}
+                          <button
+                            type="button"
+                            class="icon-button shrink-0 text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
+                            title="Stop container"
+                            aria-label="Stop container"
+                            onclick={() => act('stop', c.ID)}
+                          >
+                            <Reicon name="stop-circle" class="size-3.5" />
+                          </button>
+                        {/if}
                       {/if}
                     </div>
                   </div>

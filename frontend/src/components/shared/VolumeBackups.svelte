@@ -11,6 +11,8 @@
   import Listbox from '../Listbox.svelte';
   import Pager from '../Pager.svelte';
   import Reicon from '../Reicon.svelte';
+  import RowActions from '../RowActions.svelte';
+  import RowAction from '../RowAction.svelte';
   import SettingsSection from '../SettingsSection.svelte';
   import StatusBadge from '../StatusBadge.svelte';
   import UnsavedBar from '../UnsavedBar.svelte';
@@ -119,6 +121,10 @@
   let deletingExecution = $state<VolumeExecution | null>(null);
   let cleaning = $state(false);
 
+  async function retryRecovery(id: number) {
+    await volumeBackupsUi.retryRecovery(kind, uuid, backupUuid, id);
+    await loadExecutions();
+  }
   async function loadExecutions() {
     const r = await volumeBackupsUi.executions(kind, uuid, backupUuid, page, perPage);
     executions = r.executions;
@@ -290,21 +296,18 @@
                         <Reicon name="upload" class="size-3.5 rotate-180" />
                       </button>
                     {/if}
-                    {#if recoveryPending(e)}
-                      <button
-                        type="button"
-                        class="icon-button shrink-0"
-                        onclick={async () => {
-                          await volumeBackupsUi.retryRecovery(kind, uuid, backupUuid, e.id);
-                          await loadExecutions();
-                        }}
-                        title="Retry recovery"
-                        aria-label="Retry recovery"
-                      >
+                    {#if recoveryPending(e) && e.status !== 'running'}
+                      <RowActions label="Backup actions">
+                        <RowAction onclick={() => retryRecovery(e.id)}>Retry recovery</RowAction>
+                        {#snippet danger()}
+                          <RowAction onclick={() => (deletingExecution = e)}>Delete</RowAction>
+                        {/snippet}
+                      </RowActions>
+                    {:else if recoveryPending(e)}
+                      <button type="button" class="icon-button shrink-0" onclick={() => retryRecovery(e.id)} title="Retry recovery" aria-label="Retry recovery">
                         <Reicon name="refresh" class="size-3.5" />
                       </button>
-                    {/if}
-                    {#if e.status !== 'running'}
+                    {:else if e.status !== 'running'}
                       <button
                         type="button"
                         class="icon-button shrink-0 text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"

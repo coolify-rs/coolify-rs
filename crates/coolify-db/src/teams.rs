@@ -114,18 +114,43 @@ pub struct MemberRow {
     pub two_factor: bool,
     pub avatar_path: Option<String>,
     pub updated_at: Option<NaiveDateTime>,
+    /// Raw `team_user.access` (upstream 4.6.0), `None` before that migration or for the default.
+    pub access: Option<String>,
 }
 
-/// `currentTeam()->members` with the pivot role (no ORDER BY, like Eloquent).
+/// `currentTeam()->members` with the pivot role and access (no ORDER BY, like Eloquent).
 pub async fn member_rows(db: &Db, team_id: TeamId) -> DbResult<Vec<MemberRow>> {
-    Ok(sqlx::query_as(
+    let access = if crate::access::has_member_access_column(db) {
+        "tu.access::text"
+    } else {
+        "NULL::text"
+    };
+    Ok(sqlx::query_as(&format!(
         "SELECT u.id, u.name, u.email, COALESCE(tu.role, 'member') AS role, \
-                (u.two_factor_confirmed_at IS NOT NULL) AS two_factor, u.avatar_path, u.updated_at \
-         FROM users u JOIN team_user tu ON tu.user_id = u.id WHERE tu.team_id = $1",
-    )
+                (u.two_factor_confirmed_at IS NOT NULL) AS two_factor, u.avatar_path, u.updated_at, \
+                {access} AS access \
+         FROM users u JOIN team_user tu ON tu.user_id = u.id WHERE tu.team_id = $1"
+    ))
     .bind(team_id)
     .fetch_all(db.pool())
     .await?)
+}
+
+/// `updateExistingPivot($teamId, ['access' => ...])`: the member's grants as stored JSON.
+pub async fn set_member_access(
+    db: &Db,
+    team_id: TeamId,
+    user_id: i64,
+    access: Option<&str>,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query("UPDATE team_user SET access = $3::json WHERE team_id = $1 AND user_id = $2")
+        .bind(team_id)
+        .bind(user_id)
+        .bind(access)
+        .execute(db.pool())
+        .await?;
+    Ok(())
 }
 
 const USER_TOKENABLE: &str = "App\\Models\\User";
@@ -143,12 +168,18 @@ pub async fn set_member_role(db: &Db, team_id: TeamId, user_id: i64, role: Role)
     .bind(user_id)
     .fetch_optional(&mut *tx)
     .await?;
-    sqlx::query("UPDATE team_user SET role = $3 WHERE team_id = $1 AND user_id = $2")
-        .bind(team_id)
-        .bind(user_id)
-        .bind(role.as_str())
-        .execute(&mut *tx)
-        .await?;
+    // A member gets the default team-wide access again (upstream 4.6.0).
+    let reset_access = role == Role::Member && crate::access::has_member_access_column(db);
+    sqlx::query(if reset_access {
+        "UPDATE team_user SET role = $3, access = NULL WHERE team_id = $1 AND user_id = $2"
+    } else {
+        "UPDATE team_user SET role = $3 WHERE team_id = $1 AND user_id = $2"
+    })
+    .bind(team_id)
+    .bind(user_id)
+    .bind(role.as_str())
+    .execute(&mut *tx)
+    .await?;
     // `Role::from($this->getMemberRole())`: a missing role is a member.
     let previous = previous
         .as_deref()

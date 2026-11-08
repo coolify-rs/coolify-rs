@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use super::backup::compressor_command;
 use super::common::{helper_image, now, slug};
-use super::s3::{S3Target, minio_resolve_options};
+use super::s3::{S3Target, minio_client_resolve_options};
 use crate::Jobs;
 use crate::notifications::{Notification, VolumeBackup, notify};
 use crate::server::ServerInfo;
@@ -508,14 +508,16 @@ impl Jobs {
         };
         let script = archive_script(percentage);
         let mut path_style = false;
+        let mut stream_resolve = String::new();
         let mut archive = if stream {
             vb::update_execution(db, execution, &[F::LocalDeleted(true)], now())
                 .await
                 .map_err(text)?;
-            let (command, tested_style) = self
-                .stream_to_s3_command(&destinations[0], &script, location, &container)
+            let (command, tested_style, resolve) = self
+                .stream_to_s3_command(run, &destinations[0], &script, location, &container, &image)
                 .await?;
             path_style = tested_style;
+            stream_resolve = resolve;
             vb::update_execution(db, execution, &[F::CleanupPending(true)], now())
                 .await
                 .map_err(text)?;
@@ -576,6 +578,7 @@ impl Jobs {
                     &container,
                     &image,
                     path_style,
+                    &stream_resolve,
                 )
                 .await?;
             }
@@ -760,7 +763,8 @@ impl Jobs {
         let path_style = self.test_s3_connection(row).await?;
         let s3 = S3Target::from_row(enc, row)?;
         let name = quote(&format!("volume-upload-{execution_uuid}"));
-        let resolve = resolve_flags(&s3.endpoint).await;
+        let resolve =
+            minio_client_resolve_options(self, &run.target, &s3.endpoint, image, None).await;
         let commands = [
             format!("docker rm -f {name} >/dev/null 2>&1 || true"),
             format!(
@@ -819,6 +823,7 @@ impl Jobs {
         container: &str,
         image: &str,
         path_style: bool,
+        resolve: &str,
     ) -> Result<(), String> {
         let enc = self
             .0
@@ -842,8 +847,7 @@ impl Jobs {
             .run(&run.target, &refs, RunOptions::op(OP).timeout(run.timeout))
             .await
             .map_err(|e| e.message)?;
-        let resolve = resolve_flags(&s3.endpoint).await;
-        let alias = super::backup::minio_alias_command(container, &resolve, &s3, path_style);
+        let alias = super::backup::minio_alias_command(container, resolve, &s3, path_style);
         self.remote()
             .run(&run.target, &[alias.as_str()], RunOptions::op(OP))
             .await
@@ -851,14 +855,17 @@ impl Jobs {
             .map_err(|e| e.message)
     }
 
-    /// `streamToS3Command`: runs in the helper of [`Self::start_stream_helper`].
+    /// `streamToS3Command`: runs in the helper of [`Self::start_stream_helper`]. Also returns the
+    /// tested path style and the `--resolve` option, which the helper's alias uses too.
     async fn stream_to_s3_command(
         &self,
+        run: &Run,
         row: &Record,
         script: &str,
         location: &str,
         container: &str,
-    ) -> Result<(String, bool), String> {
+        image: &str,
+    ) -> Result<(String, bool, String), String> {
         let path_style = self.test_s3_connection(row).await?;
         let enc = self
             .0
@@ -866,7 +873,8 @@ impl Jobs {
             .as_ref()
             .ok_or("No application encryption key has been specified.")?;
         let s3 = S3Target::from_row(enc, row)?;
-        let resolve = resolve_flags(&s3.endpoint).await;
+        let resolve =
+            minio_client_resolve_options(self, &run.target, &s3.endpoint, image, None).await;
         let destination = quote(&format!("temporary/{}{location}", s3.bucket));
         let log = "/tmp/mc-pipe.log";
         let stream = format!(
@@ -879,6 +887,7 @@ impl Jobs {
         Ok((
             format!("docker exec {} sh -c {}", quote(container), quote(&stream)),
             path_style,
+            resolve,
         ))
     }
 
@@ -1201,18 +1210,4 @@ impl Jobs {
 
 fn backup_id_of(backup: &Record) -> i64 {
     parts::id_of(backup)
-}
-
-async fn resolve_flags(endpoint: &str) -> String {
-    let joined = minio_resolve_options(endpoint)
-        .await
-        .iter()
-        .map(|o| format!("--resolve {}", quote(o)))
-        .collect::<Vec<_>>()
-        .join(" ");
-    if joined.is_empty() {
-        joined
-    } else {
-        format!(" {joined}")
-    }
 }

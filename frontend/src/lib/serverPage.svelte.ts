@@ -10,7 +10,7 @@ export async function loadServerContext(uuid: string, active: string, sub?: stri
   const [list] = await Promise.all([serversUi.list(), pluginNav.ready()]);
   const facts = list.servers.find((s) => s.uuid === uuid);
   if (!facts) return null;
-  page.navContext = serverNavContext(facts, active, session.isAdmin, sub, pluginNav.of('server').length > 0);
+  page.navContext = { ...serverNavContext(facts, active, session.isAdmin, sub, pluginNav.of('server').length > 0), name: facts.name };
   page.server = {
     uuid: facts.uuid,
     name: facts.name,

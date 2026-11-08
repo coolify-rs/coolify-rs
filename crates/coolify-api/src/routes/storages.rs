@@ -30,6 +30,7 @@ use crate::routes::env_vars::magic_uuid;
 use crate::serialize::php_truthy;
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 /// `ValidationPatterns::VOLUME_NAME_PATTERN`.
 static VOLUME_NAME: LazyLock<Regex> = LazyLock::new(|| {
@@ -751,7 +752,7 @@ pub async fn application_create(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(APP_NOT_FOUND_PERIOD)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let resource = StorageResource::application(&state, &a).await?;
@@ -771,7 +772,7 @@ pub async fn application_update(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(APP_NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Write, &a) {
         return Err(ApiError::Unauthorized);
     }
     let resource = StorageResource::application(&state, &a).await?;
@@ -792,7 +793,7 @@ pub async fn application_delete(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(APP_NOT_FOUND_PERIOD)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Delete, &a) {
         return Err(ApiError::Unauthorized);
     }
     let resource = StorageResource::application(&state, &a).await?;

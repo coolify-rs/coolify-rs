@@ -2,6 +2,7 @@
   // Port of upstream livewire/project/shared/environment-variable/all.blade.php and add.blade.php
   // (Project\Shared\EnvironmentVariable\All, Add).
   import Reicon from '../Reicon.svelte';
+  import SortHeader from '../SortHeader.svelte';
   import Modal from '../Modal.svelte';
   import FormInput from '../FormInput.svelte';
   import FormTextarea from '../FormTextarea.svelte';
@@ -157,10 +158,16 @@
     load();
   }
 
-  function setTableSort(v: string) {
+  let sortRunning = $state(false);
+  async function setTableSort(v: string) {
     tableSort = v;
     page = 1;
-    load();
+    sortRunning = true;
+    try {
+      await load();
+    } finally {
+      sortRunning = false;
+    }
   }
 
   function clearFilters() {
@@ -434,6 +441,8 @@
             {/snippet}
           </Dropdown>
         </div>
+        <!-- The table header, with its Name sort, is hidden on small screens (app.css, max-width: 768px). -->
+        <div class="min-[769px]:hidden">
         <div class="table-sort">
           <Dropdown panelClass="w-44!">
             {#snippet trigger({ open })}
@@ -459,6 +468,7 @@
             {/snippet}
           </Dropdown>
         </div>
+        </div>
         {#if canManage}
           <button type="button" class="button button-highlighted" onclick={openAdd}>
             <Reicon name="plus" class="size-3.5" />
@@ -482,13 +492,13 @@
             <div class="environment-table-scroll relative">
               <div class="transition-all">
                 <div class="data-table-header env-table-grid env-table-grid-no-type">
-                  <span>Name</span>
+                  <SortHeader label="Name" asc="name_asc" desc="name_desc" current={tableSort} onsort={setTableSort} server loading={sortRunning} />
                   <span class="text-center">Managed</span>
                   <span class="text-center">Literal</span>
                   <span class="text-center">Multiline</span>
                   <span class="text-center">Buildtime</span>
                   <span class="text-center">Runtime</span>
-                  <span></span>
+                  <span class="text-right">Actions</span>
                 </div>
                 {#each rows as row, i (row.row_id)}
                   {#if showPreview && row.scope !== rows[i - 1]?.scope}

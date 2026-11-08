@@ -4,6 +4,7 @@
   import ViewToggle from '../components/ViewToggle.svelte';
   import Empty from '../components/Empty.svelte';
   import Dropdown from '../components/Dropdown.svelte';
+  import SortHeader from '../components/SortHeader.svelte';
   import Pager from '../components/Pager.svelte';
   import Modal from '../components/Modal.svelte';
   import FormInput from '../components/FormInput.svelte';
@@ -54,20 +55,29 @@
     { value: 'default', label: 'Default' },
     { value: 'name-asc', label: 'Name A–Z' },
     { value: 'name-desc', label: 'Name Z–A' },
-    { value: 'resources', label: 'Most resources' },
+    { value: 'resources-desc', label: 'Most resources' },
   ];
+  const sortEnvironments = (value: string) => ((sortBy = value), (page = 1));
   const filtered = $derived.by(() => {
     const query = search.trim().toLowerCase();
     const list = ordered.filter((e) => {
       const searchable = [e.name, e.description].filter(Boolean).join(' ').toLowerCase();
       return !query || searchable.includes(query);
     });
-    return list.sort((a, b) => {
-      if (sortBy === 'name-desc') return b.name.localeCompare(a.name);
-      if (sortBy === 'resources') return b.resources - a.resources || a.name.localeCompare(b.name);
-      if (sortBy === 'name-asc') return a.name.localeCompare(b.name);
-      return 0;
-    });
+    const [column, direction] = sortBy.split('-');
+    type Env = (typeof list)[number];
+    const sortValues: Record<string, (e: Env) => string | number> = {
+      name: (e) => e.name,
+      resources: (e) => Number(e.resources),
+      description: (e) => e.description || '',
+    };
+    const sortValue = sortValues[column];
+    // Default: the server order (production, staging, development, then by name).
+    if (!sortValue) return list;
+    const order = direction === 'desc' ? -1 : 1;
+    const compare = (a: string | number, b: string | number) =>
+      typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b));
+    return list.sort((a, b) => order * compare(sortValue(a), sortValue(b)) || a.name.localeCompare(b.name));
   });
   const totalPages = $derived(Math.max(1, Math.ceil(filtered.length / pageSize)));
   $effect.pre(() => {
@@ -76,8 +86,8 @@
   const paginated = $derived(filtered.slice((page - 1) * pageSize, page * pageSize));
 
   const href = (e: E) => `/project/${uuid}/environment/${e.uuid}`;
-  const settingsHref = (e: E) => (data?.can_update ? `/project/${uuid}/environment/${e.uuid}/edit` : null);
-  const addResourceHref = (e: E) => (data?.can_create ? `/project/${uuid}/environment/${e.uuid}/new` : null);
+  const settingsHref = (e: E) => ((e.can_update ?? data?.can_update) ? `/project/${uuid}/environment/${e.uuid}/edit` : null);
+  const addResourceHref = (e: E) => ((e.can_create ?? data?.can_create) ? `/project/${uuid}/environment/${e.uuid}/new` : null);
   const iconLink =
     'flex items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-black dark:text-fg-faint dark:hover:bg-white/[0.06] dark:hover:text-fg';
 
@@ -165,6 +175,7 @@
             {/if}
           </div>
           <div class="flex flex-wrap items-center gap-2">
+            <div class={view.mode === 'grid' ? '' : 'min-[641px]:hidden'}>
             <Dropdown panelClass="w-48!">
               {#snippet trigger({ open })}
                 <button type="button" class="button" aria-haspopup="listbox" aria-expanded={open}>
@@ -184,7 +195,7 @@
                 {#each sortOptions as option (option.value)}
                   <button
                     type="button"
-                    class="flex h-9 w-full items-center rounded-md px-2 text-left text-[12px] text-neutral-600 transition-colors hover:bg-neutral-100 hover:text-black dark:text-fg-dim dark:hover:bg-white/[0.06] dark:hover:text-fg"
+                    class="listbox-option"
                     onclick={() => ((sortBy = option.value), close(), (page = 1))}
                   >
                     <span class="flex-1">{option.label}</span>
@@ -197,6 +208,7 @@
                 {/each}
               {/snippet}
             </Dropdown>
+            </div>
             <ViewToggle canvasUrl="/project/{uuid}/canvas" bind:mode={() => view.mode, (m) => ((view.mode = m), (page = 1))} />
           </div>
         </div>
@@ -263,10 +275,10 @@
             <div
               class="environments-table-grid border-b border-neutral-200 bg-neutral-50 px-4 py-2.5 text-[11px] font-medium text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-fg-faint"
             >
-              <div>Environment</div>
-              <div class="environment-resource-count">Resources</div>
-              <div class="environment-description">Description</div>
-              <div></div>
+              <SortHeader label="Environment" asc="name-asc" desc="name-desc" current={sortBy} onsort={sortEnvironments} />
+              <SortHeader label="Resources" asc="resources-asc" desc="resources-desc" first="desc" current={sortBy} onsort={sortEnvironments} class="environment-resource-count" />
+              <SortHeader label="Description" asc="description-asc" desc="description-desc" current={sortBy} onsort={sortEnvironments} class="environment-description" />
+              <span class="text-right">Actions</span>
             </div>
             {#each paginated as e (e.uuid)}
               <div

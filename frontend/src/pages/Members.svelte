@@ -9,8 +9,13 @@
   import TeamLayout from '../components/TeamLayout.svelte';
   import Callout from '../components/Callout.svelte';
   import FormInput from '../components/FormInput.svelte';
+  import RowActions from '../components/RowActions.svelte';
+  import RowAction from '../components/RowAction.svelte';
+  import ConfirmModal from '../components/ConfirmModal.svelte';
+  import SortHeader from '../components/SortHeader.svelte';
+  import MemberAccessEditor from '../components/MemberAccessEditor.svelte';
   import { session } from '../lib/session.svelte';
-  import { teamsUi, type InvitationsData } from '../lib/teamsApi';
+  import { teamsUi, type AccessRow, type InvitationsData, type InvitationRow, type StoredGrant } from '../lib/teamsApi';
   import { teamUi, ApiError, type Role, type TeamPageData } from '../lib/api';
   import { notify } from '../lib/toast.svelte';
 
@@ -19,11 +24,17 @@
   let data = $state<TeamPageData | null>(null);
   let search = $state('');
   let roleFilter = $state('all');
-  let sortBy = $state('name_asc');
+  let sortBy = $state('name-asc');
   let page = $state(1);
   let perPage = $state(10);
-  let menuFor = $state<number | null>(null);
-  let menuStyle = $state('');
+  let removing = $state<M | null>(null);
+  let revokingInvite = $state<InvitationRow | null>(null);
+  let inviteSort = $state<string | null>(null);
+  /** The access editor (`livewire:team.member.access`). */
+  let editor = $state<{ title: string; summary: string | null; rows: AccessRow[]; memberId: number | null; forInvitation: boolean } | null>(null);
+  /** `InviteLink::$grants`: `defaultMemberGrants()` until the editor sets others. */
+  let inviteGrants = $state<StoredGrant[]>([{ scope: 'team', uuid: null, levels: ['read'] }]);
+  let inviteSummary = $state('Team: read');
 
   let invitations = $state<InvitationsData | null>(null);
   let inviteEmail = $state('');
@@ -50,7 +61,7 @@
     inviteBusy = true;
     inviteError = null;
     try {
-      const r = await teamsUi.invite(inviteEmail, inviteRole, via);
+      const r = await teamsUi.invite(inviteEmail, inviteRole, via, inviteGrants);
       notify.success(r.message);
       // `$this->email = strtolower($this->email)` once validation passed.
       inviteEmail = inviteEmail.toLowerCase();
@@ -85,19 +96,25 @@
     }
   }
 
+  const roleRank = (role: string) => ({ member: 1, admin: 2, owner: 3 })[role] ?? 0;
   const filtered = $derived.by(() => {
     const q = search.trim().toLowerCase();
+    const [column, direction] = sortBy.split('-');
+    const order = direction === 'desc' ? -1 : 1;
+    const byName = (l: M, r: M) => String(l.name || '').localeCompare(String(r.name || ''));
+    const compare =
+      {
+        name: byName,
+        email: (l: M, r: M) => String(l.email || '').localeCompare(String(r.email || '')),
+        role: (l: M, r: M) => roleRank(l.role) - roleRank(r.role),
+        twofa: (l: M, r: M) => Number(l.two_factor) - Number(r.two_factor),
+      }[column] ?? byName;
     return (data?.members ?? [])
       .filter((m) => {
         const matchesSearch = !q || [m.name, m.email, m.role].some((v) => String(v || '').toLowerCase().includes(q));
         return matchesSearch && (roleFilter === 'all' || m.role === roleFilter);
       })
-      .sort((l, r) => {
-        if (sortBy === 'name_desc') return r.name.localeCompare(l.name);
-        if (sortBy === 'email_asc') return l.email.localeCompare(r.email);
-        if (sortBy === 'role') return l.role.localeCompare(r.role);
-        return l.name.localeCompare(r.name);
-      });
+      .sort((l, r) => order * compare(l, r) || byName(l, r));
   });
   const lastPage = $derived(Math.max(1, Math.ceil(filtered.length / perPage)));
   $effect.pre(() => {
@@ -108,19 +125,7 @@
   const withoutTwoFactor = $derived((data?.members ?? []).filter((m) => m.two_factor === false).length);
   const total = $derived(data?.members.length ?? 0);
 
-  function openMenu(e: MouseEvent, id: number) {
-    if (menuFor === id) {
-      menuFor = null;
-      return;
-    }
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    // x-anchor.bottom-end.fixed.offset.4: right-aligned below the trigger (w-36 = 9rem).
-    menuStyle = `position: fixed; top: ${r.bottom + 4}px; left: ${r.right - 144}px;`;
-    menuFor = id;
-  }
-
   async function act(m: M, action: Role | 'remove') {
-    menuFor = null;
     try {
       if (action === 'remove') await teamUi.remove(m.id);
       else await teamUi.setRole(m.id, action);
@@ -132,12 +137,47 @@
   }
 
   const gridClass = $derived(`team-members-table-grid ${manage ? 'team-members-table-grid-2fa' : ''}`);
-</script>
 
-<svelte:window
-  onclick={(e) => menuFor !== null && !(e.target as HTMLElement).closest('[data-member-menu]') && (menuFor = null)}
-  onkeydown={(e) => e.key === 'Escape' && (menuFor = null)}
-/>
+  /** `open-member-access`. */
+  async function editAccess(m: M) {
+    try {
+      const r = await teamsUi.memberAccess(m.id);
+      editor = { title: r.title, summary: r.summary, rows: r.rows, memberId: m.id, forInvitation: false };
+    } catch (e) {
+      notify.failure(e instanceof ApiError ? e.message : String(e));
+    }
+  }
+
+  /** `open-invitation-access`: the editor starts from the invite form's grants. */
+  function editInvitationAccess() {
+    const groups = new Map<string, AccessRow>();
+    const names: Record<string, string> = { read: 'Read', 'read:sensitive': 'ReadSensitive', deploy: 'Deploy', write: 'Write', delete: 'Delete', root: 'Root' };
+    for (const g of inviteGrants) {
+      const levels = g.levels.map((l) => names[l]).filter(Boolean);
+      const k = levels.join(',');
+      const target = g.scope === 'team' ? 'team' : `${g.scope}:${g.uuid}`;
+      const row = groups.get(k) ?? { key: Math.random().toString(36).slice(2, 12), targets: [], levels: Object.fromEntries(Object.values(names).map((n) => [n, levels.includes(n)])) };
+      if (!row.targets.includes(target)) row.targets.push(target);
+      groups.set(k, row);
+    }
+    editor = { title: 'Access for the invited member', summary: null, rows: [...groups.values()], memberId: null, forInvitation: true };
+  }
+
+  /** `Invitations::setSort`. */
+  const invitationRows = $derived.by(() => {
+    const list = [...(invitations?.invitations ?? [])];
+    if (inviteSort === null) return list;
+    const [column, direction] = inviteSort.split('-');
+    const order = direction === 'desc' ? -1 : 1;
+    const value = (i: InvitationRow): number | string =>
+      column === 'role' ? roleRank(i.role) : String((i as unknown as Record<string, unknown>)[column] ?? '').toLowerCase();
+    return list.sort((l, r) => {
+      const a = value(l);
+      const b = value(r);
+      return order * (a < b ? -1 : a > b ? 1 : 0) || l.email.toLowerCase().localeCompare(r.email.toLowerCase());
+    });
+  });
+</script>
 
 <div>
   <TeamLayout>
@@ -182,16 +222,17 @@
                 ]}
               />
             </div>
-            <div class="w-full sm:w-40">
+            <div class="w-full sm:w-40 min-[901px]:hidden">
               <Listbox
                 id="member-sort"
                 bind:value={sortBy}
                 onchange={() => (page = 1)}
                 options={[
-                  { value: 'name_asc', label: 'Name A–Z' },
-                  { value: 'name_desc', label: 'Name Z–A' },
-                  { value: 'email_asc', label: 'Email A–Z' },
-                  { value: 'role', label: 'Role' },
+                  { value: 'name-asc', label: 'Name A–Z' },
+                  { value: 'name-desc', label: 'Name Z–A' },
+                  { value: 'email-asc', label: 'Email A–Z' },
+                  { value: 'email-desc', label: 'Email Z–A' },
+                  { value: 'role-desc', label: 'Role' },
                 ]}
               />
             </div>
@@ -213,10 +254,10 @@
         {#if data && filtered.length > 0}
           <div class="data-table flex flex-col">
             <div class="data-table-header {gridClass}">
-              <span>Name</span>
-              <span>Email</span>
-              <span>Role</span>
-              {#if manage}<span>2FA</span>{/if}
+              <SortHeader label="Name" asc="name-asc" desc="name-desc" current={sortBy} onsort={(v) => ((sortBy = v), (page = 1))} />
+              <SortHeader label="Email" asc="email-asc" desc="email-desc" current={sortBy} onsort={(v) => ((sortBy = v), (page = 1))} />
+              <SortHeader label="Role" asc="role-asc" desc="role-desc" first="desc" current={sortBy} onsort={(v) => ((sortBy = v), (page = 1))} />
+              {#if manage}<SortHeader label="2FA" asc="twofa-asc" desc="twofa-desc" current={sortBy} onsort={(v) => ((sortBy = v), (page = 1))} />{/if}
               <span class="text-right">Actions</span>
             </div>
             {#each visible as m (m.id)}
@@ -242,13 +283,23 @@
                     {/if}
                   </div>
                 </div>
-                <div class="truncate text-[12px] text-neutral-500 dark:text-fg-dim">{m.email}</div>
+                <div class="min-w-0">
+                  <div class="truncate text-[12px] text-neutral-500 dark:text-fg-dim">{m.email}</div>
+                  {#if manage && m.role === 'member' && m.access_summary}
+                    <div class="mt-0.5 truncate text-[11px] text-neutral-400 dark:text-fg-faint" title="Access: {m.access_summary}">
+                      Access: {m.access_summary}
+                    </div>
+                  {/if}
+                </div>
                 <div>
-                  <span
-                    class="inline-flex rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium capitalize text-neutral-600 dark:bg-white/[0.06] dark:text-fg-dim"
+                  <button
+                    type="button"
+                    class="table-filter-value table-filter-badge inline-flex rounded-full border border-transparent bg-neutral-100 px-2 py-0.5 text-[10px] font-medium capitalize text-neutral-600 dark:bg-white/[0.06] dark:text-fg-dim"
+                    title="Filter by {m.role}"
+                    onclick={() => ((roleFilter = roleFilter === m.role ? 'all' : m.role), (page = 1))}
                   >
                     {m.role}
-                  </span>
+                  </button>
                 </div>
                 {#if manage}
                   <div class="flex items-center">
@@ -267,7 +318,7 @@
                           />
                         </svg>
                       {:else}
-                        <Reicon name="x" class="size-4 shrink-0" />
+                        <span class="text-[12px]" aria-hidden="true">Off</span>
                       {/if}
                       <span class="sr-only">Two-factor authentication is {m.two_factor ? 'enabled' : 'disabled'}</span>
                     </span>
@@ -275,42 +326,43 @@
                 {/if}
                 <div class="flex justify-end">
                   {#if manage && m.id !== data.me}
-                    <div data-member-menu>
+                    {#if m.role === 'owner' && data.my_role !== 'owner'}
                       <button
                         type="button"
-                        class="button h-7! px-2.5! text-[11px]!"
-                        onclick={(e) => openMenu(e, m.id)}
-                        aria-haspopup="menu"
-                        aria-expanded={menuFor === m.id}
+                        class="icon-button shrink-0 text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
+                        title="Remove member"
+                        aria-label="Remove {m.name}"
+                        onclick={() => (removing = m)}
                       >
-                        Manage
+                        <Reicon name="trash" class="size-3.5" />
                       </button>
-                      {#if menuFor === m.id}
-                        <div role="menu" style={menuStyle} class="listbox-panel w-36! min-w-0! z-50!">
-                          {#if data.my_role === 'owner'}
-                            {#if m.role !== 'owner'}
-                              <button type="button" class="listbox-option justify-start!" onclick={() => act(m, 'owner')}>Make owner</button>
-                            {/if}
-                            {#if m.role !== 'admin'}
-                              <button type="button" class="listbox-option justify-start!" onclick={() => act(m, 'admin')}>Make admin</button>
-                            {/if}
-                            {#if m.role !== 'member'}
-                              <button type="button" class="listbox-option justify-start!" onclick={() => act(m, 'member')}>Make member</button>
-                            {/if}
-                          {:else if data.my_role === 'admin'}
-                            {#if m.role === 'admin'}
-                              <button type="button" class="listbox-option justify-start!" onclick={() => act(m, 'member')}>Make member</button>
-                            {:else if m.role === 'member'}
-                              <button type="button" class="listbox-option justify-start!" onclick={() => act(m, 'admin')}>Make admin</button>
-                            {/if}
+                    {:else}
+                      <RowActions label="Member actions">
+                        {#if data?.my_role === 'owner'}
+                          {#if m.role !== 'owner'}
+                            <RowAction onclick={() => act(m, 'owner')}>Make owner</RowAction>
                           {/if}
-                          <div class="my-1 border-t border-neutral-200 dark:border-white/[0.08]"></div>
-                          <button type="button" class="listbox-option justify-start! text-error! hover:text-error!" onclick={() => act(m, 'remove')}>
-                            Remove member
-                          </button>
-                        </div>
-                      {/if}
-                    </div>
+                          {#if m.role !== 'admin'}
+                            <RowAction onclick={() => act(m, 'admin')}>Make admin</RowAction>
+                          {/if}
+                          {#if m.role !== 'member'}
+                            <RowAction onclick={() => act(m, 'member')}>Make member</RowAction>
+                          {/if}
+                        {:else if data?.my_role === 'admin'}
+                          {#if m.role === 'admin'}
+                            <RowAction onclick={() => act(m, 'member')}>Make member</RowAction>
+                          {:else if m.role === 'member'}
+                            <RowAction onclick={() => act(m, 'admin')}>Make admin</RowAction>
+                          {/if}
+                        {/if}
+                        {#if m.role === 'member'}
+                          <RowAction onclick={() => editAccess(m)}>Edit access</RowAction>
+                        {/if}
+                        {#snippet danger()}
+                          <RowAction onclick={() => (removing = m)}>Remove member</RowAction>
+                        {/snippet}
+                      </RowActions>
+                    {/if}
                   {/if}
                 </div>
               </div>
@@ -354,7 +406,24 @@
               {/if}
               <div class="mt-4 grid gap-4 lg:grid-cols-2">
                 <FormInput id="email" type="email" label="Email address" placeholder="teammate@example.com" required bind:value={inviteEmail} error={inviteError?.field('email')} />
-                <Listbox id="role" label="Role" bind:value={inviteRole} options={roleOptions} />
+                <div class="flex items-end gap-2">
+                  <div class="min-w-0 flex-1">
+                    <Listbox id="role" label="Role" bind:value={inviteRole} options={roleOptions} />
+                  </div>
+                  {#if inviteRole === 'member'}
+                    <div class="shrink-0">
+                      <button type="button" class="button button-highlighted" title={inviteSummary} onclick={editInvitationAccess}>
+                        <Reicon name="keys" class="size-3.5" />
+                        Scopes
+                      </button>
+                    </div>
+                  {/if}
+                </div>
+                {#if inviteRole === 'member'}
+                  <p class="text-[12px] text-neutral-500 lg:col-span-2 dark:text-fg-faint">
+                    Scopes: <span class="text-neutral-700 dark:text-fg-dim">{inviteSummary}</span>
+                  </p>
+                {/if}
               </div>
             </SettingsSection>
           </form>
@@ -363,29 +432,41 @@
           {#if invitations.invitations.length > 0}
             <SettingsSection title="Pending invitations" description="Invitation links that have not been accepted yet." flush>
               <div class="overflow-x-auto">
-                <div class="data-table min-w-[760px]">
-                  <div class="data-table-header grid-cols-[minmax(13rem,1.2fr)_7rem_7rem_minmax(15rem,1.5fr)_6rem]">
-                    <span>Email</span>
-                    <span>Method</span>
-                    <span>Role</span>
-                    <span>Invitation link</span>
+                <div class="data-table min-w-[600px] transition-opacity">
+                  <div class="data-table-header grid-cols-[minmax(13rem,1fr)_7rem_10rem_4rem_4.5rem]">
+                    <SortHeader server label="Email" asc="email-asc" desc="email-desc" current={inviteSort ?? ''} onsort={(v) => (inviteSort = v)} />
+                    <SortHeader server label="Method" asc="via-asc" desc="via-desc" current={inviteSort ?? ''} onsort={(v) => (inviteSort = v)} />
+                    <SortHeader server label="Role" asc="role-asc" desc="role-desc" first="desc" current={inviteSort ?? ''} onsort={(v) => (inviteSort = v)} />
+                    <span>Link</span>
                     <span class="text-right">Actions</span>
                   </div>
-                  {#each invitations.invitations as row (row.id)}
-                    <div class="data-table-row grid-cols-[minmax(13rem,1.2fr)_7rem_7rem_minmax(15rem,1.5fr)_6rem] border-b border-neutral-200 last:border-b-0 dark:border-white/[0.07]">
+                  {#each invitationRows as row (row.id)}
+                    <div class="data-table-row grid-cols-[minmax(13rem,1fr)_7rem_10rem_4rem_4.5rem] border-b border-neutral-200 last:border-b-0 dark:border-white/[0.07]">
                       <div class="truncate text-[12px] font-medium text-black dark:text-fg">{row.email}</div>
                       <div class="text-[12px] capitalize text-neutral-500 dark:text-fg-dim">{row.via}</div>
-                      <div class="text-[12px] capitalize text-neutral-500 dark:text-fg-dim">{row.role}</div>
-                      <div class="flex min-w-0 items-center gap-2">
-                        <span class="min-w-0 truncate font-mono text-[12px] text-neutral-500 dark:text-fg-dim" title={row.link}>{row.link}</span>
+                      <div class="min-w-0 text-[12px] text-neutral-500 dark:text-fg-dim">
+                        <div class="capitalize">{row.role}</div>
+                        {#if row.role === 'member' && row.access_summary}
+                          <div class="truncate text-[11px] text-neutral-400 dark:text-fg-faint" title={row.access_summary}>{row.access_summary}</div>
+                        {/if}
+                      </div>
+                      <div class="flex items-center">
                         <button type="button" title="Copy invitation link" aria-label="Copy invitation link" class="icon-button group shrink-0" onclick={() => copyLink(row.id, row.link)}>
                           <span class="inline-flex transition-transform duration-150 ease-out group-active:scale-75">
                             {#if copiedId === row.id}<Reicon name="check" class="size-3.5 text-success" />{:else}<Reicon name="copy" class="size-3.5" />{/if}
                           </span>
                         </button>
                       </div>
-                      <div class="text-right">
-                        <button type="button" class="button h-7! px-2.5! text-[11px]! text-error! hover:text-error!" onclick={() => revoke(row.id)}>Revoke</button>
+                      <div class="flex justify-end">
+                        <button
+                          type="button"
+                          class="icon-button shrink-0 text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
+                          title="Revoke invitation"
+                          aria-label="Revoke invitation for {row.email}"
+                          onclick={() => (revokingInvite = row)}
+                        >
+                          <Reicon name="trash" class="size-3.5" />
+                        </button>
                       </div>
                     </div>
                   {/each}
@@ -398,3 +479,46 @@
     </div>
   </TeamLayout>
 </div>
+
+{#if removing}
+  <ConfirmModal
+    title="Remove team member?"
+    actions={['This user loses access to all resources of this team.']}
+    confirmWithText={false}
+    step2ButtonText="Remove member"
+    onconfirm={async () => {
+      const m = removing;
+      removing = null;
+      if (m) await act(m, 'remove');
+    }}
+    onclose={() => (removing = null)}
+  />
+{/if}
+
+{#if revokingInvite}
+  <ConfirmModal
+    title="Revoke invitation?"
+    actions={[`The invitation link for ${revokingInvite.email} stops working.`]}
+    confirmWithText={false}
+    step2ButtonText="Revoke invitation"
+    onconfirm={async () => {
+      const i = revokingInvite;
+      revokingInvite = null;
+      if (i) await revoke(i.id);
+    }}
+    onclose={() => (revokingInvite = null)}
+  />
+{/if}
+
+{#if editor}
+  <MemberAccessEditor
+    title={editor.title}
+    summary={editor.summary}
+    rows={editor.rows}
+    memberId={editor.memberId}
+    forInvitation={editor.forInvitation}
+    onclose={() => (editor = null)}
+    onsaved={() => load()}
+    onchosen={(access, summary) => ((inviteGrants = access), (inviteSummary = summary))}
+  />
+{/if}

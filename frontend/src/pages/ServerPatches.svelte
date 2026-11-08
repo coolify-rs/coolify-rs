@@ -284,7 +284,7 @@
               <div class="data-table-header package-updates-table-grid">
                 <span>Package</span>
                 <span>New version</span>
-                <span class="text-right">Action</span>
+                <span class="text-right">Actions</span>
               </div>
               {#each updates as update (`${update.package}-${update.architecture}`)}
                 <div class="data-table-row package-updates-table-grid border-b border-neutral-200 last:border-b-0 dark:border-white/[0.08]">

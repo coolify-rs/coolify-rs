@@ -292,7 +292,7 @@ async fn create_show_list_and_lifecycle() {
     let r = h
         .call("DELETE", &format!("/api/v1/databases/{uuid}"), W, None)
         .await;
-    assert_eq!(r.status, 403, "delete needs deploy: {}", r.body);
+    r.assert(403, r#"{"message":"Missing required permissions: delete"}"#);
     let r = h
         .call("DELETE", &format!("/api/v1/databases/{uuid}"), ROOT, None)
         .await;
@@ -343,12 +343,82 @@ async fn sqlite_and_tags_are_created() {
         .call("GET", &format!("/api/v1/databases/{uuid}/tags"), ROOT, None)
         .await;
     assert_eq!(tags.json()[0]["name"], "prod");
-    assert_eq!(
-        h.call("POST", "/api/v1/databases/sqlite", W, Some(base))
-            .await
-            .status,
-        201
-    );
+    let sqlite = h
+        .call("POST", "/api/v1/databases/sqlite", W, Some(base))
+        .await;
+    assert_eq!(sqlite.status, 201);
+    // `create_standalone_sqlite` sets the image itself (Coolify v4.6.0 drops the column default).
+    let image: String = sqlx::query_scalar("SELECT image FROM standalone_sqlites WHERE uuid = $1")
+        .bind(sqlite.json()["uuid"].as_str().unwrap())
+        .fetch_one(h.tdb.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(image, "peakimages/sqlite:3.54.1-v0.2.0");
+    f.h.finish().await;
+}
+
+/// `Postgresql\General::save_init_script` (Coolify v4.6.0): a new script or a renamed one must
+/// have a safe filename, so a filename cannot leave `docker-entrypoint-initdb.d`.
+#[tokio::test]
+async fn init_script_filenames_cannot_traverse_paths() {
+    let f = fixture().await;
+    let h = &f.h;
+    let body = json!({"server_uuid": f.server, "project_uuid": f.project, "environment_name": "production"});
+    let created = h
+        .call("POST", "/api/v1/databases/postgresql", W, Some(body))
+        .await;
+    assert_eq!(created.status, 201, "{}", created.body);
+    let uuid = created.json()["uuid"].as_str().unwrap().to_owned();
+    let (cookie, csrf) = h.ui_login("alice@example.test").await;
+    let headers = [("cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+    let path = format!("/ui/databases/{uuid}/init-scripts");
+    let scripts = || async {
+        let v: Option<String> = sqlx::query_scalar(
+            "SELECT init_scripts::text FROM standalone_postgresqls WHERE uuid = $1",
+        )
+        .bind(&uuid)
+        .fetch_one(h.tdb.db.pool())
+        .await
+        .unwrap();
+        v.unwrap_or_default()
+    };
+    let save = |filename: &str, original: &str| {
+        h.request(
+            "POST",
+            &path,
+            &headers,
+            Some(json!({"action": "save", "filename": filename, "original_filename": original, "content": "SELECT 1;"})),
+        )
+    };
+    let toast_type = |r: &common::Resp| {
+        r.json()["toasts"][0]["type"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+
+    // A save without an existing script used to skip the check.
+    for bad in [
+        "../../../etc/cron.d/x",
+        "a/b.sql",
+        "..",
+        "x\\y.sql",
+        "a b.sql",
+    ] {
+        let r = save(bad, "").await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(toast_type(&r), "error", "{bad}: {}", r.body);
+        assert!(!scripts().await.contains("SELECT 1;"), "{bad} was saved");
+    }
+    let r = save("init.sql", "").await;
+    assert_eq!(toast_type(&r), "success", "{}", r.body);
+    assert!(scripts().await.contains("init.sql"));
+    // Saving it again under its own name needs no check; renaming it does.
+    let r = save("init.sql", "init.sql").await;
+    assert_eq!(toast_type(&r), "success", "{}", r.body);
+    let r = save("../init.sql", "init.sql").await;
+    assert_eq!(toast_type(&r), "error", "{}", r.body);
+    assert!(!scripts().await.contains("../init.sql"));
     f.h.finish().await;
 }
 
@@ -434,12 +504,19 @@ async fn redis_create_and_start() {
         "{compose}"
     );
     assert!(compose.contains("- REDIS_USERNAME=default"), "{compose}");
-    let hash: Option<String> =
-        sqlx::query_scalar("SELECT config_hash FROM standalone_redis WHERE uuid = $1")
+    // The start job saves the hash after the status, so `running:healthy` can be seen first.
+    let mut hash: Option<String> = None;
+    for _ in 0..100 {
+        hash = sqlx::query_scalar("SELECT config_hash FROM standalone_redis WHERE uuid = $1")
             .bind(&uuid)
             .fetch_one(h.tdb.db.pool())
             .await
             .unwrap();
+        if hash.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     assert!(hash.is_some());
     f.h.finish().await;
 }

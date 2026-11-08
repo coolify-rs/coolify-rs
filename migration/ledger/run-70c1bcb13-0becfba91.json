@@ -1,0 +1,3541 @@
+{
+  "schema_version": 1,
+  "run_id": "run-70c1bcb13-0becfba91",
+  "upstream_from": "70c1bcb1381de7d42fd290e6cd50bf9a5bcf714d",
+  "upstream_to": "0becfba9113063336b09860579627fd218cb3fc4",
+  "stage": "analyzed",
+  "commits": [
+    {
+      "sha": "24648d4b2079f681b4a9c710cdb8a537cd42dfa1",
+      "subject": "fix(docker-cleanup): skip broadcast for executions of deleted servers",
+      "categories": [
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "57cdd92f7c5ea882cf39a552b83f0d758a3f3e12",
+      "subject": "fix(upgrade): count only scheduled jobs running on this host",
+      "categories": [
+        "tests",
+        "database_schema",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 7
+    },
+    {
+      "sha": "06747f9954dcc8ee657e45bb6a6606fa45b41240",
+      "subject": "chore(release): bump Coolify version to 4.5.4",
+      "categories": [
+        "configuration",
+        "build_release",
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "0951c5daa11968a4b89cf2fb9f71209e9c8f97bf",
+      "subject": "fix(database): index team deployment and Docker cleanup history lookups",
+      "categories": [
+        "database_schema"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "42ba6ec6669d63eb15dda6e1827eb62355b45f2f",
+      "subject": "fix(docker): preserve storage directory .gitignore files",
+      "categories": [
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "2b6af2744aeecd690b8931402a89181094b3658d",
+      "subject": "fix(database): index server settings and team membership lookups",
+      "categories": [
+        "database_schema"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "2616b4bba12657d232d8d61fea09e7928cd01bbd",
+      "subject": "fix(deployments): index history ordering and skip payload columns in lists",
+      "categories": [
+        "tests",
+        "frontend",
+        "database_schema",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 7
+    },
+    {
+      "sha": "68a08170e7a89b72652dbcfa8320a000264121d9",
+      "subject": "fix(docker): index interrupted cleanup lookup and process it in batches",
+      "categories": [
+        "tests",
+        "database_schema",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "c23d3363f274a7d691dcf5f69fafedd167283532",
+      "subject": "fix(deployments): load only commit details for the application heading",
+      "categories": [
+        "tests",
+        "frontend",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 5
+    },
+    {
+      "sha": "7324b5ca7b4ccf134cce3cf57d1c2d475541a096",
+      "subject": "fix(webhooks): filter manual webhook applications by repository in SQL",
+      "categories": [
+        "tests",
+        "external_integrations"
+      ],
+      "security_sensitive": true,
+      "files": 2
+    },
+    {
+      "sha": "55605f65160d8aa70ac14d6ed68d043ed64c748f",
+      "subject": "fix(github-runners): select runner servers with a UNION of server ids",
+      "categories": [
+        "tests",
+        "database_schema",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "c34f5f8e3bbc52134e9aefbd605f4088a9e9931b",
+      "subject": "fix(servers): index active server lookups by private key",
+      "categories": [
+        "tests",
+        "frontend",
+        "database_schema"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "3d956c110ce38ebfdc81d11a4e9303eea7f96fb5",
+      "subject": "fix(servers): skip patch check results in bulk settings loads",
+      "categories": [
+        "documentation",
+        "tests",
+        "database_schema",
+        "domain_logic",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 5
+    },
+    {
+      "sha": "a12f62ed4fbc40b5276dfe96e44e73137d07bd5f",
+      "subject": "fix(dashboard): bound recent deployments query per application",
+      "categories": [
+        "tests",
+        "frontend",
+        "database_schema",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "3607abf7eb9c0b47e871f2fb87655e50af85a44c",
+      "subject": "fix(servers): load server manager servers in batches by id",
+      "categories": [
+        "tests",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "f778942630954304c26fcb35ea70b365d807def7",
+      "subject": "docs(ai): document hidden counts in application queries",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "a3e2b9347cdd6992042859e2c7c3b972a0e84d9e",
+      "subject": "Merge branch 'fix-bulk-env-flags-proxy-event'",
+      "categories": [
+        "api_change"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "cd992e72e10f96cf542909b535fd5ad6b5e7d8aa",
+      "subject": "feat(tables): filter tables by clicking a cell value",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 6
+    },
+    {
+      "sha": "af28ba8bbc89e6c91d0f39ff449f4bd63c2293cf",
+      "subject": "feat(tables): sort tables by clicking a column header",
+      "categories": [
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 28
+    },
+    {
+      "sha": "103af830e5fa9b4b5cb50905c3db6a0338a9419c",
+      "subject": "feat(dashboard): sort projects and servers by clicking a column header",
+      "categories": [
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "c6f5899949772bccd3cebc562c5e75651088d600",
+      "subject": "feat(tables): show loading state while a server-side sort runs",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 7
+    },
+    {
+      "sha": "6e3ab703bfc2aa2a311e20defecef2ff667d0b10",
+      "subject": "fix(application): show watch paths for deploy key applications",
+      "categories": [
+        "tests",
+        "frontend",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "6f8cf50402496f2a8798d680b43e4203375878ba",
+      "subject": "feat(env): show compose defaults for empty variables in developer view",
+      "categories": [
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "623d367a2ad13a0235e11cb628f381d09e38e146",
+      "subject": "fix(env): keep preview variable order when sorting is disabled",
+      "categories": [
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "3048e9948ca8c0eaac7cfb84b1396d1a472ed15b",
+      "subject": "fix(analytics): start Locations card on resource analytics tabs",
+      "categories": [
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "b41ba87fffe7021b4961c6fe9aaa0860206dd7b2",
+      "subject": "fix(application): reject Docker image names shared by building applications",
+      "categories": [
+        "tests",
+        "frontend",
+        "api_change",
+        "domain_logic",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 5
+    },
+    {
+      "sha": "6030d096bfad37e00a0fcf64e6b458d477d38cc8",
+      "subject": "fix(team): send working invitation links to users without a password",
+      "categories": [
+        "tests",
+        "frontend",
+        "domain_logic"
+      ],
+      "security_sensitive": true,
+      "files": 4
+    },
+    {
+      "sha": "a39370dbb8bef460643b38dcf91bc43637ef4526",
+      "subject": "fix(postgresql): prevent init script path traversal",
+      "categories": [
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "96ed09f0ccfa854763d7ce98d41de26bab2394cc",
+      "subject": "fix(auth): clear forced password reset after a password reset",
+      "categories": [
+        "tests",
+        "authentication_authorization"
+      ],
+      "security_sensitive": true,
+      "files": 2
+    },
+    {
+      "sha": "607daf80be0ae79c4ff52f18a4dafe9d12e25fce",
+      "subject": "feat(auth): show two-factor code as separate digit boxes",
+      "categories": [
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "43933ee6ccb55b1e700673882e2d3da60f4fcd46",
+      "subject": "fix(upgrade): quote root user credentials with spaces in the .env file",
+      "categories": [
+        "tests",
+        "build_release",
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "7faa46bbd436f87e4b39c5ef5134d530d205d843",
+      "subject": "fix(upgrade): ignore whitespace around root user values before quoting",
+      "categories": [
+        "tests",
+        "build_release",
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "f2ece40dd47e4ee9ba3e500648300535b18bd690",
+      "subject": "fix(terminal): fall back to usable shell for nologin and false (#12242)",
+      "categories": [
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": true,
+      "files": 2
+    },
+    {
+      "sha": "69bfb24ab242038c562e13cef2ba714710f59746",
+      "subject": "feat(templates): add Hi.Events event management service (#12380)",
+      "categories": [
+        "frontend",
+        "service_templates"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "28c5af9b183a44388eeb86aadf73c9adb07ec710",
+      "subject": "fix(avatar): change avatar URL when an existing avatar is replaced",
+      "categories": [
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "0d398ced240af22ae390d24624d550c767075222",
+      "subject": "fix(servers): open patches page from the patches badge",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "72c8209285dcd09291cca16f2acaf14dacf3ac43",
+      "subject": "feat(subscription): email checkout reminders for expired sessions",
+      "categories": [
+        "tests",
+        "frontend",
+        "database_schema",
+        "domain_logic",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 9
+    },
+    {
+      "sha": "4b541011c98dc38a88cf39dec83cd4541c16bfc8",
+      "subject": "fix(api): hide locked values in resource and environment lists",
+      "categories": [
+        "tests",
+        "api_change",
+        "domain_logic"
+      ],
+      "security_sensitive": true,
+      "files": 8
+    },
+    {
+      "sha": "3e2fff0609ead3c802d674c0cce72fbb51fbea74",
+      "subject": "fix(deployments): stop the build server helper when a deployment is cancelled",
+      "categories": [
+        "tests",
+        "deployment_engine"
+      ],
+      "security_sensitive": true,
+      "files": 4
+    },
+    {
+      "sha": "98b7de0ea77a4c81a817cb3aa4905fadd169b7d8",
+      "subject": "fix(api): accept the same port mappings as the UI",
+      "categories": [
+        "tests",
+        "api_change",
+        "domain_logic"
+      ],
+      "security_sensitive": true,
+      "files": 3
+    },
+    {
+      "sha": "b3ec26c3b1771654cae4b4ebc06d14a164bd8824",
+      "subject": "fix(proxy): stop routing the Reverb HTTP API through the dashboard domain",
+      "categories": [
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "49346aeb29e38ac27b0f52bb4a7321682eae8e9b",
+      "subject": "fix(ui): restore the main menu row that reopens the resource menu",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 12
+    },
+    {
+      "sha": "a80f0c7ca875a5a8f58c0c5709aa2dfe1d3d1a13",
+      "subject": "fix(ui): name the deepest menu on the resource menu row",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 5
+    },
+    {
+      "sha": "e36c54c23cf6ad4f1caeb27c1ed1f5931e0723fc",
+      "subject": "fix(logs): style lines by their declared level, not by error keywords",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "a567a4b659382a069e7e3573a5351a1466bd5110",
+      "subject": "fix(analytics): key traffic tables so the pager works after lazy load",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "751ecb91c59fdb35fe076e5bba7076651ea2652c",
+      "subject": "ci: add a workflow to cleanup unused manifests (#12362)",
+      "categories": [
+        "build_release",
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "8af0606a32be4b1d22689e9247257729abe800e8",
+      "subject": "docs(readme): add martiinii to small sponsors",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "690331e446f13c1e3865e84069bae72d214e002d",
+      "subject": "docs(readme): remove Context.dev from huge sponsors",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "8178fa16b2b4f3a9fc208c8a556f93f4db9a9fd4",
+      "subject": "fix(ui): use red style for unused key deletion",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "759fbe5b3c66c152015cfd7da21276386db08125",
+      "subject": "feat(deployments): show spinners for in-progress status",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 5
+    },
+    {
+      "sha": "868c0f06bfd3272d28f27960b5ed7e0c1717f213",
+      "subject": "fix(api): require deploy ability for registry check and logout",
+      "categories": [
+        "api_change"
+      ],
+      "security_sensitive": true,
+      "files": 4
+    },
+    {
+      "sha": "23eebbf2adc7e9e3503af2b9fb603ce5dbc1db21",
+      "subject": "fix(servers): refresh provider status with server details action",
+      "categories": [
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "faf0b6fac4f74d1eee873fe78c2bed98ee7e4dd3",
+      "subject": "fix(runners): preserve unsaved settings during Sysbox checks",
+      "categories": [
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": true,
+      "files": 6
+    },
+    {
+      "sha": "d8c1b926ca9cc84952643ef7bd04d8d41ea34bf5",
+      "subject": "docs(readme): remove OpenElements from small sponsors",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "51029aa8b97ade582c8aa126145d966e56afeb91",
+      "subject": "fix(new-resource): accept a base directory without a leading slash",
+      "categories": [
+        "tests",
+        "frontend",
+        "domain_logic"
+      ],
+      "security_sensitive": true,
+      "files": 12
+    },
+    {
+      "sha": "f2f89ccfae497aa9e9ee9256fd1ee71b6bbd23b5",
+      "subject": "fix(canvas): add SQLite to database engines",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "31653c27d1d4f4e62b96e97d8106e38a0d2194c5",
+      "subject": "fix(clone): add Compose labels to cloned volumes",
+      "categories": [
+        "tests",
+        "background_jobs"
+      ],
+      "security_sensitive": true,
+      "files": 2
+    },
+    {
+      "sha": "33a6682791e4fae5af0c6fe29f3a76ee695f7a0b",
+      "subject": "fix(backups): keep non-deployment helper containers during cleanup",
+      "categories": [
+        "tests",
+        "background_jobs"
+      ],
+      "security_sensitive": true,
+      "files": 2
+    },
+    {
+      "sha": "dbd211486bfbe44a85fcaeecca85fe602b96e55c",
+      "subject": "fix(backups): let service databases choose the databases to back up",
+      "categories": [
+        "tests",
+        "frontend",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "b9ad48e1042e00279b386b8979b5d6510480d2fb",
+      "subject": "fix(deployments): pass port-suffixed compose service URL variables",
+      "categories": [
+        "tests",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "972ab7f6f45b5cc6c2efdff207738a4e23d23756",
+      "subject": "fix(deployments): keep build secret values out of Compose runtime",
+      "categories": [
+        "tests",
+        "deployment_engine",
+        "container_integration"
+      ],
+      "security_sensitive": true,
+      "files": 4
+    },
+    {
+      "sha": "be7a9975410ba2dff0d267b028d461e0e0263e21",
+      "subject": "fix(metrics): stop unreachable servers from blocking web workers",
+      "categories": [
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "0b3ca794644f6542f81d78038354c3157b753a9a",
+      "subject": "fix(scheduled-tasks): show disabled state in task and backup lists",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "6c650dd12734c4a2434b2cacda63b9809f937ab4",
+      "subject": "fix(api): document request bodies for shared env create and update endpoints",
+      "categories": [
+        "tests",
+        "api_change"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "dce02411a032567f71addf8fef252822c6f2c493",
+      "subject": "fix(service): keep WordPress URLs in sync with the Coolify domain",
+      "categories": [
+        "service_templates"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "1af7de8a8580f556f48e7102239f1646c76d012f",
+      "subject": "fix(backups): pin a reachable IP for S3 uploads on IPv6-only servers",
+      "categories": [
+        "tests",
+        "domain_logic",
+        "container_integration",
+        "background_jobs"
+      ],
+      "security_sensitive": true,
+      "files": 8
+    },
+    {
+      "sha": "8dea52609803f95a55716a08ace41c1ce47c2bc1",
+      "subject": "Revert \"fix(service): keep WordPress URLs in sync with the Coolify domain\"",
+      "categories": [
+        "service_templates"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "bc855fdc68ed5ae77eb23579f92bb504b649334d",
+      "subject": "fix(transfer): resolve IPv6-only server host names",
+      "categories": [
+        "api_change",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "5cf1abc0fc0cbdc39276d03607c342633a8a6cc0",
+      "subject": "fix(env): keep pre-upgrade values for legacy compose variables",
+      "categories": [
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 5
+    },
+    {
+      "sha": "6977caaa9b4f62d58c6f76d6227cc14753c794af",
+      "subject": "fix(service): store the Compose default for bare variable references",
+      "categories": [
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "6ef29c64a10f66e0a614219b12f9f7f9867e368e",
+      "subject": "fix(cdn): block releases sync before the current release is published",
+      "categories": [
+        "tests",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "697d559c7ccfcee9a08feb803bb7a7c4c681c814",
+      "subject": "v4.6 (#12401)",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "api_change",
+        "database_schema",
+        "domain_logic",
+        "authentication_authorization",
+        "deployment_engine",
+        "container_integration",
+        "configuration",
+        "external_integrations",
+        "background_jobs",
+        "build_release",
+        "unclassified"
+      ],
+      "security_sensitive": true,
+      "files": 457
+    },
+    {
+      "sha": "2b4a4bff0820b2c6e76453ded7cac5c34c315338",
+      "subject": "fix(release): name the local tags that differ from origin",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "0becfba9113063336b09860579627fd218cb3fc4",
+      "subject": "feat(release): bump coolify version to v4.6.0",
+      "categories": [
+        "documentation",
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    }
+  ],
+  "plan": {
+    "schema_version": 1,
+    "upstream_from": "70c1bcb1381de7d42fd290e6cd50bf9a5bcf714d",
+    "upstream_to": "0becfba9113063336b09860579627fd218cb3fc4",
+    "commits": [
+      "24648d4b2079f681b4a9c710cdb8a537cd42dfa1",
+      "57cdd92f7c5ea882cf39a552b83f0d758a3f3e12",
+      "06747f9954dcc8ee657e45bb6a6606fa45b41240",
+      "0951c5daa11968a4b89cf2fb9f71209e9c8f97bf",
+      "42ba6ec6669d63eb15dda6e1827eb62355b45f2f",
+      "2b6af2744aeecd690b8931402a89181094b3658d",
+      "2616b4bba12657d232d8d61fea09e7928cd01bbd",
+      "68a08170e7a89b72652dbcfa8320a000264121d9",
+      "c23d3363f274a7d691dcf5f69fafedd167283532",
+      "7324b5ca7b4ccf134cce3cf57d1c2d475541a096",
+      "55605f65160d8aa70ac14d6ed68d043ed64c748f",
+      "c34f5f8e3bbc52134e9aefbd605f4088a9e9931b",
+      "3d956c110ce38ebfdc81d11a4e9303eea7f96fb5",
+      "a12f62ed4fbc40b5276dfe96e44e73137d07bd5f",
+      "3607abf7eb9c0b47e871f2fb87655e50af85a44c",
+      "f778942630954304c26fcb35ea70b365d807def7",
+      "a3e2b9347cdd6992042859e2c7c3b972a0e84d9e",
+      "cd992e72e10f96cf542909b535fd5ad6b5e7d8aa",
+      "af28ba8bbc89e6c91d0f39ff449f4bd63c2293cf",
+      "103af830e5fa9b4b5cb50905c3db6a0338a9419c",
+      "c6f5899949772bccd3cebc562c5e75651088d600",
+      "6e3ab703bfc2aa2a311e20defecef2ff667d0b10",
+      "6f8cf50402496f2a8798d680b43e4203375878ba",
+      "623d367a2ad13a0235e11cb628f381d09e38e146",
+      "3048e9948ca8c0eaac7cfb84b1396d1a472ed15b",
+      "b41ba87fffe7021b4961c6fe9aaa0860206dd7b2",
+      "6030d096bfad37e00a0fcf64e6b458d477d38cc8",
+      "a39370dbb8bef460643b38dcf91bc43637ef4526",
+      "96ed09f0ccfa854763d7ce98d41de26bab2394cc",
+      "607daf80be0ae79c4ff52f18a4dafe9d12e25fce",
+      "43933ee6ccb55b1e700673882e2d3da60f4fcd46",
+      "7faa46bbd436f87e4b39c5ef5134d530d205d843",
+      "f2ece40dd47e4ee9ba3e500648300535b18bd690",
+      "69bfb24ab242038c562e13cef2ba714710f59746",
+      "28c5af9b183a44388eeb86aadf73c9adb07ec710",
+      "0d398ced240af22ae390d24624d550c767075222",
+      "72c8209285dcd09291cca16f2acaf14dacf3ac43",
+      "4b541011c98dc38a88cf39dec83cd4541c16bfc8",
+      "3e2fff0609ead3c802d674c0cce72fbb51fbea74",
+      "98b7de0ea77a4c81a817cb3aa4905fadd169b7d8",
+      "b3ec26c3b1771654cae4b4ebc06d14a164bd8824",
+      "49346aeb29e38ac27b0f52bb4a7321682eae8e9b",
+      "a80f0c7ca875a5a8f58c0c5709aa2dfe1d3d1a13",
+      "e36c54c23cf6ad4f1caeb27c1ed1f5931e0723fc",
+      "a567a4b659382a069e7e3573a5351a1466bd5110",
+      "751ecb91c59fdb35fe076e5bba7076651ea2652c",
+      "8af0606a32be4b1d22689e9247257729abe800e8",
+      "690331e446f13c1e3865e84069bae72d214e002d",
+      "8178fa16b2b4f3a9fc208c8a556f93f4db9a9fd4",
+      "759fbe5b3c66c152015cfd7da21276386db08125",
+      "868c0f06bfd3272d28f27960b5ed7e0c1717f213",
+      "23eebbf2adc7e9e3503af2b9fb603ce5dbc1db21",
+      "faf0b6fac4f74d1eee873fe78c2bed98ee7e4dd3",
+      "d8c1b926ca9cc84952643ef7bd04d8d41ea34bf5",
+      "51029aa8b97ade582c8aa126145d966e56afeb91",
+      "f2f89ccfae497aa9e9ee9256fd1ee71b6bbd23b5",
+      "31653c27d1d4f4e62b96e97d8106e38a0d2194c5",
+      "33a6682791e4fae5af0c6fe29f3a76ee695f7a0b",
+      "dbd211486bfbe44a85fcaeecca85fe602b96e55c",
+      "b9ad48e1042e00279b386b8979b5d6510480d2fb",
+      "972ab7f6f45b5cc6c2efdff207738a4e23d23756",
+      "be7a9975410ba2dff0d267b028d461e0e0263e21",
+      "0b3ca794644f6542f81d78038354c3157b753a9a",
+      "6c650dd12734c4a2434b2cacda63b9809f937ab4",
+      "dce02411a032567f71addf8fef252822c6f2c493",
+      "1af7de8a8580f556f48e7102239f1646c76d012f",
+      "8dea52609803f95a55716a08ace41c1ce47c2bc1",
+      "bc855fdc68ed5ae77eb23579f92bb504b649334d",
+      "5cf1abc0fc0cbdc39276d03607c342633a8a6cc0",
+      "6977caaa9b4f62d58c6f76d6227cc14753c794af",
+      "6ef29c64a10f66e0a614219b12f9f7f9867e368e",
+      "697d559c7ccfcee9a08feb803bb7a7c4c681c814",
+      "2b4a4bff0820b2c6e76453ded7cac5c34c315338",
+      "0becfba9113063336b09860579627fd218cb3fc4"
+    ],
+    "categories": [
+      "documentation",
+      "tests",
+      "frontend",
+      "api_change",
+      "database_schema",
+      "domain_logic",
+      "authentication_authorization",
+      "deployment_engine",
+      "container_integration",
+      "configuration",
+      "external_integrations",
+      "background_jobs",
+      "build_release",
+      "service_templates",
+      "unclassified"
+    ],
+    "security_sensitive": true,
+    "risk": "high",
+    "risk_reasons": [
+      "security-sensitive (124 signals)",
+      "touches authentication/authorization",
+      "migration 2026_10_25_100000_add_access_grants_to_team_members_and_tokens changes mapped tables [\"personal_access_tokens\", \"team_user\"]",
+      "migration 2026_10_27_142736_add_paused_at_to_personal_access_tokens_table changes mapped tables [\"personal_access_tokens\"]",
+      "migration 2026_10_28_211105_add_indexes_for_team_deployments_and_docker_cleanup_history is destructive/raw-SQL/encryption (destructive=false, raw_sql=true, encryption=false)",
+      "migration 2026_10_28_212642_add_indexes_for_server_settings_and_team_membership_lookups changes mapped tables [\"server_settings\", \"team_user\"]",
+      "migration 2026_10_28_212642_add_indexes_for_server_settings_and_team_membership_lookups is destructive/raw-SQL/encryption (destructive=false, raw_sql=true, encryption=false)",
+      "migration 2026_10_28_214500_add_index_for_application_deployment_history is destructive/raw-SQL/encryption (destructive=false, raw_sql=true, encryption=false)",
+      "migration 2026_10_28_214953_add_index_for_interrupted_docker_cleanup_executions is destructive/raw-SQL/encryption (destructive=false, raw_sql=true, encryption=false)",
+      "migration 2026_10_28_224219_add_index_for_active_github_runner_executions is destructive/raw-SQL/encryption (destructive=false, raw_sql=true, encryption=false)",
+      "migration 2026_10_28_224423_add_index_for_dashboard_recent_deployments is destructive/raw-SQL/encryption (destructive=false, raw_sql=true, encryption=false)",
+      "migration 2026_10_28_232000_add_index_for_active_servers_by_private_key changes mapped tables [\"servers\"]",
+      "migration 2026_10_28_232000_add_index_for_active_servers_by_private_key is destructive/raw-SQL/encryption (destructive=false, raw_sql=true, encryption=false)",
+      "migration 2026_11_01_142702_add_update_channel_to_instance_settings_table changes mapped tables [\"instance_settings\"]",
+      "API routes changed in an implemented component",
+      "category ApiChange",
+      "category DomainLogic",
+      "category DatabaseSchema",
+      "category BackgroundJobs",
+      "category ExternalIntegrations",
+      "category Configuration",
+      "category DeploymentEngine",
+      "category ContainerIntegration",
+      "deployment/container behaviour in an implemented component"
+    ],
+    "affected_components": [
+      {
+        "component": "api.auth-chain",
+        "status": "verified",
+        "reasons": [
+          "path app/Http/Kernel.php",
+          "path app/Http/Middleware/ApiAbility.php",
+          "path app/Http/Middleware/EnsureTokenBelongsToCurrentTeamMember.php",
+          "path app/Models/PersonalAccessToken.php",
+          "upstream test tests/Feature/ApiTokenExpirationTest.php",
+          "upstream test tests/Feature/ApiTokenExpirationWarningTest.php",
+          "upstream test tests/Feature/ApiTokenLivewireAuthorizationTest.php",
+          "upstream test tests/Feature/Authorization/LegacyMemberTokenTest.php",
+          "upstream test tests/Feature/Security/ApiTokenCreationSecurityTest.php",
+          "table personal_access_tokens",
+          "table team_user",
+          "table personal_access_tokens",
+          "table team_user",
+          "table instance_settings"
+        ],
+        "rust_paths": [
+          "crates/coolify-api/src/auth.rs",
+          "crates/coolify-api/src/ip.rs",
+          "crates/coolify-db/src/auth.rs",
+          "crates/coolify-db/src/instance.rs",
+          "crates/coolify-compat/src/sanctum.rs",
+          "crates/coolify-domain/src/access.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-db",
+          "coolify-compat",
+          "coolify-domain"
+        ]
+      },
+      {
+        "component": "api.teams",
+        "status": "verified",
+        "reasons": [
+          "path app/Policies/TeamPolicy.php",
+          "table team_user",
+          "table team_user"
+        ],
+        "rust_paths": [
+          "crates/coolify-api/src/routes/teams.rs",
+          "crates/coolify-db/src/teams.rs",
+          "crates/coolify-db/src/records.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-db"
+        ]
+      },
+      {
+        "component": "api.projects",
+        "status": "verified",
+        "reasons": [
+          "path app/Http/Controllers/Api/ProjectController.php",
+          "path app/Models/Environment.php",
+          "path app/Models/Project.php",
+          "path app/Policies/EnvironmentPolicy.php",
+          "path app/Policies/ProjectPolicy.php",
+          "route DELETE api/v1/projects/{uuid}",
+          "route DELETE api/v1/projects/{uuid}/environments/{environment_name_or_uuid}",
+          "route DELETE api/v1/projects/{uuid}/environments/{environment_name_or_uuid}/envs/{env_id}",
+          "route DELETE api/v1/projects/{uuid}/envs/{env_id}"
+        ],
+        "rust_paths": [
+          "crates/coolify-api/src/routes/projects.rs",
+          "crates/coolify-api/src/validation.rs",
+          "crates/coolify-api/src/serialize.rs",
+          "crates/coolify-api/src/input.rs",
+          "crates/coolify-db/src/projects.rs",
+          "crates/coolify-domain/src/naming.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-db",
+          "coolify-domain"
+        ]
+      },
+      {
+        "component": "api.route-inventory",
+        "status": "verified",
+        "reasons": [
+          "path app/Http/Kernel.php",
+          "path routes/api.php"
+        ],
+        "rust_paths": [
+          "compat/api/upstream-routes.json",
+          "crates/coolify-api/tests/route_inventory.rs",
+          "crates/coolify-port/src/php/routes.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-port"
+        ]
+      },
+      {
+        "component": "db.schema-guard",
+        "status": "implemented",
+        "reasons": [
+          "path database/migrations/2026_10_25_100000_add_access_grants_to_team_members_and_tokens.php",
+          "path database/migrations/2026_10_26_081954_add_git_https_credentials_to_applications_table.php",
+          "path database/migrations/2026_10_27_142736_add_paused_at_to_personal_access_tokens_table.php",
+          "path database/migrations/2026_10_28_204953_add_worker_host_to_scheduled_job_executions.php",
+          "path database/migrations/2026_10_28_211105_add_indexes_for_team_deployments_and_docker_cleanup_history.php",
+          "path database/migrations/2026_10_28_212642_add_indexes_for_server_settings_and_team_membership_lookups.php",
+          "path database/migrations/2026_10_28_214500_add_index_for_application_deployment_history.php",
+          "path database/migrations/2026_10_28_214953_add_index_for_interrupted_docker_cleanup_executions.php",
+          "path database/migrations/2026_10_28_224219_add_index_for_active_github_runner_executions.php",
+          "path database/migrations/2026_10_28_224423_add_index_for_dashboard_recent_deployments.php",
+          "path database/migrations/2026_10_28_232000_add_index_for_active_servers_by_private_key.php",
+          "path database/migrations/2026_10_29_221743_add_checkout_reminder_sent_at_to_subscriptions_table.php",
+          "path database/migrations/2026_10_30_144551_add_access_to_team_invitations_table.php",
+          "path database/migrations/2026_10_30_171359_drop_image_default_from_standalone_sqlites_table.php",
+          "path database/migrations/2026_11_01_142702_add_update_channel_to_instance_settings_table.php"
+        ],
+        "rust_paths": [
+          "compat/baseline/supported-migrations.txt",
+          "crates/coolify-db/src/schema.rs"
+        ],
+        "rust_packages": [
+          "coolify-db"
+        ]
+      },
+      {
+        "component": "api.servers.subroutes",
+        "status": "planned",
+        "reasons": [
+          "path app/Http/Controllers/Api/ServerDockerRegistriesController.php",
+          "path app/Http/Controllers/Api/ServerTransferController.php",
+          "path app/Policies/ServerPolicy.php"
+        ],
+        "rust_paths": [],
+        "rust_packages": []
+      },
+      {
+        "component": "api.private-keys",
+        "status": "verified",
+        "reasons": [
+          "route DELETE api/v1/security/keys/{uuid}"
+        ],
+        "rust_paths": [
+          "crates/coolify-api/src/routes/private_keys.rs",
+          "crates/coolify-db/src/private_keys.rs",
+          "crates/coolify-compat/src/sshkey.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-db",
+          "coolify-compat"
+        ]
+      },
+      {
+        "component": "ui.session",
+        "status": "implemented",
+        "reasons": [
+          "table team_user",
+          "table team_user"
+        ],
+        "rust_paths": [
+          "crates/coolify-api/src/session.rs",
+          "crates/coolify-db/src/users.rs",
+          "crates/coolify-compat/src/password.rs",
+          "crates/coolify-compat/src/totp.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-db",
+          "coolify-compat"
+        ]
+      },
+      {
+        "component": "api.servers",
+        "status": "verified",
+        "reasons": [
+          "path app/Models/Server.php",
+          "path app/Models/ServerSetting.php",
+          "table server_settings",
+          "table servers"
+        ],
+        "rust_paths": [
+          "crates/coolify-api/src/routes/servers.rs",
+          "crates/coolify-db/src/servers.rs",
+          "crates/coolify-api/src/laravel_url.rs",
+          "crates/coolify-compat/src/cron.rs",
+          "crates/coolify-compat/src/timezones.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-db",
+          "coolify-compat"
+        ]
+      },
+      {
+        "component": "ui.styles",
+        "status": "verified",
+        "reasons": [
+          "path resources/css/app.css",
+          "path resources/views/components/reicon.blade.php"
+        ],
+        "rust_paths": [
+          "frontend/src/upstream/**",
+          "frontend/scripts/gen-reicons.mjs"
+        ],
+        "rust_packages": []
+      },
+      {
+        "component": "ui.frontend",
+        "status": "implemented",
+        "reasons": [
+          "path resources/views/auth/two-factor-challenge.blade.php",
+          "path resources/views/components/forms/listbox.blade.php",
+          "path resources/views/components/modal-confirmation.blade.php",
+          "path resources/views/components/navbar.blade.php",
+          "path resources/views/components/server/sidebar.blade.php",
+          "path resources/views/livewire/dashboard.blade.php",
+          "path resources/views/livewire/project/index.blade.php",
+          "path resources/views/livewire/project/resource/index.blade.php",
+          "path resources/views/livewire/project/show.blade.php",
+          "path resources/views/livewire/security/private-key/index.blade.php",
+          "path resources/views/livewire/server/index.blade.php",
+          "path resources/views/livewire/server/show.blade.php",
+          "path resources/views/livewire/team/index.blade.php",
+          "path resources/views/livewire/team/member.blade.php",
+          "path resources/views/livewire/team/member/index.blade.php"
+        ],
+        "rust_paths": [
+          "frontend/src/**"
+        ],
+        "rust_packages": []
+      },
+      {
+        "component": "ui.read-models",
+        "status": "verified",
+        "reasons": [
+          "path app/Livewire/Dashboard.php",
+          "path app/Livewire/Project/Show.php",
+          "path app/Livewire/Server/Show.php",
+          "path app/Livewire/Team/Member.php",
+          "table personal_access_tokens",
+          "table team_user",
+          "table personal_access_tokens",
+          "table server_settings",
+          "table team_user",
+          "table servers"
+        ],
+        "rust_paths": [
+          "crates/coolify-api/src/ui.rs",
+          "crates/coolify-db/src/dashboard.rs",
+          "crates/coolify-db/src/teams.rs",
+          "crates/coolify-compat/src/sshkey.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-db",
+          "coolify-compat"
+        ]
+      },
+      {
+        "component": "deployment.engine",
+        "status": "planned",
+        "reasons": [
+          "path app/Http/Controllers/Api/DeployController.php",
+          "path app/Jobs/ApplicationDeploymentJob.php",
+          "path app/Traits/ExecuteRemoteCommand.php",
+          "table applications",
+          "table applications",
+          "table application_deployment_queues",
+          "table application_deployment_queues"
+        ],
+        "rust_paths": [],
+        "rust_packages": []
+      },
+      {
+        "component": "remote.execution",
+        "status": "verified",
+        "reasons": [
+          "path app/Helpers/SshMultiplexingHelper.php",
+          "path bootstrap/helpers/remoteProcess.php"
+        ],
+        "rust_paths": [
+          "crates/coolify-remote/src/**",
+          "compat/testing-host/**",
+          "scripts/testing-host-up.sh"
+        ],
+        "rust_packages": [
+          "coolify-remote"
+        ]
+      },
+      {
+        "component": "server.validation",
+        "status": "verified",
+        "reasons": [
+          "table server_settings",
+          "table servers"
+        ],
+        "rust_paths": [
+          "crates/coolify-jobs/src/**",
+          "crates/coolify-compat/src/redact.rs",
+          "crates/coolify-compat/src/purify.rs",
+          "frontend/src/components/ValidateServer.svelte",
+          "frontend/src/components/ProcessDialog.svelte",
+          "frontend/src/components/CheckpointItem.svelte"
+        ],
+        "rust_packages": [
+          "coolify-jobs",
+          "coolify-compat",
+          "coolify-api"
+        ]
+      },
+      {
+        "component": "databases.standalone",
+        "status": "verified",
+        "reasons": [
+          "path app/Http/Controllers/Api/DatabasesController.php",
+          "path app/Livewire/Project/Database/Postgresql/General.php",
+          "path app/Livewire/Project/Resource/Create.php",
+          "path app/Models/StandalonePostgresql.php",
+          "path app/Services/DatabaseStartCommandExecutor.php",
+          "path app/Traits/HasSecretManager.php",
+          "path resources/views/components/database/configuration-sidebar.blade.php",
+          "path resources/views/livewire/project/database/backup-edit/general.blade.php",
+          "path resources/views/livewire/project/database/scheduled-backups.blade.php",
+          "path resources/views/livewire/project/database/sqlite/connect-application.blade.php",
+          "path resources/views/livewire/project/resource/index.blade.php"
+        ],
+        "rust_paths": [
+          "crates/coolify-db/src/databases.rs",
+          "crates/coolify-jobs/src/databases/",
+          "crates/coolify-db/src/environment_variables.rs",
+          "crates/coolify-api/src/routes/databases.rs",
+          "crates/coolify-api/src/ui_databases.rs",
+          "crates/coolify-compat/src/yaml.rs",
+          "frontend/src/pages/Database.svelte",
+          "frontend/src/pages/ResourceNew.svelte",
+          "frontend/src/pages/Environment.svelte",
+          "frontend/src/components/Database*.svelte"
+        ],
+        "rust_packages": [
+          "coolify-db",
+          "coolify-jobs",
+          "coolify-api",
+          "coolify-compat"
+        ]
+      }
+    ],
+    "unmapped_files": [
+      "app/Actions/CoolifyTask/RunRemoteProcess.php",
+      "app/Actions/Database/StartDatabaseImport.php",
+      "app/Actions/Fortify/ResetUserPassword.php",
+      "app/Actions/IntegrationToken/CreateIntegrationToken.php",
+      "app/Actions/IntegrationToken/UpdateIntegrationToken.php",
+      "app/Actions/Proxy/CheckProxy.php",
+      "app/Actions/Server/UpdateCoolify.php",
+      "app/Actions/Stripe/CreateCheckoutSession.php",
+      "app/Console/Commands/SyncCdn.php",
+      "app/Console/Commands/UpdateChannel.php",
+      "app/Console/Kernel.php",
+      "app/Enums/AccessLevel.php",
+      "app/Enums/AccessScope.php",
+      "app/Events/ApplicationStopFailed.php",
+      "app/Events/DnsRecordConfigurationFinished.php",
+      "app/Events/DockerCleanupDone.php",
+      "app/Http/Controllers/Api/ApplicationSecretManagerController.php",
+      "app/Http/Controllers/Api/ApplicationsController.php",
+      "app/Http/Controllers/Api/DnsController.php",
+      "app/Http/Controllers/Api/IntegrationTokensController.php",
+      "app/Http/Controllers/Api/OtherController.php",
+      "app/Http/Controllers/Api/ResourcesController.php",
+      "app/Http/Controllers/Api/ScheduledTasksController.php",
+      "app/Http/Controllers/Api/SecretManagerController.php",
+      "app/Http/Controllers/Api/SentinelController.php",
+      "app/Http/Controllers/Api/ServicesController.php",
+      "app/Http/Controllers/Api/SharedEnvironmentVariablesController.php",
+      "app/Http/Controllers/Api/SharedVariableCanvasController.php",
+      "app/Http/Controllers/Api/VolumeBackupsController.php",
+      "app/Http/Controllers/Controller.php",
+      "app/Http/Controllers/Webhook/Concerns/MatchesManualWebhookApplications.php",
+      "app/Http/Middleware/CanCreateResources.php",
+      "app/Http/Middleware/EnsureTeamWideAccess.php",
+      "app/Jobs/ApiTokenExpirationWarningJob.php",
+      "app/Jobs/CheckForUpdatesJob.php",
+      "app/Jobs/CleanupHelperContainersJob.php",
+      "app/Jobs/DatabaseBackupJob.php",
+      "app/Jobs/DockerCleanupJob.php",
+      "app/Jobs/ReconcileGithubRunnersJob.php",
+      "app/Jobs/ScheduledJobManager.php",
+      "app/Jobs/ServerConnectionCheckJob.php",
+      "app/Jobs/ServerManagerJob.php",
+      "app/Jobs/StripeProcessJob.php",
+      "app/Jobs/SubscriptionCheckoutReminderJob.php",
+      "app/Jobs/VolumeBackupJob.php",
+      "app/Jobs/VolumeCloneJob.php",
+      "app/Mcp/Concerns/BuildsResponse.php",
+      "app/Mcp/Concerns/CallsRestApi.php",
+      "app/Mcp/Concerns/ResolvesTeam.php",
+      "app/Mcp/Resources/InfrastructureOverviewResource.php",
+      "app/Mcp/Servers/CoolifyServer.php",
+      "app/Mcp/Tools/CloudProvider.php",
+      "app/Mcp/Tools/CoolifyHelp.php",
+      "app/Mcp/Tools/GetInfrastructureOverview.php",
+      "app/Mcp/Tools/ListSharedEnvKeys.php",
+      "app/Mcp/Tools/ListUnhealthyResources.php",
+      "app/Mcp/Tools/ManageApplication.php",
+      "app/Mcp/Tools/ManageBackup.php",
+      "app/Mcp/Tools/ManageCloudflareTunnel.php",
+      "app/Mcp/Tools/ManageDatabase.php",
+      "app/Mcp/Tools/ManageDestination.php",
+      "app/Mcp/Tools/ManageDns.php",
+      "app/Mcp/Tools/ManageEnv.php",
+      "app/Mcp/Tools/ManageGitSource.php",
+      "app/Mcp/Tools/ManageIntegrationTokens.php",
+      "app/Mcp/Tools/ManagePreview.php",
+      "app/Mcp/Tools/ManagePrivateKey.php",
+      "app/Mcp/Tools/ManageProject.php",
+      "app/Mcp/Tools/ManageRegistry.php",
+      "app/Mcp/Tools/ManageS3Storage.php",
+      "app/Mcp/Tools/ManageScheduledTask.php",
+      "app/Mcp/Tools/ManageSecretManager.php",
+      "app/Mcp/Tools/ManageServer.php",
+      "app/Mcp/Tools/ManageService.php",
+      "app/Mcp/Tools/ManageSharedEnv.php",
+      "app/Mcp/Tools/ManageStorage.php",
+      "app/Mcp/Tools/ManageTags.php",
+      "app/Mcp/Tools/RestActionTool.php",
+      "app/Mcp/Tools/SearchResources.php",
+      "app/Models/Application.php",
+      "app/Models/ApplicationDeploymentQueue.php",
+      "app/Models/ApplicationSetting.php",
+      "app/Models/EnvironmentVariable.php",
+      "app/Models/InstanceSettings.php",
+      "app/Models/IntegrationToken.php",
+      "app/Models/S3Storage.php",
+      "app/Models/ScheduledDatabaseBackupExecution.php",
+      "app/Models/ScheduledTaskExecution.php",
+      "app/Models/ScheduledVolumeBackupExecution.php",
+      "app/Models/Scopes/VisibleThroughAccessGrants.php",
+      "app/Models/Service.php",
+      "app/Models/StandaloneClickhouse.php",
+      "app/Models/StandaloneDragonfly.php",
+      "app/Models/StandaloneKeydb.php",
+      "app/Models/StandaloneMariadb.php",
+      "app/Models/StandaloneMongodb.php",
+      "app/Models/StandaloneMysql.php",
+      "app/Models/StandaloneRedis.php",
+      "app/Models/StandaloneSqlite.php",
+      "app/Models/Subscription.php",
+      "app/Models/Team.php",
+      "app/Models/TeamInvitation.php",
+      "app/Models/User.php",
+      "app/Notifications/ApiTokenExpiringNotification.php",
+      "app/Policies/ApiTokenPolicy.php",
+      "app/Policies/ApplicationPolicy.php",
+      "app/Policies/ApplicationPreviewPolicy.php",
+      "app/Policies/ApplicationSettingPolicy.php",
+      "app/Policies/DatabasePolicy.php",
+      "app/Policies/EnvironmentVariablePolicy.php",
+      "app/Policies/ResourceCreatePolicy.php",
+      "app/Policies/ScheduledTaskPolicy.php",
+      "app/Policies/ServicePolicy.php",
+      "app/Policies/SharedEnvironmentVariablePolicy.php",
+      "app/Providers/AppServiceProvider.php",
+      "app/Providers/AuthServiceProvider.php",
+      "app/Rules/SafeWebhookUrl.php",
+      "app/Services/Access/AccessGrants.php",
+      "app/Services/Access/AccessResolver.php",
+      "app/Services/Access/Grant.php",
+      "app/Services/AvatarStorageService.php",
+      "app/Services/ContainerFilesystemService.php",
+      "app/Services/CoolifyUpgradeStatus.php",
+      "app/Services/Dns/CloudflareDnsProvider.php",
+      "app/Services/Dns/ManagedDnsRecordCleanup.php",
+      "app/Services/Dns/ResourceDnsRecords.php",
+      "app/Services/Dns/ServerDnsAddresses.php",
+      "app/Services/DockerRegistryLogins.php",
+      "app/Services/SecretManagers/ResourceSecretManager.php",
+      "app/Services/SentinelMetricsClient.php",
+      "app/Services/SentinelTrafficClient.php",
+      "app/Services/ServerTransfer/ServerTransferExporter.php",
+      "app/Services/ServerTransfer/TransferFinishChecklist.php",
+      "app/Services/TeamAvatarStorageService.php",
+      "app/Services/TerminalSessionService.php",
+      "app/Support/ValidationPatterns.php",
+      "app/Traits/AuthorizesResourceCreation.php",
+      "app/Traits/DeletesUserSessions.php",
+      "app/Traits/HasMetrics.php",
+      "app/Traits/ListensToTeamChannel.php",
+      "app/Traits/RecordsWorkerHost.php",
+      "app/Traits/ScopedByAccessGrants.php",
+      "bootstrap/getHelperVersion.php",
+      "bootstrap/getVersion.php",
+      "bootstrap/helpers/api.php",
+      "bootstrap/helpers/databases.php",
+      "bootstrap/helpers/docker.php",
+      "bootstrap/helpers/domains.php",
+      "bootstrap/helpers/parsers.php",
+      "bootstrap/helpers/shared.php",
+      "bootstrap/helpers/versions.php",
+      "cliff.toml",
+      "config/constants.php",
+      "database/seeders/ProductionSeeder.php",
+      "docker-compose.dev-multi.yml",
+      "docker-compose.dev.yml",
+      "docker-compose.windows.yml",
+      "docker/coolify-helper/Dockerfile",
+      "docker/development/Dockerfile",
+      "docker/production/Dockerfile",
+      "docker/tmp-php/Dockerfile",
+      "docker/tmp-php/docker-php-entrypoint",
+      "docker/tmp-php/docker-php-ext-configure",
+      "docker/tmp-php/docker-php-ext-enable",
+      "docker/tmp-php/docker-php-ext-install",
+      "docker/tmp-php/docker-php-source",
+      "openapi.json",
+      "openapi.yaml",
+      "other/nightly/.env.production",
+      "other/nightly/docker-compose.prod.yml",
+      "other/nightly/docker-compose.windows.yml",
+      "other/nightly/docker-compose.yml",
+      "other/nightly/install.sh",
+      "other/nightly/upgrade-postgres.sh",
+      "other/nightly/upgrade.sh",
+      "other/nightly/versions.json",
+      "release.json",
+      "scripts/clean-manifests.sh",
+      "scripts/dev-helper",
+      "scripts/helper-checksums",
+      "scripts/install.sh",
+      "scripts/plan-version.sh",
+      "scripts/release.sh",
+      "scripts/run",
+      "scripts/size.sh",
+      "scripts/sync-cdn.sh",
+      "scripts/tmp-remove-arch-tags.sh",
+      "scripts/undo-release.sh",
+      "scripts/upgrade.sh",
+      "upstream.json",
+      "versions.json"
+    ],
+    "route_diff": {
+      "added": [
+        {
+          "methods": [
+            "DELETE"
+          ],
+          "uri": "api/v1/applications/{uuid}/dns/{hostname}",
+          "action": "App\\Http\\Controllers\\Api\\DnsController@releaseApplicationRecord",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:delete"
+          ]
+        },
+        {
+          "methods": [
+            "DELETE"
+          ],
+          "uri": "api/v1/security/integration-tokens/{uuid}",
+          "action": "App\\Http\\Controllers\\Api\\IntegrationTokensController@destroy",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:delete"
+          ]
+        },
+        {
+          "methods": [
+            "DELETE"
+          ],
+          "uri": "api/v1/services/{uuid}/dns/{hostname}",
+          "action": "App\\Http\\Controllers\\Api\\DnsController@releaseServiceRecord",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:delete"
+          ]
+        },
+        {
+          "methods": [
+            "DELETE"
+          ],
+          "uri": "api/v1/{resource_type}/{uuid}/secret-manager",
+          "action": "App\\Http\\Controllers\\Api\\SecretManagerController@destroy",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:delete"
+          ]
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "uri": "api/v1/applications/{uuid}/dns",
+          "action": "App\\Http\\Controllers\\Api\\DnsController@applicationStatus",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:read"
+          ]
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "uri": "api/v1/dns/zones",
+          "action": "App\\Http\\Controllers\\Api\\DnsController@zones",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:read"
+          ]
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "uri": "api/v1/security/integration-tokens",
+          "action": "App\\Http\\Controllers\\Api\\IntegrationTokensController@index",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:read"
+          ]
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "uri": "api/v1/security/integration-tokens/{uuid}",
+          "action": "App\\Http\\Controllers\\Api\\IntegrationTokensController@show",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:read"
+          ]
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "uri": "api/v1/services/{uuid}/dns",
+          "action": "App\\Http\\Controllers\\Api\\DnsController@serviceStatus",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:read"
+          ]
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "uri": "api/v1/{resource_type}/{uuid}/secret-manager",
+          "action": "App\\Http\\Controllers\\Api\\SecretManagerController@show",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:read"
+          ]
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "uri": "api/v1/{resource_type}/{uuid}/secret-manager/keys",
+          "action": "App\\Http\\Controllers\\Api\\SecretManagerController@keys",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:write"
+          ]
+        },
+        {
+          "methods": [
+            "PATCH"
+          ],
+          "uri": "api/v1/security/integration-tokens/{uuid}",
+          "action": "App\\Http\\Controllers\\Api\\IntegrationTokensController@update",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:write"
+          ]
+        },
+        {
+          "methods": [
+            "PATCH"
+          ],
+          "uri": "api/v1/{resource_type}/{uuid}/secret-manager",
+          "action": "App\\Http\\Controllers\\Api\\SecretManagerController@update",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:write"
+          ]
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "uri": "api/v1/applications/{uuid}/dns",
+          "action": "App\\Http\\Controllers\\Api\\DnsController@createApplicationRecord",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:write"
+          ]
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "uri": "api/v1/applications/{uuid}/dns/replace",
+          "action": "App\\Http\\Controllers\\Api\\DnsController@replaceApplicationRecord",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:write"
+          ]
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "uri": "api/v1/security/integration-tokens/{uuid}/sync-zones",
+          "action": "App\\Http\\Controllers\\Api\\IntegrationTokensController@syncZones",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:write"
+          ]
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "uri": "api/v1/services/{uuid}/dns",
+          "action": "App\\Http\\Controllers\\Api\\DnsController@createServiceRecord",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:write"
+          ]
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "uri": "api/v1/services/{uuid}/dns/replace",
+          "action": "App\\Http\\Controllers\\Api\\DnsController@replaceServiceRecord",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:write"
+          ]
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "uri": "api/v1/{resource_type}/{uuid}/secret-manager/import",
+          "action": "App\\Http\\Controllers\\Api\\SecretManagerController@import",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:write"
+          ]
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "uri": "api/v1/{resource_type}/{uuid}/secret-manager/references",
+          "action": "App\\Http\\Controllers\\Api\\SecretManagerController@addReference",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:write"
+          ]
+        }
+      ],
+      "removed": [
+        {
+          "methods": [
+            "PATCH"
+          ],
+          "uri": "api/v1/applications/{uuid}/secret-manager",
+          "action": "App\\Http\\Controllers\\Api\\ApplicationSecretManagerController@update",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:write"
+          ]
+        }
+      ],
+      "changed": [
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ApplicationsController@delete_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write",
+              "App\\Http\\Middleware\\ApiAbility:deploy"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ApplicationsController@delete_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}/destinations/{destination_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ApplicationsController@remove_destination",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}/destinations/{destination_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ApplicationsController@remove_destination",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}/envs/{env_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ApplicationsController@delete_env_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}/envs/{env_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ApplicationsController@delete_env_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}/previews/{pull_request_id}",
+            "action": "App\\Http\\Controllers\\Api\\ApplicationsController@delete_preview_by_pull_request_id",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write",
+              "App\\Http\\Middleware\\ApiAbility:deploy"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}/previews/{pull_request_id}",
+            "action": "App\\Http\\Controllers\\Api\\ApplicationsController@delete_preview_by_pull_request_id",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@delete_scheduled_task_by_application_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@delete_scheduled_task_by_application_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}/storages/{storage_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ApplicationsController@delete_storage",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}/storages/{storage_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ApplicationsController@delete_storage",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}/storages/{storage_uuid}/backups",
+            "action": "App\\Http\\Controllers\\Api\\VolumeBackupsController@destroy",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}/storages/{storage_uuid}/backups",
+            "action": "App\\Http\\Controllers\\Api\\VolumeBackupsController@destroy",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}/tags/{tag_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ApplicationsController@delete_tag",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/applications/{uuid}/tags/{tag_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ApplicationsController@delete_tag",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/cloud-init-scripts/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\CloudInitScriptsController@destroy",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/cloud-init-scripts/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\CloudInitScriptsController@destroy",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/cloud-tokens/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\CloudProviderTokensController@destroy",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/cloud-tokens/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\CloudProviderTokensController@destroy",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/databases/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write",
+              "App\\Http\\Middleware\\ApiAbility:deploy"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/databases/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/databases/{uuid}/backups/{scheduled_backup_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_backup_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/databases/{uuid}/backups/{scheduled_backup_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_backup_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/databases/{uuid}/backups/{scheduled_backup_uuid}/executions/{execution_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_execution_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/databases/{uuid}/backups/{scheduled_backup_uuid}/executions/{execution_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_execution_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/databases/{uuid}/envs/{env_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_env_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/databases/{uuid}/envs/{env_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_env_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/databases/{uuid}/storages/{storage_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_storage",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/databases/{uuid}/storages/{storage_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_storage",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/databases/{uuid}/storages/{storage_uuid}/backups",
+            "action": "App\\Http\\Controllers\\Api\\VolumeBackupsController@destroy",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/databases/{uuid}/storages/{storage_uuid}/backups",
+            "action": "App\\Http\\Controllers\\Api\\VolumeBackupsController@destroy",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/databases/{uuid}/tags/{tag_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_tag",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/databases/{uuid}/tags/{tag_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\DatabasesController@delete_tag",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/destinations/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\DestinationsController@delete",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/destinations/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\DestinationsController@delete",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/github-apps/{github_app_id}",
+            "action": "App\\Http\\Controllers\\Api\\GithubController@delete_github_app",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/github-apps/{github_app_id}",
+            "action": "App\\Http\\Controllers\\Api\\GithubController@delete_github_app",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/gitlab-apps/{gitlab_app_id}",
+            "action": "App\\Http\\Controllers\\Api\\GitlabController@delete_gitlab_app",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/gitlab-apps/{gitlab_app_id}",
+            "action": "App\\Http\\Controllers\\Api\\GitlabController@delete_gitlab_app",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/projects/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ProjectController@delete_project",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/projects/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ProjectController@delete_project",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/projects/{uuid}/environments/{environment_name_or_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ProjectController@delete_environment",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/projects/{uuid}/environments/{environment_name_or_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ProjectController@delete_environment",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/projects/{uuid}/environments/{environment_name_or_uuid}/envs/{env_id}",
+            "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@environment_delete_env",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/projects/{uuid}/environments/{environment_name_or_uuid}/envs/{env_id}",
+            "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@environment_delete_env",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/projects/{uuid}/envs/{env_id}",
+            "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@project_delete_env",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/projects/{uuid}/envs/{env_id}",
+            "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@project_delete_env",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/s3-storages/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\S3StoragesController@destroy",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/s3-storages/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\S3StoragesController@destroy",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/security/keys/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\SecurityController@delete_key",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/security/keys/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\SecurityController@delete_key",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/servers/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ServersController@delete_server",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/servers/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ServersController@delete_server",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/servers/{uuid}/envs/{env_id}",
+            "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@server_delete_env",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/servers/{uuid}/envs/{env_id}",
+            "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@server_delete_env",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/servers/{uuid}/registries/{registry}",
+            "action": "App\\Http\\Controllers\\Api\\ServerDockerRegistriesController@logout",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/servers/{uuid}/registries/{registry}",
+            "action": "App\\Http\\Controllers\\Api\\ServerDockerRegistriesController@logout",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/services/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ServicesController@delete_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write",
+              "App\\Http\\Middleware\\ApiAbility:deploy"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/services/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ServicesController@delete_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/services/{uuid}/envs/{env_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ServicesController@delete_env_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/services/{uuid}/envs/{env_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ServicesController@delete_env_by_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@delete_scheduled_task_by_service_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/services/{uuid}/scheduled-tasks/{task_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@delete_scheduled_task_by_service_uuid",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/services/{uuid}/storages/{storage_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ServicesController@delete_storage",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/services/{uuid}/storages/{storage_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ServicesController@delete_storage",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/services/{uuid}/storages/{storage_uuid}/backups",
+            "action": "App\\Http\\Controllers\\Api\\VolumeBackupsController@destroy",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/services/{uuid}/storages/{storage_uuid}/backups",
+            "action": "App\\Http\\Controllers\\Api\\VolumeBackupsController@destroy",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/services/{uuid}/tags/{tag_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ServicesController@delete_tag",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/services/{uuid}/tags/{tag_uuid}",
+            "action": "App\\Http\\Controllers\\Api\\ServicesController@delete_tag",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/tags/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\TagsController@delete",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/tags/{uuid}",
+            "action": "App\\Http\\Controllers\\Api\\TagsController@delete",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/team/envs/{env_id}",
+            "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@team_delete_env",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "DELETE"
+            ],
+            "uri": "api/v1/team/envs/{env_id}",
+            "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@team_delete_env",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:delete"
+            ]
+          }
+        ],
+        [
+          {
+            "methods": [
+              "POST"
+            ],
+            "uri": "api/v1/servers/{uuid}/registries/{registry}/check",
+            "action": "App\\Http\\Controllers\\Api\\ServerDockerRegistriesController@check",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write"
+            ]
+          },
+          {
+            "methods": [
+              "POST"
+            ],
+            "uri": "api/v1/servers/{uuid}/registries/{registry}/check",
+            "action": "App\\Http\\Controllers\\Api\\ServerDockerRegistriesController@check",
+            "middleware": [
+              "api",
+              "App\\Http\\Middleware\\Authenticate:sanctum",
+              "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+              "App\\Http\\Middleware\\ApiAllowed",
+              "App\\Http\\Middleware\\ApiSensitiveData",
+              "App\\Http\\Middleware\\ApiAbility:write",
+              "App\\Http\\Middleware\\ApiAbility:deploy"
+            ]
+          }
+        ]
+      ]
+    },
+    "migrations": [
+      {
+        "name": "2026_10_25_100000_add_access_grants_to_team_members_and_tokens",
+        "summary": {
+          "tables": [
+            {
+              "table": "team_user",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "json",
+                  "columns": [
+                    "access"
+                  ]
+                }
+              ]
+            },
+            {
+              "table": "personal_access_tokens",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "json",
+                  "columns": [
+                    "scopes"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": true,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": [
+          "personal_access_tokens",
+          "team_user"
+        ]
+      },
+      {
+        "name": "2026_10_26_081954_add_git_https_credentials_to_applications_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "applications",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "string",
+                  "columns": [
+                    "git_https_username"
+                  ]
+                },
+                {
+                  "method": "text",
+                  "columns": [
+                    "git_https_password"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_10_27_142736_add_paused_at_to_personal_access_tokens_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "personal_access_tokens",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "timestamp",
+                  "columns": [
+                    "paused_at"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": [
+          "personal_access_tokens"
+        ]
+      },
+      {
+        "name": "2026_10_28_204953_add_worker_host_to_scheduled_job_executions",
+        "summary": {
+          "tables": [],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_10_28_211105_add_indexes_for_team_deployments_and_docker_cleanup_history",
+        "summary": {
+          "tables": [
+            {
+              "table": "applications",
+              "op": "alter",
+              "columns": []
+            },
+            {
+              "table": "docker_cleanup_executions",
+              "op": "alter",
+              "columns": []
+            }
+          ],
+          "has_raw_sql": true,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_10_28_212642_add_indexes_for_server_settings_and_team_membership_lookups",
+        "summary": {
+          "tables": [
+            {
+              "table": "server_settings",
+              "op": "alter",
+              "columns": []
+            },
+            {
+              "table": "team_user",
+              "op": "alter",
+              "columns": []
+            }
+          ],
+          "has_raw_sql": true,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": [
+          "server_settings",
+          "team_user"
+        ]
+      },
+      {
+        "name": "2026_10_28_214500_add_index_for_application_deployment_history",
+        "summary": {
+          "tables": [
+            {
+              "table": "application_deployment_queues",
+              "op": "alter",
+              "columns": []
+            }
+          ],
+          "has_raw_sql": true,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_10_28_214953_add_index_for_interrupted_docker_cleanup_executions",
+        "summary": {
+          "tables": [
+            {
+              "table": "docker_cleanup_executions",
+              "op": "alter",
+              "columns": []
+            }
+          ],
+          "has_raw_sql": true,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_10_28_224219_add_index_for_active_github_runner_executions",
+        "summary": {
+          "tables": [
+            {
+              "table": "github_runner_executions",
+              "op": "alter",
+              "columns": []
+            }
+          ],
+          "has_raw_sql": true,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_10_28_224423_add_index_for_dashboard_recent_deployments",
+        "summary": {
+          "tables": [
+            {
+              "table": "application_deployment_queues",
+              "op": "alter",
+              "columns": []
+            }
+          ],
+          "has_raw_sql": true,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_10_28_232000_add_index_for_active_servers_by_private_key",
+        "summary": {
+          "tables": [
+            {
+              "table": "servers",
+              "op": "alter",
+              "columns": []
+            }
+          ],
+          "has_raw_sql": true,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": [
+          "servers"
+        ]
+      },
+      {
+        "name": "2026_10_29_221743_add_checkout_reminder_sent_at_to_subscriptions_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "subscriptions",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "timestamp",
+                  "columns": [
+                    "stripe_checkout_reminder_sent_at"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_10_30_144551_add_access_to_team_invitations_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "team_invitations",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "json",
+                  "columns": [
+                    "access"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_10_30_171359_drop_image_default_from_standalone_sqlites_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "standalone_sqlites",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "string",
+                  "columns": [
+                    "image"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_01_142702_add_update_channel_to_instance_settings_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "instance_settings",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "string",
+                  "columns": [
+                    "update_channel"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "update_custom_tag"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "previous_update_channel"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": [
+          "instance_settings"
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "regenerate_route_inventory",
+        "layer": "a",
+        "description": "regenerate compat/api/upstream-routes.json"
+      },
+      {
+        "id": "regenerate_migration_inventory",
+        "layer": "a",
+        "description": "regenerate compat/baseline/supported-migrations.txt"
+      },
+      {
+        "id": "update_schema_mapping:team_user",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `team_user` (Alter: json:access)"
+      },
+      {
+        "id": "update_schema_mapping:personal_access_tokens",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `personal_access_tokens` (Alter: json:scopes)"
+      },
+      {
+        "id": "update_schema_mapping:personal_access_tokens",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `personal_access_tokens` (Alter: timestamp:paused_at)"
+      },
+      {
+        "id": "update_schema_mapping:server_settings",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `server_settings` (Alter: )"
+      },
+      {
+        "id": "update_schema_mapping:team_user",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `team_user` (Alter: )"
+      },
+      {
+        "id": "update_schema_mapping:servers",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `servers` (Alter: )"
+      },
+      {
+        "id": "update_schema_mapping:instance_settings",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `instance_settings` (Alter: string:update_channel, string:update_custom_tag, string:previous_update_channel)"
+      },
+      {
+        "id": "review_component:api.auth-chain",
+        "layer": "d",
+        "description": "port behaviour change into api.auth-chain (path app/Http/Kernel.php; path app/Http/Middleware/ApiAbility.php; path app/Http/Middleware/EnsureTokenBelongsToCurrentTeamMember.php; path app/Models/PersonalAccessToken.php; upstream test tests/Feature/ApiTokenExpirationTest.php; upstream test tests/Feature/ApiTokenExpirationWarningTest.php; upstream test tests/Feature/ApiTokenLivewireAuthorizationTest.php; upstream test tests/Feature/Authorization/LegacyMemberTokenTest.php; upstream test tests/Feature/Security/ApiTokenCreationSecurityTest.php; table personal_access_tokens; table team_user; table personal_access_tokens; table team_user; table instance_settings)"
+      },
+      {
+        "id": "review_component:api.teams",
+        "layer": "d",
+        "description": "port behaviour change into api.teams (path app/Policies/TeamPolicy.php; table team_user; table team_user)"
+      },
+      {
+        "id": "review_component:api.projects",
+        "layer": "d",
+        "description": "port behaviour change into api.projects (path app/Http/Controllers/Api/ProjectController.php; path app/Models/Environment.php; path app/Models/Project.php; path app/Policies/EnvironmentPolicy.php; path app/Policies/ProjectPolicy.php; route DELETE api/v1/projects/{uuid}; route DELETE api/v1/projects/{uuid}/environments/{environment_name_or_uuid}; route DELETE api/v1/projects/{uuid}/environments/{environment_name_or_uuid}/envs/{env_id}; route DELETE api/v1/projects/{uuid}/envs/{env_id})"
+      },
+      {
+        "id": "review_component:api.route-inventory",
+        "layer": "d",
+        "description": "port behaviour change into api.route-inventory (path app/Http/Kernel.php; path routes/api.php)"
+      },
+      {
+        "id": "review_component:db.schema-guard",
+        "layer": "d",
+        "description": "port behaviour change into db.schema-guard (path database/migrations/2026_10_25_100000_add_access_grants_to_team_members_and_tokens.php; path database/migrations/2026_10_26_081954_add_git_https_credentials_to_applications_table.php; path database/migrations/2026_10_27_142736_add_paused_at_to_personal_access_tokens_table.php; path database/migrations/2026_10_28_204953_add_worker_host_to_scheduled_job_executions.php; path database/migrations/2026_10_28_211105_add_indexes_for_team_deployments_and_docker_cleanup_history.php; path database/migrations/2026_10_28_212642_add_indexes_for_server_settings_and_team_membership_lookups.php; path database/migrations/2026_10_28_214500_add_index_for_application_deployment_history.php; path database/migrations/2026_10_28_214953_add_index_for_interrupted_docker_cleanup_executions.php; path database/migrations/2026_10_28_224219_add_index_for_active_github_runner_executions.php; path database/migrations/2026_10_28_224423_add_index_for_dashboard_recent_deployments.php; path database/migrations/2026_10_28_232000_add_index_for_active_servers_by_private_key.php; path database/migrations/2026_10_29_221743_add_checkout_reminder_sent_at_to_subscriptions_table.php; path database/migrations/2026_10_30_144551_add_access_to_team_invitations_table.php; path database/migrations/2026_10_30_171359_drop_image_default_from_standalone_sqlites_table.php; path database/migrations/2026_11_01_142702_add_update_channel_to_instance_settings_table.php)"
+      },
+      {
+        "id": "review_component:api.private-keys",
+        "layer": "d",
+        "description": "port behaviour change into api.private-keys (route DELETE api/v1/security/keys/{uuid})"
+      },
+      {
+        "id": "review_component:ui.session",
+        "layer": "d",
+        "description": "port behaviour change into ui.session (table team_user; table team_user)"
+      },
+      {
+        "id": "review_component:api.servers",
+        "layer": "d",
+        "description": "port behaviour change into api.servers (path app/Models/Server.php; path app/Models/ServerSetting.php; table server_settings; table servers)"
+      },
+      {
+        "id": "review_component:ui.styles",
+        "layer": "d",
+        "description": "port behaviour change into ui.styles (path resources/css/app.css; path resources/views/components/reicon.blade.php)"
+      },
+      {
+        "id": "review_component:ui.frontend",
+        "layer": "d",
+        "description": "port behaviour change into ui.frontend (path resources/views/auth/two-factor-challenge.blade.php; path resources/views/components/forms/listbox.blade.php; path resources/views/components/modal-confirmation.blade.php; path resources/views/components/navbar.blade.php; path resources/views/components/server/sidebar.blade.php; path resources/views/livewire/dashboard.blade.php; path resources/views/livewire/project/index.blade.php; path resources/views/livewire/project/resource/index.blade.php; path resources/views/livewire/project/show.blade.php; path resources/views/livewire/security/private-key/index.blade.php; path resources/views/livewire/server/index.blade.php; path resources/views/livewire/server/show.blade.php; path resources/views/livewire/team/index.blade.php; path resources/views/livewire/team/member.blade.php; path resources/views/livewire/team/member/index.blade.php)"
+      },
+      {
+        "id": "review_component:ui.read-models",
+        "layer": "d",
+        "description": "port behaviour change into ui.read-models (path app/Livewire/Dashboard.php; path app/Livewire/Project/Show.php; path app/Livewire/Server/Show.php; path app/Livewire/Team/Member.php; table personal_access_tokens; table team_user; table personal_access_tokens; table server_settings; table team_user; table servers)"
+      },
+      {
+        "id": "review_component:remote.execution",
+        "layer": "d",
+        "description": "port behaviour change into remote.execution (path app/Helpers/SshMultiplexingHelper.php; path bootstrap/helpers/remoteProcess.php)"
+      },
+      {
+        "id": "review_component:server.validation",
+        "layer": "d",
+        "description": "port behaviour change into server.validation (table server_settings; table servers)"
+      },
+      {
+        "id": "review_component:databases.standalone",
+        "layer": "d",
+        "description": "port behaviour change into databases.standalone (path app/Http/Controllers/Api/DatabasesController.php; path app/Livewire/Project/Database/Postgresql/General.php; path app/Livewire/Project/Resource/Create.php; path app/Models/StandalonePostgresql.php; path app/Services/DatabaseStartCommandExecutor.php; path app/Traits/HasSecretManager.php; path resources/views/components/database/configuration-sidebar.blade.php; path resources/views/livewire/project/database/backup-edit/general.blade.php; path resources/views/livewire/project/database/scheduled-backups.blade.php; path resources/views/livewire/project/database/sqlite/connect-application.blade.php; path resources/views/livewire/project/resource/index.blade.php)"
+      }
+    ],
+    "validation": [
+      [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      [
+        "cargo",
+        "test",
+        "-p",
+        "coolify-api"
+      ],
+      [
+        "cargo",
+        "test",
+        "-p",
+        "coolify-compat"
+      ],
+      [
+        "cargo",
+        "test",
+        "-p",
+        "coolify-db"
+      ],
+      [
+        "cargo",
+        "test",
+        "-p",
+        "coolify-domain"
+      ],
+      [
+        "cargo",
+        "test",
+        "-p",
+        "coolify-jobs"
+      ],
+      [
+        "cargo",
+        "test",
+        "-p",
+        "coolify-port"
+      ],
+      [
+        "cargo",
+        "test",
+        "-p",
+        "coolify-remote"
+      ]
+    ],
+    "escalation": {
+      "reasons": [
+        "high risk: requires explicit human approval before integration",
+        "191 behaviour-relevant files are not covered by the mapping registry"
+      ],
+      "decision_required": "approve or reject the generated patch and assign the semantic port of the listed components"
+    },
+    "mapping_coverage": 0.17316017316017315,
+    "unresolved_questions": [
+      "2026_10_28_211105_add_indexes_for_team_deployments_and_docker_cleanup_history: raw SQL cannot be analysed statically; review manually",
+      "2026_10_28_212642_add_indexes_for_server_settings_and_team_membership_lookups: raw SQL cannot be analysed statically; review manually",
+      "2026_10_28_214500_add_index_for_application_deployment_history: raw SQL cannot be analysed statically; review manually",
+      "2026_10_28_214953_add_index_for_interrupted_docker_cleanup_executions: raw SQL cannot be analysed statically; review manually",
+      "2026_10_28_224219_add_index_for_active_github_runner_executions: raw SQL cannot be analysed statically; review manually",
+      "2026_10_28_224423_add_index_for_dashboard_recent_deployments: raw SQL cannot be analysed statically; review manually",
+      "2026_10_28_232000_add_index_for_active_servers_by_private_key: raw SQL cannot be analysed statically; review manually",
+      "some files matched no classification rule; extend PATH_RULES"
+    ]
+  },
+  "branch": null,
+  "base_commit": null,
+  "worktree": null,
+  "generated_files": [],
+  "patch_file": null,
+  "prompt_pack": null,
+  "attempts": [],
+  "verdict": null,
+  "recommended_action": "analysis only: re-run with generation to produce a patch",
+  "started_at": "2026-11-08T09:02:15Z",
+  "updated_at": "2026-11-08T09:02:19Z"
+}

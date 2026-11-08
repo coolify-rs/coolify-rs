@@ -103,7 +103,7 @@
                 <span>Name</span>
                 <span>Email</span>
                 <span>Subscription</span>
-                <span class="text-right">Action</span>
+                <span class="text-right">Actions</span>
               </div>
               {#each found as user (user.id)}
                 <div class="data-table-row admin-search-table-grid border-b border-neutral-200 last:border-b-0 dark:border-white/[0.06]">

@@ -18,6 +18,7 @@ use crate::auth::AuthCtx;
 use crate::input::{Input, validated_json};
 use crate::response::{ApiError, ApiResult, PhpJson};
 use crate::state::AppState;
+use coolify_domain::grants::AccessLevel;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Resource {
@@ -54,12 +55,50 @@ async fn find_resource(
     kind: Resource,
     uuid: &str,
 ) -> Result<Option<Vec<(String, i64)>>, ApiError> {
+    let visible = match kind {
+        Resource::Application => {
+            coolify_db::applications::find_in_team(&state.db, ctx.team_id, uuid)
+                .await?
+                .is_some()
+        }
+        Resource::Service => coolify_db::services::find_in_team(&state.db, ctx.team_id, uuid)
+            .await?
+            .is_some(),
+        Resource::Database => true,
+    };
+    if !visible {
+        return Ok(None);
+    }
     Ok(match kind {
         Resource::Application => vb::application_resource(&state.db, ctx.team_id, uuid).await?,
         Resource::Service => vb::service_resource(&state.db, ctx.team_id, uuid).await?,
         Resource::Database => dbs::find_in_team(&state.db, ctx.team_id, uuid)
             .await?
             .map(|d| vec![(d.kind.morph().to_owned(), d.id)]),
+    })
+}
+
+/// `$this->authorize('update' | 'delete', $resource)`: the grant level on the application,
+/// database or service (`VisibleThroughAccessGrants` hides one without a grant: not found).
+async fn authorize(
+    state: &AppState,
+    ctx: &AuthCtx,
+    kind: Resource,
+    uuid: &str,
+    level: AccessLevel,
+) -> Result<bool, ApiError> {
+    Ok(match kind {
+        Resource::Application => {
+            coolify_db::applications::find_in_team(&state.db, ctx.team_id, uuid)
+                .await?
+                .is_some_and(|a| ctx.can_app(level, &a))
+        }
+        Resource::Service => coolify_db::services::find_in_team(&state.db, ctx.team_id, uuid)
+            .await?
+            .is_some_and(|s| crate::routes::services::require(ctx, &s, level).is_ok()),
+        Resource::Database => dbs::find_in_team(&state.db, ctx.team_id, uuid)
+            .await?
+            .is_some_and(|d| ctx.can_db(level, &d)),
     })
 }
 
@@ -374,7 +413,7 @@ async fn upsert(
             json!({"message": kind.not_found()}),
         ));
     };
-    if !ctx.is_team_admin() {
+    if !authorize(&state, &ctx, kind, &uuid, AccessLevel::Write).await? {
         return Err(ApiError::Unauthorized);
     }
     if boolean(input.get("stop_during_backup"))
@@ -473,6 +512,7 @@ async fn schedule(
     uuid: &str,
     storage_uuid: &str,
     not_found: &'static str,
+    level: AccessLevel,
 ) -> Result<Result<(BackupTarget, coolify_db::records::Record), axum::response::Response>, ApiError>
 {
     let Some(resources) = find_resource(state, ctx, kind, uuid).await? else {
@@ -481,7 +521,7 @@ async fn schedule(
             json!({"message": not_found}),
         )));
     };
-    if !ctx.is_team_admin() {
+    if !authorize(state, ctx, kind, uuid, level).await? {
         return Err(ApiError::Unauthorized);
     }
     let Some(target) = vb::find_storage(&state.db, &resources, storage_uuid).await? else {
@@ -514,6 +554,7 @@ async fn destroy(
         &uuid,
         &storage_uuid,
         "Resource not found.",
+        AccessLevel::Delete,
     )
     .await?
     {
@@ -557,11 +598,20 @@ async fn run(
     uuid: String,
     storage_uuid: String,
 ) -> ApiResult {
-    let (_, row) =
-        match schedule(&state, &ctx, kind, &uuid, &storage_uuid, kind.not_found()).await? {
-            Ok(v) => v,
-            Err(r) => return Ok(r),
-        };
+    let (_, row) = match schedule(
+        &state,
+        &ctx,
+        kind,
+        &uuid,
+        &storage_uuid,
+        kind.not_found(),
+        AccessLevel::Write,
+    )
+    .await?
+    {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     jobs.spawn_volume_backup(parts::id_of(&row));
     tracing::info!(target: "audit", event = "api.volume_backup.run", team_id = ctx.team_id, resource_type = kind.name(), resource_uuid = %uuid, backup_uuid = ?row.get("uuid"));

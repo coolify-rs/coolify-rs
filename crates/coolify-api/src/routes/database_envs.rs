@@ -24,6 +24,7 @@ use crate::routes::databases::NOT_FOUND;
 use crate::serialize::serialize_record;
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 /// `ValidationPatterns::ENVIRONMENT_VARIABLE_KEY_PATTERN`.
 static KEY: LazyLock<Regex> =
@@ -122,6 +123,34 @@ async fn find(state: &AppState, ctx: &AuthCtx, uuid: &str) -> Result<DatabaseRow
 }
 
 /// `removeSensitiveEnvData($env)` of a stored row (or a fresh model's attributes).
+/// The stored plain value of a variable row, for the reference check of the `saving` hook.
+fn stored_plain(state: &AppState, row: &Record) -> Option<String> {
+    let enc = state.encrypter.as_ref()?;
+    let cipher = row
+        .get("value")
+        .and_then(Value::as_str)
+        .filter(|c| !c.is_empty())?;
+    enc.decrypt_maybe_serialized(cipher)
+        .ok()
+        .map(|v| v.trim().to_owned())
+}
+
+/// `EnvironmentVariable::authorizeAddedSharedVariableReferencesIn` for a database variable.
+fn check_references(
+    ctx: &AuthCtx,
+    d: &DatabaseRow,
+    stored: Option<&str>,
+    value: Option<&str>,
+) -> Result<(), ApiError> {
+    crate::shared_refs::authorize_added(
+        ctx,
+        d.raw.get("environment_id").and_then(Value::as_i64),
+        stored,
+        value,
+        "value",
+    )
+}
+
 async fn present(
     state: &AppState,
     ctx: &AuthCtx,
@@ -278,7 +307,7 @@ pub async fn create(
     body: Bytes,
 ) -> ApiResult {
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let mut input = lenient_json(&headers, &uri, &body);
@@ -301,6 +330,7 @@ pub async fn create(
     }
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let value = input.str("value").map(|v| v.trim().to_owned());
+    check_references(&ctx, &d, None, value.as_deref())?;
     let row = parts::create_variable(
         &state.db,
         d.kind.morph(),
@@ -334,7 +364,7 @@ pub async fn update(
     body: Bytes,
 ) -> ApiResult {
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let mut input = lenient_json(&headers, &uri, &body);
@@ -355,6 +385,10 @@ pub async fn update(
     // `if ($request->has('value'))`: a request without a value keeps the stored one.
     if input.has("value") {
         let value = input.str("value").map(|v| v.trim().to_owned());
+        let stored = stored_plain(&state, &row);
+        if stored.as_deref() != value.as_deref() {
+            check_references(&ctx, &d, stored.as_deref(), value.as_deref())?;
+        }
         values.push((
             "value",
             ColumnValue::Text(value.as_deref().map(|v| enc.encrypt_serialized(v))),
@@ -398,7 +432,7 @@ pub async fn bulk(
     body: Bytes,
 ) -> ApiResult {
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let input = lenient_json(&headers, &uri, &body);
@@ -436,6 +470,10 @@ pub async fn bulk(
                 let id = parts::id_of(&row);
                 let mut values: Vec<(&'static str, ColumnValue)> = Vec::new();
                 if item.has("value") {
+                    let stored = stored_plain(&state, &row);
+                    if stored.as_deref() != value.as_deref() {
+                        check_references(&ctx, &d, stored.as_deref(), value.as_deref())?;
+                    }
                     values.push(("value", ColumnValue::Text(cipher)));
                     values.push(("is_shared", ColumnValue::Bool(shared)));
                 }
@@ -456,6 +494,7 @@ pub async fn bulk(
                     .ok_or(ApiError::Internal)?
             }
             None => {
+                check_references(&ctx, &d, None, value.as_deref())?;
                 let row = parts::create_variable(
                     &state.db,
                     d.kind.morph(),
@@ -497,7 +536,7 @@ pub async fn delete(
     Path((uuid, env_uuid)): Path<(String, String)>,
 ) -> ApiResult {
     let d = find(&state, &ctx, &uuid).await?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_db(AccessLevel::Write, &d) {
         return Err(ApiError::Unauthorized);
     }
     let row = parts::variable_by_uuid(&state.db, d.kind.morph(), d.id, &env_uuid)

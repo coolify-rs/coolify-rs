@@ -477,13 +477,18 @@ async fn init_scripts(
                 ));
             }
             let index = scripts.iter().position(|s| name_of(s) == original);
-            if index.is_some() && name != original {
-                if let Err(e) = validate_filename(name) {
-                    return Ok(toast("error", &e));
-                }
-                if let Err(e) = remove(original).await {
-                    return Ok(toast("error", &e));
-                }
+            // Only an unchanged filename of an existing script skips validation, so legacy rows
+            // stay editable; a new script or a rename must be a safe filename (no path traversal).
+            if (index.is_none() || name != original)
+                && let Err(e) = validate_filename(name)
+            {
+                return Ok(toast("error", &e));
+            }
+            if index.is_some()
+                && name != original
+                && let Err(e) = remove(original).await
+            {
+                return Ok(toast("error", &e));
             }
             let entry = json!({"index": index.unwrap_or(scripts.len()), "filename": name, "content": content});
             match index {

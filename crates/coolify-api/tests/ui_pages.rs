@@ -39,7 +39,7 @@ impl Ui<'_> {
 }
 
 async fn exec(h: &Harness, sql: &str) {
-    sqlx::query(sql).execute(h.tdb.db.pool()).await.unwrap();
+    sqlx::raw_sql(sql).execute(h.tdb.db.pool()).await.unwrap();
 }
 
 #[tokio::test]
@@ -458,5 +458,57 @@ async fn servers_form_create_list_and_delete() {
         .await
         .assert(200, r#"{"message":"Server deleted."}"#);
     assert_eq!(alice.get("/ui/servers").await["servers"], json!([]));
+    h.finish().await;
+}
+
+/// `ActiveDeployments`: the five newest unfinished and the five newest finished deployments of
+/// the team's applications, deleted ones included; the finished list reads at most five per app.
+#[tokio::test]
+async fn dashboard_recent_deployments() {
+    let h = Harness::new().await;
+    let alice = Ui::login(&h, "alice@example.test").await;
+    let r = alice
+        .send(
+            "POST",
+            "/ui/api/v1/projects",
+            Some(json!({"name": "Deploys"})),
+        )
+        .await;
+    assert_eq!(r.status, 201, "{}", r.body);
+    let uuid = r.json()["uuid"].as_str().unwrap().to_string();
+    exec(
+        &h,
+        &format!(
+            "INSERT INTO applications (id, uuid, name, environment_id, build_pack, git_branch, git_repository, \
+                                       destination_type, destination_id, deleted_at) \
+             SELECT v.id, v.uuid, v.name, e.id, 'dockerfile', 'main', 'r', 'App\\Models\\StandaloneDocker', 0, v.deleted \
+               FROM environments e JOIN projects p ON p.id = e.project_id, \
+                    (VALUES (901, 'app-a', 'a', NULL::timestamp), (902, 'app-b', 'b', now()::timestamp)) v(id, uuid, name, deleted) \
+              WHERE p.uuid = '{uuid}'"
+        ),
+    )
+    .await;
+    // App a: eight finished (ids 1..8) and one in progress; deleted app b: two finished, newest.
+    exec(
+        &h,
+        "INSERT INTO application_deployment_queues (id, application_id, deployment_uuid, status, application_name) \
+         SELECT i, '901', 'd' || i, 'finished', 'a' FROM generate_series(1, 8) i; \
+         INSERT INTO application_deployment_queues (id, application_id, deployment_uuid, status, application_name) VALUES \
+           (9, '901', 'd9', 'in_progress', 'a'), (10, '902', 'd10', 'failed', 'b'), (11, '902', 'd11', 'finished', 'b'), \
+           (12, '999', 'd12', 'finished', 'elsewhere')",
+    )
+    .await;
+    let v = alice.get("/ui/layout/recent-deployments").await;
+    let ids = |k: &str| -> Vec<i64> {
+        v[k].as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["id"].as_i64().unwrap())
+            .collect()
+    };
+    assert_eq!(ids("active"), vec![9]);
+    assert_eq!(ids("recent"), vec![11, 10, 8, 7, 6]);
+    assert_eq!(v["recent"][0]["application_uuid"], "app-b");
+    assert_eq!(v["recent"][0]["project"], "Deploys");
     h.finish().await;
 }

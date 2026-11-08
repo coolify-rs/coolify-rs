@@ -1,6 +1,6 @@
 {
   "generator": "coolify-port 0.1.0",
-  "upstream_commit": "70c1bcb1381de7d42fd290e6cd50bf9a5bcf714d",
+  "upstream_commit": "0becfba9113063336b09860579627fd218cb3fc4",
   "routes": [
     {
       "methods": [
@@ -14,8 +14,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write",
-        "App\\Http\\Middleware\\ApiAbility:deploy"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -30,7 +29,22 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/applications/{uuid}/dns/{hostname}",
+      "action": "App\\Http\\Controllers\\Api\\DnsController@releaseApplicationRecord",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -45,7 +59,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -60,8 +74,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write",
-        "App\\Http\\Middleware\\ApiAbility:deploy"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -76,7 +89,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -91,7 +104,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -106,7 +119,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -121,7 +134,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -136,7 +149,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -151,7 +164,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -166,8 +179,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write",
-        "App\\Http\\Middleware\\ApiAbility:deploy"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -182,7 +194,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -197,7 +209,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -212,7 +224,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -227,7 +239,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -242,7 +254,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -257,7 +269,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -272,7 +284,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -287,7 +299,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -302,7 +314,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -317,7 +329,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -332,7 +344,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -347,7 +359,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -362,7 +374,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -377,7 +389,22 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/security/integration-tokens/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\IntegrationTokensController@destroy",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -392,7 +419,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -407,7 +434,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -422,7 +449,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -437,7 +464,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -452,8 +479,22 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write",
-        "App\\Http\\Middleware\\ApiAbility:deploy"
+        "App\\Http\\Middleware\\ApiAbility:delete"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/services/{uuid}/dns/{hostname}",
+      "action": "App\\Http\\Controllers\\Api\\DnsController@releaseServiceRecord",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -468,7 +509,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -483,7 +524,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -498,7 +539,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -513,7 +554,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -528,7 +569,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -543,7 +584,7 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -558,7 +599,22 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:delete"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE"
+      ],
+      "uri": "api/v1/{resource_type}/{uuid}/secret-manager",
+      "action": "App\\Http\\Controllers\\Api\\SecretManagerController@destroy",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:delete"
       ]
     },
     {
@@ -607,6 +663,21 @@
       ],
       "uri": "api/v1/applications/{uuid}/destinations",
       "action": "App\\Http\\Controllers\\Api\\ApplicationsController@destinations",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/applications/{uuid}/dns",
+      "action": "App\\Http\\Controllers\\Api\\DnsController@applicationStatus",
       "middleware": [
         "api",
         "App\\Http\\Middleware\\Authenticate:sanctum",
@@ -1234,6 +1305,21 @@
       "methods": [
         "GET"
       ],
+      "uri": "api/v1/dns/zones",
+      "action": "App\\Http\\Controllers\\Api\\DnsController@zones",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
       "uri": "api/v1/github-apps",
       "action": "App\\Http\\Controllers\\Api\\GithubController@list_github_apps",
       "middleware": [
@@ -1694,6 +1780,36 @@
       "methods": [
         "GET"
       ],
+      "uri": "api/v1/security/integration-tokens",
+      "action": "App\\Http\\Controllers\\Api\\IntegrationTokensController@index",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/security/integration-tokens/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\IntegrationTokensController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
       "uri": "api/v1/security/keys",
       "action": "App\\Http\\Controllers\\Api\\SecurityController@keys",
       "middleware": [
@@ -2130,6 +2246,21 @@
       "methods": [
         "GET"
       ],
+      "uri": "api/v1/services/{uuid}/dns",
+      "action": "App\\Http\\Controllers\\Api\\DnsController@serviceStatus",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
       "uri": "api/v1/services/{uuid}/envs",
       "action": "App\\Http\\Controllers\\Api\\ServicesController@envs",
       "middleware": [
@@ -2488,6 +2619,36 @@
     },
     {
       "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/{resource_type}/{uuid}/secret-manager",
+      "action": "App\\Http\\Controllers\\Api\\SecretManagerController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/{resource_type}/{uuid}/secret-manager/keys",
+      "action": "App\\Http\\Controllers\\Api\\SecretManagerController@keys",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
         "GET",
         "POST"
       ],
@@ -2583,21 +2744,6 @@
       ],
       "uri": "api/v1/applications/{uuid}/scheduled-tasks/{task_uuid}",
       "action": "App\\Http\\Controllers\\Api\\ScheduledTasksController@update_scheduled_task_by_application_uuid",
-      "middleware": [
-        "api",
-        "App\\Http\\Middleware\\Authenticate:sanctum",
-        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
-        "App\\Http\\Middleware\\ApiAllowed",
-        "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
-      ]
-    },
-    {
-      "methods": [
-        "PATCH"
-      ],
-      "uri": "api/v1/applications/{uuid}/secret-manager",
-      "action": "App\\Http\\Controllers\\Api\\ApplicationSecretManagerController@update",
       "middleware": [
         "api",
         "App\\Http\\Middleware\\Authenticate:sanctum",
@@ -2941,6 +3087,21 @@
       "methods": [
         "PATCH"
       ],
+      "uri": "api/v1/security/integration-tokens/{uuid}",
+      "action": "App\\Http\\Controllers\\Api\\IntegrationTokensController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
       "uri": "api/v1/security/keys/{uuid}",
       "action": "App\\Http\\Controllers\\Api\\SecurityController@update_key",
       "middleware": [
@@ -3226,6 +3387,21 @@
     },
     {
       "methods": [
+        "PATCH"
+      ],
+      "uri": "api/v1/{resource_type}/{uuid}/secret-manager",
+      "action": "App\\Http\\Controllers\\Api\\SecretManagerController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
         "POST"
       ],
       "uri": "api/feedback",
@@ -3331,6 +3507,36 @@
       ],
       "uri": "api/v1/applications/{uuid}/destinations",
       "action": "App\\Http\\Controllers\\Api\\ApplicationsController@add_destination",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/dns",
+      "action": "App\\Http\\Controllers\\Api\\DnsController@createApplicationRecord",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/{uuid}/dns/replace",
+      "action": "App\\Http\\Controllers\\Api\\DnsController@replaceApplicationRecord",
       "middleware": [
         "api",
         "App\\Http\\Middleware\\Authenticate:sanctum",
@@ -4123,6 +4329,21 @@
       "methods": [
         "POST"
       ],
+      "uri": "api/v1/security/integration-tokens/{uuid}/sync-zones",
+      "action": "App\\Http\\Controllers\\Api\\IntegrationTokensController@syncZones",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
       "uri": "api/v1/security/keys",
       "action": "App\\Http\\Controllers\\Api\\SecurityController@create_key",
       "middleware": [
@@ -4369,7 +4590,8 @@
         "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
-        "App\\Http\\Middleware\\ApiAbility:write"
+        "App\\Http\\Middleware\\ApiAbility:write",
+        "App\\Http\\Middleware\\ApiAbility:deploy"
       ]
     },
     {
@@ -4550,6 +4772,36 @@
         "App\\Http\\Middleware\\ApiAllowed",
         "App\\Http\\Middleware\\ApiSensitiveData",
         "App\\Http\\Middleware\\ApiAbility:deploy"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/dns",
+      "action": "App\\Http\\Controllers\\Api\\DnsController@createServiceRecord",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/services/{uuid}/dns/replace",
+      "action": "App\\Http\\Controllers\\Api\\DnsController@replaceServiceRecord",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
       ]
     },
     {
@@ -4739,6 +4991,36 @@
       ],
       "uri": "api/v1/team/envs",
       "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@team_create_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/{resource_type}/{uuid}/secret-manager/import",
+      "action": "App\\Http\\Controllers\\Api\\SecretManagerController@import",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/{resource_type}/{uuid}/secret-manager/references",
+      "action": "App\\Http\\Controllers\\Api\\SecretManagerController@addReference",
       "middleware": [
         "api",
         "App\\Http\\Middleware\\Authenticate:sanctum",

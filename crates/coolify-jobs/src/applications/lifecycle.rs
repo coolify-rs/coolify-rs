@@ -365,26 +365,69 @@ impl Jobs {
 }
 
 impl Jobs {
-    /// `CleanupCancelledDeployment::run`: removes the helper container of a cancelled deployment.
+    /// `CleanupCancelledDeployment::run`: removes the helper container of a cancelled deployment,
+    /// on the build server and on the deployment server (`helperContainerServers()`: a restart
+    /// creates the helper on the deployment server even when a build server was selected).
     pub async fn cleanup_cancelled_deployment(&self, d: &apps::Deployment) {
         let db = &self.0.db;
-        let server_id = d.int("server_id").unwrap_or_default();
-        let message = async {
-            let row = servers::find_by_id(db, server_id).await.ok().flatten()?;
-            let t = ServerInfo::from_row(&row).target(self).await.ok()?;
+        let server_id = d.int("server_id");
+        let mut ids: Vec<i64> = Vec::new();
+        for id in [d.int("build_server_id"), server_id].into_iter().flatten() {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        let mut rows = Vec::new();
+        for id in ids {
+            if let Ok(Some(row)) = servers::find_by_id(db, id).await {
+                rows.push(row);
+            }
+        }
+        // `Server::whereTeamId($teamId)`: the team of the deployment server.
+        let team = rows
+            .iter()
+            .find(|r| Some(r.id) == server_id)
+            .map(|r| r.team_id);
+        let (mut stopped, mut failed) = (false, rows.is_empty());
+        for row in rows
+            .into_iter()
+            .filter(|r| team.is_none_or(|t| r.team_id == t))
+        {
+            let Ok(t) = ServerInfo::from_row(&row).target(self).await else {
+                failed = true;
+                continue;
+            };
             let out = self
                 .remote()
-                .run_quiet(&t, &[&format!("docker ps -a --filter name={} --format '{{{{.Names}}}}'", d.uuid)], RunOptions::op("deployment.cancel"))
+                .run_quiet(
+                    &t,
+                    &[&format!(
+                        "docker ps -a --filter name={} --format '{{{{.Names}}}}'",
+                        d.uuid
+                    )],
+                    RunOptions::op("deployment.cancel"),
+                )
                 .await
                 .unwrap_or_default();
             if out.lines().any(|l| l.trim() == d.uuid) {
-                let _ = self.remote().run_quiet(&t, &[&format!("docker rm -f {}", d.uuid)], RunOptions::op("deployment.cancel")).await;
-                Some("Deployment container stopped.")
-            } else {
-                Some("Deployment container not yet started. Will be cancelled when job checks status.")
+                let _ = self
+                    .remote()
+                    .run_quiet(
+                        &t,
+                        &[&format!("docker rm -f {}", d.uuid)],
+                        RunOptions::op("deployment.cancel"),
+                    )
+                    .await;
+                stopped = true;
             }
         }
-        .await;
+        let message = if stopped {
+            Some("Deployment container stopped.")
+        } else if !failed {
+            Some("Deployment container not yet started. Will be cancelled when job checks status.")
+        } else {
+            None
+        };
         let now = Utc::now().naive_utc();
         if let Some(m) = message {
             let entry = apps::LogEntry {

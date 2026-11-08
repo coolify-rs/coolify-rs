@@ -52,6 +52,7 @@ export function applicationBackupNavContext(base: string, backup: string, sectio
     label: 'Application',
     backTitle: 'Back to the application menu',
     ariaLabel: 'Backup settings',
+    name: 'Backup',
     parent,
     groups: [
       [

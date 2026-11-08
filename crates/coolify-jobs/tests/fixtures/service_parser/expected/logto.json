@@ -298,7 +298,7 @@
                 },
                 {
                     "key": "POSTGRES_DB",
-                    "value": null,
+                    "value": "logto",
                     "is_required": false,
                     "is_shared": false,
                     "comment": null
@@ -437,7 +437,7 @@
                 },
                 {
                     "key": "POSTGRES_DB",
-                    "value": null,
+                    "value": "logto",
                     "is_required": false,
                     "is_shared": false,
                     "comment": null

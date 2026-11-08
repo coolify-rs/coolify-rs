@@ -87,8 +87,10 @@ pub static BACKUP_EXECUTION: ModelSpec = ModelSpec {
         "local_storage_deleted",
         "s3_storage_deleted",
         "s3_uploaded",
+        "worker_host",
     ],
-    hidden: &[],
+    // `RecordsWorkerHost` (Coolify v4.6.0).
+    hidden: &["worker_host"],
     timestamps: &["created_at", "updated_at", "finished_at"],
     datetimes: &["created_at", "updated_at", "finished_at"],
 };
@@ -846,19 +848,24 @@ pub async fn create_execution(
     now: NaiveDateTime,
 ) -> DbResult<i64> {
     db.ensure_writable()?;
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO scheduled_database_backup_executions (uuid, scheduled_database_backup_id, database_name, filename, status, message, local_storage_deleted, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, COALESCE($5, 'running'), $6, false, $7, $7) RETURNING id",
-    )
-    .bind(uuid)
-    .bind(backup_id)
-    .bind(database_name)
-    .bind(filename)
-    .bind(status)
-    .bind(message)
-    .bind(now)
-    .fetch_one(db.pool())
-    .await?;
+    let (column, value, host) =
+        crate::worker_host::insert_parts(db.schema(), "scheduled_database_backup_executions", 8);
+    let sql = format!(
+        "INSERT INTO scheduled_database_backup_executions (uuid, scheduled_database_backup_id, database_name, filename, status, message, local_storage_deleted, created_at, updated_at{column}) \
+         VALUES ($1, $2, $3, $4, COALESCE($5, 'running'), $6, false, $7, $7{value}) RETURNING id"
+    );
+    let mut query = sqlx::query_scalar(&sql)
+        .bind(uuid)
+        .bind(backup_id)
+        .bind(database_name)
+        .bind(filename)
+        .bind(status)
+        .bind(message)
+        .bind(now);
+    if let Some(host) = host {
+        query = query.bind(host);
+    }
+    let id: i64 = query.fetch_one(db.pool()).await?;
     sqlx::query("UPDATE scheduled_database_backups SET last_execution_at = $1, updated_at = $1 WHERE id = $2")
         .bind(now)
         .bind(backup_id)

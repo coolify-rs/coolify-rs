@@ -33,6 +33,7 @@ use crate::routes::databases::{
 use crate::serialize::{php_truthy, serialize_record};
 use crate::state::AppState;
 use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
+use coolify_domain::grants::AccessLevel;
 
 pub(super) const NOT_FOUND_APPLICATION: ApiError = NOT_FOUND_NO_PERIOD;
 const NOT_FOUND: ApiError = ApiError::Message(StatusCode::NOT_FOUND, "Application not found.");
@@ -256,6 +257,8 @@ pub(crate) async fn present_preloaded(
         }
         r.shift_remove("id");
     }
+    // `redactLockedApiResourceValues()`.
+    super::locked_values::redact_application(state, a, &mut r).await;
     // Accessors and casts.
     r.insert(
         "status".into(),
@@ -401,6 +404,8 @@ const ALLOWED: &[&str] = &[
     "git_repository",
     "git_branch",
     "git_commit_sha",
+    "git_https_username",
+    "git_https_password",
     "private_key_uuid",
     "docker_registry_image_name",
     "docker_registry_image_tag",
@@ -552,9 +557,6 @@ pub(crate) fn is_valid_docker_image_tag(value: &str, allow_variables: bool) -> b
 static PORTS_EXPOSES: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"^(\d+)(,\d+)*$").unwrap_or_else(|_| unreachable!())
 });
-static PORTS_MAPPINGS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"^(\d+:\d+)(,\d+:\d+)*$").unwrap_or_else(|_| unreachable!())
-});
 static HEALTH_PATH: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"^[a-zA-Z0-9/\-_.~%,;]+$").unwrap_or_else(|_| unreachable!())
 });
@@ -565,6 +567,16 @@ static HEALTH_COMMAND: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::
 static GIT_COMMIT_SHA: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"^[a-zA-Z0-9][a-zA-Z0-9._\-/]*$").unwrap_or_else(|_| unreachable!())
 });
+/// `sharedDataApplications()`: `git_https_username` `regex:/^[^:\r\n]*$/`.
+pub(crate) static GIT_HTTPS_USERNAME: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^[^:\r\n]*$").unwrap_or_else(|_| unreachable!())
+    });
+/// `sharedDataApplications()`: `git_https_password` `regex:/^[^\r\n]*$/`.
+pub(crate) static GIT_HTTPS_PASSWORD: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^[^\r\n]*$").unwrap_or_else(|_| unreachable!())
+    });
 /// `ValidationPatterns::SHELL_SAFE_COMMAND_PATTERN`.
 static SHELL_SAFE_COMMAND: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(
@@ -753,6 +765,24 @@ pub(super) fn shared_rules(overrides: Vec<Field>) -> Vec<Field> {
             "git_branch",
             vec![Rule::String, Rule::CustomOwned(git_urls::valid_git_branch)],
         ),
+        field(
+            "git_https_username",
+            vec![
+                Rule::String,
+                Rule::Nullable,
+                Rule::Max(255),
+                Rule::Regex(&GIT_HTTPS_USERNAME),
+            ],
+        ),
+        field(
+            "git_https_password",
+            vec![
+                Rule::String,
+                Rule::Nullable,
+                Rule::Max(2048),
+                Rule::Regex(&GIT_HTTPS_PASSWORD),
+            ],
+        ),
         field("build_pack", vec![Rule::In(BUILD_PACKS)]),
     ];
     for name in [
@@ -880,7 +910,12 @@ pub(super) fn shared_rules(overrides: Vec<Field>) -> Vec<Field> {
         ),
         field(
             "ports_mappings",
-            vec![Rule::String, Rule::Regex(&PORTS_MAPPINGS), Rule::Nullable],
+            // `ValidationPatterns::portMappingRules()` (v4.6.0): the mappings the UI accepts.
+            vec![
+                Rule::Nullable,
+                Rule::String,
+                Rule::Regex(&crate::ui_databases::PORT_MAPPINGS),
+            ],
         ),
         field("custom_network_aliases", vec![Rule::String, Rule::Nullable]),
         field("base_directory", path_rules(255, &DIRECTORY_PATH)),
@@ -1044,9 +1079,6 @@ async fn create_prologue(
 ) -> Result<CreateContext, ApiError> {
     use coolify_domain::Ability;
     let (headers, uri, body) = request;
-    if !ctx.is_team_admin() {
-        return Err(ApiError::Unauthorized);
-    }
     let raw_input = lenient_json(headers, uri, body);
     let instant = raw_input.get("instant_deploy").is_some_and(php_truthy);
     if instant && !(ctx.abilities.can(Ability::Deploy) || ctx.abilities.can(Ability::Root)) {
@@ -1090,6 +1122,12 @@ async fn create_prologue(
     extra_field_errors(&input, &mut extra, ALLOWED);
     if !extra.is_empty() {
         return Err(ApiError::Validation(extra));
+    }
+    if kind != "public" && (input.has("git_https_username") || input.has("git_https_password")) {
+        return Err(field_error(
+            "git_https_password",
+            "HTTPS credentials can only be used with a public or custom Git host repository (POST /applications/public).",
+        ));
     }
     if input.filled("docker_compose_raw") {
         let raw = input
@@ -1169,6 +1207,10 @@ async fn create_prologue(
         StatusCode::NOT_FOUND,
         "Environment not found.",
     ))?;
+    // `$this->authorize('create', [Application::class, $environment])`.
+    if !ctx.can_create_in(Some(env.id)) {
+        return Err(ApiError::Unauthorized);
+    }
     let server = servers::find(
         &state.db,
         ctx.team_id,
@@ -1253,19 +1295,11 @@ pub(super) async fn validate_data_applications(
             "Argon2id needs a server that runs the Caddy proxy, version 2.11 or newer.",
         ));
     }
-    if let Some(v) = input.get("ports_mappings") {
-        let text = fields::php_text(v)?.unwrap_or_default();
-        let mut seen: Vec<&str> = Vec::new();
-        for m in text.split(',') {
-            let first = m.split(':').next().unwrap_or_default();
-            if seen.contains(&first) {
-                return Err(field_error(
-                    "ports_mappings",
-                    "The first number before : should be unique between mappings.",
-                ));
-            }
-            seen.push(first);
-        }
+    // Each host binding (IP, port, protocol) of `ports_mappings` is unique.
+    if let Some(Value::String(text)) = input.get("ports_mappings")
+        && let Some(message) = duplicate_host_binding(text)
+    {
+        return Err(field_error("ports_mappings", message));
     }
     fields::normalize_custom_labels(input)?;
     if input.has("domains") && fields::proxy_should_run(server) {
@@ -1428,6 +1462,34 @@ const IMAGE_SETTINGS: &[(&str, &str)] = &[
 ];
 
 /// PHP `trim()` (the model's `saving` hook trims git and command columns).
+/// The host binding check of `validateDataApplications()` (v4.6.0): the container port is after
+/// the last `:`, and an empty host port makes Docker pick a free port.
+pub(crate) fn duplicate_host_binding(text: &str) -> Option<&'static str> {
+    static PROTOCOL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"/(tcp|udp|sctp)").unwrap_or_else(|_| unreachable!())
+    });
+    static OTHER_PROTOCOL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"/(udp|sctp)").unwrap_or_else(|_| unreachable!())
+    });
+    let mut seen: Vec<String> = Vec::new();
+    for mapping in text.split(',') {
+        let host = &mapping[..mapping.rfind(':').unwrap_or(0)];
+        let host = PROTOCOL.replace_all(host, "").into_owned();
+        if host.is_empty() || host.ends_with(':') {
+            continue;
+        }
+        let protocol = OTHER_PROTOCOL
+            .captures(mapping)
+            .map_or("tcp".to_owned(), |c| c[1].to_owned());
+        let binding = format!("{host}/{protocol}");
+        if seen.contains(&binding) {
+            return Some("Each host IP, port, and protocol can only be used once.");
+        }
+        seen.push(binding);
+    }
+    None
+}
+
 pub(crate) fn php_trim(s: &str) -> String {
     s.trim_matches([' ', '\t', '\n', '\r', '\0', '\x0B'])
         .to_owned()
@@ -1435,6 +1497,33 @@ pub(crate) fn php_trim(s: &str) -> String {
 
 /// `$application->save()` and the rest of the type branch: the `created` hook, the
 /// generated domain, read-only labels, `isConfigurationChanged(true)`, instant deploy, 201.
+/// `sharedImageNameValidationResponse()` (v4.6.0): another application of the team builds the same
+/// Docker image name.
+pub(crate) async fn shared_image_name_check(
+    state: &AppState,
+    team_id: i64,
+    except: Option<i64>,
+    image_name: Option<&str>,
+    build_pack: Option<&str>,
+) -> Result<(), ApiError> {
+    if let Some((_, other)) = apps::other_application_building_same_image(
+        &state.db, team_id, except, image_name, build_pack,
+    )
+    .await?
+    {
+        let mut errors = Map::new();
+        errors.insert(
+            "docker_registry_image_name".into(),
+            json!([apps::shared_image_name_message(
+                other.as_deref(),
+                image_name.unwrap_or_default()
+            )]),
+        );
+        return Err(ApiError::Validation(errors));
+    }
+    Ok(())
+}
+
 async fn finish_create(
     state: &AppState,
     ctx: &AuthCtx,
@@ -1453,6 +1542,23 @@ async fn finish_create(
             _ => None,
         })
         .unwrap_or_default();
+    // `sharedImageNameValidationResponse($application)` right before `save()` (v4.6.0).
+    let image_name = columns
+        .iter()
+        .rev()
+        .find(|(k, _)| *k == "docker_registry_image_name")
+        .and_then(|(_, v)| match v {
+            ColumnValue::Text(t) => t.clone(),
+            _ => None,
+        });
+    shared_image_name_check(
+        state,
+        ctx.team_id,
+        None,
+        image_name.as_deref(),
+        Some(&build_pack),
+    )
+    .await?;
     let uuid = coolify_domain::new_public_id();
     let now = state.now();
     let id = apps::create(
@@ -1945,6 +2051,41 @@ async fn create_git(
             }) {
                 return Err(SERVER_ERROR);
             }
+            let on_github = parts.as_ref().is_some_and(|p| p.host == "github.com");
+            if cx.input.filled("git_https_password") {
+                if on_github {
+                    return Err(field_error(
+                        "git_https_password",
+                        "HTTPS credentials are not used for github.com. Use a GitHub App (POST /applications/private-github-app) for a private GitHub repository.",
+                    ));
+                }
+            } else if cx.input.filled("git_https_username") {
+                return Err(field_error(
+                    "git_https_password",
+                    "The git_https_password is required with git_https_username.",
+                ));
+            }
+            // fill() takes both from the request; the password goes through the `encrypted` cast.
+            if state
+                .db
+                .schema()
+                .has_column("applications", "git_https_password")
+            {
+                let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+                if let Some(v) = cx.input.get("git_https_username") {
+                    source_columns.push((
+                        "git_https_username",
+                        ColumnValue::Text(fields::php_text(v)?),
+                    ));
+                }
+                if let Some(v) = cx.input.get("git_https_password") {
+                    let plain = fields::php_text(v)?;
+                    source_columns.push((
+                        "git_https_password",
+                        ColumnValue::Text(plain.map(|p| enc.encrypt_string(&p))),
+                    ));
+                }
+            }
             if let Some(p) = parts.filter(|p| p.host == "github.com") {
                 let path = p.path_or_root();
                 let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
@@ -2154,7 +2295,7 @@ pub async fn start(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Deploy, &a) {
         return Err(ApiError::Unauthorized);
     }
     deployable(&state, &a).await?;
@@ -2198,7 +2339,7 @@ pub async fn restart(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Deploy, &a) {
         return Err(ApiError::Unauthorized);
     }
     deployable(&state, &a).await?;
@@ -2238,7 +2379,7 @@ pub async fn stop(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Deploy, &a) {
         return Err(ApiError::Unauthorized);
     }
     if a.destination.is_none() {
@@ -2262,7 +2403,7 @@ pub async fn delete(
     let a = apps::find_in_team(&state.db, ctx.team_id, &uuid)
         .await?
         .ok_or(NOT_FOUND_NO_PERIOD)?;
-    if !ctx.is_team_admin() {
+    if !ctx.can_app(AccessLevel::Delete, &a) {
         return Err(ApiError::Unauthorized);
     }
     // `DeleteResourceJob` removes the rows also when the destination is gone.
@@ -2400,7 +2541,7 @@ pub async fn deployment(
     let a = apps::find_by_id(&state.db, d.application_id)
         .await?
         .ok_or(MISSING)?;
-    if a.team_id != ctx.team_id {
+    if a.team_id != ctx.team_id || !apps::visible(&a) {
         return Err(MISSING);
     }
     let Value::Object(mut m) = present_deployment(&ctx, &d, false) else {
@@ -2449,12 +2590,23 @@ pub async fn cancel_deployment(
             StatusCode::NOT_FOUND,
             "Deployment not found.",
         ))?;
-    let a = apps::find_by_id(&state.db, d.application_id).await?;
-    if a.as_ref().is_none_or(|a| a.team_id != ctx.team_id) {
+    // `$deployment->application()->withTrashed()->first()`: in-flight deploys stay cancellable.
+    let a = apps::find_with_trashed(&state.db, d.application_id).await?;
+    // The relation query hides an application the actor has no grant for.
+    if a.as_ref()
+        .is_none_or(|a| a.team_id != ctx.team_id || !apps::visible(a))
+    {
         return Err(ApiError::Message(
             StatusCode::FORBIDDEN,
             "You do not have permission to cancel this deployment.",
         ));
+    }
+    // For an actor limited by access grants: `$this->authorize('deploy', $application)`.
+    if !ctx.covers_whole_team()
+        && a.as_ref()
+            .is_some_and(|a| !ctx.can_app(AccessLevel::Deploy, a))
+    {
+        return Err(ApiError::Unauthorized);
     }
     let message = |status: &str| {
         PhpJson(
@@ -2602,13 +2754,13 @@ async fn deploy_by_tags(
         }
         for row in applications {
             let uuid = row.get("uuid").and_then(Value::as_str).unwrap_or_default();
-            if !ctx.is_team_admin() {
-                messages.push(json!("Unauthorized to deploy this application."));
-                continue;
-            }
             let Some(a) = apps::find_in_team(&state.db, ctx.team_id, uuid).await? else {
                 continue;
             };
+            if !ctx.can_app(AccessLevel::Deploy, &a) {
+                messages.push(json!("Unauthorized to deploy this application."));
+                continue;
+            }
             match deploy_application(state, ctx, meta, &a, force).await? {
                 Deployed::QueueFull(m) => {
                     let mut resp = PhpJson(StatusCode::TOO_MANY_REQUESTS, json!({"message": m}))
@@ -2626,7 +2778,12 @@ async fn deploy_by_tags(
             }
         }
         for row in services {
-            if !ctx.is_team_admin() {
+            let uuid = row.get("uuid").and_then(Value::as_str).unwrap_or_default();
+            let Some(s) = coolify_db::services::find_in_team(&state.db, ctx.team_id, uuid).await?
+            else {
+                continue;
+            };
+            if crate::routes::services::require(ctx, &s, AccessLevel::Deploy).is_err() {
                 messages.push(json!("Unauthorized to deploy this service."));
                 continue;
             }
@@ -2720,7 +2877,7 @@ pub async fn deploy(
             if let Some(s) = coolify_db::services::find_in_team(&state.db, ctx.team_id, u).await? {
                 items.push(if pr != 0 {
                     json!({"message": format!("Pull request {pr} not found for this resource."), "resource_uuid": u})
-                } else if !ctx.is_team_admin() {
+                } else if crate::routes::services::require(&ctx, &s, AccessLevel::Deploy).is_err() {
                     json!({"message": "Unauthorized to deploy this service.", "resource_uuid": u})
                 } else {
                     jobs.spawn_service_start(s.id, false, false);
@@ -2738,7 +2895,7 @@ pub async fn deploy(
             {
                 items.push(if pr != 0 {
                     json!({"message": format!("Pull request {pr} not found for this resource."), "resource_uuid": u})
-                } else if !ctx.is_team_admin() {
+                } else if !ctx.can_db(AccessLevel::Write, &d) {
                     json!({"message": "Unauthorized to start this database.", "resource_uuid": u})
                 } else {
                     json!({
@@ -2771,7 +2928,7 @@ pub async fn deploy(
                 .and_then(Value::as_str)
                 .map(str::to_owned);
         }
-        if !ctx.is_team_admin() {
+        if !ctx.can_app(AccessLevel::Deploy, &a) {
             items.push(
                 json!({"message": "Unauthorized to deploy this application.", "resource_uuid": u}),
             );
@@ -2855,6 +3012,22 @@ mod tests {
         ] {
             assert_eq!(git_repository_slug(input), slug, "{input}");
         }
+    }
+
+    #[test]
+    fn host_bindings_of_port_mappings() {
+        let dup = Some("Each host IP, port, and protocol can only be used once.");
+        assert_eq!(duplicate_host_binding("3000:3000,3001:3000"), None);
+        assert_eq!(duplicate_host_binding("3000:3000,3000:3001"), dup);
+        // Another protocol or IP is another binding; an empty host port is never a duplicate.
+        assert_eq!(duplicate_host_binding("53:53,53:53/udp"), None);
+        assert_eq!(duplicate_host_binding("53/udp:53,53:53/udp"), dup);
+        assert_eq!(
+            duplicate_host_binding("127.0.0.1:80:80,10.0.0.1:80:80"),
+            None
+        );
+        assert_eq!(duplicate_host_binding(":80,:80,[::1]::81,[::1]::81"), None);
+        assert_eq!(duplicate_host_binding("80,80"), None);
     }
 
     #[test]
