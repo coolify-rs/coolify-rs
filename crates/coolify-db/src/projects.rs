@@ -81,7 +81,7 @@ pub async fn list(db: &Db, team_id: TeamId) -> DbResult<Vec<Record>> {
 }
 
 pub async fn find(db: &Db, team_id: TeamId, uuid: &str) -> DbResult<Option<ProjectRef>> {
-    Ok(sqlx::query_as(
+    Ok(sqlx::query_as::<_, ProjectRef>(
         "SELECT id, uuid, team_id, name, description FROM projects WHERE team_id = $1 AND uuid = $2 \
          LIMIT 1",
     )
@@ -159,7 +159,7 @@ pub async fn team_environment_by_uuid(
     team_id: TeamId,
     uuid: &str,
 ) -> DbResult<Option<(i64, String, String)>> {
-    Ok(sqlx::query_as(
+    Ok(sqlx::query_as::<_, (i64, String, String)>(
         "SELECT e.id, p.uuid, e.uuid FROM environments e JOIN projects p ON p.id = e.project_id WHERE e.uuid = $1 AND p.team_id = $2 LIMIT 1",
     )
     .bind(uuid)
