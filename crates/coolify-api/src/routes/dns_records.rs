@@ -17,6 +17,7 @@ use crate::input::{query_param, validated_json};
 use crate::integration_token_actions::{automatic_dns_enabled, proxied_dns_enabled};
 use crate::response::{ApiError, ApiResult, created, ok};
 use crate::state::AppState;
+use coolify_domain::grants::AccessLevel;
 
 const APPLICATION: &str = "App\\Models\\Application";
 const SERVICE_APPLICATION: &str = "App\\Models\\ServiceApplication";
@@ -103,7 +104,9 @@ async fn load(state: &AppState, kind: Kind, id: i64) -> Result<Option<Resource>,
     }
 }
 
-/// `findResource()`: the resource of the token team; `update` needs an admin.
+/// `findResource()`: the resource of the token team (hidden when the actor has no grant for it),
+/// then `authorize('view' | 'update')`: `canAccess(Read | Write)` (`ApplicationPolicy`,
+/// `ServicePolicy`).
 async fn find_resource(
     state: &AppState,
     ctx: &AuthCtx,
@@ -111,22 +114,30 @@ async fn find_resource(
     uuid: &str,
     update: bool,
 ) -> Result<Resource, ApiError> {
-    let id = match kind {
+    let found = match kind {
         Kind::Application => coolify_db::applications::find_in_team(&state.db, ctx.team_id, uuid)
             .await?
-            .map(|a| a.id),
+            .map(|a| (a.id, a.int("environment_id"), a.uuid)),
         Kind::Service => coolify_db::services::find_in_team(&state.db, ctx.team_id, uuid)
             .await?
-            .map(|s| s.id),
+            .map(|s| {
+                let env = s.raw.get("environment_id").and_then(Value::as_i64);
+                (s.id, env, s.uuid)
+            }),
     };
     let not_found = match kind {
         Kind::Application => "Application not found.",
         Kind::Service => "Service not found.",
     };
-    let Some(id) = id else {
+    let Some((id, environment_id, resource_uuid)) = found else {
         return Err(ApiError::Message(StatusCode::NOT_FOUND, not_found));
     };
-    if update && !ctx.is_team_admin() {
+    let level = if update {
+        AccessLevel::Write
+    } else {
+        AccessLevel::Read
+    };
+    if !ctx.can_resource(level, environment_id, &resource_uuid) {
         return Err(ApiError::Unauthorized);
     }
     load(state, kind, id)

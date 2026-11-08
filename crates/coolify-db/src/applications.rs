@@ -185,18 +185,24 @@ pub async fn other_application_building_same_image(
     if build_pack.is_some_and(|b| NO_PUSHED_IMAGE.contains(&b)) {
         return Ok(None);
     }
-    Ok(sqlx::query_as(
-        "SELECT a.id, a.name FROM applications a JOIN environments e ON e.id = a.environment_id \
-         JOIN projects p ON p.id = e.project_id \
+    let rows: Vec<(i64, Option<String>, String, i64)> = sqlx::query_as(
+        "SELECT a.id, a.name, a.uuid, a.environment_id FROM applications a \
+         JOIN environments e ON e.id = a.environment_id JOIN projects p ON p.id = e.project_id \
          WHERE a.deleted_at IS NULL AND p.team_id = $1 AND ($2::bigint IS NULL OR a.id <> $2) \
          AND a.docker_registry_image_name = $3 AND a.build_pack NOT IN ('dockerimage', 'dockercompose') \
-         ORDER BY a.id LIMIT 1",
+         ORDER BY a.id",
     )
     .bind(team_id)
     .bind(except)
     .bind(image_name)
-    .fetch_optional(db.pool())
-    .await?)
+    .fetch_all(db.pool())
+    .await?;
+    // `Application::query()` carries `VisibleThroughAccessGrants`: a restricted actor does not
+    // learn about applications it has no grant for.
+    Ok(rows
+        .into_iter()
+        .find(|(_, _, uuid, env)| crate::access::resource_visible(Some(*env), uuid))
+        .map(|(id, name, _, _)| (id, name)))
 }
 
 /// `Application::sharedImageNameMessage()`.

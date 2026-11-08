@@ -20,6 +20,7 @@ use crate::input::validated_json;
 use crate::response::{ApiError, ApiResult, created, ok};
 use crate::state::AppState;
 use crate::ui_shared::Res;
+use coolify_domain::grants::AccessLevel;
 
 /// `filled($value)`.
 fn filled(v: &Value) -> bool {
@@ -67,7 +68,20 @@ async fn find_resource(
         }
         Err(e) => return Err(e),
     };
-    if update && !ctx.is_team_admin() {
+    // `authorize('view' | 'update')`: `canAccess(Read | Write)` (`ApplicationPolicy`, `ServicePolicy`,
+    // `DatabasePolicy`, whose instance database needs an owner or admin of the root team).
+    let level = if update {
+        AccessLevel::Write
+    } else {
+        AccessLevel::Read
+    };
+    let allowed =
+        if kind == "database" && res.id == 0 && res.team_id == coolify_domain::ROOT_TEAM_ID {
+            ctx.team_id == coolify_domain::ROOT_TEAM_ID && (!update || ctx.is_team_admin())
+        } else {
+            ctx.can_resource(level, res.environment_id, &res.uuid)
+        };
+    if !allowed {
         return Err(ApiError::Unauthorized);
     }
     Ok(res)

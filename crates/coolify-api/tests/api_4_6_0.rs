@@ -9,11 +9,8 @@ use common::Harness;
 use serde_json::{Value, json};
 
 const W: Option<&str> = Some("acme_owner_write");
-
-/// The columns of `add_git_https_credentials_to_applications_table` (v4.6.0), which the
-/// v4.5.3 baseline of the tests does not have.
-const GIT_HTTPS_COLUMNS: &str = "ALTER TABLE applications ADD COLUMN git_https_username varchar(255), \
-     ADD COLUMN git_https_password text;";
+/// DELETE routes need the `delete` ability since v4.6.0 (`api.ability:delete`).
+const D: Option<&str> = Some("acme_owner_delete");
 
 struct Team {
     server: String,
@@ -91,7 +88,7 @@ async fn stored(h: &Harness, uuid: &str) -> (Option<String>, Option<String>) {
 
 #[tokio::test]
 async fn git_https_credentials_on_create() {
-    let h = Harness::with_extra_sql(GIT_HTTPS_COLUMNS).await;
+    let h = Harness::new().await;
     let t = team(&h).await;
 
     // Only the public type takes them, checked right after the allowed fields.
@@ -196,7 +193,7 @@ async fn git_https_credentials_on_create() {
 
 #[tokio::test]
 async fn git_https_credentials_on_update() {
-    let h = Harness::with_extra_sql(GIT_HTTPS_COLUMNS).await;
+    let h = Harness::new().await;
     let t = team(&h).await;
     let uuid = uuid_of(
         &h.call(
@@ -302,12 +299,8 @@ async fn locked_values_are_hidden_in_generated_compose() {
         )
         .await;
     assert_eq!(r.status, 201, "{}", r.body);
-    // The v4.6.0 columns, added after the harness inspected the schema: only read here.
+    // The v4.6.0 Git HTTPS credentials, set directly.
     let enc = coolify_compat::Encrypter::new(common::APP_KEY).unwrap();
-    sqlx::query(GIT_HTTPS_COLUMNS)
-        .execute(h.tdb.db.pool())
-        .await
-        .unwrap();
     sqlx::query(
         "UPDATE applications SET git_https_username = 'deploy', git_https_password = $2, \
          docker_compose = 'services:\n  app:\n    environment:\n      SECRET: shown-once-value\n      TOKEN: https-token-1\n' WHERE uuid = $1",
@@ -507,9 +500,9 @@ async fn integration_token_endpoints() {
     );
 
     // Delete.
-    let r = h.call("DELETE", path, W, None).await;
+    let r = h.call("DELETE", path, D, None).await;
     r.assert(200, r#"{"message":"Integration token deleted."}"#);
-    let r = h.call("DELETE", path, W, None).await;
+    let r = h.call("DELETE", path, D, None).await;
     r.assert(404, r#"{"message":"Integration token not found."}"#);
     h.finish().await;
 }
@@ -547,7 +540,7 @@ async fn secret_manager_endpoints() {
         200,
         r#"{"linked":false,"integration_token_uuid":null,"provider":null,"settings":null,"available_tokens":[{"uuid":"vaulttoken000000000000002","name":"vault token","provider":"vault"}]}"#,
     );
-    let r = h.call("DELETE", &path, W, None).await;
+    let r = h.call("DELETE", &path, D, None).await;
     r.assert(
         404,
         r#"{"message":"The resource has no secret manager source."}"#,
@@ -609,7 +602,7 @@ async fn secret_manager_endpoints() {
         .call(
             "DELETE",
             "/api/v1/security/integration-tokens/vaulttoken000000000000002",
-            W,
+            D,
             None,
         )
         .await;
@@ -617,7 +610,7 @@ async fn secret_manager_endpoints() {
         409,
         r#"{"message":"This token is used by one or more resources as a secret manager source. Remove those links first."}"#,
     );
-    let r = h.call("DELETE", &path, W, None).await;
+    let r = h.call("DELETE", &path, D, None).await;
     r.assert(
         200,
         r#"{"message":"Secret manager source removed. Existing {{vault.*}} variables fail the next deployment until they are removed."}"#,
@@ -736,14 +729,14 @@ async fn application_dns_endpoints() {
 
     // Release: only a hostname the resource no longer uses, and only with a record of it.
     let r = h
-        .call("DELETE", &format!("{path}/app.example.test"), W, None)
+        .call("DELETE", &format!("{path}/app.example.test"), D, None)
         .await;
     r.assert(
         422,
         r#"{"message":"Validation failed.","errors":{"hostname":["The resource still uses app.example.test. Remove the domain first; its DNS record is then released."]}}"#,
     );
     let r = h
-        .call("DELETE", &format!("{path}/gone.example.test"), W, None)
+        .call("DELETE", &format!("{path}/gone.example.test"), D, None)
         .await;
     r.assert(
         404,
@@ -914,11 +907,7 @@ async fn replaced_avatar_touches_updated_at() {
 /// keeps following after a switch to a more stable one.
 #[tokio::test]
 async fn update_channel_settings() {
-    let h = Harness::with_extra_sql(
-        "ALTER TABLE instance_settings ADD COLUMN update_channel varchar(255) NOT NULL DEFAULT 'stable', \
-         ADD COLUMN update_custom_tag varchar(255), ADD COLUMN previous_update_channel varchar(255);",
-    )
-    .await;
+    let h = Harness::new().await;
     let (cookie, csrf) = h.ui_login("root@example.test").await;
     let headers = [("cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
     let values = |channel: &str, tag: Value| {
@@ -977,5 +966,284 @@ async fn update_channel_settings() {
         stored().await,
         ("custom".into(), Some("pr-1234".into()), None)
     );
+    h.finish().await;
+}
+
+/// A token of Bob (user 2, a member of Acme) with these abilities and scopes; the bearer value.
+async fn member_token(h: &Harness, abilities: &str, scopes: Option<&str>) -> String {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let plain = format!(
+        "grant-4-6-0-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::SeqCst)
+    );
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO personal_access_tokens (tokenable_type, tokenable_id, name, token, team_id, abilities, scopes, created_at, updated_at) \
+         VALUES ('App\\Models\\User', 2, 'grant test', $1, '1', $2, $3::json, now(), now()) RETURNING id",
+    )
+    .bind(coolify_compat::hash_token(&plain))
+    .bind(abilities)
+    .bind(scopes)
+    .fetch_one(h.tdb.db.pool())
+    .await
+    .unwrap();
+    format!("{id}|{plain}")
+}
+
+async fn as_bearer(
+    h: &Harness,
+    method: &str,
+    path: &str,
+    bearer: &str,
+    body: Option<Value>,
+) -> common::Resp {
+    h.request(
+        method,
+        path,
+        &[("authorization", &format!("Bearer {bearer}"))],
+        body,
+    )
+    .await
+}
+
+async fn set_member_access(h: &Harness, project: &str, levels: &str) {
+    sqlx::query(&format!(
+        r#"UPDATE team_user SET access = '[{{"scope":"project","uuid":"{project}","levels":{levels}}}]' WHERE team_id = 1 AND user_id = 2"#
+    ))
+    .execute(h.tdb.db.pool())
+    .await
+    .unwrap();
+}
+
+/// The v4.6.0 DNS, secret manager, integration token and zone routes under access grants:
+/// `findResource()` hides resources without a grant (404), `authorize('view' | 'update')` is
+/// `canAccess(Read | Write)`, and the team-level routes refuse a member limited to some projects.
+#[tokio::test]
+async fn new_routes_follow_access_grants() {
+    const SCOPED: &str = r#"{"message":"This API token is limited to selected projects, environments, or resources, so it cannot use this endpoint."}"#;
+    let h = Harness::new().await;
+    let t = team(&h).await;
+    let shop_app = uuid_of(
+        &h.call(
+            "POST",
+            "/api/v1/applications/public",
+            W,
+            Some(public_body(
+                &t,
+                "https://git.example.test/o/r.git",
+                json!({}),
+            )),
+        )
+        .await,
+    );
+    let other = Team {
+        server: t.server.clone(),
+        project: uuid_of(
+            &h.call(
+                "POST",
+                "/api/v1/projects",
+                W,
+                Some(json!({"name": "Other"})),
+            )
+            .await,
+        ),
+    };
+    let other_app = uuid_of(
+        &h.call(
+            "POST",
+            "/api/v1/applications/public",
+            W,
+            Some(public_body(
+                &other,
+                "https://git.example.test/o/s.git",
+                json!({}),
+            )),
+        )
+        .await,
+    );
+    let scope = format!(r#"[{{"scope":"project","uuid":"{}"}}]"#, t.project);
+
+    // Bob may read the Shop project only.
+    set_member_access(&h, &t.project, r#"["read"]"#).await;
+    let read = member_token(&h, r#"["read"]"#, Some(&scope)).await;
+    let r = as_bearer(
+        &h,
+        "GET",
+        &format!("/api/v1/applications/{shop_app}/dns"),
+        &read,
+        None,
+    )
+    .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = as_bearer(
+        &h,
+        "GET",
+        &format!("/api/v1/applications/{shop_app}/secret-manager"),
+        &read,
+        None,
+    )
+    .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    // Resources of other projects are hidden.
+    as_bearer(
+        &h,
+        "GET",
+        &format!("/api/v1/applications/{other_app}/dns"),
+        &read,
+        None,
+    )
+    .await
+    .assert(404, r#"{"message":"Application not found."}"#);
+    as_bearer(
+        &h,
+        "GET",
+        &format!("/api/v1/applications/{other_app}/secret-manager"),
+        &read,
+        None,
+    )
+    .await
+    .assert(404, r#"{"message":"Application not found."}"#);
+    // Writes need the write ability; the token cannot hold more than Bob.
+    as_bearer(
+        &h,
+        "POST",
+        &format!("/api/v1/applications/{shop_app}/dns"),
+        &read,
+        Some(json!({"name": "x"})),
+    )
+    .await
+    .assert(403, r#"{"message":"Missing required permissions: write"}"#);
+    // Team-level routes need access to the whole team.
+    as_bearer(&h, "GET", "/api/v1/dns/zones", &read, None)
+        .await
+        .assert(403, SCOPED);
+    as_bearer(
+        &h,
+        "GET",
+        "/api/v1/security/integration-tokens",
+        &read,
+        None,
+    )
+    .await
+    .assert(403, SCOPED);
+
+    // With write on the Shop project, Bob passes `authorize('update')` and reaches the validation.
+    set_member_access(&h, &t.project, r#"["write"]"#).await;
+    let write = member_token(&h, r#"["read","write"]"#, Some(&scope)).await;
+    let r = as_bearer(
+        &h,
+        "POST",
+        &format!("/api/v1/applications/{shop_app}/dns"),
+        &write,
+        Some(json!({"name": "x"})),
+    )
+    .await;
+    assert_eq!(r.status, 422, "{}", r.body);
+    let r = as_bearer(
+        &h,
+        "PATCH",
+        &format!("/api/v1/applications/{shop_app}/secret-manager"),
+        &write,
+        Some(json!({"settings": "x"})),
+    )
+    .await;
+    // No token of the team is linked yet: the request got past `authorize('update')`.
+    r.assert(
+        404,
+        r#"{"message":"Secret manager integration token not found."}"#,
+    );
+    as_bearer(
+        &h,
+        "POST",
+        &format!("/api/v1/applications/{other_app}/dns"),
+        &write,
+        Some(json!({"name": "x"})),
+    )
+    .await
+    .assert(404, r#"{"message":"Application not found."}"#);
+
+    // A member without stored grants reads the whole team, but is no admin: no integration tokens.
+    sqlx::query("UPDATE team_user SET access = NULL WHERE team_id = 1 AND user_id = 2")
+        .execute(h.tdb.db.pool())
+        .await
+        .unwrap();
+    let team_read = member_token(&h, r#"["read"]"#, None).await;
+    let r = as_bearer(&h, "GET", "/api/v1/dns/zones", &team_read, None).await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    let r = as_bearer(
+        &h,
+        "GET",
+        "/api/v1/security/integration-tokens",
+        &team_read,
+        None,
+    )
+    .await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    h.finish().await;
+}
+
+/// `otherApplicationBuildingSameImage()` runs under `VisibleThroughAccessGrants`: a member limited
+/// to one project does not learn the name of an application in another one.
+#[tokio::test]
+async fn shared_image_check_skips_hidden_applications() {
+    let h = Harness::new().await;
+    let t = team(&h).await;
+    let shop_app = uuid_of(
+        &h.call(
+            "POST",
+            "/api/v1/applications/public",
+            W,
+            Some(public_body(
+                &t,
+                "https://git.example.test/o/r.git",
+                json!({}),
+            )),
+        )
+        .await,
+    );
+    let other = Team {
+        server: t.server.clone(),
+        project: uuid_of(
+            &h.call(
+                "POST",
+                "/api/v1/projects",
+                W,
+                Some(json!({"name": "Other"})),
+            )
+            .await,
+        ),
+    };
+    let other_app = uuid_of(
+        &h.call(
+            "POST",
+            "/api/v1/applications/public",
+            W,
+            Some(public_body(
+                &other,
+                "https://git.example.test/o/s.git",
+                json!({}),
+            )),
+        )
+        .await,
+    );
+    sqlx::query(
+        "UPDATE applications SET docker_registry_image_name = 'registry.example.test/shared' WHERE uuid = $1",
+    )
+    .bind(&other_app)
+    .execute(h.tdb.db.pool())
+    .await
+    .unwrap();
+    let body = json!({"docker_registry_image_name": "registry.example.test/shared"});
+    let path = format!("/api/v1/applications/{shop_app}");
+    // The owner sees both applications: the shared name is rejected.
+    let r = h.call("PATCH", &path, W, Some(body.clone())).await;
+    assert_eq!(r.status, 422, "{}", r.body);
+    // Bob, with write on the Shop project only, does not see the other application.
+    set_member_access(&h, &t.project, r#"["write"]"#).await;
+    let scope = format!(r#"[{{"scope":"project","uuid":"{}"}}]"#, t.project);
+    let write = member_token(&h, r#"["read","write"]"#, Some(&scope)).await;
+    let r = as_bearer(&h, "PATCH", &path, &write, Some(body)).await;
+    assert!(r.status.is_success(), "{}", r.body);
     h.finish().await;
 }
