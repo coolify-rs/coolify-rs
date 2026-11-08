@@ -26,6 +26,7 @@ const INSPECTED_TABLES: &[&str] = &[
     "project_settings",
     "environments",
     "private_keys",
+    "server_settings",
     "scheduled_task_executions",
     "scheduled_database_backup_executions",
     "scheduled_volume_backup_executions",

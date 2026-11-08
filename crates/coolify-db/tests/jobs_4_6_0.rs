@@ -42,6 +42,52 @@ async fn runner_servers_come_from_a_union_of_server_ids() {
     tdb.drop_db().await;
 }
 
+/// `ServerManagerJob` loads servers in batches by id, with settings but without
+/// `patch_check_result` (`ServerSetting::withoutPatchCheckResult()`).
+#[tokio::test]
+async fn server_batches_leave_out_the_patch_check_result() {
+    let tdb = TestDb::new(SEED).await;
+    tdb.db
+        .pool()
+        .execute(
+            "INSERT INTO server_settings (server_id, docker_cleanup_frequency, patch_check_result) \
+             VALUES (2, '0 * * * *', '{\"updates\": [1, 2, 3]}')",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        coolify_db::servers::ids(&tdb.db).await.unwrap(),
+        vec![1, 2, 3, 4]
+    );
+    let rows = coolify_db::servers::batch_without_patch_check_result(&tdb.db, &[4, 2])
+        .await
+        .unwrap();
+    assert_eq!(rows.iter().map(|r| r.id).collect::<Vec<_>>(), vec![2, 4]);
+    let settings = rows[0].settings.as_ref().unwrap();
+    assert_eq!(settings["docker_cleanup_frequency"], "0 * * * *");
+    assert!(settings.contains_key("server_id"));
+    assert!(!settings.contains_key("patch_check_result"));
+    assert!(rows[1].settings.is_none());
+
+    let all = coolify_db::servers::all_without_patch_check_result(&tdb.db)
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 4);
+    assert!(all.iter().all(|r| {
+        r.settings
+            .as_ref()
+            .is_none_or(|s| !s.contains_key("patch_check_result"))
+    }));
+    // The full load still has it.
+    let full = coolify_db::servers::all(&tdb.db).await.unwrap();
+    assert!(full.iter().any(|r| {
+        r.settings
+            .as_ref()
+            .is_some_and(|s| s.contains_key("patch_check_result"))
+    }));
+    tdb.drop_db().await;
+}
+
 /// `RecordsWorkerHost`: on a v4.6.0 schema the execution stores the host; on v4.5.3 it has no
 /// such column and the insert still works.
 #[tokio::test]
