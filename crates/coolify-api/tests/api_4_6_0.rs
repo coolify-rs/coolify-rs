@@ -273,7 +273,12 @@ async fn git_https_credentials_on_update() {
 /// too.
 #[tokio::test]
 async fn locked_values_are_hidden_in_generated_compose() {
-    let h = Harness::with_extra_sql(GIT_HTTPS_COLUMNS).await;
+    // The locked values come from the jobs (`logRedactionSecretsFor()`), which need a remote; no
+    // command runs on a server here.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cfg = coolify_remote::RemoteConfig::new(tmp.path().join("data"));
+    cfg.ssh_binary = "/usr/bin/false".into();
+    let h = Harness::with_remote(coolify_remote::Remote::new(cfg).unwrap()).await;
     let t = team(&h).await;
     let uuid = uuid_of(
         &h.call(
@@ -283,7 +288,7 @@ async fn locked_values_are_hidden_in_generated_compose() {
             Some(public_body(
                 &t,
                 "https://git.example.test/o/r.git",
-                json!({"git_https_username": "deploy", "git_https_password": "https-token-1"}),
+                json!({}),
             )),
         )
         .await,
@@ -297,10 +302,18 @@ async fn locked_values_are_hidden_in_generated_compose() {
         )
         .await;
     assert_eq!(r.status, 201, "{}", r.body);
+    // The v4.6.0 columns, added after the harness inspected the schema: only read here.
+    let enc = coolify_compat::Encrypter::new(common::APP_KEY).unwrap();
+    sqlx::query(GIT_HTTPS_COLUMNS)
+        .execute(h.tdb.db.pool())
+        .await
+        .unwrap();
     sqlx::query(
-        "UPDATE applications SET docker_compose = 'services:\n  app:\n    environment:\n      SECRET: shown-once-value\n      TOKEN: https-token-1\n' WHERE uuid = $1",
+        "UPDATE applications SET git_https_username = 'deploy', git_https_password = $2, \
+         docker_compose = 'services:\n  app:\n    environment:\n      SECRET: shown-once-value\n      TOKEN: https-token-1\n' WHERE uuid = $1",
     )
     .bind(&uuid)
+    .bind(enc.encrypt_string("https-token-1"))
     .execute(h.tdb.db.pool())
     .await
     .unwrap();
