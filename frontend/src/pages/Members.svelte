@@ -9,9 +9,10 @@
   import TeamLayout from '../components/TeamLayout.svelte';
   import Callout from '../components/Callout.svelte';
   import FormInput from '../components/FormInput.svelte';
-  import Dropdown from '../components/Dropdown.svelte';
+  import RowActions from '../components/RowActions.svelte';
+  import RowAction from '../components/RowAction.svelte';
   import ConfirmModal from '../components/ConfirmModal.svelte';
-  import TableSortHeader from '../components/TableSortHeader.svelte';
+  import SortHeader from '../components/SortHeader.svelte';
   import MemberAccessEditor from '../components/MemberAccessEditor.svelte';
   import { session } from '../lib/session.svelte';
   import { teamsUi, type AccessRow, type InvitationsData, type InvitationRow, type StoredGrant } from '../lib/teamsApi';
@@ -253,10 +254,10 @@
         {#if data && filtered.length > 0}
           <div class="data-table flex flex-col">
             <div class="data-table-header {gridClass}">
-              <TableSortHeader label="Name" asc="name-asc" desc="name-desc" bind:value={sortBy} onsort={() => (page = 1)} />
-              <TableSortHeader label="Email" asc="email-asc" desc="email-desc" bind:value={sortBy} onsort={() => (page = 1)} />
-              <TableSortHeader label="Role" asc="role-asc" desc="role-desc" first="desc" bind:value={sortBy} onsort={() => (page = 1)} />
-              {#if manage}<TableSortHeader label="2FA" asc="twofa-asc" desc="twofa-desc" bind:value={sortBy} onsort={() => (page = 1)} />{/if}
+              <SortHeader label="Name" asc="name-asc" desc="name-desc" current={sortBy} onsort={(v) => ((sortBy = v), (page = 1))} />
+              <SortHeader label="Email" asc="email-asc" desc="email-desc" current={sortBy} onsort={(v) => ((sortBy = v), (page = 1))} />
+              <SortHeader label="Role" asc="role-asc" desc="role-desc" first="desc" current={sortBy} onsort={(v) => ((sortBy = v), (page = 1))} />
+              {#if manage}<SortHeader label="2FA" asc="twofa-asc" desc="twofa-desc" current={sortBy} onsort={(v) => ((sortBy = v), (page = 1))} />{/if}
               <span class="text-right">Actions</span>
             </div>
             {#each visible as m (m.id)}
@@ -336,39 +337,31 @@
                         <Reicon name="trash" class="size-3.5" />
                       </button>
                     {:else}
-                      <Dropdown panelClass="w-44!" role="menu">
-                        {#snippet trigger({ open })}
-                          <button type="button" class="icon-button" title="Member actions" aria-label="Member actions" aria-haspopup="menu" aria-expanded={open}>
-                            <Reicon name="dots-horizontal" class="size-4" />
-                          </button>
-                        {/snippet}
-                        {#snippet children({ close })}
-                          {#if data?.my_role === 'owner'}
-                            {#if m.role !== 'owner'}
-                              <button type="button" role="menuitem" class="listbox-option justify-start!" onclick={() => (close(), act(m, 'owner'))}>Make owner</button>
-                            {/if}
-                            {#if m.role !== 'admin'}
-                              <button type="button" role="menuitem" class="listbox-option justify-start!" onclick={() => (close(), act(m, 'admin'))}>Make admin</button>
-                            {/if}
-                            {#if m.role !== 'member'}
-                              <button type="button" role="menuitem" class="listbox-option justify-start!" onclick={() => (close(), act(m, 'member'))}>Make member</button>
-                            {/if}
-                          {:else if data?.my_role === 'admin'}
-                            {#if m.role === 'admin'}
-                              <button type="button" role="menuitem" class="listbox-option justify-start!" onclick={() => (close(), act(m, 'member'))}>Make member</button>
-                            {:else if m.role === 'member'}
-                              <button type="button" role="menuitem" class="listbox-option justify-start!" onclick={() => (close(), act(m, 'admin'))}>Make admin</button>
-                            {/if}
+                      <RowActions label="Member actions">
+                        {#if data?.my_role === 'owner'}
+                          {#if m.role !== 'owner'}
+                            <RowAction onclick={() => act(m, 'owner')}>Make owner</RowAction>
                           {/if}
-                          {#if m.role === 'member'}
-                            <button type="button" role="menuitem" class="listbox-option justify-start!" onclick={() => (close(), editAccess(m))}>Edit access</button>
+                          {#if m.role !== 'admin'}
+                            <RowAction onclick={() => act(m, 'admin')}>Make admin</RowAction>
                           {/if}
-                          <div class="my-1 border-t border-neutral-200 dark:border-white/[0.08]"></div>
-                          <div class="row-actions-danger contents">
-                            <button type="button" role="menuitem" class="listbox-option justify-start!" onclick={() => (close(), (removing = m))}>Remove member</button>
-                          </div>
+                          {#if m.role !== 'member'}
+                            <RowAction onclick={() => act(m, 'member')}>Make member</RowAction>
+                          {/if}
+                        {:else if data?.my_role === 'admin'}
+                          {#if m.role === 'admin'}
+                            <RowAction onclick={() => act(m, 'member')}>Make member</RowAction>
+                          {:else if m.role === 'member'}
+                            <RowAction onclick={() => act(m, 'admin')}>Make admin</RowAction>
+                          {/if}
+                        {/if}
+                        {#if m.role === 'member'}
+                          <RowAction onclick={() => editAccess(m)}>Edit access</RowAction>
+                        {/if}
+                        {#snippet danger()}
+                          <RowAction onclick={() => (removing = m)}>Remove member</RowAction>
                         {/snippet}
-                      </Dropdown>
+                      </RowActions>
                     {/if}
                   {/if}
                 </div>
@@ -441,9 +434,9 @@
               <div class="overflow-x-auto">
                 <div class="data-table min-w-[600px] transition-opacity">
                   <div class="data-table-header grid-cols-[minmax(13rem,1fr)_7rem_10rem_4rem_4.5rem]">
-                    <TableSortHeader label="Email" asc="email-asc" desc="email-desc" bind:value={inviteSort} />
-                    <TableSortHeader label="Method" asc="via-asc" desc="via-desc" bind:value={inviteSort} />
-                    <TableSortHeader label="Role" asc="role-asc" desc="role-desc" first="desc" bind:value={inviteSort} />
+                    <SortHeader server label="Email" asc="email-asc" desc="email-desc" current={inviteSort ?? ''} onsort={(v) => (inviteSort = v)} />
+                    <SortHeader server label="Method" asc="via-asc" desc="via-desc" current={inviteSort ?? ''} onsort={(v) => (inviteSort = v)} />
+                    <SortHeader server label="Role" asc="role-asc" desc="role-desc" first="desc" current={inviteSort ?? ''} onsort={(v) => (inviteSort = v)} />
                     <span>Link</span>
                     <span class="text-right">Actions</span>
                   </div>

@@ -6,7 +6,8 @@
   import Callout from '../components/Callout.svelte';
   import Pager from '../components/Pager.svelte';
   import Modal from '../components/Modal.svelte';
-  import Dropdown from '../components/Dropdown.svelte';
+  import RowActions from '../components/RowActions.svelte';
+  import RowAction from '../components/RowAction.svelte';
   import StatusBadge from '../components/StatusBadge.svelte';
   import ConfirmModal from '../components/ConfirmModal.svelte';
   import SecurityLayout from '../components/SecurityLayout.svelte';
@@ -294,24 +295,14 @@
                       </div>
                       <div class="flex items-center justify-end gap-1">
                         {#if token.own}
-                          <Dropdown panelClass="w-44!" role="menu">
-                            {#snippet trigger({ open })}
-                              <button type="button" class="icon-button" title="Token actions" aria-label="Token actions" aria-haspopup="menu" aria-expanded={open}>
-                                <Reicon name="dots-horizontal" class="size-4" />
-                              </button>
+                          <RowActions label="Token actions">
+                            <RowAction onclick={() => editToken(token)}>Edit</RowAction>
+                            <RowAction onclick={() => setPaused(token, !token.paused)}>{token.paused ? 'Resume' : 'Pause'}</RowAction>
+                            <RowAction onclick={() => (rolling = token)}>Roll</RowAction>
+                            {#snippet danger()}
+                              <RowAction onclick={() => (revoking = token)}>Revoke</RowAction>
                             {/snippet}
-                            {#snippet children({ close })}
-                              <button type="button" role="menuitem" class="listbox-option justify-start!" onclick={() => (close(), editToken(token))}>Edit</button>
-                              <button type="button" role="menuitem" class="listbox-option justify-start!" onclick={() => (close(), setPaused(token, !token.paused))}>
-                                {token.paused ? 'Resume' : 'Pause'}
-                              </button>
-                              <button type="button" role="menuitem" class="listbox-option justify-start!" onclick={() => (close(), (rolling = token))}>Roll</button>
-                              <div class="my-1 border-t border-neutral-200 dark:border-white/[0.08]"></div>
-                              <div class="row-actions-danger contents">
-                                <button type="button" role="menuitem" class="listbox-option justify-start!" onclick={() => (close(), (revoking = token))}>Revoke</button>
-                              </div>
-                            {/snippet}
-                          </Dropdown>
+                          </RowActions>
                         {/if}
                       </div>
                     </div>

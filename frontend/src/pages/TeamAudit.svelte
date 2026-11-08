@@ -1,5 +1,5 @@
 <script lang="ts">
-  import TableSortHeader from '../components/TableSortHeader.svelte';
+  import SortHeader from '../components/SortHeader.svelte';
   // Port of upstream livewire/team/audit-log.blade.php (App\Livewire\Team\AuditLog).
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
@@ -18,15 +18,19 @@
   let page = $state(1);
   let perPage = $state(25);
   /** `AuditLog::$sort`. */
-  let sort = $state<string | null>('time-desc');
+  let sort = $state('time-desc');
+  /** `wire:loading` of `setSort`: the clicked header shows a spinner while the page reloads. */
+  let sorting = $state<string | null>(null);
   let expanded = $state<Record<number, boolean>>({});
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   async function load() {
     try {
-      data = await teamsUi.audit({ search, action, source, per_page: perPage, page, sort: sort ?? 'time-desc' });
+      data = await teamsUi.audit({ search, action, source, per_page: perPage, page, sort });
     } catch {
       router.go('/', true);
+    } finally {
+      sorting = null;
     }
   }
 
@@ -117,10 +121,19 @@
           <div class="overflow-x-auto">
             <div class="data-table transition-opacity">
               <div class="grid min-w-[760px] grid-cols-[14rem_minmax(0,1fr)_12rem_9rem] gap-4 border-b border-neutral-200 px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-neutral-500 dark:border-white/[0.07] dark:text-fg-faint">
-                <TableSortHeader label="Actor" asc="actor-asc" desc="actor-desc" bind:value={sort} onsort={() => (page = 1)} />
-                <TableSortHeader label="Activity" asc="activity-asc" desc="activity-desc" bind:value={sort} onsort={() => (page = 1)} />
-                <TableSortHeader label="Source" asc="source-asc" desc="source-desc" bind:value={sort} onsort={() => (page = 1)} />
-                <TableSortHeader label="Time" asc="time-asc" desc="time-desc" first="desc" class="justify-self-end" bind:value={sort} onsort={() => (page = 1)} />
+                {#each [['Actor', 'actor', 'asc'], ['Activity', 'activity', 'asc'], ['Source', 'source', 'asc'], ['Time', 'time', 'desc']] as [label, column, first] (column)}
+                  <SortHeader
+                    server
+                    loading={sorting === column}
+                    {label}
+                    asc="{column}-asc"
+                    desc="{column}-desc"
+                    first={first as 'asc' | 'desc'}
+                    class={column === 'time' ? 'justify-self-end' : ''}
+                    current={sort}
+                    onsort={(v) => ((sorting = column), (sort = v), (page = 1))}
+                  />
+                {/each}
               </div>
               {#each data.events as event (event.id)}
                 {@const changes = event.changes && Object.keys(event.changes).length ? event.changes : null}
