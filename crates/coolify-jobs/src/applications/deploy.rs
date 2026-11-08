@@ -155,6 +155,9 @@ type Step = Result<(), Fail>;
 /// The build state of a git deployment (`$this->build_pack`, `$this->source`, image names, …).
 #[derive(Default)]
 struct BuildState {
+    /// `$helperBuildSecretEnvironmentKeys`: build-time variables the helper container has in its
+    /// environment for build secrets.
+    helper_build_secret_keys: Vec<String>,
     restart_only: bool,
     rollback: bool,
     force_rebuild: bool,

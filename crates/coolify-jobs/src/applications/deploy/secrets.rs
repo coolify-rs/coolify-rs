@@ -19,6 +19,7 @@ use crate::integrations::secret_managers;
 impl Run {
     /// `generate_docker_env_flags_for_secrets()`: the `-e` flags of the helper container.
     pub(super) async fn generate_docker_env_flags_for_secrets(&mut self) -> Result<String, Fail> {
+        self.b.helper_build_secret_keys = Vec::new();
         if !self.app.setting_bool("use_build_secrets") || self.build_pack() == "dockerimage" {
             return Ok(String::new());
         }
@@ -37,24 +38,55 @@ impl Run {
         if variables.is_empty() {
             return Ok(String::new());
         }
-        let vars = self.variables().await?;
+        let variables = self.with_raw_build_secret_values(&variables).await?;
         let mut flags = Vec::new();
-        for (key, value) in variables {
-            self.validated_buildtime_key(&key, "the build secret environment")
+        for (key, value) in &variables {
+            self.validated_buildtime_key(key, "the build secret environment")
                 .await?;
-            let multiline = vars
-                .iter()
-                .find(|v| v.is_preview == self.b.is_preview() && v.is_buildtime && v.key == key)
-                .is_some_and(|v| v.is_multiline);
             // generateDockerEnvFlags()
-            let value = if multiline {
-                value.trim_matches('\'').to_owned()
-            } else {
-                value
-            };
             flags.push(format!("-e {}", quote(&format!("{key}={value}"))));
         }
+        self.b.helper_build_secret_keys = variables.into_iter().map(|(key, _)| key).collect();
         Ok(flags.join(" "))
+    }
+
+    /// `withRawBuildSecretValues($variables)`: the build-time values are escaped or quoted for .env
+    /// files and shell build arguments, where the shell removes the escapes again. A build secret
+    /// gets its value from the helper container as it is, so it gets the raw value of each
+    /// variable (`resolve_environment_variable_raw()`) instead.
+    pub(super) async fn with_raw_build_secret_values(
+        &mut self,
+        variables: &[(String, String)],
+    ) -> Result<Vec<(String, String)>, Fail> {
+        let raw: std::collections::HashMap<String, String> = self
+            .deployed_variables()
+            .await?
+            .into_iter()
+            .filter(|v| v.is_buildtime && variables.iter().any(|(key, _)| *key == v.key))
+            .map(|v| (v.key, v.resolved.unwrap_or_default()))
+            .collect();
+        Ok(variables
+            .iter()
+            .map(|(key, value)| {
+                (
+                    key.clone(),
+                    raw.get(key).cloned().unwrap_or_else(|| value.clone()),
+                )
+            })
+            .collect())
+    }
+
+    /// `withoutHelperBuildSecretEnvironment($command)`: Docker Compose prefers the process
+    /// environment over `--env-file`, so a command in the helper container that pulls or starts
+    /// services first unsets the build-time values the container holds for build secrets.
+    pub(super) fn without_helper_build_secret_environment(&self, command: &str) -> String {
+        if self.b.helper_build_secret_keys.is_empty() {
+            return command.to_owned();
+        }
+        format!(
+            "unset {}; {command}",
+            self.b.helper_build_secret_keys.join(" ")
+        )
     }
 
     /// `generate_build_secrets($variables)`.
@@ -72,12 +104,13 @@ impl Run {
                 quote(&format!("id={key},env={key}"))
             ));
         }
+        let raw = self.with_raw_build_secret_values(variables).await?;
         self.b.build_secrets = format!(
             "{} --build-arg {}",
             flags.join(" "),
             quote(&format!(
                 "COOLIFY_BUILD_SECRETS_HASH={}",
-                self.secrets_hash(variables)
+                self.secrets_hash(&raw)
             ))
         );
         Ok(())
@@ -193,7 +226,8 @@ impl Run {
             self.validated_buildtime_key(key, "the Compose build secret environment")
                 .await?;
         }
-        let hash = self.secrets_hash(&variables);
+        let raw = self.with_raw_build_secret_values(&variables).await?;
+        let hash = self.secrets_hash(&raw);
         if let Some(services) = compose.services_mut() {
             for (_, service) in services.iter_mut() {
                 add_build_secrets_to_service(service, &variables, &hash);

@@ -879,10 +879,10 @@ impl Run {
         );
         let command = in_docker(
             &self.dep,
-            &format!(
+            &self.without_helper_build_secret_environment(&format!(
                 "{} docker compose --env-file {w}/{ENV_FILE} --project-name {u} --project-directory {w} -f {w}{loc} pull --ignore-buildable {list}",
                 self.b.coolify_variables
-            ),
+            )),
         );
         self.exec(vec![Cmd::new(command).hidden()]).await
     }
@@ -909,9 +909,14 @@ impl Run {
                 self.write_deployment_configurations().await?;
                 let result = self
                     .exec(vec![
-                        Cmd::new(in_docker(&dep, &format!("cd {w} && {start}")))
-                            .kind("stdout")
-                            .command_hidden(),
+                        Cmd::new(in_docker(
+                            &dep,
+                            &self.without_helper_build_secret_environment(&format!(
+                                "cd {w} && {start}"
+                            )),
+                        ))
+                        .kind("stdout")
+                        .command_hidden(),
                     ])
                     .await;
                 return result.map_err(|e| syntax_error(e, "start", &custom));
@@ -945,7 +950,12 @@ impl Run {
                     in_workdir
                 }
             } else {
-                in_docker(&dep, &format!("cd /artifacts/{dep} && {start}"))
+                in_docker(
+                    &dep,
+                    &self.without_helper_build_secret_environment(&format!(
+                        "cd /artifacts/{dep} && {start}"
+                    )),
+                )
             };
             return self
                 .exec(vec![Cmd::new(command).kind("stdout").command_hidden()])
@@ -963,6 +973,7 @@ impl Run {
         let command = format!(
             "{vars} docker compose --env-file {w}/{ENV_FILE} --project-name {u} --project-directory {w} -f {w}{loc} up -d"
         );
+        let command = self.without_helper_build_secret_environment(&command);
         self.exec(vec![
             Cmd::new(in_docker(&dep, &command))
                 .kind("stdout")
