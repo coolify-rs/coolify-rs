@@ -35,6 +35,15 @@ const OUTPUT_QUEUE: usize = 64;
 
 static NEXT_PTY: AtomicU64 = AtomicU64::new(1);
 
+/// `/terminal/ws` alone, for Coolify's terminal server port (6002). With an instance domain, the
+/// proxy configuration Coolify writes sends `/terminal/ws` there and everything else to the main
+/// port, so a drop-in must answer on it too. Nothing else is served on that port.
+pub fn router(state: AppState) -> axum::Router {
+    axum::Router::new()
+        .route("/terminal/ws", axum::routing::get(upgrade))
+        .with_state(state)
+}
+
 /// `createTerminalUpgradeHandler`: a rejected client is still upgraded, because a browser cannot
 /// read the status of a failed handshake and needs the close code.
 pub async fn upgrade(

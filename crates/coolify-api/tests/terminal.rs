@@ -311,6 +311,56 @@ async fn a_session_runs_the_command_of_the_server() {
     f.h.finish().await;
 }
 
+/// With an instance domain, Coolify's proxy configuration sends `/terminal/ws` to `coolify:6002`
+/// and the rest to the main port. The terminal port serves the same session and nothing else.
+#[tokio::test]
+async fn the_terminal_port_serves_the_terminal_and_nothing_else() {
+    let f = fixture().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap();
+    let router = coolify_api::terminal_ws::router(f.h.state.clone());
+    tokio::spawn(async move {
+        axum::serve(listener, router.into_make_service())
+            .await
+            .unwrap();
+    });
+
+    let mut req = format!("ws://{port}/terminal/ws")
+        .into_client_request()
+        .unwrap();
+    req.headers_mut()
+        .insert("cookie", f.alice.0.parse().unwrap());
+    req.headers_mut()
+        .insert("origin", format!("http://{port}").parse().unwrap());
+    let mut ws = tokio_tungstenite::connect_async(req).await.unwrap().0;
+    send(&mut ws, json!({"ping": true})).await;
+    assert_eq!(next(&mut ws).await, "pong");
+    let answer = token(&f, &f.alice, None).await;
+    let t = answer["token"].as_str().unwrap().to_owned();
+    send(&mut ws, json!({"terminalToken": t})).await;
+    assert_eq!(next(&mut ws).await, "pty-ready");
+    until(&mut ws, "READY").await;
+    send(&mut ws, json!({"message": "hello\r"})).await;
+    until(&mut ws, "GOT:hello").await;
+    send(&mut ws, json!({"message": "exit\r"})).await;
+    until(&mut ws, "pty-exited").await;
+
+    for path in ["/", "/api/health", "/login", "/ui/terminal/session"] {
+        let mut stream = tokio::net::TcpStream::connect(port).await.unwrap();
+        let request = format!("GET {path} HTTP/1.0\r\nHost: {port}\r\n\r\n");
+        tokio::io::AsyncWriteExt::write_all(&mut stream, request.as_bytes())
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut response)
+            .await
+            .unwrap();
+        let response = String::from_utf8_lossy(&response);
+        assert!(response.starts_with("HTTP/1.0 404"), "{path}: {response}");
+    }
+    f.h.finish().await;
+}
+
 #[tokio::test]
 async fn tokens_belong_to_the_user_and_team_that_got_them() {
     let f = fixture().await;
