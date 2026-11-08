@@ -1,5 +1,6 @@
 <script lang="ts">
   // Port of upstream livewire/settings/updates.blade.php (App\Livewire\Settings\Updates).
+  import Callout from '../components/Callout.svelte';
   import FormInput from '../components/FormInput.svelte';
   import Listbox from '../components/Listbox.svelte';
   import Reicon from '../components/Reicon.svelte';
@@ -21,7 +22,7 @@
   let saving = $state(false);
   let errors = $state<Record<string, string[]>>({});
 
-  const targets = ['update_check_frequency', 'auto_update_frequency'];
+  const targets = ['update_check_frequency', 'auto_update_frequency', 'update_channel', 'update_custom_tag'];
   const dirty = $derived(!!form && targets.some((k) => (form![k] ?? '') !== (saved[k] ?? '')));
   const onOff = [
     { value: true, label: 'Enabled' },
@@ -83,6 +84,46 @@
             </button>
           {/snippet}
           <div class="grid gap-4 lg:grid-cols-2">
+            <Listbox
+              id="update_channel"
+              label="Channel"
+              helper="The versions this instance upgrades to."
+              bind:value={form.update_channel}
+              options={[
+                { value: 'stable', label: 'Stable', description: 'Stable releases' },
+                { value: 'preview', label: 'Preview', description: 'Betas and release candidates, then the stable release' },
+                { value: 'nightly', label: 'Nightly', description: 'A build of the next version twice a day, then every release' },
+                { value: 'custom', label: 'Custom image', description: 'A pinned image, such as the build of a pull request' },
+              ]}
+            />
+
+            {#if form.update_channel === 'custom'}
+              <FormInput
+                required
+                id="update_custom_tag"
+                label="Image tag"
+                placeholder="pr-1234"
+                error={errors.update_custom_tag?.[0]}
+                helper="A tag of ghcr.io/coolify-rs/coolify-rs, such as pr-1234 for the build of pull request 1234."
+                bind:value={form.update_custom_tag}
+              />
+            {:else}
+              <div class="hidden lg:block"></div>
+            {/if}
+
+            {#if form.update_channel === 'nightly'}
+              <Callout type="danger" title="Nightly builds can break this instance" class="lg:col-span-2">
+                Nightly builds are untested builds of the next version. Things can break at any time and breaking changes are possible, including
+                database changes a stable release does not expect. Back up first and use nightly only on an instance you can rebuild. After switching
+                back to stable, the instance keeps getting the nightlies of its version until that version is released as stable.
+              </Callout>
+            {:else if form.update_channel === 'custom'}
+              <Callout type="danger" title="A custom image can break this instance" class="lg:col-span-2">
+                The image installs only when you upgrade to it here, and automatic updates pause until you switch back to a channel. Pull request
+                builds are untested and can include database changes a later release does not expect.
+              </Callout>
+            {/if}
+
             <FormInput
               required
               id="update_check_frequency"

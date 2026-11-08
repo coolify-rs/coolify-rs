@@ -58,19 +58,185 @@ pub async fn refresh_versions() -> Option<Value> {
     Some(data)
 }
 
-fn latest_in(versions: &Value) -> Option<String> {
+/// The Coolify version of a versions file: `coolify.version` (v4.6.0) or `coolify.v4.version`.
+fn version_of(versions: &Value) -> Option<String> {
     versions
-        .pointer("/coolify/v4/version")
+        .pointer("/coolify/version")
+        .or_else(|| versions.pointer("/coolify/v4/version"))
         .and_then(Value::as_str)
         .map(str::to_owned)
 }
 
+/// The update channels, most stable first.
+pub const CHANNELS: [&str; 3] = ["stable", "preview", "nightly"];
+
+/// `update_channel`, `update_custom_tag` and `previous_update_channel` of the instance settings
+/// (v4.6.0, `add_update_channel_to_instance_settings_table`). An older schema is on `stable`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateChannel {
+    pub channel: String,
+    pub custom_tag: Option<String>,
+    pub previous: Option<String>,
+}
+
+impl Default for UpdateChannel {
+    fn default() -> Self {
+        Self {
+            channel: "stable".to_owned(),
+            custom_tag: None,
+            previous: None,
+        }
+    }
+}
+
+impl UpdateChannel {
+    pub fn from_settings(row: &serde_json::Map<String, Value>) -> Self {
+        let text = |k: &str| {
+            row.get(k)
+                .and_then(Value::as_str)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+        };
+        Self {
+            channel: text("update_channel").unwrap_or_else(|| "stable".to_owned()),
+            custom_tag: text("update_custom_tag"),
+            previous: text("previous_update_channel"),
+        }
+    }
+
+    pub async fn load(db: &coolify_db::Db) -> Self {
+        let row: Option<Value> =
+            sqlx::query_scalar("SELECT to_jsonb(s) FROM instance_settings s WHERE id = 0")
+                .fetch_optional(db.pool())
+                .await
+                .ok()
+                .flatten();
+        row.as_ref()
+            .and_then(Value::as_object)
+            .map(Self::from_settings)
+            .unwrap_or_default()
+    }
+
+    pub fn is_custom(&self) -> bool {
+        self.channel == "custom"
+    }
+}
+
+fn rank(channel: Option<&str>) -> Option<usize> {
+    channel.and_then(|c| CHANNELS.iter().position(|x| *x == c))
+}
+
+/// `InstanceSettings::switchUpdateChannel()`: the `previous_update_channel` after a switch. After a
+/// switch to a more stable channel, the instance keeps the updates of the channel it left until the
+/// stable release of its version is out.
+pub fn previous_after_switch(
+    from: &str,
+    to: &str,
+    previous: Option<&str>,
+) -> Option<Option<String>> {
+    if from == to {
+        return None;
+    }
+    let (from_rank, to_rank) = (rank(Some(from)), rank(Some(to)));
+    Some(match (from_rank, to_rank) {
+        (Some(f), Some(t)) if t < f => {
+            // `array_search($followed, ...) > $fromRank`: false compares as 0.
+            if rank(previous).unwrap_or(0) > f {
+                previous.map(str::to_owned)
+            } else {
+                Some(from.to_owned())
+            }
+        }
+        _ => None,
+    })
+}
+
+/// `version_compare($version, $release, '<')` as PHP orders a pre-release: below its release.
+/// [`version_compare`] puts a word part at 0, so `4.7.0-beta.1` would be above `4.7.0` there.
+fn before_release(version: &str, release: &str) -> bool {
+    let core_end = version
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(version.len());
+    let (core, suffix) = version.split_at(core_end);
+    match version_compare(core.trim_end_matches('.'), release) {
+        Ordering::Less => true,
+        Ordering::Equal => !suffix.is_empty(),
+        Ordering::Greater => false,
+    }
+}
+
+/// `newest_update_channel()`: the channel of the newest Coolify version this instance takes, its
+/// update channel and the more stable ones, and the channel it left below the stable release of
+/// the running version. `channels` holds the versions of each channel.
+pub fn newest_update_channel(channels: &Value, settings: &UpdateChannel, running: &str) -> String {
+    let follows = rank(Some(&settings.channel)).unwrap_or(0);
+    let until_release = settings
+        .previous
+        .as_deref()
+        .map_or(-1, |p| rank(Some(p)).unwrap_or(0) as i64);
+    let release = {
+        let re = regex::Regex::new(r"^(\d+\.\d+\.\d+).*").unwrap_or_else(|_| unreachable!());
+        re.replace(running, "$1").into_owned()
+    };
+    let version_of_channel = |c: &str| channels.get(c).and_then(version_of);
+    let mut newest = "stable";
+    for (i, channel) in CHANNELS.iter().enumerate() {
+        let Some(version) = version_of_channel(channel) else {
+            continue;
+        };
+        let current = version_of_channel(newest).unwrap_or_default();
+        if version_compare(&version, &current) != Ordering::Greater {
+            continue;
+        }
+        if i <= follows || (i as i64 <= until_release && before_release(&version, &release)) {
+            newest = channel;
+        }
+    }
+    newest.to_owned()
+}
+
+/// The versions this instance follows in a versions file: the file of the newest channel when it
+/// lists channels (`{"stable": {...}, "preview": {...}, "nightly": {...}}`, v4.6.0), else the
+/// file itself, a stable-only file of an older release.
+pub fn channel_versions(file: &Value, settings: &UpdateChannel, running: &str) -> (String, Value) {
+    if file.get("stable").is_some_and(Value::is_object) {
+        let channel = newest_update_channel(file, settings, running);
+        let versions = file.get(&channel).cloned().unwrap_or(Value::Null);
+        (channel, versions)
+    } else {
+        ("stable".to_owned(), file.clone())
+    }
+}
+
+/// `upgrade_script_url($channel)`: a channel's `upgrade.sh` is next to the versions file.
+fn upgrade_script_url_for(channel: &str) -> Option<String> {
+    if channel == "stable" {
+        return upgrade_script_url();
+    }
+    let versions = versions_url()?;
+    let base = versions
+        .rsplit_once('/')
+        .map_or(versions.as_str(), |(b, _)| b);
+    Some(format!("{base}/{channel}/upgrade.sh"))
+}
+
+/// The newest version this instance takes from a versions file.
+pub fn latest_in(file: &Value, settings: &UpdateChannel, running: &str) -> Option<String> {
+    version_of(&channel_versions(file, settings, running).1)
+}
+
 /// `CheckForUpdatesJob::handle`. `true` when `new_version_available` is up to date.
 pub async fn check_for_updates(jobs: &Jobs, current: &str) -> bool {
-    let Some(latest) = refresh_versions().await.as_ref().and_then(latest_in) else {
+    let settings = UpdateChannel::load(&jobs.0.db).await;
+    let Some(latest) = refresh_versions()
+        .await
+        .as_ref()
+        .and_then(|f| latest_in(f, &settings, current))
+    else {
         return false;
     };
-    let newer = version_compare(&latest, current) == Ordering::Greater;
+    // A custom image is installed by hand only (v4.6.0).
+    let newer = !settings.is_custom() && version_compare(&latest, current) == Ordering::Greater;
     sqlx::query(
         "UPDATE instance_settings SET new_version_available = $1, updated_at = $2 WHERE id = 0",
     )
@@ -185,21 +351,33 @@ async fn backup_database(jobs: &Jobs) -> Result<(), String> {
 
 /// `UpdateCoolify::handle`. `Ok(false)` when there is nothing to do.
 pub async fn update_coolify(jobs: &Jobs, current: &str, manual: bool) -> Result<bool, String> {
-    let Some(script_url) = upgrade_script_url() else {
+    let settings = UpdateChannel::load(&jobs.0.db).await;
+    // A custom image (v4.6.0) installs only when upgraded to by hand, from ghcr.io.
+    if settings.is_custom() {
+        let Some(tag) = settings.custom_tag.clone().filter(|_| manual) else {
+            return Ok(false);
+        };
+        let Some(script_url) = upgrade_script_url() else {
+            return Err("This installation has no update address (COOLIFY_RS_CDN).".to_owned());
+        };
+        backup_database(jobs).await?;
+        return run_upgrade(jobs, &script_url, &tag, Some("ghcr.io")).await;
+    }
+    let file = match refresh_versions().await {
+        Some(file) => Some(file),
+        None => std::fs::read_to_string(versions_path())
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok()),
+    };
+    let (channel, versions) = file
+        .as_ref()
+        .map(|f| channel_versions(f, &settings, current))
+        .ok_or_else(|| "Cannot determine latest version.".to_owned())?;
+    let latest =
+        version_of(&versions).ok_or_else(|| "Cannot determine latest version.".to_owned())?;
+    let Some(script_url) = upgrade_script_url_for(&channel) else {
         return Err("This installation has no update address (COOLIFY_RS_CDN).".to_owned());
     };
-    let latest = refresh_versions()
-        .await
-        .as_ref()
-        .and_then(latest_in)
-        .or_else(|| {
-            std::fs::read_to_string(versions_path())
-                .ok()
-                .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-                .as_ref()
-                .and_then(latest_in)
-        })
-        .ok_or_else(|| "Cannot determine latest version.".to_owned())?;
     let db = jobs.0.db.pool();
     if !manual {
         let auto: bool = sqlx::query_scalar(
@@ -218,7 +396,17 @@ pub async fn update_coolify(jobs: &Jobs, current: &str, manual: bool) -> Result<
         ));
     }
     backup_database(jobs).await?;
+    run_upgrade(jobs, &script_url, &latest, None).await
+}
 
+/// `UpdateCoolify::update($registryUrl)`: runs `upgrade.sh` for the version or image tag.
+async fn run_upgrade(
+    jobs: &Jobs,
+    script_url: &str,
+    latest: &str,
+    registry_url: Option<&str>,
+) -> Result<bool, String> {
+    let db = jobs.0.db.pool();
     let srv = Srv::load(jobs, 0).await?;
     let status = srv
         .run_quiet(
@@ -239,17 +427,19 @@ pub async fn update_coolify(jobs: &Jobs, current: &str, manual: bool) -> Result<
     .await
     .map_err(|e| e.to_string())?;
     let helper = helper_version(helper.as_deref());
-    let registry = registry
-        .filter(|r| !r.is_empty())
-        .unwrap_or_else(|| "docker.io".to_owned());
+    let registry = registry_url.map(str::to_owned).unwrap_or_else(|| {
+        registry
+            .filter(|r| !r.is_empty())
+            .unwrap_or_else(|| "docker.io".to_owned())
+    });
     let commands = vec![
         format!(
             "curl -fsSL {} -o /data/coolify/source/upgrade.sh",
-            shell_arg(&script_url)
+            shell_arg(script_url)
         ),
         format!(
             "bash /data/coolify/source/upgrade.sh {} {} {}",
-            shell_arg(&latest),
+            shell_arg(latest),
             shell_arg(&helper),
             shell_arg(&registry)
         ),
@@ -331,6 +521,81 @@ pub fn spawn_schedule(jobs: &Jobs, current: String) {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    fn channel(channel: &str, previous: Option<&str>) -> UpdateChannel {
+        UpdateChannel {
+            channel: channel.to_owned(),
+            custom_tag: None,
+            previous: previous.map(str::to_owned),
+        }
+    }
+
+    /// `InstanceSettings::switchUpdateChannel()` (v4.6.0).
+    #[test]
+    fn switching_update_channels() {
+        assert_eq!(previous_after_switch("stable", "stable", None), None);
+        // A more stable channel remembers the one it left.
+        assert_eq!(
+            previous_after_switch("nightly", "stable", None),
+            Some(Some("nightly".to_owned()))
+        );
+        assert_eq!(
+            previous_after_switch("nightly", "preview", None),
+            Some(Some("nightly".to_owned()))
+        );
+        // ...or the less stable one it still follows.
+        assert_eq!(
+            previous_after_switch("preview", "stable", Some("nightly")),
+            Some(Some("nightly".to_owned()))
+        );
+        // A less stable channel, or custom, forgets it.
+        assert_eq!(
+            previous_after_switch("stable", "nightly", Some("nightly")),
+            Some(None)
+        );
+        assert_eq!(previous_after_switch("nightly", "custom", None), Some(None));
+        assert_eq!(previous_after_switch("custom", "stable", None), Some(None));
+    }
+
+    /// `newest_update_channel()` (v4.6.0).
+    #[test]
+    fn newest_channel_of_the_versions_file() {
+        let file = json!({
+            "stable": {"coolify": {"version": "4.6.0"}},
+            "preview": {"coolify": {"version": "4.7.0-beta.1"}},
+            "nightly": {"coolify": {"version": "4.7.0-beta.2"}},
+        });
+        assert_eq!(
+            newest_update_channel(&file, &channel("stable", None), "4.6.0"),
+            "stable"
+        );
+        assert_eq!(
+            newest_update_channel(&file, &channel("preview", None), "4.6.0"),
+            "preview"
+        );
+        assert_eq!(
+            newest_update_channel(&file, &channel("nightly", None), "4.6.0"),
+            "nightly"
+        );
+        // Back on stable from nightly: the nightlies of a version not yet released as stable.
+        assert_eq!(
+            newest_update_channel(&file, &channel("stable", Some("nightly")), "4.7.0-beta.1"),
+            "nightly"
+        );
+        assert_eq!(
+            newest_update_channel(&file, &channel("stable", Some("nightly")), "4.6.0"),
+            "stable"
+        );
+        assert!(before_release("4.7.0-beta.1", "4.7.0"));
+        assert!(before_release("4.6.9", "4.7.0"));
+        assert!(!before_release("4.7.0", "4.7.0"));
+        assert!(!before_release("4.8.0-beta.1", "4.7.0"));
+        // A file of an older release lists no channels: its version is the stable one.
+        let old = json!({"coolify": {"v4": {"version": "4.5.3-rs.1"}}});
+        let (name, versions) = channel_versions(&old, &channel("nightly", None), "4.5.3");
+        assert_eq!(name, "stable");
+        assert_eq!(version_of(&versions).as_deref(), Some("4.5.3-rs.1"));
+    }
 
     fn at(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s)

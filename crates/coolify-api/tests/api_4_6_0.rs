@@ -909,3 +909,73 @@ async fn replaced_avatar_touches_updated_at() {
     assert_eq!(updated("teams").await, at("2026-11-05 10:00:00"));
     h.finish().await;
 }
+
+/// `Settings\Updates` (v4.6.0): the update channel, the custom image tag and the channel an instance
+/// keeps following after a switch to a more stable one.
+#[tokio::test]
+async fn update_channel_settings() {
+    let h = Harness::with_extra_sql(
+        "ALTER TABLE instance_settings ADD COLUMN update_channel varchar(255) NOT NULL DEFAULT 'stable', \
+         ADD COLUMN update_custom_tag varchar(255), ADD COLUMN previous_update_channel varchar(255);",
+    )
+    .await;
+    let (cookie, csrf) = h.ui_login("root@example.test").await;
+    let headers = [("cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+    let values = |channel: &str, tag: Value| {
+        json!({
+            "update_check_frequency": "0 * * * *",
+            "auto_update_frequency": "0 0 * * *",
+            "is_auto_update_enabled": false,
+            "docker_registry_url": "docker.io",
+            "update_channel": channel,
+            "update_custom_tag": tag,
+        })
+    };
+    let post = |body: Value| h.request("POST", "/ui/settings/updates", &headers, Some(body));
+    let stored = || async {
+        sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+            "SELECT update_channel, update_custom_tag, previous_update_channel FROM instance_settings WHERE id = 0",
+        )
+        .fetch_one(h.tdb.db.pool())
+        .await
+        .unwrap()
+    };
+
+    let r = post(json!({"action": "submit", "values": values("weekly", json!(null))})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        r.json()["errors"],
+        json!({"update_channel": ["The selected update channel is invalid."]})
+    );
+    let r = post(json!({"action": "instant", "values": values("custom", json!(null))})).await;
+    assert_eq!(
+        r.json()["errors"],
+        json!({"update_custom_tag": ["The update custom tag field is required when update channel is custom."]})
+    );
+    let r = post(json!({"action": "instant", "values": values("custom", json!("-bad"))})).await;
+    assert_eq!(
+        r.json()["errors"],
+        json!({"update_custom_tag": ["The update custom tag field format is invalid."]})
+    );
+
+    let r = post(json!({"action": "instant", "values": values("nightly", json!(null))})).await;
+    assert_eq!(
+        r.json()["settings"]["update_channel"],
+        "nightly",
+        "{}",
+        r.body
+    );
+    assert_eq!(stored().await, ("nightly".into(), None, None));
+    // Back to stable: the nightlies of this version stay until its stable release.
+    post(json!({"action": "instant", "values": values("stable", json!(null))})).await;
+    assert_eq!(
+        stored().await,
+        ("stable".into(), None, Some("nightly".into()))
+    );
+    post(json!({"action": "instant", "values": values("custom", json!("pr-1234"))})).await;
+    assert_eq!(
+        stored().await,
+        ("custom".into(), Some("pr-1234".into()), None)
+    );
+    h.finish().await;
+}
