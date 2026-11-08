@@ -1117,6 +1117,24 @@ mod tests {
     }
 
     #[test]
+    fn page_urls_ask_disk_history_for_the_root_mounts() {
+        let from = "2026-11-08T10:00:00Z";
+        assert_eq!(
+            history_url("disk", "24h", from),
+            "http://localhost:8888/api/disk/history?from=2026-11-08T10:00:00Z&bucket_ms=300000&mount=%2F%2C%2Fapp%2Fdb%2C%2Fdata%2Fcoolify%2C%2Fdata"
+        );
+        assert_eq!(
+            history_url("bogus", "7d", from),
+            "http://localhost:8888/api/cpu/history?from=2026-11-08T10:00:00Z&bucket_ms=1800000"
+        );
+        let urls = page_urls("24h", from);
+        assert_eq!(urls.len(), 7);
+        assert_eq!(urls[0], "http://localhost:8888/api/summary");
+        assert_eq!(urls[1], "http://localhost:8888/api/containers/current");
+        assert!(urls[6].starts_with("http://localhost:8888/api/network/history?"));
+    }
+
+    #[test]
     fn root_mount_prefers_slash_and_falls_back() {
         let rows = vec![
             json!({"mount": "/data", "used": 1, "total": 2, "usedPercent": 50.0}),

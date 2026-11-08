@@ -640,6 +640,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sentinel_reads_have_short_curl_timeouts_and_the_token_on_stdin() {
+        assert_eq!(
+            sentinel_script(&sentinel_curl(
+                "http://localhost:8888/api/cpu/history?from=x",
+                "tok"
+            )),
+            "docker exec -i coolify-sentinel sh -s <<'COOLIFY_SENTINEL_SCRIPT'\ncurl -sS --connect-timeout 2 --max-time 3 -H @- \"http://localhost:8888/api/cpu/history?from=x\" <<'COOLIFY_SENTINEL_AUTH'\nAuthorization: Bearer tok\nCOOLIFY_SENTINEL_AUTH\nCOOLIFY_SENTINEL_SCRIPT"
+        );
+    }
+
+    #[test]
     fn container_memory_is_in_megabytes() {
         assert_eq!(
             bytes_to_megabytes(&[(1, 10_485_760.0), (2, 1_572_864.0)]),
