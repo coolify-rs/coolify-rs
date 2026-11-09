@@ -77,7 +77,8 @@
   import Terminal from './pages/Terminal.svelte';
   import { router } from './lib/router.svelte';
   import { session } from './lib/session.svelte';
-  import { page } from './lib/page.svelte';
+  import { page, carryNavContext } from './lib/page.svelte';
+  import { untrack } from 'svelte';
   import { setUnauthenticatedHandler } from './lib/api';
   import SettingsPlugins from './pages/SettingsPlugins.svelte';
   import TeamPlugins from './pages/TeamPlugins.svelte';
@@ -142,7 +143,7 @@
     page.switchers = [];
     page.resourceSwitcher = null;
     page.renamed = {};
-    page.navContext = null;
+    page.navContext = untrack(() => carryNavContext(page.navContext, router.path));
     page.server = null;
     page.sourceConnected = null;
     page.navChildren = null;

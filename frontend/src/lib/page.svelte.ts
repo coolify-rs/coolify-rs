@@ -130,3 +130,26 @@ export function dashboardContext(path: string): string | null {
   ];
   return rules.find(([re]) => re.test(p))?.[1] ?? null;
 }
+
+/** The resource menu to keep while the next page loads. Upstream renders each page with its menu, so moving
+ *  between entries of one resource menu never shows the main menu in between. Here a page sets its menu only
+ *  after its data arrives, so the menu of the page being left stays when `path` is one of its entries (or of
+ *  a menu one Back away), with that entry marked active. Anywhere else the main menu shows at once. */
+export function carryNavContext(ctx: NavContext | null, path: string): NavContext | null {
+  for (let menu = ctx; menu; menu = menu.parent ?? null) {
+    const entries = menu.groups.flat();
+    const isEntry = entries.some((i) => !i.disabled && (i.href === path || i.links?.some((l) => l.href === path)));
+    if (!isEntry) continue;
+    return {
+      ...menu,
+      groups: menu.groups.map((group) =>
+        group.map((item) => {
+          const links = item.links?.map((l) => ({ ...l, active: l.href === path }));
+          // The sections of the page being left belong to that page.
+          return { ...item, links, children: undefined, active: item.href === path || !!links?.some((l) => l.active) };
+        }),
+      ),
+    };
+  }
+  return null;
+}
