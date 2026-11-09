@@ -603,4 +603,3 @@ events = ["deployment.succeeded"]
     let report = conformance::check(&wasm("deploy_stats"), "id = 1", Settings::default()).await;
     assert!(!report.ok);
 }
-
