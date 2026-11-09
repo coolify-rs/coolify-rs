@@ -16,7 +16,7 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 - **Update channels.** The Preview and Nightly channels of the update settings take a version only from a version
   file that lists channels (`{"stable": …, "preview": …, "nightly": …}`); with a stable-only file every channel
   gets the stable release. A custom image tag installs `ghcr.io/coolify-rs/coolify-rs:<tag>`.
-- **Existing Coolify databases.** Each release takes over exactly one Coolify release (4.6.0 for `4.6.0-rs.2`; see
+- **Existing Coolify databases.** Each release takes over exactly one Coolify release (4.6.0 for `4.6.0-rs.3`; see
   [MIGRATING.md](MIGRATING.md)). `coolify-rs boot` runs the upstream migrations from Coolify 4.5.3 to that release (the
   ones that bring its own earlier installs up), whoever created the database: a Coolify 4.5.3 database is upgraded to
   the 4.6.0 schema on the first start, and from then on only Coolify 4.6.0 can take it back. A database from a Coolify
