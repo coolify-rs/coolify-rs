@@ -603,18 +603,3 @@ events = ["deployment.succeeded"]
     let report = conformance::check(&wasm("deploy_stats"), "id = 1", Settings::default()).await;
     assert!(!report.ok);
 }
-
-#[test]
-fn the_registry_template_is_valid() {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry");
-    let index = registry::source::build_index(&dir, Utc::now()).unwrap();
-    let head = registry::source::load(&dir).unwrap();
-    let review = registry::review::review(&[], &head);
-    assert!(review.errors.is_empty(), "{:?}", review.errors);
-    // The example's manifest in the registry is the one in the coolify-rs repository.
-    let text =
-        std::fs::read_to_string(plugins_dir().join("examples/deploy-stats/plugin.toml")).unwrap();
-    let ours = coolify_plugins::Manifest::parse(&text).unwrap();
-    let listed = index.entry(ID).unwrap().versions[0].manifest().unwrap();
-    assert_eq!(listed, ours);
-}

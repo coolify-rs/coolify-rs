@@ -11,7 +11,7 @@ guide uses Rust and the SDK in [`plugins/sdk-rust`](../plugins/sdk-rust).
 ## First-party plugins
 
 These are maintained in this repository under [`plugins/official`](../plugins/official) and listed in the
-registry template under [`registry/plugins/coolify-rs`](../registry/plugins/coolify-rs). Each README lists
+registry under [`plugins/coolify-rs`](https://github.com/coolify-rs/plugins/tree/main/plugins/coolify-rs). Each README lists
 the settings, exactly what is sent where, and the capabilities.
 
 | Plugin | What it does | Capabilities beyond events, storage and routes |
@@ -605,7 +605,7 @@ plugin that is not installed.
 ```json
 {
   "index": {
-    "url": "https://raw.githubusercontent.com/coolify-rs/plugins/main/dist",
+    "url": "https://raw.githubusercontent.com/coolify-rs/plugins/index/dist",
     "key_id": "coolify-rs-2026",
     "generated_at": "2026-11-06T12:00:00Z",
     "fetched_at": "2026-11-06T12:01:00Z"
@@ -654,7 +654,7 @@ These fields need explaining:
 
 ```json
 {
-  "url": "https://raw.githubusercontent.com/coolify-rs/plugins/main/dist",
+  "url": "https://raw.githubusercontent.com/coolify-rs/plugins/index/dist",
   "key_id": "coolify-rs-2026",
   "generated_at": "2026-11-06T12:00:00Z",
   "fetched_at": "2026-11-06T12:01:00Z",
@@ -726,7 +726,7 @@ None of these need a database.
 | `coolify-rs plugin verify-index <dist-dir> [--trust <public-key-file>]` | Verifies an index with the compiled-in keys, and any key you trust explicitly |
 | `coolify-rs plugin review <registry-dir> [--base <main-checkout>] [--out <dir>]` | The registry's pull request checks: metadata, typosquatting, immutability, capability diff and review tier |
 
-[`registry/`](../registry) is the template for the registry repository, with its workflows and scripts.
+The registry repository, with its workflows and scripts, is [`coolify-rs/plugins`](https://github.com/coolify-rs/plugins).
 
 ## Settings
 
@@ -735,7 +735,7 @@ None of these need a database.
 | `COOLIFY_RS_PLUGINS` | on | `off` switches the plugin system off entirely |
 | `COOLIFY_RS_ALLOW_UNVERIFIED_PLUGINS` | `false` | `true` turns on development mode: uploads, test events, extra registry keys |
 | `COOLIFY_RS_PLUGIN_REGISTRY` | on | `off` stops the daily refresh. An admin can still refresh by hand. Without refreshes, revocations don't arrive |
-| `COOLIFY_RS_PLUGIN_REGISTRY_URL` | `https://raw.githubusercontent.com/coolify-rs/plugins/main/dist` | The folder that holds `index.json` and `index.json.sig` |
+| `COOLIFY_RS_PLUGIN_REGISTRY_URL` | `https://raw.githubusercontent.com/coolify-rs/plugins/index/dist` | The folder that holds `index.json` and `index.json.sig` |
 | `COOLIFY_RS_PLUGIN_REGISTRY_KEYS` | none | Extra trusted keys, as `id:hex-public-key:YYYY-MM-DD` separated by commas. They are read in development mode only and ignored otherwise |
 
 The development key, `coolify-rs-dev-insecure`, signs the test registries. Its secret half is in this

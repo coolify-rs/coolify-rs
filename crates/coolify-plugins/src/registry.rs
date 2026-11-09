@@ -29,7 +29,7 @@ use coolify_db::Db;
 use crate::PluginError;
 
 /// `COOLIFY_RS_PLUGIN_REGISTRY_URL`'s default: the `dist/` folder of the registry repository.
-pub const DEFAULT_URL: &str = "https://raw.githubusercontent.com/coolify-rs/plugins/main/dist";
+pub const DEFAULT_URL: &str = "https://raw.githubusercontent.com/coolify-rs/plugins/index/dist";
 
 /// Where the registry is and whom to trust.
 #[derive(Debug, Clone)]
