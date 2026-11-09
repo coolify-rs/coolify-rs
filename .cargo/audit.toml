@@ -9,4 +9,8 @@ ignore = [
   # the 0.14 elliptic-curve crates. Here ECDSA verifies passkey signatures, which uses public keys only,
   # and signs certificates locally, so an attacker has no secret operation to time.
   "RUSTSEC-2026-0387",
+  # libsqlite3-sys 0.30 (SQLite CVE-2026-119375). It is only in Cargo.lock because sqlx 0.8 lists its SQLite
+  # driver there; coolify-rs enables only the postgres feature, so neither sqlx-sqlite nor libsqlite3-sys is
+  # built (`cargo tree -i libsqlite3-sys --target all` prints nothing). Drop this with the move to sqlx 0.9.
+  "RUSTSEC-2026-0459",
 ]

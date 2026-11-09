@@ -19,13 +19,15 @@ pub struct TrustedKey {
     pub not_after: NaiveDate,
 }
 
-/// Production registry keys, compiled in.
+/// Production registry keys, compiled in: `(id, public key, not_after)`.
 ///
-/// TODO(registry): no production key exists yet. The maintainers generate one with
-/// `coolify-rs plugin keygen`, keep the secret half only in the registry repository's Actions secrets,
-/// and add the public half here as `key("<id>", "<hex>", "<not_after>")`. Until then no index verifies
-/// unless a key is added in development mode.
-const PRODUCTION_KEYS: &[(&str, &str, &str)] = &[];
+/// The secret halves live only in the `registry-signing` environment of `github.com/coolify-rs/plugins`.
+/// Ship the next key here well before the current one's `not_after`, then switch the secret.
+const PRODUCTION_KEYS: &[(&str, &str, &str)] = &[(
+    "coolify-rs-registry-2026",
+    "73f90f47b8560ecd8b6bf16e73853c0426c49832967cc2858bc3231adb1c4546",
+    "2028-11-30",
+)];
 
 /// FOR TESTS AND LOCAL DEVELOPMENT ONLY. Its secret half is committed to this repository
 /// (`crates/coolify-plugins/tests/fixtures/registry-dev.key`), so anyone can sign with it. It is never
@@ -334,5 +336,12 @@ mod tests {
                 .iter()
                 .all(|k| k.id != DEV_KEY_ID && !k.id.contains("dev"))
         );
+    }
+
+    #[test]
+    fn every_production_key_is_valid() {
+        // An invalid entry would be dropped with only a log line, and no index would verify.
+        assert!(!PRODUCTION_KEYS.is_empty());
+        assert_eq!(production_keys().len(), PRODUCTION_KEYS.len());
     }
 }

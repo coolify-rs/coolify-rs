@@ -98,7 +98,7 @@ upgrades and installing a local build: [docs/INSTALL.md](docs/INSTALL.md).
 ### Move from Coolify
 
 coolify-rs takes over a Coolify server in place, with the same database, secrets, SSH keys and running resources, and
-Coolify can take it back. Each release matches one Coolify release: `4.6.0-rs.3` matches Coolify 4.6.0. Back up, run
+Coolify can take it back. Each release matches one Coolify release: `4.6.0-rs.4` matches Coolify 4.6.0. Back up, run
 the dry-run check, then the same installer: [docs/MIGRATING.md](docs/MIGRATING.md).
 
 ### Run it against an existing Coolify database
