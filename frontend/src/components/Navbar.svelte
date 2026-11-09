@@ -10,6 +10,7 @@
   import { page, type NavContextItem } from '../lib/page.svelte';
   import BetaBadge from './BetaBadge.svelte';
   import { pluginNav } from '../lib/plugins.svelte';
+  import { untrack } from 'svelte';
 
   let { desktop = false }: { desktop?: boolean } = $props();
 
@@ -38,8 +39,13 @@
     submenu = activeSubmenu;
     navSwap = '';
   });
+  // A page that opens a deeper menu plays the forward swap, one that opens a lower menu the back swap, and
+  // one at the same depth none (upstream compares the depth with the previous page's).
   $effect.pre(() => {
-    navLevel = page.navContext ? 0 : -1;
+    const next = page.navContext ? 0 : -1;
+    const previous = untrack(() => navLevel);
+    if (next !== previous) navSwap = next > previous ? 'forward' : 'back';
+    navLevel = next;
   });
   const shownContext = $derived(navLevel === 0 ? page.navContext : navLevel === 1 ? (page.navContext?.parent ?? null) : null);
   const showContext = $derived(!!shownContext);
@@ -161,7 +167,7 @@
     {#if showContext && shownContext}
       {@const ctx = shownContext}
       <li class="contents">
-        <ul role="list" class="flex flex-col gap-y-0.5 {navSwap && 'nav-swap-' + navSwap}">
+        <ul role="list" class="flex flex-col gap-y-0.5 {navSwap && 'nav-swap-' + navSwap}" onanimationend={() => (navSwap = '')}>
           <li class="mb-1">
             <button
               type="button"
@@ -203,7 +209,7 @@
     {#each submenus as parent (parent.label)}
       {#if !showContext && submenu === parent.label}
         <li class="contents">
-          <ul role="list" class="flex flex-col gap-y-0.5 {navSwap && 'nav-swap-' + navSwap}">
+          <ul role="list" class="flex flex-col gap-y-0.5 {navSwap && 'nav-swap-' + navSwap}" onanimationend={() => (navSwap = '')}>
             <li class="mb-1">
               <button
                 type="button"
@@ -258,7 +264,7 @@
     {/each}
     {#if !showContext && !submenu}
       <li class="contents">
-        <ul role="list" class="flex flex-col gap-y-0.5 {navSwap && 'nav-swap-' + navSwap}">
+        <ul role="list" class="flex flex-col gap-y-0.5 {navSwap && 'nav-swap-' + navSwap}" onanimationend={() => (navSwap = '')}>
           {#if page.navContext}
             <!-- On a resource page the main menu opens the deepest resource menu again. -->
             <li class="mb-1">

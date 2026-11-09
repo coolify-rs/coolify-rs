@@ -9,7 +9,7 @@ You can go back to Coolify the same way (see [Going back to Coolify](#going-back
 
 ## Which Coolify versions can move
 
-A coolify-rs release matches exactly one Coolify release, named in its version: **coolify-rs `4.6.0-rs.2` takes over
+A coolify-rs release matches exactly one Coolify release, named in its version: **coolify-rs `4.6.0-rs.3` takes over
 Coolify `4.6.0`**.
 
 | Your Coolify | What to do |
@@ -53,7 +53,7 @@ refuses writes and says why in the dashboard and the log, instead of risking you
 
    ```bash
    docker run --rm --network coolify --env-file /data/coolify/source/.env -e DB_HOST=coolify-db \
-     ghcr.io/coolify-rs/coolify-rs:4.6.0-rs.2 check-schema
+     ghcr.io/coolify-rs/coolify-rs:4.6.0-rs.3 check-schema
    ```
 
    `"read_only_reason": null` means it can. Anything else says why not; nothing has changed, and Coolify keeps running.
@@ -80,7 +80,7 @@ The switch takes a minute or two. Everyone is signed out.
 
 ## Check it
 
-1. Open the dashboard at the same address and sign in with your Coolify account. Settings shows version `4.6.0-rs.2`.
+1. Open the dashboard at the same address and sign in with your Coolify account. Settings shows version `4.6.0-rs.3`.
 2. `docker exec coolify coolify-rs check-schema` shows `"read_only_reason": null`. If not, the reason is there (usually
    a Coolify version other than 4.6.0); [go back to Coolify](#going-back-to-coolify) and see the version table above.
 3. Open each server and click **Validate**. They should be reachable with their existing keys.
