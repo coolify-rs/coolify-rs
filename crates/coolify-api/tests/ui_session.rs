@@ -499,6 +499,90 @@ async fn team_two_factor_policy_blocks_bridge() {
 }
 
 #[tokio::test]
+async fn team_two_factor_policy_blocks_the_canvas_for_that_team() {
+    let h = Harness::new().await;
+    // Alice's session is on team 1; team 2, where she is also a member, requires 2FA.
+    for sql in [
+        "INSERT INTO team_user (team_id, user_id, role) VALUES (2, 1, 'member')",
+        "UPDATE teams SET is_two_factor_required = true WHERE id = 2",
+    ] {
+        sqlx::query(sql).execute(h.tdb.db.pool()).await.unwrap();
+    }
+    let (cookie, _) = h.ui_login("alice@example.test").await;
+    let canvas = |team: &'static str| {
+        let cookie = cookie.clone();
+        let h = &h;
+        async move {
+            h.request(
+                "GET",
+                "/canvas/api/projects/canvas",
+                &[("cookie", &cookie), ("x-canvas-team", team)],
+                None,
+            )
+            .await
+        }
+    };
+    let own = canvas("1").await;
+    assert_eq!(own.status, 200, "{}", own.body);
+    canvas("2").await.assert(
+        403,
+        r#"{"message":"Your team requires two-factor authentication. Configure it to continue."}"#,
+    );
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn cookies_are_secure_behind_an_https_proxy() {
+    use axum::extract::ConnectInfo;
+    use tower::ServiceExt as _;
+    let h = Harness::new().await;
+    let state = coolify_api::state::AppState::new(
+        h.tdb.db.clone(),
+        h.state.version.clone(),
+        coolify_api::ip::TrustedProxies::parse("10.0.0.0/8").unwrap(),
+    );
+    let app = coolify_api::router(state);
+    let login = |peer: &str, proto: &str| {
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/ui/session")
+            .header("content-type", "application/json")
+            .header("x-forwarded-proto", proto)
+            .body(axum::body::Body::from(
+                json!({"email": "alice@example.test", "password": PASSWORD}).to_string(),
+            ))
+            .unwrap();
+        let mut req = req;
+        req.extensions_mut()
+            .insert(ConnectInfo(peer.parse::<std::net::SocketAddr>().unwrap()));
+        app.clone().oneshot(req)
+    };
+    let cookie = |r: axum::response::Response| {
+        assert_eq!(r.status(), 200);
+        r.headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    // Through the trusted proxy over https: Secure.
+    let secure = cookie(login("10.0.1.5:5000", "https").await.unwrap());
+    assert!(
+        !secure.is_empty() && secure.iter().all(|c| c.contains("; Secure")),
+        "{secure:?}"
+    );
+    // Plain http, or a forged header from an untrusted client: unchanged.
+    for (peer, proto) in [("10.0.1.5:5000", "http"), ("203.0.113.9:5000", "https")] {
+        let plain = cookie(login(peer, proto).await.unwrap());
+        assert!(
+            plain.iter().all(|c| !c.contains("Secure")),
+            "{peer} {proto} {plain:?}"
+        );
+    }
+    h.finish().await;
+}
+
+#[tokio::test]
 async fn login_is_throttled() {
     let h = Harness::new().await;
     let bad = json!({"email": "alice@example.test", "password": "nope"});

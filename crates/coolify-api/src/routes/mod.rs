@@ -3879,6 +3879,10 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::ui_terminal::routes(state.clone()))
         .merge(crate::ui_plugins::routes(state.clone()))
         .fallback(crate::fallback::fallback)
+        .layer(from_fn_with_state(
+            state.clone(),
+            crate::session::secure_cookies_over_https,
+        ))
         .with_state(state)
 }
 

@@ -163,6 +163,9 @@ async fn git_commands(
     let branch = app.str("git_branch").unwrap_or_default().to_owned();
     let (repository, port) =
         convert_git_url(app.str("git_repository").unwrap_or_default(), kind, source);
+    if crate::applications::deploy::git::is_option_like(&repository) {
+        return Err(rt(crate::applications::deploy::git::INVALID_REPOSITORY));
+    }
     let shallow = app.setting_bool("is_git_shallow_clone_enabled");
     let depth = if shallow { " --depth=1" } else { "" };
     let mut submodule_flags = String::new();

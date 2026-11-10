@@ -292,6 +292,8 @@ pub async fn update(
     let mut errors: Vec<String> = Vec::new();
     if repository.is_empty() {
         errors.push("The git repository field is required.".into());
+    } else if let Some(msg) = git_urls::not_option_like(&Value::String(repository.clone())) {
+        errors.push(msg.replace(":attribute", "git repository"));
     }
     if branch.is_empty() {
         errors.push("The git branch field is required.".into());

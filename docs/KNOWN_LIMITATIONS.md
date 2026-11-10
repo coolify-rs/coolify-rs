@@ -16,7 +16,7 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 - **Update channels.** The Preview and Nightly channels of the update settings take a version only from a version
   file that lists channels (`{"stable": …, "preview": …, "nightly": …}`); with a stable-only file every channel
   gets the stable release. A custom image tag installs `ghcr.io/coolify-rs/coolify-rs:<tag>`.
-- **Existing Coolify databases.** Each release takes over exactly one Coolify release (4.6.0 for `4.6.0-rs.4`; see
+- **Existing Coolify databases.** Each release takes over exactly one Coolify release (4.6.0 for `4.6.0-rs.5`; see
   [MIGRATING.md](MIGRATING.md)). `coolify-rs boot` runs the upstream migrations from Coolify 4.5.3 to that release (the
   ones that bring its own earlier installs up), whoever created the database: a Coolify 4.5.3 database is upgraded to
   the 4.6.0 schema on the first start, and from then on only Coolify 4.6.0 can take it back. A database from a Coolify
@@ -210,8 +210,10 @@ These differences are deliberate.
 - **Client IP.** Upstream v4.5.3's `client_ip()` uses the forwarded address whenever the TCP peer is a private,
   loopback or link-local address, so anything on the Docker network or host can set it. coolify-rs keeps its trusted-proxy
   model (ADR 0006): it uses the peer address unless `COOLIFY_RS_TRUSTED_PROXIES` is set, and then the rightmost untrusted
-  hop, so a private peer is trusted only when listed. The same rule applies to the scheme and host used for a new
-  server's `sentinel_custom_url`.
+  hop, so a private peer is trusted only when listed. The installer and upgrader list the `coolify` Docker network,
+  which Coolify's proxy uses, when the setting is missing; containers attached to that network are trusted with it.
+  The same rule applies to the scheme and host used for a new server's `sentinel_custom_url`, and to marking cookies
+  Secure.
 - **Database storage responses.** Upstream's `POST` and `PATCH /databases/{uuid}/storages` answers include the whole
   database with its server and saved proxy configuration, also for tokens without `read:sensitive`. coolify-rs leaves
   that relation out.

@@ -254,6 +254,14 @@ pub fn ssh_git_url_to_https(url: &str) -> Option<String> {
     Some(format!("https://{host}/{path}"))
 }
 
+/// Refuses a repository that git would read as an option (`--upload-pack=...` runs a program).
+/// Checked wherever the repository can be changed, also where upstream only checks a string.
+pub fn not_option_like(v: &Value) -> Option<String> {
+    v.as_str()
+        .is_some_and(|s| s.trim_start().starts_with('-'))
+        .then(|| "The :attribute must not start with a dash.".to_owned())
+}
+
 /// The `ValidGitRepositoryUrl` rule (SSH and IPs allowed).
 pub fn valid_git_repository_url(v: &Value) -> Option<String> {
     if php_empty(v) {
@@ -425,6 +433,15 @@ mod tests {
 
     fn repo(s: &str) -> Option<String> {
         valid_git_repository_url(&json!(s))
+    }
+
+    #[test]
+    fn a_repository_starting_with_a_dash_is_refused() {
+        let msg = Some("The :attribute must not start with a dash.".to_owned());
+        assert_eq!(not_option_like(&json!("--upload-pack=x")), msg);
+        assert_eq!(not_option_like(&json!("  -u x")), msg);
+        assert_eq!(not_option_like(&json!("https://github.com/o/r")), None);
+        assert_eq!(not_option_like(&json!(null)), None);
     }
 
     #[test]

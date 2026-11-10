@@ -74,7 +74,8 @@ pub async fn base_url_error(db: &Db, url: &str, settings_url: &str) -> Option<St
     endpoint_error(url, "base_url", &policy, settings_url).await
 }
 
-/// `SafeExternalUrl::httpClientOptions($url)`: the request is pinned to the validated addresses.
+/// `SafeExternalUrl::httpClientOptions($url)`: the request is pinned to the validated addresses,
+/// and redirects are not followed (a redirect target would skip both the check and the pin).
 pub async fn pinned_client(
     db: &Db,
     url: &str,
@@ -84,6 +85,7 @@ pub async fn pinned_client(
     let mut builder = Client::builder()
         .connect_timeout(connect)
         .timeout(total)
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent("coolify-rs");
     if !is_fake(url) {
         let policy = UrlPolicy::load(db).await;

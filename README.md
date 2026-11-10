@@ -98,7 +98,7 @@ upgrades and installing a local build: [docs/INSTALL.md](docs/INSTALL.md).
 ### Move from Coolify
 
 coolify-rs takes over a Coolify server in place, with the same database, secrets, SSH keys and running resources, and
-Coolify can take it back. Each release matches one Coolify release: `4.6.0-rs.4` matches Coolify 4.6.0. Back up, run
+Coolify can take it back. Each release matches one Coolify release: `4.6.0-rs.5` matches Coolify 4.6.0. Back up, run
 the dry-run check, then the same installer: [docs/MIGRATING.md](docs/MIGRATING.md).
 
 ### Run it against an existing Coolify database
@@ -152,8 +152,8 @@ docs/                   architecture, compatibility, security model and decision
 | `COOLIFY_RS_UI_DIR` | `frontend/dist` | Built web UI |
 | `COOLIFY_RS_DATA_DIR` | `/data/coolify-rs` | Pinned host keys, short-lived key files and other state |
 | `COOLIFY_RS_SCHEDULER` | on | `off` stops the scheduler, for example when Coolify shares the database |
-| `COOLIFY_RS_SECURE_COOKIES` | `false` | Set to `true` behind HTTPS |
-| `COOLIFY_RS_TRUSTED_PROXIES` | none | IPs or CIDRs whose `X-Forwarded-For` is trusted |
+| `COOLIFY_RS_SECURE_COOKIES` | `false` | `true` marks cookies Secure on every request. Without it they are Secure on requests that reach a trusted proxy over HTTPS |
+| `COOLIFY_RS_TRUSTED_PROXIES` | the `coolify` network (set by the installer) | IPs or CIDRs whose `X-Forwarded-*` headers are trusted |
 | `COOLIFY_RS_SSH_HOST_KEYS` | `pin` | `ignore` behaves like Coolify |
 | `COOLIFY_RS_SSH_MAX_CONCURRENCY` | `32` | Concurrent SSH commands |
 | `SSH_COMMAND_TIMEOUT` | `3600` | Seconds, as in Coolify |
