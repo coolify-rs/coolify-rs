@@ -522,9 +522,21 @@ fn pull_request_clone(
     }
 }
 
+/// The error for a repository that git would read as an option.
+pub const INVALID_REPOSITORY: &str = "The git repository is not valid.";
+
+/// Whether git would read `value` as an option rather than a repository or branch.
+pub fn is_option_like(value: &str) -> bool {
+    value.trim_start().starts_with('-')
+}
+
 /// `Application::generateGitImportCommands($uuid, $pull_request_id, $git_type, true, false, null, $commit)`.
 pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImport, String> {
     use base64::Engine as _;
+    // git reads an argument that starts with `-` as an option (`--upload-pack=...` runs a program).
+    if is_option_like(i.repository) {
+        return Err(INVALID_REPOSITORY.into());
+    }
     let base_dir = format!("/artifacts/{}", i.dep);
     let dir = quote(&base_dir);
     let key_location = format!("/root/.ssh/id_rsa_coolify_{}", i.dep);
@@ -1273,5 +1285,42 @@ mod tests {
             g.commands[0].command,
             r#"docker exec abc bash -c 'git clone --depth=1 --recurse-submodules --shallow-submodules -b '\''main'\'' '\''https://github.com/o/r'\'' '\''/artifacts/abc'\'' && cd '\''/artifacts/abc'\'' && echo '\''Fetching the commit.'\'' && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git fetch --depth=1 origin '\''0123456789abcdef0123456789abcdef01234567'\'' && git -c advice.detachedHead=false checkout '\''0123456789abcdef0123456789abcdef01234567'\'' >/dev/null 2>&1 && cd '\''/artifacts/abc'\'' && if [ -f .gitmodules ]; then sed -i "s#[A-Za-z0-9._-]*@\(.*\):#https://\1/#g" '\''/artifacts/abc'\''/.gitmodules || true && echo '\''Updating submodules.'\'' && git submodule sync && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git submodule update --init --recursive --depth=1; fi && cd '\''/artifacts/abc'\'' && if git lfs ls-files -n | grep -q .; then echo '\''Downloading Git LFS objects.'\'' && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git lfs pull; fi'"#
         );
+    }
+
+    #[test]
+    fn a_repository_git_would_read_as_an_option_is_refused() {
+        let s = ImportSettings {
+            shallow: true,
+            submodules: false,
+            lfs: false,
+        };
+        for kind in [DeploymentType::Other, DeploymentType::DeployKey] {
+            for repository in [
+                "--upload-pack=touch /tmp/x;",
+                "-utouch /tmp/x",
+                " --config=x",
+            ] {
+                let r = generate_git_import_commands(&ImportInput {
+                    dep: "abc",
+                    branch: "main",
+                    repository,
+                    port: "22",
+                    kind,
+                    source: None,
+                    settings: s,
+                    commit: "HEAD",
+                    private_key: Some("key"),
+                    github_token: None,
+                    oauth_token: None,
+                    source_key: None,
+                    pull_request_id: 0,
+                    git_type: None,
+                    https_option: None,
+                });
+                assert_eq!(r.err().as_deref(), Some(INVALID_REPOSITORY), "{repository}");
+            }
+        }
+        assert!(!is_option_like("https://example.com/-o/r"));
+        assert!(!is_option_like("git@example.com:o/r.git"));
     }
 }

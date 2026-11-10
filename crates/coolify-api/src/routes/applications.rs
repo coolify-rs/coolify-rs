@@ -760,7 +760,10 @@ fn container_name_rules() -> Vec<Rule> {
 pub(super) fn shared_rules(overrides: Vec<Field>) -> Vec<Field> {
     let boolean = |name| field(name, vec![Rule::Boolean]);
     let mut fields = vec![
-        field("git_repository", vec![Rule::String]),
+        field(
+            "git_repository",
+            vec![Rule::String, Rule::CustomOwned(git_urls::not_option_like)],
+        ),
         field(
             "git_branch",
             vec![Rule::String, Rule::CustomOwned(git_urls::valid_git_branch)],

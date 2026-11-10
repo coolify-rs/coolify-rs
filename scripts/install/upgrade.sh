@@ -310,6 +310,16 @@ echo "     Done."
 
 ensure_coolify_network || exit 1
 
+# coolify-rs takes the client address from X-Forwarded-For only from trusted proxies (ADR 0006).
+# Coolify's proxy reaches it over the coolify network, so that network is trusted; without it every
+# visitor shares the proxy's address and per-address limits apply to everyone at once. Only set
+# when missing, so an operator's own value stays.
+coolify_subnets=$(docker network inspect coolify --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null |
+    tr ' ' '\n' | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$|^[0-9A-Fa-f:]+/[0-9]{1,3}$' | paste -sd, -)
+if [ -n "$coolify_subnets" ]; then
+    update_env_var "COOLIFY_RS_TRUSTED_PROXIES" "$coolify_subnets"
+fi
+
 mkdir -p /data/coolify/images/{avatars,project-icons}
 chown -R 9999:root /data/coolify/images
 chmod -R 700 /data/coolify/images

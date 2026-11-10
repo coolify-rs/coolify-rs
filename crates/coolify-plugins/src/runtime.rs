@@ -232,6 +232,8 @@ fn http_reserve(deadline: Duration) -> Duration {
 }
 
 /// The shortest `http` request worth starting; with less time left, `fetch` fails at once.
+/// Elements a plugin table may hold.
+pub const TABLE_ELEMENTS: usize = 10_000;
 const MIN_FETCH: Duration = Duration::from_millis(50);
 
 impl WasiView for State {
@@ -757,6 +759,9 @@ impl Host {
                     .memory_size(limits.memory)
                     .instances(16)
                     .tables(32)
+                    // Table growth commits host memory outside `memory_size`; the first-party
+                    // plugins use about 150 elements.
+                    .table_elements(TABLE_ELEMENTS)
                     .memories(4)
                     .trap_on_grow_failure(true)
                     .build(),

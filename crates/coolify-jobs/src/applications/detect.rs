@@ -96,6 +96,9 @@ fn scan_commands_with(
     checkout_override: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let checkout_dir = format!("/tmp/{uuid}/checkout");
+    if crate::applications::deploy::git::is_option_like(clone_url) {
+        return Err(crate::applications::deploy::git::INVALID_REPOSITORY.into());
+    }
     let base = base_directory.trim_matches('/');
     let dots = regex::Regex::new(r"(^|/)\.\.?(/|$)").map_err(|e| e.to_string())?;
     let safe = regex::Regex::new(r"^[a-zA-Z0-9_./-]*$").map_err(|e| e.to_string())?;
@@ -271,6 +274,9 @@ impl Jobs {
         uuid: &str,
     ) -> Result<String, String> {
         use base64::Engine as _;
+        if crate::applications::deploy::git::is_option_like(repository) {
+            return Err(crate::applications::deploy::git::INVALID_REPOSITORY.into());
+        }
         let db = &self.0.db;
         let enc = self
             .0

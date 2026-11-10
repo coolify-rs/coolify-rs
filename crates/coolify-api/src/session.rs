@@ -42,6 +42,8 @@ pub const COOKIE: &str = "coolify_rs_session";
 const GUEST_COOKIE: &str = "coolify_rs_guest";
 const GUEST_LIFETIME: Duration = Duration::from_secs(2 * 3600);
 const MAX_SESSIONS: usize = 10_000;
+/// Login throttle keys kept at most; a flood of distinct emails evicts keys instead of growing.
+const MAX_ATTEMPT_KEYS: usize = 50_000;
 const ABSOLUTE_LIFETIME: Duration = Duration::from_secs(30 * 24 * 3600);
 const LOGIN_LIMIT: usize = 5;
 const LOGIN_WINDOW: Duration = Duration::from_secs(60);
@@ -136,13 +138,20 @@ impl SessionStore {
     pub(crate) fn guest<R>(&self, id: &str, f: impl FnOnce(&mut Guest) -> R) -> Option<R> {
         let now = Instant::now();
         let mut m = self.guests.lock().ok()?;
-        if m.len() >= MAX_SESSIONS {
+        let key = digest(id);
+        if m.len() >= MAX_SESSIONS && !m.contains_key(&key) {
             m.retain(|_, g| {
                 g.last_seen
                     .is_some_and(|t| now.duration_since(t) < GUEST_LIFETIME)
             });
+            // Still full (a flood of new visitors): the least recently seen guest makes room.
+            if m.len() >= MAX_SESSIONS
+                && let Some(oldest) = m.iter().min_by_key(|(_, g)| g.last_seen).map(|(k, _)| *k)
+            {
+                m.remove(&oldest);
+            }
         }
-        let g = m.entry(digest(id)).or_default();
+        let g = m.entry(key).or_default();
         if g.last_seen
             .is_some_and(|t| now.duration_since(t) >= GUEST_LIFETIME)
         {
@@ -325,8 +334,12 @@ impl SessionStore {
         let mut m = self.attempts.lock().ok()?;
         keys.iter()
             .filter_map(|k| {
-                let v = m.entry(k.clone()).or_default();
+                let v = m.get_mut(k)?;
                 v.retain(|t| now.duration_since(*t) < LOGIN_WINDOW);
+                if v.is_empty() {
+                    m.remove(k);
+                    return None;
+                }
                 (v.len() >= LOGIN_LIMIT).then(|| {
                     let oldest = v.iter().min().copied().unwrap_or(now);
                     (LOGIN_WINDOW.saturating_sub(now.duration_since(oldest)))
@@ -338,9 +351,19 @@ impl SessionStore {
     }
 
     fn record_failure(&self, keys: &[String]) {
+        let now = Instant::now();
         if let Ok(mut m) = self.attempts.lock() {
+            if m.len() >= MAX_ATTEMPT_KEYS {
+                m.retain(|_, v| v.iter().any(|t| now.duration_since(*t) < LOGIN_WINDOW));
+            }
             for k in keys {
-                m.entry(k.clone()).or_default().push(Instant::now());
+                if m.len() >= MAX_ATTEMPT_KEYS
+                    && !m.contains_key(k)
+                    && let Some(any) = m.keys().next().cloned()
+                {
+                    m.remove(&any);
+                }
+                m.entry(k.clone()).or_default().push(now);
             }
         }
     }
@@ -360,6 +383,44 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
 
 fn session_cookie(headers: &HeaderMap) -> Option<String> {
     cookie_value(headers, COOKIE)
+}
+
+/// Marks every cookie `Secure` on a request that reached the trusted proxy over HTTPS (Laravel's
+/// `SESSION_SECURE_COOKIE=null`, which follows `Request::isSecure()`), so an instance behind its
+/// https domain gets Secure cookies without `COOLIFY_RS_SECURE_COOKIES`, and plain-http access
+/// on the IP keeps working.
+pub async fn secure_cookies_over_https(
+    State(state): State<AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let https = !state.secure_cookies
+        && req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .is_some_and(|c| state.trusted_proxies.request_origin(c.0, req.headers()).0 == "https");
+    let mut res = next.run(req).await;
+    if https {
+        let cookies: Vec<HeaderValue> = res
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .cloned()
+            .collect();
+        if !cookies.is_empty() {
+            res.headers_mut().remove(header::SET_COOKIE);
+            for c in cookies {
+                let c = match c.to_str() {
+                    Ok(t) if !t.to_ascii_lowercase().contains("; secure") => {
+                        HeaderValue::from_str(&format!("{t}; Secure")).unwrap_or(c)
+                    }
+                    _ => c,
+                };
+                res.headers_mut().append(header::SET_COOKIE, c);
+            }
+        }
+    }
+    res
 }
 
 fn cookie_header(state: &AppState, name: &str, value: &str, max_age: Option<u64>) -> HeaderValue {
@@ -631,10 +692,21 @@ fn web_gates(live: &Live, path: &str) -> Result<(), ApiError> {
             FORCE_RESET_REQUIRED,
         ));
     }
+    team_two_factor(live, live.team_id, path)?;
+    // Instance settings act for the root team, whatever team the session is on.
+    if path.starts_with("/ui/settings/oauth") {
+        team_two_factor(live, 0, path)?;
+    }
+    Ok(())
+}
+
+/// A team that requires two-factor authentication refuses a user without it, for every request
+/// that acts on that team (the session's team, or the team a canvas request names).
+fn team_two_factor(live: &Live, team_id: TeamId, path: &str) -> Result<(), ApiError> {
     let required = live
         .memberships
         .iter()
-        .find(|m| m.team_id == live.team_id)
+        .find(|m| m.team_id == team_id)
         .is_some_and(|m| m.two_factor_required);
     if required
         && live.user.two_factor_confirmed_at.is_none()
@@ -905,6 +977,7 @@ pub async fn canvas_guard(State(state): State<AppState>, mut req: Request, next:
             .iter()
             .find(|m| m.team_id == team)
             .ok_or(ApiError::InvalidToken)?;
+        team_two_factor(&live, team, &path)?;
         let access = if team == live.team_id {
             live.access.clone()
         } else {
@@ -1231,7 +1304,8 @@ pub async fn login(
         .to_lowercase();
     let pass = input.get("password").and_then(Value::as_str).unwrap_or("");
     // `throttle:login`: every attempt counts, also a successful one.
-    let mut keys = vec![format!("{email}|{ip}")];
+    // Hashed, so a long email in the body costs the map no more than a short one.
+    let mut keys = vec![format!("login:{}", hex_digest(&format!("{email}|{ip}")))];
     if let Some(identity) = crate::rules::normalize_email_identity(Some(&email)) {
         keys.push(format!("email:{}", hex_digest(&identity)));
     }
@@ -1472,6 +1546,39 @@ mod tests {
             s.record_failure(&keys);
         }
         assert!(s.throttled(&keys).is_some());
+    }
+
+    #[test]
+    fn the_login_throttle_stays_bounded() {
+        let s = SessionStore::new(Duration::from_secs(60));
+        let len = || s.attempts.lock().unwrap().len();
+        // A lookup alone adds nothing.
+        assert!(s.throttled(&["never-failed".into()]).is_none());
+        assert_eq!(len(), 0);
+        for i in 0..MAX_ATTEMPT_KEYS + 50 {
+            s.record_failure(&[format!("k{i}")]);
+        }
+        assert!(len() <= MAX_ATTEMPT_KEYS);
+        // A key being attacked keeps counting while the map is full.
+        let target = vec!["target".to_string()];
+        for _ in 0..5 {
+            s.record_failure(&target);
+        }
+        assert!(s.throttled(&target).is_some());
+    }
+
+    #[test]
+    fn guest_sessions_stay_bounded() {
+        let s = SessionStore::new(Duration::from_secs(60));
+        let first = "first".repeat(13);
+        s.guest(&first, |g| g.login_id = Some(1));
+        for i in 0..MAX_SESSIONS + 50 {
+            s.guest(&format!("{i:064}"), |_| ());
+        }
+        let m = s.guests.lock().unwrap();
+        assert!(m.len() <= MAX_SESSIONS);
+        // The least recently seen guest made room first.
+        assert!(!m.contains_key(&digest(&first)));
     }
 
     #[test]
