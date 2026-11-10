@@ -130,17 +130,31 @@ pub fn ordered(errors: Map<String, Value>, order: &[&str]) -> Map<String, Value>
     out
 }
 
-static HITS: LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// The window a key is limited over (keys use different windows), and its hits.
+type Hits = (Duration, Vec<Instant>);
+
+/// Hits per key.
+static HITS: LazyLock<Mutex<HashMap<String, Hits>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Keys kept at most; past it, keys whose own window has passed are dropped, then any key.
+const MAX_KEYS: usize = 50_000;
 
 /// `RateLimiter`: records a hit; the seconds to wait when over `max` in `window`.
 pub fn throttle(key: &str, max: usize, window: Duration) -> Option<u64> {
     let now = Instant::now();
     let mut m = HITS.lock().ok()?;
-    if m.len() > 50_000 {
-        m.retain(|_, v| v.last().is_some_and(|t| now.duration_since(*t) < window));
+    if m.len() >= MAX_KEYS && !m.contains_key(key) {
+        m.retain(|_, (w, v)| v.last().is_some_and(|t| now.duration_since(*t) < *w));
+        if m.len() >= MAX_KEYS
+            && let Some(any) = m.keys().next().cloned()
+        {
+            m.remove(&any);
+        }
     }
-    let v = m.entry(key.to_string()).or_default();
+    let (w, v) = m
+        .entry(key.to_string())
+        .or_insert_with(|| (window, Vec::new()));
+    *w = (*w).max(window);
     v.retain(|t| now.duration_since(*t) < window);
     if v.len() >= max {
         let oldest = v.iter().min().copied().unwrap_or(now);
@@ -159,7 +173,7 @@ pub fn throttle(key: &str, max: usize, window: Duration) -> Option<u64> {
 pub fn too_many(key: &str, max: usize, window: Duration) -> Option<u64> {
     let now = Instant::now();
     let m = HITS.lock().ok()?;
-    let v = m.get(key)?;
+    let (_, v) = m.get(key)?;
     let live: Vec<&Instant> = v
         .iter()
         .filter(|t| now.duration_since(**t) < window)

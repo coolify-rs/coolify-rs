@@ -1039,6 +1039,9 @@ impl Run {
 
     /// `check_git_if_build_needed()`.
     pub(super) async fn check_git_if_build_needed(&mut self) -> Step {
+        if git::is_option_like(&self.b.repository) {
+            return Err(Fail::new(git::INVALID_REPOSITORY));
+        }
         if let Some(source) = self.b.source.clone()
             && self.b.kind == DeploymentType::Source
             && source.is_github()
