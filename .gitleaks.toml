@@ -18,5 +18,12 @@ paths = [
   # The plugin registry's development signing key: public on purpose, never trusted by default.
   '''^crates/coolify-plugins/tests/fixtures/registry-dev\.key$''',
 ]
-# The UUID of the private key record the differential scripts use (an id, not key material).
-regexes = ['''hv41morfjv9x0av5kakzdmv8''']
+# The UUID of the private key record the differential scripts use (an id, not key material), and
+# sha256("abc"), the published SHA-256 test vector, used as an expected hash in tests.
+# Commits whose findings were reviewed as test placeholders: 88e6428e has a placeholder PEM block
+# (body "abc", no key material) in a test of crates/coolify-jobs/src/databases/env.rs.
+commits = ['''88e6428ead73c0120f6e04556bccb41738f0f64a''']
+regexes = [
+  '''hv41morfjv9x0av5kakzdmv8''',
+  '''ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad''',
+]

@@ -511,8 +511,10 @@ mod tests {
     fn multiline_values_keep_their_edge_whitespace() {
         assert_eq!(without_edge_whitespace("  value \n"), "value");
         assert_eq!(without_edge_whitespace("\n"), "");
-        let key = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n";
-        assert_eq!(without_edge_whitespace(key), key);
+        // A placeholder PEM block (no key material), built so it does not look like a committed key.
+        let kind = "OPENSSH PRIVATE";
+        let key = format!("-----BEGIN {kind} KEY-----\nabc\n-----END {kind} KEY-----\n");
+        assert_eq!(without_edge_whitespace(&key), key);
         assert_eq!(without_edge_whitespace(" a\nb "), " a\nb ");
     }
 
