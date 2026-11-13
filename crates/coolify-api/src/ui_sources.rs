@@ -87,9 +87,12 @@ fn is_int(v: &str) -> bool {
     v.parse::<i64>().is_ok()
 }
 
+/// `SafeExternalUrl::forGitSource()`: `allow_private` is whether the source may use private
+/// networks (`git_http::may_use_private_networks`).
 async fn check_url(
     state: &AppState,
     headers: &HeaderMap,
+    allow_private: bool,
     errors: &mut Errors,
     field: &str,
     label: &str,
@@ -102,7 +105,7 @@ async fn check_url(
     if !crate::laravel_url::is_url(v) {
         errors.push(field, format!("The {label} field must be a valid URL."));
     }
-    if let Some(msg) = safe_url::check_with(state, field, v, headers, true).await? {
+    if let Some(msg) = safe_url::check_with(state, field, v, headers, allow_private).await? {
         errors.push(field, msg);
     }
     Ok(())
@@ -162,6 +165,13 @@ impl Provider {
             Provider::Github => "GitHub",
             Provider::Gitlab => "GitLab",
             Provider::Gitea => "Gitea",
+        }
+    }
+    /// The name the pages and messages show: a Gitea source can also be Forgejo or Codeberg.
+    fn display(self) -> &'static str {
+        match self {
+            Provider::Gitea => "Gitea / Forgejo",
+            other => other.name(),
         }
     }
     fn slug(self) -> &'static str {
@@ -346,7 +356,7 @@ pub async fn index(State(state): State<AppState>, Extension(ctx): Extension<Auth
                 "uuid": r.get("uuid"),
                 "name": r.get("name"),
                 "type": p.slug(),
-                "provider": p.name(),
+                "provider": p.display(),
                 "organization": r.get(p.organization_column()),
                 "is_connected": is_connected(p, &r),
             }));
@@ -419,6 +429,7 @@ pub async fn create_github(
     check_url(
         &state,
         &headers,
+        ctx.team_id == 0,
         &mut errors,
         "api_url",
         "api url",
@@ -428,6 +439,7 @@ pub async fn create_github(
     check_url(
         &state,
         &headers,
+        ctx.team_id == 0,
         &mut errors,
         "html_url",
         "html url",
@@ -506,6 +518,7 @@ async fn create_oauth(
     check_url(
         &state,
         &headers,
+        ctx.team_id == 0,
         &mut errors,
         "html_url",
         "html url",
@@ -515,6 +528,7 @@ async fn create_oauth(
     check_url(
         &state,
         &headers,
+        ctx.team_id == 0,
         &mut errors,
         "api_url",
         "api url",
@@ -680,13 +694,23 @@ pub async fn show_github(
             .fetch_all(state.db.pool())
             .await
             .map_err(db_err)?;
-    let endpoints = endpoints(&state, &headers).await?;
+    let mut endpoints = endpoints(&state, &headers).await?;
+    // On cloud, the instance IPs are the addresses of the Coolify hosts. Do not send them to the browser.
+    if crate::ui_subscription::is_cloud() {
+        endpoints["ipv4"] = Value::Null;
+        endpoints["ipv6"] = Value::Null;
+    }
     let has_app_id = row.get("app_id").is_some_and(|v| !v.is_null());
     let has_installation = row.get("installation_id").is_some_and(|v| !v.is_null());
-    let manifest_state = put_state(
-        "github-app-setup-state",
-        json!({"action": "manifest", "github_app_id": row.get("id"), "team_id": row.get("team_id")}),
-    );
+    // `#[Locked] $manifestState`: only who may update the App gets a setup state.
+    let manifest_state = if update {
+        put_state(
+            "github-app-setup-state",
+            json!({"action": "manifest", "github_app_id": row.get("id"), "team_id": row.get("team_id")}),
+        )
+    } else {
+        String::new()
+    };
     Ok(ok(json!({
         "uuid": row.get("uuid"),
         "name": row.get("name"),
@@ -706,9 +730,11 @@ pub async fn show_github(
         "contents": row.get("contents"),
         "metadata": row.get("metadata"),
         "pull_requests": row.get("pull_requests"),
+        "deployments": row.get("deployments"),
         "organization_self_hosted_runners": row.get("organization_self_hosted_runners"),
         "actions": row.get("actions"),
         "webhook_events": row.get("webhook_events"),
+        "missing_deployment_requirements": coolify_jobs::github::missing_deployment_requirements(&row),
         "missing_runner_requirements": missing_runner_requirements(&row),
         "has_app_id": has_app_id,
         "has_installation": has_installation,
@@ -764,6 +790,7 @@ pub async fn update_github(
     check_url(
         &state,
         &headers,
+        coolify_jobs::git_http::may_use_private_networks(&row),
         &mut errors,
         "apiUrl",
         "api url",
@@ -773,6 +800,7 @@ pub async fn update_github(
     check_url(
         &state,
         &headers,
+        coolify_jobs::git_http::may_use_private_networks(&row),
         &mut errors,
         "htmlUrl",
         "html url",
@@ -936,6 +964,8 @@ pub async fn github_check_permissions(
     Path(uuid): Path<String>,
 ) -> ApiResult {
     let row = find_row(&state, &ctx, Provider::Github, &uuid).await?;
+    // `$this->authorize('update', $this->github_app)`.
+    require_update(&state, &ctx, &row).await?;
     let mut missing = Vec::new();
     if row.get("app_id").is_none_or(Value::is_null) {
         missing.push("App ID");
@@ -959,33 +989,10 @@ pub async fn github_check_permissions(
     // syncGithubAppName($this->github_app) without throwing.
     let _ = sync_name(&state, &row).await;
     let row = find_row(&state, &ctx, Provider::Github, &uuid).await?;
-    let info = match coolify_jobs::github::fetch_permissions(&state.db, enc, &row).await {
-        Ok(i) => i,
-        Err(e) => return failure(key_failure(e)),
-    };
-    let permissions = info.get("permissions").cloned().unwrap_or(Value::Null);
-    let perm = |k: &str| {
-        permissions
-            .get(k)
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-    };
-    sqlx::query(
-        "UPDATE github_apps SET contents = $1, metadata = $2, pull_requests = $3, administration = $4, \
-         organization_self_hosted_runners = $5, actions = $6, webhook_events = $7::json, updated_at = $8 WHERE id = $9",
-    )
-    .bind(perm("contents"))
-    .bind(perm("metadata"))
-    .bind(perm("pull_requests"))
-    .bind(perm("administration"))
-    .bind(perm("organization_self_hosted_runners"))
-    .bind(perm("actions"))
-    .bind(info.get("events").cloned().unwrap_or_else(|| json!([])).to_string())
-    .bind(state.now())
-    .bind(id_of(&row))
-    .execute(state.db.pool())
-    .await
-    .map_err(db_err)?;
+    if let Err(e) = coolify_jobs::github::sync_permissions(&state.db, enc, &row, state.now()).await
+    {
+        return failure(key_failure(e));
+    }
     Ok(ok(json!({"message": "Github App permissions updated."})).into_response())
 }
 
@@ -996,6 +1003,8 @@ pub async fn github_test(
     Path(uuid): Path<String>,
 ) -> ApiResult {
     let row = find_row(&state, &ctx, Provider::Github, &uuid).await?;
+    // `$this->authorize('update', $this->github_app)`.
+    require_update(&state, &ctx, &row).await?;
     if !is_connected(Provider::Github, &row) {
         return failure("GitHub App is not fully set up. Please complete installation first.");
     }
@@ -1160,6 +1169,13 @@ async fn show_oauth(
         _ => ("webhook_secret", secret(&state, &row, "webhook_secret")),
     };
     let _ = secret_col;
+    let mut shown_endpoints = endpoints(&state, &headers).await?;
+    // `Source\Gitea\Change::mount()`: on cloud, the instance IPs are the addresses of the Coolify
+    // hosts. Do not send them to the browser.
+    if p == Provider::Gitea && crate::ui_subscription::is_cloud() {
+        shown_endpoints["ipv4"] = Value::Null;
+        shown_endpoints["ipv6"] = Value::Null;
+    }
     Ok(ok(json!({
         "uuid": row.get("uuid"),
         "name": row.get("name"),
@@ -1178,7 +1194,7 @@ async fn show_oauth(
         "is_connected": is_connected(p, &row),
         "private_keys": keys.iter().map(|(id, n)| json!({"id": id, "name": n})).collect::<Vec<_>>(),
         "applications": applications_of(&state, &ctx, p, id_of(&row)).await?,
-        "endpoints": endpoints(&state, &headers).await?,
+        "endpoints": shown_endpoints,
         "oauth_state": oauth_state,
         "can_update": update,
         "can_delete": update,
@@ -1232,6 +1248,7 @@ async fn update_oauth(
     check_url(
         &state,
         &headers,
+        coolify_jobs::git_http::may_use_private_networks(&row),
         &mut errors,
         "apiUrl",
         "api url",
@@ -1241,6 +1258,7 @@ async fn update_oauth(
     check_url(
         &state,
         &headers,
+        coolify_jobs::git_http::may_use_private_networks(&row),
         &mut errors,
         "htmlUrl",
         "html url",
@@ -1322,7 +1340,7 @@ async fn update_oauth(
     }
     coolify_db::database_parts::update_row(&state.db, p.table(), id_of(&row), &values, state.now())
         .await?;
-    Ok(ok(json!({"message": format!("{} App updated.", p.name())})).into_response())
+    Ok(ok(json!({"message": format!("{} App updated.", p.display())})).into_response())
 }
 
 pub async fn update_gitlab(
@@ -1394,7 +1412,7 @@ async fn test_oauth(state: AppState, ctx: AuthCtx, p: Provider, uuid: String) ->
     if !is_connected(p, &row) {
         return failure(format!(
             "{} App is not connected. Please complete the OAuth flow first.",
-            p.name()
+            p.display()
         ));
     }
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
@@ -1506,6 +1524,25 @@ async fn consume_setup_state(
     let Some(row) = row.filter(|r| r.get("team_id").and_then(Value::as_i64) == Some(team)) else {
         return Err(StatusCode::NOT_FOUND.into_response());
     };
+    // abort_unless($request->user()->can('update', $github_app), 403): `GithubAppPolicy::update()`.
+    let allowed = if row.get("is_system_wide").and_then(Value::as_bool) == Some(true) {
+        can_access_system_resources(state, ctx.user_id)
+            .await
+            .unwrap_or(false)
+    } else {
+        let role: Option<String> =
+            sqlx::query_scalar("SELECT role FROM team_user WHERE team_id = $1 AND user_id = $2")
+                .bind(team)
+                .bind(ctx.user_id)
+                .fetch_optional(state.db.pool())
+                .await
+                .ok()
+                .flatten();
+        matches!(role.as_deref(), Some("admin" | "owner"))
+    };
+    if !allowed {
+        return Err(StatusCode::FORBIDDEN.into_response());
+    }
     // refreshSession($github_app->team) when the user switched teams on GitHub.
     ctx.switch_team(state, team);
     Ok(row)
@@ -1548,7 +1585,14 @@ pub async fn github_redirect(
         );
     }
     let api = str_of(&row, "api_url").unwrap_or_default().to_owned();
-    let data = match coolify_jobs::github::manifest_conversion(&state.db, &api, &code).await {
+    let data = match coolify_jobs::github::manifest_conversion(
+        &state.db,
+        coolify_jobs::git_http::may_use_private_networks(&row),
+        &api,
+        &code,
+    )
+    .await
+    {
         Ok(d) => d,
         Err(e) => {
             tracing::warn!(error = %e, "github manifest conversion failed");
@@ -1771,7 +1815,10 @@ async fn oauth_redirect(
         _ => {
             return redirect_with_error(
                 "/sources",
-                &format!("You are not authorized to connect this {name} App."),
+                &format!(
+                    "You are not authorized to connect this {} App.",
+                    p.display()
+                ),
             );
         }
     }
@@ -1793,8 +1840,13 @@ async fn oauth_redirect(
         return abort(StatusCode::INTERNAL_SERVER_ERROR, "Server Error");
     };
     let exchange = async {
-        let http =
-            coolify_jobs::git_http::client(Some(&state.db), &base, Duration::from_secs(30)).await?;
+        let http = coolify_jobs::git_http::client(
+            Some(&state.db),
+            coolify_jobs::git_http::may_use_private_networks(&row),
+            &base,
+            Duration::from_secs(30),
+        )
+        .await?;
         let client_id = str_of(&row, "client_id").unwrap_or_default().to_owned();
         let client_secret = secret(&state, &row, "client_secret").unwrap_or_default();
         let redirect_uri = str_of(&row, "redirect_uri").unwrap_or_default().to_owned();

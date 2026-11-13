@@ -8,7 +8,9 @@ mod build;
 mod commands;
 pub(super) mod compose_pack;
 pub(crate) mod git;
+pub(super) mod host_keys;
 mod image_config;
+mod image_scan;
 mod preview;
 mod secrets;
 pub(crate) use secrets::remote_redaction_values;
@@ -210,6 +212,8 @@ struct BuildState {
     compose_start_command: Option<String>,
     /// `$this->docker_compose_custom_build_command`.
     compose_build_command: Option<String>,
+    /// `$this->skip_build`: the image of an earlier build is used.
+    skip_build: bool,
 }
 
 impl BuildState {
@@ -254,9 +258,19 @@ struct Run {
     saved: HashMap<String, String>,
     generated_compose: Option<String>,
     healthy: bool,
+    /// `$containerNamesBeforeRollingUpdate`: containers that ran before the rolling update
+    /// started its new container. Only these are removed after it, so the new container of
+    /// another deployment of the application stays.
+    names_before_rolling_update: Option<Vec<String>>,
     b: BuildState,
     /// `$hiddenEnvValuesHintAdded`, shared with the output writers.
     hint_added: Arc<std::sync::atomic::AtomicBool>,
+    /// `$this->imageScan`: the image scan steps, created on first use (`image_scan.rs`).
+    image_scan: Option<crate::image_scan::gate::DeploymentImageScan>,
+    /// `$this->handleStartedAt`: Unix time when `handle()` started.
+    started_at: Option<i64>,
+    /// `$this->timeout`: `dynamic_timeout` of the server, in seconds.
+    timeout: i64,
 }
 
 /// `ApplicationDeploymentQueue::HIDDEN_ENV_VALUES_HINT`.
@@ -601,8 +615,9 @@ impl Run {
         };
         (
             format!(
-                "Command execution failed (exit code {code}): {shown}\nError: {}",
-                self.redact(&error)
+                "Command execution failed (exit code {code}): {shown}\nError: {}{}",
+                self.redact(&error),
+                ssh_connection_lost_hint(code)
             ),
             code,
         )
@@ -721,6 +736,84 @@ impl Run {
     }
 }
 
+/// `ApplicationDeploymentJob::HELPER_DOCKER_CONFIG`: the Docker CLI config directory of the
+/// helper image, which holds the buildx and compose plugins. Set explicitly, because a
+/// build-time HOME variable would otherwise move it.
+pub(super) const HELPER_DOCKER_CONFIG: &str = "/root/.docker";
+
+/// `ApplicationDeploymentJob::TEMPORARY_HELPER_CONTAINER_PREFIXES`: name prefixes of the helpers
+/// that `DatabaseBackupJob` (S3 upload) and `StartDatabaseImport` (S3 download) run on a resource
+/// network for the duration of one backup or import.
+const TEMPORARY_HELPER_CONTAINER_PREFIXES: [&str; 2] = ["backup-of-", "s3-restore-"];
+
+/// `ApplicationDeploymentJob::HOST_CA_BUNDLE_PATHS`: system CA bundles of the supported server
+/// distributions, in the order that Go checks them.
+const HOST_CA_BUNDLE_PATHS: [&str; 6] = [
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/ca-bundle.pem",
+    "/etc/pki/tls/cacert.pem",
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    "/etc/ssl/cert.pem",
+];
+
+/// `ApplicationDeploymentJob::HELPER_HOST_CA_BUNDLE_PATH`: Go programs in the helper (the Docker
+/// CLI, which fetches registry tokens for BuildKit) read every file in /etc/ssl/certs, so this
+/// file adds the server CAs to the helper CAs. OpenSSL (git, curl) ignores it.
+const HELPER_HOST_CA_BUNDLE_PATH: &str = "/etc/ssl/certs/coolify-host-ca-certificates.crt";
+
+/// The flag of `hostCaBundleMount()` for the bundle path the server answered, or nothing when
+/// the answer is not one of `HOST_CA_BUNDLE_PATHS`.
+fn host_ca_bundle_mount_flag(bundle: &str) -> String {
+    if !HOST_CA_BUNDLE_PATHS.contains(&bundle) {
+        return String::new();
+    }
+    // Unlike -v, --mount does not create a missing source as a directory on the server.
+    format!(" --mount type=bind,source={bundle},target={HELPER_HOST_CA_BUNDLE_PATH},readonly")
+}
+
+/// The containers that `addHostFlags()` leaves out by name. BuildKit keys every RUN layer on the
+/// host names of the --add-host set (not on the IPs), so a container that joins or leaves the
+/// network between two builds forces a full rebuild. Left out are the short-lived containers:
+/// rolling update containers (`isGeneratedContainerName()`), preview deployments (named
+/// `<name>-pr-<id>`, they come and go with pull requests), and the backup and S3 import helpers;
+/// also the proxy, Sentinel, and the proxy error page containers: no build uses them, and
+/// Coolify recreates them. Build helpers are named after their deployment uuid and are checked
+/// against the deployment queue by the caller.
+fn is_short_lived_network_host(name: &str) -> bool {
+    static GENERATED: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(-\d{8}T\d{6}|-\d{12})$").unwrap_or_else(|_| unreachable!())
+    });
+    static PREVIEW: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"-pr-\d+$").unwrap_or_else(|_| unreachable!())
+    });
+    matches!(
+        name,
+        "coolify-proxy" | "coolify-sentinel" | crate::server_ops::proxy::PROXY_ERROR_PAGE_CONTAINER
+    ) || GENERATED.is_match(name)
+        || PREVIEW.is_match(name)
+        || TEMPORARY_HELPER_CONTAINER_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+}
+
+/// `oldGeneratedContainerNames($containers)`: the containers to remove when container names are
+/// generated per deployment: all except the new one, and after a rolling update only the ones
+/// that ran before its new container started.
+fn old_generated_container_names(
+    names: Vec<String>,
+    container_name: &str,
+    pull_request_id: i64,
+    before_rolling_update: Option<&[String]>,
+) -> Vec<String> {
+    names
+        .into_iter()
+        .filter(|name| !name.is_empty())
+        .filter(|name| pull_request_id != 0 || name != container_name)
+        .filter(|name| before_rolling_update.is_none_or(|before| before.contains(name)))
+        .collect()
+}
+
 fn md5_hex(s: &str) -> String {
     use md5::Digest as _;
     md5::Md5::digest(s.as_bytes())
@@ -761,6 +854,12 @@ impl Jobs {
             return;
         };
         let server = ServerInfo::from_row(&server_row);
+        // `$this->timeout = $this->server->settings->dynamic_timeout`.
+        let timeout = server
+            .settings
+            .get("dynamic_timeout")
+            .and_then(Value::as_i64)
+            .unwrap_or(3600);
         let server_name = server_row
             .record
             .get("name")
@@ -855,8 +954,12 @@ impl Jobs {
             saved: HashMap::new(),
             generated_compose: None,
             healthy: false,
+            names_before_rolling_update: None,
             b,
             hint_added: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            image_scan: None,
+            started_at: None,
+            timeout,
         };
         run.init_redaction().await;
         // `__construct`: `validateDockerRegistryImageConfiguration()` runs before the preview's tag
@@ -878,8 +981,14 @@ impl Jobs {
         }
 
         // handle()
+        run.started_at = Some(Utc::now().timestamp());
         if q.status == "cancelled-by-user" {
             run.info("Deployment was cancelled before starting.").await;
+            run.handle_cancelled_deployment().await;
+            return;
+        }
+        if let Err(e) = run.warn_about_preview_variables_not_passed().await {
+            run.failed(&e).await;
             return;
         }
         if let Err(e) = run.check_multiple_servers().await {
@@ -890,16 +999,20 @@ impl Jobs {
             .ok()
             .or_else(hostname)
             .unwrap_or_default();
-        let _ = apps::update_deployment(
+        // A conditional update, so a cancel that came after the check above is not overwritten.
+        let started = coolify_db::deployment_queue::start_unless_cancelled(
             &self.0.db,
             queue_id,
-            &[
-                ("status", ColumnValue::Text(Some("in_progress".into()))),
-                ("horizon_job_worker", ColumnValue::Text(Some(host))),
-            ],
+            &host,
             now(),
         )
-        .await;
+        .await
+        .unwrap_or(true);
+        if !started {
+            run.info("Deployment was cancelled before starting.").await;
+            run.handle_cancelled_deployment().await;
+            return;
+        }
         if !run.server.is_functional() {
             run.info("Server is not functional.").await;
             run.failed(&Fail::new("Server is not functional.")).await;
@@ -926,11 +1039,16 @@ impl Jobs {
             .ok()
             .or_else(hostname)
             .unwrap_or_default();
-        let count = coolify_db::git_sources::fail_in_progress_for_worker(&self.0.db, &host, now())
+        let failed = coolify_db::git_sources::fail_in_progress_for_worker(&self.0.db, &host, now())
             .await
-            .unwrap_or(0);
+            .unwrap_or_default();
+        let count = failed.len();
         if count > 0 {
             tracing::info!(count, "marked stuck deployments as failed");
+        }
+        // The query update fires no model event, so GitHub would show them in progress forever.
+        for id in failed {
+            self.sync_github_deployment(id);
         }
         count
     }
@@ -1159,18 +1277,6 @@ impl Jobs {
 
 impl Run {
     async fn deploy(&mut self) -> Step {
-        let net = quote(&self.network);
-        let containers = self
-            .instant(
-                &[&format!(
-                    "docker network inspect {net} -f '{{{{json .Containers}}}}' "
-                )],
-                true,
-            )
-            .await?;
-        if let Some(out) = containers {
-            self.b.add_hosts = self.add_host_flags(&out).await;
-        }
         if let Some(target) = self
             .app
             .str("dockerfile_target_build")
@@ -1191,8 +1297,98 @@ impl Run {
         // customRepository()
         self.load_source().await?;
         self.select_build_server().await?;
+        self.b.add_hosts = self.network_host_flags().await?;
         self.detect_buildkit().await;
         self.decide_what_to_do().await
+    }
+
+    /// `handleCancelledDeployment()`.
+    async fn handle_cancelled_deployment(&self) {
+        if let Some(parent) = self.parent_deployment_uuid.clone() {
+            self.send_multi_server_notification(&parent).await;
+        }
+    }
+
+    /// `startDeployPhase()`: marks that the deployment starts to change containers. From here on,
+    /// a newer webhook deployment does not cancel it, so the application is never left half
+    /// deployed. The update is conditional, so it cannot race with that cancel: exactly one wins.
+    pub(super) async fn start_deploy_phase(&self) -> Step {
+        let _ =
+            coolify_db::deployment_queue::start_deploy_phase(&self.jobs.0.db, self.queue_id, now())
+                .await;
+        self.check_cancelled().await
+    }
+
+    /// `composeProjectName()`: the Docker Compose project of this deployment. Each preview has its
+    /// own project, so Docker Compose does not treat the containers of the application and of the
+    /// other previews as orphans of the deployed preview, and networks that the Compose file
+    /// declares are not shared between them.
+    pub(super) fn compose_project_name(&self) -> String {
+        crate::compose_parser::volumes::add_preview_deployment_suffix(
+            &self.app.uuid,
+            self.b.pull_request_id,
+        )
+    }
+
+    /// `Application::coolifyBranch($this->pull_request_id)`: the COOLIFY_BRANCH value of the
+    /// deployment. Preview deployments use the pull request ref.
+    pub(super) fn coolify_branch(&self) -> Option<String> {
+        if self.b.is_preview() {
+            return Some(format!("pull/{}/head", self.b.pull_request_id));
+        }
+        self.app.str("git_branch").map(str::to_owned)
+    }
+
+    /// `networkHostFlags()`: the --add-host flags for the build, from the containers on the
+    /// destination network. A build server gets no flags: the IPs are on the network of the
+    /// deployment server, so the build server cannot reach them, and the flags only invalidate
+    /// the build cache.
+    async fn network_host_flags(&self) -> Result<String, Fail> {
+        let include = self
+            .app
+            .settings
+            .get("include_network_hosts_in_build")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        if self.use_build_server || !include {
+            return Ok(String::new());
+        }
+        let net = quote(&self.network);
+        let containers = self
+            .instant(
+                &[&format!(
+                    "docker network inspect {net} -f '{{{{json .Containers}}}}' "
+                )],
+                true,
+            )
+            .await?;
+        match containers {
+            Some(out) => Ok(self.add_host_flags(&out).await),
+            None => Ok(String::new()),
+        }
+    }
+
+    /// `hostCaBundleMount()`: mounts the server CA bundle, so that the helper trusts the same
+    /// registries as the Docker daemon, for example behind a TLS-inspecting proxy with a CA that
+    /// is only installed on the server.
+    async fn host_ca_bundle_mount(&self) -> String {
+        let script = format!(
+            "for f in {}; do if [ -f \"$f\" ]; then echo \"$f\"; break; fi; done",
+            HOST_CA_BUNDLE_PATHS.join(" ")
+        );
+        let bundle = self
+            .jobs
+            .remote()
+            .run(
+                &self.target,
+                &[script.as_str()],
+                RunOptions::op("deployment.instant").no_sudo(),
+            )
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        host_ca_bundle_mount_flag(&bundle)
     }
 
     /// `addHostFlags(collect($allContainers[0]))`.
@@ -1229,13 +1425,10 @@ impl Run {
         let helpers = coolify_db::git_sources::existing_deployment_uuids(&self.jobs.0.db, &names)
             .await
             .unwrap_or_default();
-        static GENERATED: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-            regex::Regex::new(r"(-\d{8}T\d{6}|-\d{12})$").unwrap_or_else(|_| unreachable!())
-        });
         let mut ips: Vec<(String, String)> = Vec::new();
         for c in &containers {
             let name = field(c, "Name");
-            if name == "coolify-proxy" || GENERATED.is_match(&name) || helpers.contains(&name) {
+            if is_short_lived_network_host(&name) || helpers.contains(&name) {
                 continue;
             }
             let ip = field(c, "IPv4Address");
@@ -1411,6 +1604,8 @@ impl Run {
         } else {
             image
         };
+        // `$this->production_image_name`, which the image scan steps read.
+        self.b.production_image = image.clone();
         self.info(&format!(
             "Starting deployment of {display} to {}.",
             self.server_name
@@ -1457,7 +1652,16 @@ impl Run {
             )
             .await?
             .unwrap_or_default();
-        let env_flags = self.generate_docker_env_flags_for_secrets().await?;
+        // Build secrets put user variables such as HOME or DOCKER_CONFIG into the helper environment.
+        // DOCKER_CONFIG comes after them, so the Docker CLI keeps its plugins. Without build secrets the
+        // helper environment stays empty, so Docker Compose interpolates the user DOCKER_CONFIG from the env file.
+        let secret_env_flags = self.generate_docker_env_flags_for_secrets().await?;
+        let env_flags = if secret_env_flags.trim().is_empty() {
+            String::new()
+        } else {
+            format!("{secret_env_flags} -e DOCKER_CONFIG={HELPER_DOCKER_CONFIG}")
+        };
+        let ca = self.host_ca_bundle_mount().await;
         let buildx = format!("-v {home}/.docker/buildx:/root/.docker/buildx");
         let net = quote(&self.network);
         let dep = &self.dep;
@@ -1475,15 +1679,15 @@ impl Run {
                 )));
             }
             format!(
-                "docker run -d --name {dep} {env_flags} --rm -v {home}/.docker/config.json:/root/.docker/config.json:ro {buildx} -v /var/run/docker.sock:/var/run/docker.sock {helper}"
+                "docker run -d --name {dep} {env_flags} --rm -v {home}/.docker/config.json:/root/.docker/config.json:ro {buildx}{ca} -v /var/run/docker.sock:/var/run/docker.sock {helper}"
             )
         } else if config == "OK" {
             format!(
-                "docker run -d --network {net} --name {dep} {env_flags} --rm -v {home}/.docker/config.json:/root/.docker/config.json:ro {buildx} -v /var/run/docker.sock:/var/run/docker.sock {seccomp} {helper}"
+                "docker run -d --network {net} --name {dep} {env_flags} --rm -v {home}/.docker/config.json:/root/.docker/config.json:ro {buildx}{ca} -v /var/run/docker.sock:/var/run/docker.sock {seccomp} {helper}"
             )
         } else {
             format!(
-                "docker run -d --network {net} --name {dep} {env_flags} --rm {buildx} -v /var/run/docker.sock:/var/run/docker.sock {seccomp} {helper}"
+                "docker run -d --network {net} --name {dep} {env_flags} --rm {buildx}{ca} -v /var/run/docker.sock:/var/run/docker.sock {seccomp} {helper}"
             )
         };
         if first_try {
@@ -1494,13 +1698,24 @@ impl Run {
                 .await;
         }
         let dep = self.dep.clone();
-        self.graceful_shutdown(&dep, true).await;
+        // "docker stop" returns before the --rm auto-removal frees the name, so the "docker run" below can conflict with it.
+        self.remove_container(&dep).await;
         let mkdir = in_docker(&dep, &format!("mkdir -p /artifacts/{dep}"));
+        // `gitSshSetupCommand($this->deployment_uuid, $this->application->git_ssh_known_hosts)`.
+        let git_ssh_setup = in_docker(
+            &dep,
+            &super::git_ssh::git_ssh_setup_command(
+                &dep,
+                self.app.str("git_ssh_known_hosts"),
+                false,
+            ),
+        );
         let mut run = Cmd::new(run_command).hidden();
-        if !env_flags.is_empty() {
+        if !secret_env_flags.trim().is_empty() {
             run = run.skip_command_log();
         }
-        self.exec(vec![run, Cmd::new(mkdir)]).await?;
+        self.exec(vec![run, Cmd::new(mkdir), Cmd::new(git_ssh_setup).hidden()])
+            .await?;
         self.run_pre_deployment_command().await
     }
 
@@ -1747,12 +1962,19 @@ impl Run {
             vars
         };
         let mut production_values = Vec::new();
+        let mut preview_keys = Vec::new();
         if self.b.is_preview() {
-            if self.preview_keeps_production_values() {
+            // The production runtime variables that have no preview variable.
+            if self.preview_gets_production_runtime_fallback(&variables) {
                 production_values = variables
                     .iter()
                     .filter(|v| !v.is_preview)
                     .cloned()
+                    .collect();
+                preview_keys = variables
+                    .iter()
+                    .filter(|v| v.is_preview)
+                    .map(|v| v.key.clone())
                     .collect();
             }
             variables = self.deployed_variables().await?;
@@ -1771,12 +1993,13 @@ impl Run {
             .and_then(Value::as_str)
             .map(str::to_owned);
         let ip = self.main_server.ip.clone();
+        let branch = self.coolify_branch();
         let (envs, warning) = compose::runtime_env(
             &self.app,
             &variables,
             &compose::EnvContext {
                 commit: &self.commit,
-                branch: Some(self.b.branch.as_str()).filter(|b| !b.is_empty()),
+                branch: branch.as_deref(),
                 compose: self.b.compose_env.take(),
                 container_name: &self.container,
                 project_name: project.as_deref(),
@@ -1784,6 +2007,7 @@ impl Run {
                 server_ip: Some(&ip),
                 preview: self.b.is_preview().then_some(deployed_fqdn.as_deref()),
                 production_values,
+                preview_keys,
             },
         );
         Ok((envs, warning))
@@ -1833,8 +2057,10 @@ impl Run {
 
     /// `rolling_update()`.
     async fn rolling_update(&mut self) -> Step {
+        // `applyStartPin()` and `checkGate($this->production_image_name)`, outside the try.
+        self.image_scan_start_pin_and_gate().await?;
         let inner = async {
-            self.check_cancelled().await?;
+            self.start_deploy_phase().await?;
             // write_compose_file_to_workdir()
             let w = self.workdir.clone();
             let dep = self.dep.clone();
@@ -1913,6 +2139,13 @@ impl Run {
             } else {
                 self.info(SEPARATOR).await;
                 self.info("Rolling update started.").await;
+                self.names_before_rolling_update = Some(
+                    self.current_containers()
+                        .await
+                        .iter()
+                        .filter_map(|c| c.get("Names").and_then(Value::as_str).map(str::to_owned))
+                        .collect(),
+                );
                 self.start_by_compose_file().await?;
                 self.health_check().await?;
                 self.wait_for_proxy().await;
@@ -1969,34 +2202,49 @@ impl Run {
                 .ignore_errors(),
             ])
             .await?;
-            let u = self.app.uuid.clone();
+            let u = self.compose_project_name();
             let w = self.workdir.clone();
             let dep = self.dep.clone();
             let vars = self.b.coolify_variables.clone();
             if self.app.str("build_pack") == Some("dockerimage") {
-                self.info("Pulling latest images from the registry.").await;
-                self.exec(vec![
-                    Cmd::new(in_docker(
-                        &dep,
-                        &format!("docker compose --project-name {u} --project-directory {w} pull"),
-                    ))
-                    .hidden(),
-                    // `{$this->coolify_variables}` is empty here: the command starts with a space.
-                    Cmd::new(in_docker(
-                        &dep,
-                        &format!(
-                            "{vars} docker compose --project-name {u} --project-directory {w} up --build -d"
-                        ),
-                    ))
-                    .hidden(),
-                ])
-                .await?;
+                // `{$this->coolify_variables}` is empty here: the command starts with a space.
+                let up = Cmd::new(in_docker(
+                    &dep,
+                    &format!(
+                        "{vars} docker compose --project-name {u} --project-directory {w} up --build -d"
+                    ),
+                ))
+                .hidden();
+                if self.image_scan_skips_pull() {
+                    // The gate pulled and scanned the pinned image.
+                    self.exec(vec![up]).await?;
+                } else {
+                    self.info("Pulling latest images from the registry.").await;
+                    self.exec(vec![
+                        Cmd::new(in_docker(
+                            &dep,
+                            &format!(
+                                "docker compose --project-name {u} --project-directory {w} pull"
+                            ),
+                        ))
+                        .hidden(),
+                        up,
+                    ])
+                    .await?;
+                }
             } else if self.use_build_server {
                 let loc = self.b.compose_location.clone();
                 let prefix = servers_multi::docker_config_prefix(&self.server);
+                // A pinned digest cannot change in the registry, so Compose pulls it only when it
+                // is missing.
+                let pull = if self.image_scan_pinned() {
+                    ""
+                } else {
+                    "--pull always "
+                };
                 self.exec(vec![
                     Cmd::new(format!(
-                        "{prefix}{vars} docker compose --project-name {u} --project-directory {c} -f {c}{loc} up --pull always --build -d"
+                        "{prefix}{vars} docker compose --project-name {u} --project-directory {c} -f {c}{loc} up {pull}--build -d"
                     ))
                     .hidden(),
                 ])
@@ -2247,7 +2495,12 @@ impl Run {
                 names.push(self.container.clone());
                 names.dedup();
             } else {
-                names.retain(|n| *n != self.container);
+                names = old_generated_container_names(
+                    names,
+                    &self.container,
+                    self.b.pull_request_id,
+                    self.names_before_rolling_update.as_deref(),
+                );
             }
             for name in names {
                 self.graceful_shutdown(&name, false).await;
@@ -2297,6 +2550,8 @@ impl Run {
             prev.as_deref(),
             Some("finished" | "failed" | "cancelled-by-user")
         ) {
+            // `updateDeploymentStatus()` fires the model event that syncs the GitHub Deployment.
+            self.jobs.sync_github_deployment(self.queue_id);
             // `handleFailedDeployment()`
             if let Some(parent) = self.parent_deployment_uuid.clone() {
                 self.send_multi_server_notification(&parent).await;
@@ -2322,6 +2577,8 @@ impl Run {
             return;
         }
         tracing::warn!(deployment = %self.dep, "Deployment could not be started: {message}");
+        // The query update fires no model event.
+        self.jobs.sync_github_deployment(self.queue_id);
         self.log("========================================", "stderr", false)
             .await;
         self.log(
@@ -2356,6 +2613,7 @@ impl Run {
     /// `post_deployment()`.
     async fn post_deployment(&mut self) {
         self.complete_deployment().await;
+        self.image_scan_link_reused_scans().await;
         // GetContainersStatus::dispatch($server)
         let jobs = self.jobs.clone();
         let server_id = self.server.id;
@@ -2364,6 +2622,7 @@ impl Run {
         if let Err(Fail::Error { message, .. }) = self.run_post_deployment_command().await {
             tracing::warn!("Post deployment command failed for {}: {message}", self.dep);
         }
+        self.image_scan_after_start().await;
     }
 
     /// `completeDeployment()` → `transitionToStatus(FINISHED)`.
@@ -2376,6 +2635,8 @@ impl Run {
             prev.as_deref(),
             Some("finished" | "failed" | "cancelled-by-user")
         ) {
+            // `updateDeploymentStatus()` fires the model event that syncs the GitHub Deployment.
+            self.jobs.sync_github_deployment(self.queue_id);
             self.handle_successful_deployment().await;
             self.jobs
                 .queue_next_deployment(self.app.id, self.main_server.id)
@@ -2451,6 +2712,9 @@ impl Run {
             } => (message.clone(), *code, *logged),
         };
         self.fail_deployment().await;
+        // A failed remote command can store the failed status with a query update, which fires no
+        // model event.
+        self.jobs.sync_github_deployment(self.queue_id);
         self.log("========================================", "stderr", false)
             .await;
         if logged {
@@ -2681,4 +2945,102 @@ fn version_gt(a: &str, b: &str) -> bool {
             .collect::<Vec<_>>()
     };
     parse(a) > parse(b)
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    /// `addHostFlags()`: containers that come and go must not change the --add-host set.
+    #[test]
+    fn short_lived_containers_are_not_build_hosts() {
+        for name in [
+            "coolify-proxy",
+            "coolify-sentinel",
+            "coolify-proxy-error-pages",
+            // A rolling update container and one with the older numeric suffix.
+            "abc-20261103T101500",
+            "abc-123456789012",
+            // A preview deployment.
+            "abc-pr-12",
+            "web-abc-pr-3",
+            // Backup and S3 import helpers.
+            "backup-of-xyz",
+            "s3-restore-xyz",
+        ] {
+            assert!(is_short_lived_network_host(name), "{name}");
+        }
+        for name in [
+            "abc",
+            "postgres-abc",
+            "abc-pr-x",
+            "my-backup-of-x",
+            "abc-pr-1-db",
+        ] {
+            assert!(!is_short_lived_network_host(name), "{name}");
+        }
+    }
+
+    /// `hostCaBundleMount()`: only a known bundle path is mounted.
+    #[test]
+    fn the_server_ca_bundle_is_mounted_read_only() {
+        assert_eq!(
+            host_ca_bundle_mount_flag("/etc/ssl/certs/ca-certificates.crt"),
+            " --mount type=bind,source=/etc/ssl/certs/ca-certificates.crt,target=/etc/ssl/certs/coolify-host-ca-certificates.crt,readonly"
+        );
+        assert_eq!(host_ca_bundle_mount_flag(""), "");
+        assert_eq!(host_ca_bundle_mount_flag("/tmp/evil.crt -v /:/host"), "");
+    }
+
+    /// `oldGeneratedContainerNames()`.
+    #[test]
+    fn a_rolling_update_removes_only_the_containers_that_ran_before_it() {
+        let names = || {
+            vec![
+                "app-old".to_owned(),
+                "app-new".to_owned(),
+                "app-other-deployment".to_owned(),
+            ]
+        };
+        // Without a rolling update: all except the new one.
+        assert_eq!(
+            old_generated_container_names(names(), "app-new", 0, None),
+            vec!["app-old", "app-other-deployment"]
+        );
+        // After a rolling update: the new container of another deployment stays.
+        let before = vec!["app-old".to_owned()];
+        assert_eq!(
+            old_generated_container_names(names(), "app-new", 0, Some(&before)),
+            vec!["app-old"]
+        );
+        // A preview removes its container by name too.
+        assert_eq!(
+            old_generated_container_names(vec!["app-pr-4".to_owned()], "app-pr-4", 4, None),
+            vec!["app-pr-4"]
+        );
+    }
+}
+
+/// `ExecuteRemoteCommand::sshConnectionLostHint()`: SSH exits with 255 when the connection
+/// closes, so the output of the remote command stops without an error.
+fn ssh_connection_lost_hint(exit_code: i32) -> &'static str {
+    if exit_code != 255 {
+        return "";
+    }
+    "\nExit code 255 usually means that the SSH connection to the server closed before the command finished. Check the network between Coolify and the server, and the sshd logs and memory usage of the server, then deploy again."
+}
+
+#[cfg(test)]
+mod ssh_connection_lost_hint_tests {
+    use super::ssh_connection_lost_hint;
+
+    #[test]
+    fn only_exit_code_255_gets_the_hint() {
+        assert_eq!(ssh_connection_lost_hint(1), "");
+        assert_eq!(ssh_connection_lost_hint(137), "");
+        assert!(ssh_connection_lost_hint(255).starts_with(
+            "\nExit code 255 usually means that the SSH connection to the server closed"
+        ));
+    }
 }

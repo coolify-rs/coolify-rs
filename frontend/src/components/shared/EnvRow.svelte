@@ -50,6 +50,9 @@
   let reallyRequired = $state(false);
   let error = $state<ApiError | null>(null);
   let confirming = $state(false);
+  let confirmingLock = $state(false);
+  /** A new value for a locked variable. The locked value is never sent to the browser, but it can be replaced. */
+  let newLockedValue = $state('');
   let copied = $state(false);
   let initial = $state('');
   let root: HTMLDivElement | undefined = $state();
@@ -62,7 +65,7 @@
   const requiredBadge = $derived(loaded ? reallyRequired : row.is_required);
   const composeInfo = $derived(row.compose_info);
   const warning = $derived(buildWarning(key, value, isBuildtime));
-  const snapshot = () => JSON.stringify([key, comment, value, isMultiline, isLiteral, isBuildtime, isRuntime]);
+  const snapshot = () => JSON.stringify([key, comment, value, newLockedValue, isMultiline, isLiteral, isBuildtime, isRuntime]);
   const dirty = $derived(loaded && snapshot() !== initial);
 
   function fill() {
@@ -80,6 +83,7 @@
     error = null;
     fill();
     value = '';
+    newLockedValue = '';
     if (!hidden) {
       const r = await api.values(row.id);
       value = r.value ?? '';
@@ -109,6 +113,7 @@
   const payload = () => ({
     key,
     value: locked ? null : value,
+    new_locked_value: locked && newLockedValue !== '' ? newLockedValue : null,
     comment: comment === '' && row.comment === null ? null : comment,
     is_multiline: isMultiline,
     is_literal: isLiteral,
@@ -150,8 +155,10 @@
   async function lock() {
     try {
       await api.lock(row.id);
+      confirmingLock = false;
       onchange();
     } catch (err) {
+      confirmingLock = false;
       failure(err);
     }
   }
@@ -252,11 +259,16 @@
             <input disabled type="text" value="Hidden (only admins can view)" class="input w-full italic !text-neutral-500 dark:!text-neutral-500" />
           </div>
         {:else if locked}
-          <div class="w-full">
-            <!-- svelte-ignore a11y_label_has_associated_control -->
-            <label class="mb-1 flex items-center gap-1 text-sm font-medium">Value</label>
-            <input disabled type="text" value="Hidden after locking" class="input w-full italic !text-neutral-500 dark:!text-neutral-500" />
-          </div>
+          <FormInput
+            id="newLockedValue"
+            type="password"
+            label="Value"
+            copyable={false}
+            placeholder="Hidden after locking. Enter a new value to replace it."
+            helper="The locked value cannot be shown. Leave this empty to keep it."
+            disabled={!canUpdate || disabled}
+            bind:value={newLockedValue}
+          />
         {:else if isMultiline}
           <div class="w-full">
             <!-- svelte-ignore a11y_label_has_associated_control -->
@@ -356,7 +368,7 @@
           </div>
           <div class="ml-auto flex flex-wrap gap-2" data-environment-variable-update-actions>
             {#if !locked && !row.is_magic}
-              <button type="button" class="button" onclick={lock}>Lock</button>
+              <button type="button" class="button" onclick={() => (confirmingLock = true)}>Lock</button>
             {/if}
             {#if !disabled}
               <fieldset disabled={!dirty}>
@@ -368,6 +380,20 @@
       {/if}
     </form>
   </Modal>
+{/if}
+
+{#if confirmingLock}
+  <ConfirmModal
+    title="Lock Environment Variable?"
+    actions={['The value will be hidden. You cannot see or copy it again.', 'You can still replace the value with a new one, but you cannot unlock the variable.']}
+    confirmWithText={false}
+    confirmWithPassword={false}
+    step2ButtonText="Lock"
+    onconfirm={async () => {
+      await lock();
+    }}
+    onclose={() => (confirmingLock = false)}
+  />
 {/if}
 
 {#if confirming}

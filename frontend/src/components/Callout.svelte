@@ -4,16 +4,22 @@
   import Reicon from './Reicon.svelte';
 
   type Kind = 'warning' | 'danger' | 'info' | 'success';
-  let { type = 'warning', title = 'Warning', class: cls = '', children }: { type?: Kind; title?: string; class?: string; children: Snippet } =
-    $props();
+  let {
+    type = 'warning',
+    title = 'Warning',
+    class: cls = '',
+    children,
+    ondismiss,
+  }: { type?: Kind; title?: string; class?: string; children: Snippet; /** `dismissible` with `onDismiss`. */ ondismiss?: () => void } = $props();
 
   const styles: Record<Kind, { icon: string; shell: string; iconClass: string; titleClass: string; textClass: string }> = {
     warning: {
       icon: 'alert-triangle',
-      shell: 'border-warning/25 bg-warning/[0.07] dark:border-warning/20 dark:bg-warning/[0.06]',
-      iconClass: 'text-warning-700 dark:text-warning',
-      titleClass: 'text-warning-900 dark:text-warning',
-      textClass: 'text-warning-900/75 dark:text-warning/70',
+      // Numbered warning shades: the custom theme maps the plain warning color to its accent.
+      shell: 'border-warning-700/25 bg-warning-700/[0.07] dark:border-warning-400/20 dark:bg-warning-400/[0.06]',
+      iconClass: 'text-warning-700 dark:text-warning-400',
+      titleClass: 'text-warning-900 dark:text-warning-400',
+      textClass: 'text-warning-900/75 dark:text-warning-400/70',
     },
     danger: {
       icon: 'alert-circle',
@@ -43,9 +49,22 @@
 <div class="relative rounded-lg border px-3 py-2.5 {style.shell} {cls}">
   <div class="flex items-start gap-2.5">
     <Reicon name={style.icon} class="mt-0.5 size-4 shrink-0 {style.iconClass}" />
-    <div class="min-w-0 flex-1">
+    <div class="min-w-0 flex-1 {ondismiss ? 'pr-7' : ''}">
       <div class="text-[12px] font-semibold {style.titleClass}">{title}</div>
       <div class="mt-0.5 text-[12px] leading-5 {style.textClass}">{@render children()}</div>
     </div>
+    {#if ondismiss}
+      <button
+        type="button"
+        onclick={(event) => {
+          event.stopPropagation();
+          ondismiss();
+        }}
+        class="absolute top-1.5 right-1.5 flex size-7 items-center justify-center rounded-md transition-colors hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
+        aria-label="Dismiss"
+      >
+        <Reicon name="x" class="size-3.5 {style.iconClass}" />
+      </button>
+    {/if}
   </div>
 </div>

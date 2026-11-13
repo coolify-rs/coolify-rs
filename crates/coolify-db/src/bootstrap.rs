@@ -8,9 +8,12 @@ use sqlx::{Connection, PgConnection};
 
 use crate::{DbError, DbResult};
 
-/// `pg_dump --schema-only` of upstream's schema at the compatibility baseline (Coolify v4.6.0).
+/// `pg_dump --schema-only` of upstream's schema at Coolify v4.6.0. The compatibility baseline is
+/// Coolify v4.7.5: this dump plus [`MIGRATIONS`], which `coolify-rs boot` and `create-schema`
+/// apply after loading it (a v4.7.5 dump makes that a no-op once it is captured; see
+/// docs/UPSTREAM_BASELINE.md).
 pub const SCHEMA_SQL: &str = include_str!("../../../compat/baseline/upstream-4.6.0-schema.sql");
-/// The `migrations` rows and sequence value at the compatibility baseline.
+/// The `migrations` rows and sequence value of that dump.
 pub const MIGRATIONS_SQL: &str =
     include_str!("../../../compat/baseline/upstream-4.6.0-migrations.sql");
 
@@ -152,9 +155,10 @@ impl Migration {
 /// current baseline) are skipped.
 ///
 /// They bring a database created at upstream `main` @ b5823c7 (the baseline of the first
-/// coolify-rs builds) or at Coolify v4.5.3 (coolify-rs 4.5.3-rs.N) to v4.6.0: the five migrations
-/// of v4.5.3 and the fifteen of v4.6.0. Their SQL is what Laravel's Postgres grammar runs for the
-/// PHP.
+/// coolify-rs builds), at Coolify v4.5.3 (coolify-rs 4.5.3-rs.N) or at Coolify v4.6.0 (coolify-rs
+/// 4.6.0-rs.N, and what [`create_schema`] loads) to v4.7.5: the five migrations of v4.5.3, the
+/// fifteen of v4.6.0 and the twenty-seven of v4.7.0 to v4.7.5. Their SQL is what Laravel's Postgres
+/// grammar runs for the PHP.
 pub const MIGRATIONS: &[Migration] = &[
     // v4.6.0. `$table->json('access')->nullable()` and `$table->json('scopes')->nullable()`, each
     // unless the column exists. Then delete becomes its own ability: every token whose `abilities`
@@ -281,12 +285,191 @@ $$"#,
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_servers_private_key_id_active \
          ON public.servers (private_key_id) WHERE deleted_at IS NULL",
     ),
+    // v4.7.5. The five image scanning tables, the instance policy row
+    // (`DB::table('image_scan_policies')->insert`, `uuid` = `new_public_id()`: 24 characters of
+    // `Str::lower(Str::random())`, `now()` in UTC), then the columns on existing tables. Laravel
+    // runs the commands of a blueprint in the order the closure adds them and the fluent
+    // `->unique()` of a column last.
+    Migration::new(
+        "2026_10_29_100000_create_image_scanning_tables",
+        r#"CREATE TABLE public.image_scan_policies (
+    id bigserial NOT NULL PRIMARY KEY,
+    uuid varchar(255) NOT NULL,
+    scope_type varchar(255) NULL,
+    scope_id bigint NULL,
+    gate_mode varchar(255) NULL,
+    on_scan_error varchar(255) NULL,
+    count_medium boolean NULL,
+    created_at timestamp(0) without time zone NULL,
+    updated_at timestamp(0) without time zone NULL
+);
+ALTER TABLE public.image_scan_policies
+    ADD CONSTRAINT image_scan_policies_scope_type_scope_id_unique UNIQUE (scope_type, scope_id);
+ALTER TABLE public.image_scan_policies ADD CONSTRAINT image_scan_policies_uuid_unique UNIQUE (uuid);
+INSERT INTO public.image_scan_policies
+    (uuid, scope_type, scope_id, gate_mode, on_scan_error, count_medium, created_at, updated_at)
+VALUES (
+    (SELECT lower(string_agg(substr(
+                'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
+                (floor(random() * 62))::int + 1, 1), ''))
+       FROM generate_series(1, 24)),
+    NULL, NULL, 'off', 'deploy', false,
+    date_trunc('second', now() AT TIME ZONE 'UTC'), date_trunc('second', now() AT TIME ZONE 'UTC'));
+CREATE TABLE public.image_scan_ignores (
+    id bigserial NOT NULL PRIMARY KEY,
+    uuid varchar(255) NOT NULL,
+    team_id bigint NOT NULL,
+    resource_type varchar(255) NULL,
+    resource_id bigint NULL,
+    vulnerability_id varchar(64) NULL,
+    package varchar(214) NULL,
+    reason varchar(500) NOT NULL,
+    expires_at timestamp(0) without time zone NULL,
+    created_by bigint NULL,
+    created_at timestamp(0) without time zone NULL,
+    updated_at timestamp(0) without time zone NULL
+);
+ALTER TABLE public.image_scan_ignores
+    ADD CONSTRAINT image_scan_ignores_team_id_foreign
+    FOREIGN KEY (team_id) REFERENCES public.teams (id) ON DELETE CASCADE;
+CREATE INDEX image_scan_ignores_resource_type_resource_id_index
+    ON public.image_scan_ignores (resource_type, resource_id);
+ALTER TABLE public.image_scan_ignores
+    ADD CONSTRAINT image_scan_ignores_created_by_foreign
+    FOREIGN KEY (created_by) REFERENCES public.users (id) ON DELETE SET NULL;
+CREATE INDEX image_scan_ignores_team_id_resource_type_resource_id_index
+    ON public.image_scan_ignores (team_id, resource_type, resource_id);
+ALTER TABLE public.image_scan_ignores ADD CONSTRAINT image_scan_ignores_uuid_unique UNIQUE (uuid);
+CREATE TABLE public.image_sboms (
+    id bigserial NOT NULL PRIMARY KEY,
+    server_id bigint NOT NULL,
+    image_id varchar(80) NOT NULL,
+    platform varchar(32) NOT NULL,
+    packages jsonb NOT NULL,
+    packages_truncated boolean NOT NULL DEFAULT '0',
+    last_used_at timestamp(0) without time zone NOT NULL
+);
+ALTER TABLE public.image_sboms
+    ADD CONSTRAINT image_sboms_server_id_foreign
+    FOREIGN KEY (server_id) REFERENCES public.servers (id) ON DELETE CASCADE;
+ALTER TABLE public.image_sboms
+    ADD CONSTRAINT image_sboms_server_id_image_id_unique UNIQUE (server_id, image_id);
+CREATE TABLE public.image_scans (
+    id bigserial NOT NULL PRIMARY KEY,
+    uuid varchar(255) NOT NULL,
+    server_id bigint NOT NULL,
+    image_sbom_id bigint NULL,
+    image_id varchar(80) NOT NULL,
+    repo_digest varchar(80) NULL,
+    resource_type varchar(255) NOT NULL,
+    resource_id bigint NOT NULL,
+    image_ref varchar(512) NOT NULL,
+    deployment_queue_id bigint NULL,
+    status varchar(255) NOT NULL,
+    error_code varchar(255) NULL,
+    error_context jsonb NULL,
+    summary jsonb NULL,
+    findings jsonb NULL,
+    candidates jsonb NULL,
+    base_image_ref varchar(512) NULL,
+    builds_image boolean NOT NULL DEFAULT '0',
+    is_baseline boolean NOT NULL DEFAULT '1',
+    grype_db_built_at timestamp(0) without time zone NULL,
+    scanned_at timestamp(0) without time zone NULL,
+    created_at timestamp(0) without time zone NULL,
+    updated_at timestamp(0) without time zone NULL
+);
+ALTER TABLE public.image_scans
+    ADD CONSTRAINT image_scans_server_id_foreign
+    FOREIGN KEY (server_id) REFERENCES public.servers (id) ON DELETE CASCADE;
+ALTER TABLE public.image_scans
+    ADD CONSTRAINT image_scans_image_sbom_id_foreign
+    FOREIGN KEY (image_sbom_id) REFERENCES public.image_sboms (id) ON DELETE SET NULL;
+CREATE INDEX image_scans_resource_type_resource_id_index
+    ON public.image_scans (resource_type, resource_id);
+ALTER TABLE public.image_scans
+    ADD CONSTRAINT image_scans_deployment_queue_id_foreign
+    FOREIGN KEY (deployment_queue_id) REFERENCES public.application_deployment_queues (id) ON DELETE SET NULL;
+ALTER TABLE public.image_scans
+    ADD CONSTRAINT image_scans_resource_type_resource_id_image_id_unique
+    UNIQUE (resource_type, resource_id, image_id);
+CREATE INDEX image_scans_server_id_image_id_index ON public.image_scans (server_id, image_id);
+ALTER TABLE public.image_scans ADD CONSTRAINT image_scans_uuid_unique UNIQUE (uuid);
+CREATE TABLE public.image_scan_notification_states (
+    id bigserial NOT NULL PRIMARY KEY,
+    resource_type varchar(255) NOT NULL,
+    resource_id bigint NOT NULL,
+    team_id bigint NOT NULL,
+    notified_ids jsonb NULL,
+    notified_candidates jsonb NULL,
+    digest_ids jsonb NULL,
+    is_baseline boolean NOT NULL DEFAULT '1',
+    check_reported boolean NOT NULL DEFAULT '0',
+    held_digests smallint NOT NULL DEFAULT '0',
+    baseline_deployment_queue_id bigint NULL,
+    created_at timestamp(0) without time zone NULL,
+    updated_at timestamp(0) without time zone NULL
+);
+ALTER TABLE public.image_scan_notification_states
+    ADD CONSTRAINT image_scan_notification_states_team_id_foreign
+    FOREIGN KEY (team_id) REFERENCES public.teams (id) ON DELETE CASCADE;
+ALTER TABLE public.image_scan_notification_states
+    ADD CONSTRAINT image_scan_notification_states_resource_type_resource_id_unique
+    UNIQUE (resource_type, resource_id);
+ALTER TABLE public.server_settings
+    ADD COLUMN is_image_scan_enabled boolean NOT NULL DEFAULT '0',
+    ADD COLUMN image_candidate_scans_today integer NOT NULL DEFAULT '0',
+    ADD COLUMN image_candidate_scans_date date NULL;
+ALTER TABLE public.teams ADD COLUMN scan_images_on_new_servers boolean NOT NULL DEFAULT '0';
+ALTER TABLE public.application_settings
+    ADD COLUMN is_image_scan_enabled boolean NOT NULL DEFAULT '1',
+    ADD COLUMN image_builds_by_team boolean NULL;
+ALTER TABLE public.applications ADD COLUMN docker_compose_image_overrides json NULL;
+ALTER TABLE public.application_deployment_queues
+    ADD COLUMN scan_gate_result jsonb NULL,
+    ADD COLUMN scan_gate_bypassed_by bigint NULL;
+ALTER TABLE public.application_deployment_queues
+    ADD CONSTRAINT application_deployment_queues_scan_gate_bypassed_by_foreign
+    FOREIGN KEY (scan_gate_bypassed_by) REFERENCES public.users (id) ON DELETE SET NULL;
+ALTER TABLE public.email_notification_settings
+    ADD COLUMN image_vulnerabilities_email_notifications boolean NOT NULL DEFAULT '1';
+ALTER TABLE public.discord_notification_settings
+    ADD COLUMN image_vulnerabilities_discord_notifications boolean NOT NULL DEFAULT '0';
+ALTER TABLE public.telegram_notification_settings
+    ADD COLUMN image_vulnerabilities_telegram_notifications boolean NOT NULL DEFAULT '0';
+ALTER TABLE public.slack_notification_settings
+    ADD COLUMN image_vulnerabilities_slack_notifications boolean NOT NULL DEFAULT '0';
+ALTER TABLE public.pushover_notification_settings
+    ADD COLUMN image_vulnerabilities_pushover_notifications boolean NOT NULL DEFAULT '0';
+ALTER TABLE public.webhook_notification_settings
+    ADD COLUMN image_vulnerabilities_webhook_notifications boolean NOT NULL DEFAULT '0';
+ALTER TABLE public.telegram_notification_settings
+    ADD COLUMN telegram_notifications_image_vulnerabilities_thread_id text NULL"#,
+    ),
     // v4.6.0. `$table->timestamp('stripe_checkout_reminder_sent_at')->nullable()` (a Coolify
     // Cloud column; coolify-rs never writes it).
     Migration::new(
         "2026_10_29_221743_add_checkout_reminder_sent_at_to_subscriptions_table",
         "ALTER TABLE public.subscriptions \
          ADD COLUMN stripe_checkout_reminder_sent_at timestamp(0) without time zone NULL",
+    ),
+    // v4.7.5. `$table->text('git_ssh_known_hosts')->nullable()`. It shares its timestamp with the
+    // next one; Laravel sorts pending migrations by file name.
+    Migration::new(
+        "2026_10_30_120000_add_git_ssh_known_hosts_to_applications_table",
+        "ALTER TABLE public.applications ADD COLUMN git_ssh_known_hosts text NULL",
+    ),
+    // v4.7.5. `ssh_host_key` text, `ssh_host_key_source` string, `ssh_host_key_trusted_at`
+    // timestamp, `ssh_host_key_pending` text (all nullable),
+    // `$table->boolean('is_ssh_host_key_check_disabled')->default(false)`.
+    Migration::new(
+        "2026_10_30_120000_add_ssh_host_key_to_server_settings_table",
+        "ALTER TABLE public.server_settings \
+         ADD COLUMN ssh_host_key text NULL, \
+         ADD COLUMN ssh_host_key_source varchar(255) NULL, \
+         ADD COLUMN ssh_host_key_trusted_at timestamp(0) without time zone NULL, \
+         ADD COLUMN ssh_host_key_pending text NULL, \
+         ADD COLUMN is_ssh_host_key_check_disabled boolean NOT NULL DEFAULT '0'",
     ),
     // v4.6.0. `$table->json('access')->nullable()` unless the column exists.
     Migration::new(
@@ -302,6 +485,21 @@ $$"#,
          ALTER COLUMN image SET NOT NULL, \
          ALTER COLUMN image DROP DEFAULT",
     ),
+    // v4.7.5. `$table->string('type')->default('s3')`, `$table->longText('bucket')->nullable()->change()`
+    // (`compileChange`: the type, `drop not null`, `drop default`), then
+    // `$table->foreignId('private_key_id')->nullable()->constrained('private_keys')->nullOnDelete()`.
+    Migration::new(
+        "2026_10_31_161621_add_type_to_s3_storages_table",
+        "ALTER TABLE public.s3_storages ADD COLUMN type varchar(255) NOT NULL DEFAULT 's3'; \
+         ALTER TABLE public.s3_storages \
+         ALTER COLUMN bucket TYPE text, \
+         ALTER COLUMN bucket DROP NOT NULL, \
+         ALTER COLUMN bucket DROP DEFAULT; \
+         ALTER TABLE public.s3_storages ADD COLUMN private_key_id bigint NULL; \
+         ALTER TABLE public.s3_storages \
+         ADD CONSTRAINT s3_storages_private_key_id_foreign \
+         FOREIGN KEY (private_key_id) REFERENCES public.private_keys (id) ON DELETE SET NULL",
+    ),
     // v4.6.0. `$table->string('update_channel')->default('stable')`, then `update_custom_tag` and
     // `previous_update_channel` as nullable strings.
     Migration::new(
@@ -310,6 +508,263 @@ $$"#,
          ADD COLUMN update_channel varchar(255) NOT NULL DEFAULT 'stable', \
          ADD COLUMN update_custom_tag varchar(255) NULL, \
          ADD COLUMN previous_update_channel varchar(255) NULL",
+    ),
+    // v4.7.5. `$table->text('sftp_host_key')->nullable()`
+    Migration::new(
+        "2026_11_01_170003_add_sftp_host_key_to_s3_storages_table",
+        "ALTER TABLE public.s3_storages ADD COLUMN sftp_host_key text NULL",
+    ),
+    // v4.7.5. Two booleans on `application_settings` (queued: default true, building: default
+    // false) and `$table->timestamp('deploy_started_at')->nullable()`, each unless the column exists.
+    Migration::new(
+        "2026_11_03_072701_add_auto_cancel_superseded_deployments",
+        "ALTER TABLE public.application_settings \
+         ADD COLUMN IF NOT EXISTS is_auto_cancel_queued_deployments_enabled boolean NOT NULL DEFAULT '1', \
+         ADD COLUMN IF NOT EXISTS is_auto_cancel_building_deployments_enabled boolean NOT NULL DEFAULT '0'; \
+         ALTER TABLE public.application_deployment_queues \
+         ADD COLUMN IF NOT EXISTS deploy_started_at timestamp(0) without time zone NULL",
+    ),
+    // v4.7.5. `$table->boolean('is_mcp')->default(false)` unless the column exists.
+    Migration::new(
+        "2026_11_03_120133_add_is_mcp_to_application_deployment_queues_table",
+        "ALTER TABLE public.application_deployment_queues \
+         ADD COLUMN IF NOT EXISTS is_mcp boolean NOT NULL DEFAULT '0'",
+    ),
+    // v4.7.5. `$table->boolean('skip_tls_verification')->default(false)`
+    Migration::new(
+        "2026_11_03_171936_add_skip_tls_verification_to_s3_storages_table",
+        "ALTER TABLE public.s3_storages ADD COLUMN skip_tls_verification boolean NOT NULL DEFAULT '0'",
+    ),
+    // v4.7.5. `$table->boolean('is_removed_from_compose')->default(false)` on both tables.
+    Migration::new(
+        "2026_11_03_192547_add_is_removed_from_compose_to_service_parts",
+        "ALTER TABLE public.service_applications \
+         ADD COLUMN is_removed_from_compose boolean NOT NULL DEFAULT '0'; \
+         ALTER TABLE public.service_databases \
+         ADD COLUMN is_removed_from_compose boolean NOT NULL DEFAULT '0'",
+    ),
+    // v4.7.5. `consecutive_failures` (unsigned integer, default 0), `failing_since` (timestamp) and
+    // `disabled_reason` (text), each unless the column exists. Then `setExecutionStatuses()`, its
+    // `pgsql` branch as it is: executions may be `skipped`.
+    Migration::new(
+        "2026_11_03_192735_add_failure_tracking_to_scheduled_tasks_table",
+        "ALTER TABLE public.scheduled_tasks \
+         ADD COLUMN IF NOT EXISTS consecutive_failures integer NOT NULL DEFAULT '0', \
+         ADD COLUMN IF NOT EXISTS failing_since timestamp(0) without time zone NULL, \
+         ADD COLUMN IF NOT EXISTS disabled_reason text NULL; \
+         ALTER TABLE public.scheduled_task_executions \
+         DROP CONSTRAINT IF EXISTS scheduled_task_executions_status_check; \
+         ALTER TABLE public.scheduled_task_executions \
+         ADD CONSTRAINT scheduled_task_executions_status_check \
+         CHECK (status IN ('success', 'failed', 'running', 'skipped'))",
+    ),
+    // v4.7.5. `$table->text('notification_from_address')->nullable()`,
+    // `$table->text('notification_from_name')->nullable()`
+    Migration::new(
+        "2026_11_03_194650_add_notification_sender_to_instance_settings_table",
+        "ALTER TABLE public.instance_settings \
+         ADD COLUMN notification_from_address text NULL, \
+         ADD COLUMN notification_from_name text NULL",
+    ),
+    // v4.7.5. `$table->string('deployments')->nullable()->after('pull_requests')` (Postgres has no
+    // `after`: the column is last), then `github_deployment_id` (unsigned big integer) and
+    // `github_deployment_state` (string), both nullable.
+    Migration::new(
+        "2026_11_03_195902_add_github_deployments_columns",
+        "ALTER TABLE public.github_apps ADD COLUMN deployments varchar(255) NULL; \
+         ALTER TABLE public.application_deployment_queues \
+         ADD COLUMN github_deployment_id bigint NULL, \
+         ADD COLUMN github_deployment_state varchar(255) NULL",
+    ),
+    // v4.7.5. `$table->boolean('use_shell')->default(true)`
+    Migration::new(
+        "2026_11_03_202635_add_use_shell_to_scheduled_tasks_table",
+        "ALTER TABLE public.scheduled_tasks ADD COLUMN use_shell boolean NOT NULL DEFAULT '1'",
+    ),
+    // v4.7.5. `smtp_server_name` (string) and `smtp_servers` (text), both nullable, on each of the
+    // two tables that does not have `smtp_servers` yet.
+    Migration::new(
+        "2026_11_03_225251_add_named_smtp_servers_to_email_settings",
+        r#"DO $$
+DECLARE
+    t text;
+BEGIN
+    FOREACH t IN ARRAY ARRAY['instance_settings', 'email_notification_settings'] LOOP
+        IF EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = t AND column_name = 'smtp_servers') THEN
+            CONTINUE;
+        END IF;
+        EXECUTE format(
+            'ALTER TABLE public.%I ADD COLUMN smtp_server_name varchar(255) NULL, ADD COLUMN smtp_servers text NULL',
+            t);
+    END LOOP;
+END
+$$"#,
+    ),
+    // v4.7.5. `$table->string('auto_update_target_version')->nullable()`,
+    // `$table->timestamp('auto_update_started_at')->nullable()`
+    Migration::new(
+        "2026_11_04_080000_add_auto_update_attempt_to_instance_settings_table",
+        "ALTER TABLE public.instance_settings \
+         ADD COLUMN auto_update_target_version varchar(255) NULL, \
+         ADD COLUMN auto_update_started_at timestamp(0) without time zone NULL",
+    ),
+    // v4.7.5. Resend gets its own sender: `resend_from_address` and `resend_from_name` (nullable
+    // text) on each of the two tables that does not have them yet, filled with a copy of the SMTP
+    // sender (`DB::raw('smtp_from_address')`: the stored, encrypted values as they are). The query
+    // builder does not touch `updated_at`.
+    Migration::new(
+        "2026_11_04_103949_add_resend_sender_to_email_settings",
+        r#"DO $$
+DECLARE
+    t text;
+BEGIN
+    FOREACH t IN ARRAY ARRAY['instance_settings', 'email_notification_settings'] LOOP
+        IF EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = t AND column_name = 'resend_from_address') THEN
+            CONTINUE;
+        END IF;
+        EXECUTE format(
+            'ALTER TABLE public.%I ADD COLUMN resend_from_address text NULL, ADD COLUMN resend_from_name text NULL',
+            t);
+        EXECUTE format(
+            'UPDATE public.%I SET resend_from_address = smtp_from_address, resend_from_name = smtp_from_name',
+            t);
+    END LOOP;
+END
+$$"#,
+    ),
+    // v4.7.5. `$table->boolean('include_network_hosts_in_build')->default(true)` unless the column
+    // exists (`after()` does nothing on Postgres).
+    Migration::new(
+        "2026_11_05_163404_add_include_network_hosts_in_build_to_application_settings",
+        "ALTER TABLE public.application_settings \
+         ADD COLUMN IF NOT EXISTS include_network_hosts_in_build boolean NOT NULL DEFAULT '1'",
+    ),
+    // v4.7.5. `dropIndex('audit_events_level_index')` and
+    // `dropIndex(['team_id', 'resource_type', 'resource_uuid', 'created_at'])`, each when
+    // `Schema::hasIndex` finds it. Laravel's name for the second one has 65 characters; Postgres
+    // keeps 63.
+    Migration::new(
+        "2026_11_05_224732_drop_unused_indexes_from_audit_events_table",
+        "DROP INDEX IF EXISTS public.audit_events_level_index; \
+         DROP INDEX IF EXISTS public.audit_events_team_id_resource_type_resource_uuid_created_at_ind",
+    ),
+    // v4.7.5. `$blueprint->string('image')->default($image['new'])->change()` on six tables
+    // (`compileChange`: the type, `set not null`, `set default`). Existing databases keep their
+    // image; only new ones get the new default.
+    Migration::new(
+        "2026_11_06_083240_update_standalone_database_default_images",
+        "ALTER TABLE public.standalone_postgresqls \
+         ALTER COLUMN image TYPE varchar(255), \
+         ALTER COLUMN image SET NOT NULL, \
+         ALTER COLUMN image SET DEFAULT 'postgres:18-alpine'; \
+         ALTER TABLE public.standalone_redis \
+         ALTER COLUMN image TYPE varchar(255), \
+         ALTER COLUMN image SET NOT NULL, \
+         ALTER COLUMN image SET DEFAULT 'redis:8'; \
+         ALTER TABLE public.standalone_mongodbs \
+         ALTER COLUMN image TYPE varchar(255), \
+         ALTER COLUMN image SET NOT NULL, \
+         ALTER COLUMN image SET DEFAULT 'mongo:9'; \
+         ALTER TABLE public.standalone_mysqls \
+         ALTER COLUMN image TYPE varchar(255), \
+         ALTER COLUMN image SET NOT NULL, \
+         ALTER COLUMN image SET DEFAULT 'mysql:9.7'; \
+         ALTER TABLE public.standalone_mariadbs \
+         ALTER COLUMN image TYPE varchar(255), \
+         ALTER COLUMN image SET NOT NULL, \
+         ALTER COLUMN image SET DEFAULT 'mariadb:12.3'; \
+         ALTER TABLE public.standalone_clickhouses \
+         ALTER COLUMN image TYPE varchar(255), \
+         ALTER COLUMN image SET NOT NULL, \
+         ALTER COLUMN image SET DEFAULT 'clickhouse/clickhouse-server:26.8'",
+    ),
+    // v4.7.5. `$table->string('image')->default('valkey/valkey:9-alpine')->change()`: new Redis
+    // databases are Valkey.
+    Migration::new(
+        "2026_11_06_113843_set_valkey_as_standalone_redis_default_image",
+        "ALTER TABLE public.standalone_redis \
+         ALTER COLUMN image TYPE varchar(255), \
+         ALTER COLUMN image SET NOT NULL, \
+         ALTER COLUMN image SET DEFAULT 'valkey/valkey:9-alpine'",
+    ),
+    // v4.7.5. One row per server: `$table->foreignId('server_id')->unique()->constrained()->cascadeOnDelete()`.
+    Migration::new(
+        "2026_11_06_145819_create_server_host_scans_table",
+        "CREATE TABLE public.server_host_scans (\
+         id bigserial NOT NULL PRIMARY KEY, \
+         server_id bigint NOT NULL, \
+         error_code varchar(255) NULL, \
+         error_context jsonb NULL, \
+         eol jsonb NULL, \
+         summary jsonb NULL, \
+         findings jsonb NULL, \
+         findings_truncated boolean NOT NULL DEFAULT '0', \
+         grype_db_built_at timestamp(0) without time zone NULL, \
+         scanned_at timestamp(0) without time zone NULL, \
+         created_at timestamp(0) without time zone NULL, \
+         updated_at timestamp(0) without time zone NULL); \
+         ALTER TABLE public.server_host_scans \
+         ADD CONSTRAINT server_host_scans_server_id_foreign \
+         FOREIGN KEY (server_id) REFERENCES public.servers (id) ON DELETE CASCADE; \
+         ALTER TABLE public.server_host_scans \
+         ADD CONSTRAINT server_host_scans_server_id_unique UNIQUE (server_id)",
+    ),
+    // v4.7.5. `$table->morphs('starrable')` (two columns and their index),
+    // `$table->unsignedInteger('position')->default(0)`, one star per user and resource.
+    Migration::new(
+        "2026_11_06_165709_create_stars_table",
+        "CREATE TABLE public.stars (\
+         id bigserial NOT NULL PRIMARY KEY, \
+         user_id bigint NOT NULL, \
+         starrable_type varchar(255) NOT NULL, \
+         starrable_id bigint NOT NULL, \
+         \"position\" integer NOT NULL DEFAULT '0', \
+         created_at timestamp(0) without time zone NULL, \
+         updated_at timestamp(0) without time zone NULL); \
+         ALTER TABLE public.stars \
+         ADD CONSTRAINT stars_user_id_foreign \
+         FOREIGN KEY (user_id) REFERENCES public.users (id) ON DELETE CASCADE; \
+         CREATE INDEX stars_starrable_type_starrable_id_index \
+         ON public.stars (starrable_type, starrable_id); \
+         ALTER TABLE public.stars \
+         ADD CONSTRAINT stars_user_id_starrable_type_starrable_id_unique \
+         UNIQUE (user_id, starrable_type, starrable_id)",
+    ),
+    // v4.7.5. `$table->boolean('is_ssh_host_key_check_enforced')->default(false)`
+    Migration::new(
+        "2026_11_06_194613_add_ssh_host_key_check_enforced_to_server_settings_table",
+        "ALTER TABLE public.server_settings \
+         ADD COLUMN is_ssh_host_key_check_enforced boolean NOT NULL DEFAULT '0'",
+    ),
+    // v4.7.5. Columns only nightly builds of the image scanning migration created.
+    Migration::new(
+        "2026_11_08_120000_drop_image_scanning_columns_from_instance_settings",
+        "ALTER TABLE public.instance_settings \
+         DROP COLUMN IF EXISTS is_image_scanning_allowed, \
+         DROP COLUMN IF EXISTS image_scan_db_url",
+    ),
+    // v4.7.5. Columns only an earlier version of task auto-disable created.
+    Migration::new(
+        "2026_11_09_120000_drop_unused_failure_columns_from_scheduled_tasks",
+        "ALTER TABLE public.scheduled_tasks \
+         DROP COLUMN IF EXISTS failure_count, \
+         DROP COLUMN IF EXISTS auto_disabled_at",
+    ),
+    // v4.7.5. `$table->unsignedInteger('image_scan_memory_mb')->default(1024)`
+    Migration::new(
+        "2026_11_09_130000_add_image_scan_memory_mb_to_server_settings_table",
+        "ALTER TABLE public.server_settings \
+         ADD COLUMN image_scan_memory_mb integer NOT NULL DEFAULT '1024'",
+    ),
+    // v4.7.5. Two unsigned integers (default 600) and `$table->decimal('image_scan_cpus', 5, 2)->default(1)`.
+    Migration::new(
+        "2026_11_09_140000_add_image_scanner_time_and_cpu_limits_to_server_settings_table",
+        "ALTER TABLE public.server_settings \
+         ADD COLUMN image_scan_syft_timeout integer NOT NULL DEFAULT '600', \
+         ADD COLUMN image_scan_grype_timeout integer NOT NULL DEFAULT '600', \
+         ADD COLUMN image_scan_cpus decimal(5, 2) NOT NULL DEFAULT '1'",
     ),
 ];
 

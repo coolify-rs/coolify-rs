@@ -48,6 +48,8 @@ export interface AccessOptions {
   levels: AccessLevelInfo[];
   presets: Record<string, AccessRow>;
   supported: boolean;
+  /** 4.7.5: the root team (`$team->id === 0`). */
+  is_root_team?: boolean;
 }
 
 export interface InvitationsData {

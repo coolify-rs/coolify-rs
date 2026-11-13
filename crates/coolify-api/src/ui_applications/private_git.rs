@@ -743,11 +743,12 @@ async fn deploy_key_source(
         segments.get(1).copied().unwrap_or_default()
     );
     if host == "github.com" {
-        let id: Option<i64> =
-            sqlx::query_scalar("SELECT id FROM github_apps WHERE name = 'Public GitHub' LIMIT 1")
-                .fetch_optional(state.db.pool())
-                .await
-                .map_err(db_err)?;
+        let id: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM github_apps WHERE id = 0 AND is_public = true LIMIT 1",
+        )
+        .fetch_optional(state.db.pool())
+        .await
+        .map_err(db_err)?;
         return Ok(Ok((repository, id)));
     }
     if url.starts_with("http") {

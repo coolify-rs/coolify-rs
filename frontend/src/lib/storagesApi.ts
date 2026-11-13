@@ -1,26 +1,60 @@
-// Page endpoints of the S3 storage screens (crates/coolify-api/src/ui_storages.rs).
+// Page endpoints of the backup storage screens (crates/coolify-api/src/ui_storages.rs).
 import { request } from './api';
+
+/** `App\Enums\BackupStorageType`. */
+export type StorageType = 's3' | 'sftp' | 'ftps' | 'webdav';
 
 export interface StorageRow {
   uuid: string;
   name: string;
   description: string | null;
+  type: StorageType;
+  type_label: string;
   is_usable: boolean;
 }
 
+/** Host, port, and directory of an SFTP or FTPS storage. */
+export interface ServerParts {
+  host: string;
+  port: string | number | null;
+  path: string;
+}
+
+/** A private key that an SFTP storage can log in with, and its public key for authorized_keys. */
+export interface PrivateKeyOption {
+  value: number;
+  label: string;
+  public_key: string | null;
+}
+
 export interface StorageForm {
+  /** Only `Create` sends it: the type cannot change after creation. */
+  type?: StorageType;
   name: string;
   description: string;
   endpoint: string;
+  server_parts: ServerParts;
   bucket: string;
   region: string;
   key: string;
+  /** A new secret key or password; empty keeps the saved one. */
   secret: string;
   use_path_style_endpoint: boolean;
+  skip_tls_verification: boolean;
+  /** "password" or "key". */
+  sftp_auth: string;
+  private_key_id: number | null;
 }
 
 export interface StorageDetails extends StorageForm {
   uuid: string;
+  type: StorageType;
+  type_label: string;
+  default_port: number | null;
+  has_saved_secret: boolean;
+  private_keys: PrivateKeyOption[];
+  /** The SHA256 fingerprint of the saved SFTP host key, as `ssh-keygen -l` prints it. */
+  sftp_host_key_fingerprint: string | null;
   is_usable: boolean;
   /** The saved URL style is not the one detection picks: a user choice, kept when the endpoint changes. */
   use_path_style_endpoint_changed: boolean;
@@ -51,12 +85,14 @@ export interface StorageResources {
 const one = (uuid: string) => `/ui/storages/${encodeURIComponent(uuid)}`;
 
 export const storagesUi = {
-  list: () => request<{ storages: StorageRow[]; can_create: boolean }>('GET', '/ui/storages'),
+  list: () =>
+    request<{ storages: StorageRow[]; can_create: boolean; types: { value: StorageType; label: string }[]; private_keys: PrivateKeyOption[] }>('GET', '/ui/storages'),
   create: (form: StorageForm) => request<{ uuid: string }>('POST', '/ui/storages', form),
   show: (uuid: string) => request<StorageDetails>('GET', one(uuid)),
   update: (uuid: string, form: StorageForm) => request<{ message: string; use_path_style_endpoint: boolean }>('PATCH', one(uuid), form),
   test: (uuid: string, form: StorageForm) =>
-    request<{ message: string; details: string; is_usable: boolean; use_path_style_endpoint: boolean }>('POST', `${one(uuid)}/test`, form),
+    request<{ message: string; details: string; is_usable: boolean; use_path_style_endpoint: boolean; sftp_host_key_fingerprint: string | null }>('POST', `${one(uuid)}/test`, form),
+  resetHostKey: (uuid: string) => request<{ message: string; details: string; is_usable: boolean }>('POST', `${one(uuid)}/reset-host-key`),
   destroy: (uuid: string) => request<unknown>('DELETE', one(uuid)),
   resources: (uuid: string) => request<StorageResources>('GET', `${one(uuid)}/resources`),
   move: (uuid: string, backup: number, volume: boolean, target: number) =>

@@ -26,7 +26,7 @@ pub async fn create_team(
          VALUES ($1, $2, false, true, true, false, $3, $3) RETURNING id",
     )
     .bind(coolify_domain::naming::strip_tags(Some(name)))
-    .bind(coolify_domain::naming::strip_tags(description))
+    .bind(coolify_domain::naming::strip_tags_nullable(description))
     .bind(now)
     .fetch_one(&mut *tx)
     .await?;
@@ -538,7 +538,11 @@ pub async fn set_password(db: &Db, user_id: i64, hash: &str, now: NaiveDateTime)
     Ok(())
 }
 
-async fn revoke_user_tokens(tx: &mut Transaction<'_, Postgres>, user_id: i64) -> DbResult<()> {
+/// `RevokeUserTeamTokens::forUser`: every API token of the user.
+pub(crate) async fn revoke_user_tokens(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: i64,
+) -> DbResult<()> {
     sqlx::query(
         "DELETE FROM personal_access_tokens WHERE tokenable_type = $1 AND tokenable_id = $2",
     )
@@ -562,6 +566,50 @@ pub async fn is_disposable_invitee(db: &Db, email: &str) -> DbResult<Option<i64>
     .bind(email)
     .fetch_optional(db.pool())
     .await?)
+}
+
+/// `User::needsInitialInvitationLogin()` (4.7.5): the account never set a password (not verified,
+/// `force_password_reset`) and belongs to no team but its own personal one. The user id, if so.
+pub async fn needs_initial_invitation_login(db: &Db, email: &str) -> DbResult<Option<i64>> {
+    Ok(sqlx::query_scalar(
+        "SELECT u.id FROM users u WHERE u.email = $1 AND u.email_verified_at IS NULL AND u.force_password_reset = true \
+           AND NOT EXISTS (SELECT 1 FROM team_user tu JOIN teams t ON t.id = tu.team_id \
+             WHERE tu.user_id = u.id AND (t.personal_team = false OR EXISTS ( \
+               SELECT 1 FROM team_user o WHERE o.team_id = t.id AND o.user_id <> u.id)))",
+    )
+    .bind(email)
+    .fetch_optional(db.pool())
+    .await?)
+}
+
+/// `TeamInvitation::whereEmail($email)->where('team_id', '!=', $teamId)` of
+/// `User::canReceiveInvitationLoginFrom()`: when each invitation of another team was created.
+pub async fn other_team_invitation_dates(
+    db: &Db,
+    email: &str,
+    team_id: TeamId,
+) -> DbResult<Vec<Option<NaiveDateTime>>> {
+    Ok(sqlx::query_scalar(
+        "SELECT created_at FROM team_invitations WHERE email = $1 AND team_id <> $2",
+    )
+    .bind(email)
+    .bind(team_id)
+    .fetch_all(db.pool())
+    .await?)
+}
+
+/// `Controller::acceptLink` (4.7.5): `email_verified_at = now()` for an invitee whose invitation
+/// was emailed and whose address is not verified yet.
+pub async fn verify_email_if_unverified(db: &Db, user_id: i64, now: NaiveDateTime) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query(
+        "UPDATE users SET email_verified_at = $2 WHERE id = $1 AND email_verified_at IS NULL",
+    )
+    .bind(user_id)
+    .bind(now)
+    .execute(db.pool())
+    .await?;
+    Ok(())
 }
 
 // ---- Instance users (`Team/AdminView`) ----
@@ -694,7 +742,8 @@ pub async fn delete_user(
 ) -> Result<Vec<crate::records::Record>, DeleteUserError> {
     db.ensure_writable()?;
     let teams = user_teams(db, user_id).await?;
-    let email = user_email(db, user_id).await?.map(|u| u.1);
+    let identity = user_email(db, user_id).await?;
+    let email = identity.as_ref().map(|u| u.1.clone());
     let mut deleted = Vec::new();
     let mut tx = db.pool().begin().await?;
     revoke_user_tokens(&mut tx, user_id).await?;
@@ -750,6 +799,10 @@ pub async fn delete_user(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    // 4.7.5: `static::deleted(fn (User $user) => AuditEvent::anonymizeUser($user))`.
+    if let Some((name, email)) = &identity {
+        crate::audit::anonymize_user(db, user_id, name, email).await?;
+    }
     Ok(deleted)
 }
 
@@ -772,6 +825,7 @@ pub async fn delete_account(
 ) -> DbResult<Vec<crate::records::Record>> {
     db.ensure_writable()?;
     let teams = user_teams(db, user_id).await?;
+    let identity = user_email(db, user_id).await?;
     let mut deleted = Vec::new();
     let mut tx = db.pool().begin().await?;
     revoke_user_tokens(&mut tx, user_id).await?;
@@ -847,5 +901,9 @@ pub async fn delete_account(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    // 4.7.5: `static::deleted(fn (User $user) => AuditEvent::anonymizeUser($user))`.
+    if let Some((name, email)) = &identity {
+        crate::audit::anonymize_user(db, user_id, name, email).await?;
+    }
     Ok(deleted)
 }

@@ -62,18 +62,38 @@ async fn layout(State(state): State<AppState>, Extension(ctx): Extension<AuthCtx
     .into_response())
 }
 
+/// `ApplicationDeploymentQueue::isImageScanBlocked()` in SQL: `(bool) data_get($this->scan_gate_result,
+/// 'blocked', false)`. A schema without the column (before `create_image_scanning_tables`) has no gate.
+fn image_scan_blocked_sql(state: &AppState) -> &'static str {
+    if state
+        .db
+        .schema()
+        .has_column("application_deployment_queues", "scan_gate_result")
+    {
+        "COALESCE(q.scan_gate_result->>'blocked', '') NOT IN ('', 'false', '0')"
+    } else {
+        "false"
+    }
+}
+
 /// `ApplicationDeploymentQueue::ownedByTeam` with `application.environment.project`.
-const DEPLOYMENT_SELECT: &str = "SELECT json_build_object(
+fn deployment_select(state: &AppState) -> String {
+    format!(
+        "SELECT json_build_object(
         'id', q.id, 'application_name', q.application_name, 'deployment_url', q.deployment_url,
         'deployment_uuid', q.deployment_uuid, 'pull_request_id', q.pull_request_id,
         'server_name', q.server_name, 'status', q.status, 'created_at', q.created_at,
+        'finished_at', q.finished_at, 'image_scan_blocked', {blocked},
         'application_uuid', a.uuid, 'project', p.name, 'environment', e.name,
         'environment_id', e.id)::text
     FROM application_deployment_queues q
     JOIN applications a ON a.id::text = q.application_id
     JOIN environments e ON e.id = a.environment_id
     JOIN projects p ON p.id = e.project_id
-    WHERE p.team_id = $1";
+    WHERE p.team_id = $1",
+        blocked = image_scan_blocked_sql(state)
+    )
+}
 
 async fn queue_rows(state: &AppState, sql: String, team: i64) -> Result<Vec<Value>, ApiError> {
     let rows: Vec<String> = sqlx::query_scalar(&sql)
@@ -102,36 +122,53 @@ async fn queue_rows(state: &AppState, sql: String, team: i64) -> Result<Vec<Valu
         .collect())
 }
 
+/// The engine words in a database's `search_text` (`GlobalSearch::loadSearchableItems()`): a Redis
+/// database is also found as Valkey.
+fn database_search_word(subtype: &str) -> &str {
+    if subtype == "redis" {
+        "redis valkey"
+    } else {
+        subtype
+    }
+}
+
 /// `DeploymentsIndicator::deployments`.
 async fn deployments(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
 ) -> ApiResult {
-    let sql =
-        format!("{DEPLOYMENT_SELECT} AND q.status IN ('in_progress', 'queued') ORDER BY q.id");
+    let sql = format!(
+        "{} AND q.status IN ('in_progress', 'queued') ORDER BY q.id",
+        deployment_select(&state)
+    );
     Ok(ok(json!({"deployments": queue_rows(&state, sql, ctx.team_id).await?})).into_response())
 }
 
 /// `ActiveDeployments::recentDeployments()` on PostgreSQL: the five newest finished deployments of
 /// each of the team's applications (`idx_deployment_queues_app_id`), then the five newest of those,
 /// instead of scanning the primary key backwards.
-const RECENT_DEPLOYMENTS: &str = "SELECT json_build_object(
+fn recent_deployments_select(state: &AppState) -> String {
+    format!(
+        "SELECT json_build_object(
         'id', q.id, 'application_name', q.application_name, 'deployment_url', q.deployment_url,
         'deployment_uuid', q.deployment_uuid, 'pull_request_id', q.pull_request_id,
         'server_name', q.server_name, 'status', q.status, 'created_at', q.created_at,
+        'finished_at', q.finished_at, 'image_scan_blocked', {blocked},
         'application_uuid', a.uuid, 'project', p.name, 'environment', e.name,
         'environment_id', e.id)::text
     FROM applications a
     JOIN environments e ON e.id = a.environment_id
     JOIN projects p ON p.id = e.project_id
     CROSS JOIN LATERAL (
-        SELECT id, application_name, deployment_url, deployment_uuid, pull_request_id, server_name,
-               status, created_at
+        SELECT *
           FROM application_deployment_queues
          WHERE application_id = a.id::text AND status NOT IN ('in_progress', 'queued')
          ORDER BY id DESC LIMIT 5) q
     WHERE p.team_id = $1
-    ORDER BY q.id DESC";
+    ORDER BY q.id DESC",
+        blocked = image_scan_blocked_sql(state)
+    )
+}
 
 /// `ActiveDeployments::activeDeployments()` and `recentDeployments()`.
 async fn recent_deployments(
@@ -145,9 +182,10 @@ async fn recent_deployments(
         ""
     };
     let active = format!(
-        "{DEPLOYMENT_SELECT} AND q.status IN ('in_progress', 'queued') ORDER BY q.status, q.id{limit}"
+        "{} AND q.status IN ('in_progress', 'queued') ORDER BY q.status, q.id{limit}",
+        deployment_select(&state)
     );
-    let recent = format!("{RECENT_DEPLOYMENTS}{limit}");
+    let recent = format!("{}{limit}", recent_deployments_select(&state));
     let mut active = queue_rows(&state, active, ctx.team_id).await?;
     let mut recent = queue_rows(&state, recent, ctx.team_id).await?;
     active.truncate(5);
@@ -379,8 +417,8 @@ async fn resources(state: &AppState, team: i64) -> Result<Vec<Value>, ApiError> 
                 "project": d.get("project"),
                 "environment": d.get("environment"),
                 "search_text": lower(format!(
-                    "{} {} {subtype} {} database databases db",
-                    s(&d, "name"), s(&d, "uuid"), s(&d, "description"),
+                    "{} {} {} {} database databases db",
+                    s(&d, "name"), s(&d, "uuid"), database_search_word(subtype), s(&d, "description"),
                 )),
             }));
         }
@@ -539,6 +577,16 @@ async fn search_step(
                 team,
             )
             .await?;
+            // `->filter(fn (Server $server) => Gate::allows('placeResource', $server))`.
+            let allowed = crate::place_resource::allowed_server_ids(&state, &ctx).await?;
+            let list: Vec<Value> = list
+                .into_iter()
+                .filter(|s| {
+                    s.get("id")
+                        .and_then(Value::as_i64)
+                        .is_some_and(|id| allowed.contains(&id))
+                })
+                .collect();
             Ok(ok(json!({"items": list})).into_response())
         }
         // `loadDestinations`.

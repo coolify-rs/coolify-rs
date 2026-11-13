@@ -522,9 +522,9 @@ async fn data(
         .map(|r| {
             // `SentinelMetricsClient::rootMountName`, as the Fleet page picks it.
             let root: Vec<Value> = if r.iter().any(|row| row.get("mount").is_some()) {
-                let mount = crate::ui_fleet_metrics::root_mount_name(&r);
+                let mount = crate::ui_fleet_metrics::root_mount_name(&r).map(str::to_owned);
                 r.into_iter()
-                    .filter(|row| row.get("mount").and_then(Value::as_str) == mount)
+                    .filter(|row| row.get("mount").and_then(Value::as_str) == mount.as_deref())
                     .collect()
             } else {
                 r

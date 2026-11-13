@@ -141,7 +141,9 @@ impl Jobs {
             .get("file_download_s3_storage_id")
             .and_then(Value::as_i64)?;
         let row = parts::s3_by_id(db, id).await.ok().flatten()?;
-        (row.get("team_id").and_then(Value::as_i64) == Some(0)
+        // `->s3Only()`: file downloads need presigned URLs, so they only use S3 storages.
+        (super::storage_type::is_s3(&row)
+            && row.get("team_id").and_then(Value::as_i64) == Some(0)
             && row.get("is_usable").and_then(Value::as_bool) == Some(true))
         .then_some(row)
     }

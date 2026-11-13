@@ -9,6 +9,12 @@
   import Empty from '../components/Empty.svelte';
   import NewProjectModal from '../components/NewProjectModal.svelte';
   import PluginPanels from '../components/PluginPanels.svelte';
+  import ResourceLogo from '../components/ResourceLogo.svelte';
+  import Callout from '../components/Callout.svelte';
+  import { session } from '../lib/session.svelte';
+  import { dismissSecurityCallout, securityCallout, securityCalloutTitle } from '../lib/securityCallout';
+  import { tick } from 'svelte';
+  import { starsUi, type StarredResource } from '../lib/starsApi.svelte';
   import { uiApi, type DashboardData } from '../lib/api';
   import { link } from '../lib/router.svelte';
   import { listView } from '../lib/listview.svelte';
@@ -57,8 +63,104 @@
 
   uiApi.dashboard().then((d) => {
     data = d;
+    starred = d.starred_resources ?? [];
     startMetrics(d);
+    showSecurityCallout(d.security_update_now ?? []);
   });
+
+  // The callout "{n} resources need a security update now." (resources/js/security-callout.js):
+  // dismissed until a resource that was not dismissed needs an update now.
+  let securityVisible = $state(false);
+  const securityKey = $derived(`coolify.image-scan.dashboard-update-now-dismissed.${session.info?.current_team?.id ?? ''}`);
+  function readStorage(key: string): string | null {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+  function showSecurityCallout(resources: string[]) {
+    const state = securityCallout(resources, readStorage(securityKey));
+    securityVisible = state.visible;
+    if (state.reset) {
+      try {
+        localStorage.removeItem(securityKey);
+      } catch {
+        // Storage unavailable.
+      }
+    }
+  }
+  function dismissSecurity() {
+    try {
+      localStorage.setItem(securityKey, dismissSecurityCallout(data?.security_update_now ?? [], readStorage(securityKey)));
+    } catch {
+      // Storage unavailable: hidden for this page only.
+    }
+    securityVisible = false;
+  }
+
+  // `$starredResources`: the cards of the "Starred" section, in the order the user chose.
+  let starred = $state<StarredResource[]>([]);
+  let starGrid: HTMLDivElement | undefined = $state();
+  // The card being dragged (`dragged`), by star id, and the classes it wears meanwhile (`lifted`).
+  let dragged = $state<number | null>(null);
+  let sliding = false;
+  const lifted = 'z-20 scale-[1.02] shadow-lg ring-2 ring-coollabs/40 dark:ring-brand-light/30 cursor-grabbing';
+
+  /** `unstar()`. */
+  async function unstar(starId: number) {
+    await starsUi.unstar(starId);
+    starred = starred.filter((s) => s.star_id !== starId);
+  }
+  // Pointer events, so the same code works for mouse, touch, and pen.
+  function startDrag(event: PointerEvent, starId: number) {
+    event.preventDefault();
+    dragged = starId;
+  }
+  async function moveDrag(event: PointerEvent) {
+    if (dragged === null || !starGrid || sliding) return;
+    const grid = starGrid;
+    const draggedCard = grid.querySelector<HTMLElement>(`[data-star-id="${dragged}"]`);
+    const target = document
+      .elementsFromPoint(event.clientX, event.clientY)
+      .map((element) => element.closest<HTMLElement>('[data-star-id]'))
+      .find((card) => card && card !== draggedCard && grid.contains(card));
+    // A card that still slides would move away under the pointer and swap back.
+    if (!target || target.getAnimations().length) return;
+    const rect = target.getBoundingClientRect();
+    const after = (event.clientX - rect.left) / rect.width + (event.clientY - rect.top) / rect.height > 1;
+    const cards = [...grid.querySelectorAll<HTMLElement>('[data-star-id]')];
+    const oldRects = new Map(cards.map((card) => [card, card.getBoundingClientRect()]));
+    // `insertBefore(dragged, after ? target.nextSibling : target)` on the list the cards render from.
+    const moved = starred.find((s) => s.star_id === dragged);
+    if (!moved) return;
+    const rest = starred.filter((s) => s.star_id !== dragged);
+    const index = rest.findIndex((s) => s.star_id === Number(target.dataset.starId));
+    if (index < 0) return;
+    rest.splice(index + (after ? 1 : 0), 0, moved);
+    starred = rest;
+    sliding = true;
+    await tick();
+    sliding = false;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    // FLIP: each card that moved slides from its old place to the new one.
+    cards.forEach((card) => {
+      const oldRect = oldRects.get(card);
+      if (!oldRect) return;
+      const newRect = card.getBoundingClientRect();
+      const dx = oldRect.left - newRect.left;
+      const dy = oldRect.top - newRect.top;
+      if (dx || dy) {
+        card.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 200, easing: 'cubic-bezier(0.2, 0, 0, 1)' });
+      }
+    });
+  }
+  /** Drop: `reorderStars()` with the star ids in their new order. */
+  function endDrag() {
+    if (dragged === null) return;
+    dragged = null;
+    starsUi.reorder(starred.map((s) => s.star_id)).catch(() => {});
+  }
 
   const projects = $derived(data ? sortedProjects(data, projectSort).slice(0, limit) : []);
   const servers = $derived(data ? sortedServers(data, serverSort).slice(0, limit) : []);
@@ -109,8 +211,76 @@
   {/if}
 {/snippet}
 
+<svelte:window onpointermove={moveDrag} onpointerup={endDrag} onpointercancel={endDrag} />
+
 <div class="application-settings-form w-full">
   <div class="flex min-w-0 flex-col gap-8">
+    {#if securityVisible && (data?.security_update_now?.length ?? 0) > 0}
+      <div>
+        <Callout type="danger" title={securityCalloutTitle(data?.security_update_now?.length ?? 0)} ondismiss={dismissSecurity}>
+          <a href="/vulnerabilities?statuses[0]=update_now" use:link class="font-medium underline-offset-2 hover:underline">Review</a>
+        </Callout>
+      </div>
+    {/if}
+
+    <!-- First on every screen size, so starred resources are one tap away on phones too. -->
+    {#if starred.length > 0}
+      <section class="@container mb-0! min-w-0">
+        <SectionHeading title="Starred" />
+        <div bind:this={starGrid} class="grid min-w-0 grid-cols-1 gap-3 @lg:grid-cols-2 @5xl:grid-cols-3 @7xl:grid-cols-4">
+          {#each starred as s (s.star_id)}
+            <article
+              data-star-id={s.star_id}
+              class="group relative flex min-h-16 min-w-0 select-none items-center gap-3 rounded-xl [-webkit-touch-callout:none] border border-neutral-200 bg-white p-3 shadow-sm transition-all hover:-translate-y-px hover:border-neutral-300 hover:shadow-md dark:border-white/[0.08] dark:bg-white/[0.05] dark:hover:border-white/[0.14] {dragged === s.star_id ? lifted : ''}"
+            >
+              <a href={s.href} use:link class="absolute inset-0 rounded-xl" aria-label="Open {s.name}"></a>
+              <!-- The handle has touch-none, so a drag on a phone does not scroll the page. -->
+              <button
+                type="button"
+                title="Drag to change the order"
+                aria-label="Move {s.name}"
+                onpointerdown={(e) => startDrag(e, s.star_id)}
+                class="relative z-10 -mx-1.5 flex h-8 w-5 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-black active:cursor-grabbing dark:text-fg-faint dark:hover:bg-white/[0.06] dark:hover:text-fg"
+              >
+                <Reicon name="grip-vertical" class="size-4" />
+              </button>
+              <div class="resource-glyph flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500">
+                {#if s.type === 'server'}
+                  <Reicon name="servers" class="size-4" />
+                {:else}
+                  <ResourceLogo
+                    databaseType={s.database_type ?? ''}
+                    application={s.application
+                      ? {
+                          buildPack: s.application.build_pack,
+                          sourceType: s.application.source_type,
+                          fqdn: s.application.fqdn,
+                          basicAuth: s.application.is_http_basic_auth_enabled,
+                        }
+                      : null}
+                    service={s.service}
+                  />
+                {/if}
+              </div>
+              <div class="min-w-0 flex-1">
+                <h3 class="truncate text-[13px]! leading-4! font-semibold! text-black dark:text-fg">{s.name}</h3>
+                <p class="mt-0.5 truncate text-[11px] text-neutral-500 dark:text-fg-faint">{s.context}</p>
+              </div>
+              <button
+                type="button"
+                onclick={() => unstar(s.star_id)}
+                title="Remove from the dashboard"
+                aria-label="Unstar {s.name}"
+                class="relative z-10 flex size-6.5 shrink-0 items-center justify-center rounded-md text-warning transition-colors hover:bg-neutral-100 dark:hover:bg-white/[0.06]"
+              >
+                <Reicon name="star-filled" class="size-4" />
+              </button>
+            </article>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
     <div class="grid min-w-0 gap-8 xl:items-start xl:has-[.dashboard-activity_section]:grid-cols-[minmax(0,1fr)_22rem] 2xl:has-[.dashboard-activity_section]:grid-cols-[minmax(0,1fr)_26rem]">
       <div class="dashboard-activity hidden min-w-0 has-[section]:flex flex-col gap-8 xl:order-last">
         <ActiveDeployments />
@@ -288,16 +458,17 @@
                   <SortHeader label="Status" asc="status-asc" desc="status-desc" current={serverSort} onsort={setServerSort} server />
                 </div>
                 {#each servers as s (s.uuid)}
-                  <a href="/server/{s.uuid}" use:link class="grid {serverCols} gap-4 @2xl:min-w-[480px] hover:no-underline {tableRow}">
+                  <a href="/server/{s.uuid}" use:link class="grid {serverCols} gap-x-4 gap-y-2 @2xl:min-w-[480px] hover:no-underline {tableRow}">
                     <div class="flex min-w-0 items-center gap-3">
                       <div class={glyph}><Reicon name="servers" class="size-4" /></div>
                       <p class="truncate text-[13px] font-semibold text-black dark:text-fg">{s.name}</p>
                     </div>
                     <p class="hidden truncate text-neutral-500 @2xl:block dark:text-fg-dim">{s.description || '-'}</p>
                     {#if showServerUsage}
-                      <div class="hidden @xl:block">
+                      <!-- Below @xl the usage takes a second line of the row, under the name and status. -->
+                      <div class="order-last col-span-full @xl:order-none @xl:col-span-1 {s.is_metrics_enabled ? '' : 'hidden @xl:block'}">
                         {#if s.is_metrics_enabled}
-                          <div class="flex flex-col gap-1 text-[11px] text-neutral-500 tabular-nums dark:text-fg-dim">
+                          <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-neutral-500 tabular-nums @xl:grid-cols-1 dark:text-fg-dim">
                             {#each [['CPU', 'bg-[rgb(30,144,255)]', latest(metrics.charts[s.uuid]?.cpu)], ['Mem', 'bg-[rgb(168,85,247)]', latest(metrics.charts[s.uuid]?.memory)]] as [metricLabel, metricColor, value] (metricLabel)}
                               <div class="flex items-center gap-2">
                                 <span class="w-7 shrink-0">{metricLabel}</span>

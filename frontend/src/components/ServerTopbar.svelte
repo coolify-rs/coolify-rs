@@ -7,6 +7,9 @@
   import { post, failure } from '../lib/serverApi';
   import { session } from '../lib/session.svelte';
   import ServerProxyActions from './ServerProxyActions.svelte';
+  import StarToggle from './StarToggle.svelte';
+  import { teleport } from '../lib/databaseMenu';
+  import { showProxyActions } from '../lib/serverPage.svelte';
   import type { ServerTopbar } from '../lib/page.svelte';
 
   let { server, statusOnly = false }: { server: ServerTopbar; statusOnly?: boolean } = $props();
@@ -78,7 +81,8 @@
       <div class="listbox-panel top-8! right-auto! left-0! z-[90]! w-64! min-w-64!" role="menu">
         <div class="flex items-center gap-1 px-3 py-2 text-[11px] font-medium text-neutral-400 dark:text-fg-faint">
           <span>System status</span>
-          {#if server.proxySet}
+          <!-- v4.7.5: `checkProxyStatus` needs `manageProxy` (an admin of the team). -->
+          {#if server.proxySet && session.isAdmin}
             <button
               type="button"
               onclick={refreshStatus}
@@ -133,18 +137,28 @@
 <div data-testid="server-topbar-context" class="flex min-w-0 items-center gap-1 text-[13px]">
   <span class="shrink-0 px-0.5 text-neutral-300 dark:text-fg-faint">/</span>
   <span class="relative flex min-w-0 shrink items-center gap-2 px-1" bind:this={switcher}>
-    <button
-      type="button"
-      class="flex h-8 max-w-56 min-w-0 items-center gap-1.5 rounded-md px-2 transition-colors hover:bg-neutral-100 dark:hover:bg-white/[0.05] xl:max-w-72"
-      onclick={() => (open = !open)}
-      aria-expanded={open}
-      aria-label="Switch server"
-    >
-      <span class="min-w-0 truncate font-semibold text-black dark:text-fg">{server.name}</span>
-      <svg class="size-4 shrink-0 text-neutral-400 dark:text-fg-faint" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M8 9l4-4 4 4M8 15l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
-    </button>
+    <!-- v4.7.5: the name links to the server, the chevrons open the switcher. -->
+    <div class="flex h-8 max-w-56 min-w-0 items-center rounded-md xl:max-w-72">
+      <a
+        href="/server/{server.uuid}"
+        use:link
+        title="Go to server"
+        class="flex h-8 min-w-0 items-center rounded-l-md pr-1 pl-2 transition-colors hover:bg-neutral-100 dark:hover:bg-white/[0.05]"
+      >
+        <span class="min-w-0 truncate font-semibold text-black dark:text-fg">{server.name}</span>
+      </a>
+      <button
+        type="button"
+        class="flex h-8 shrink-0 items-center rounded-r-md px-0.5 transition-colors hover:bg-neutral-100 dark:hover:bg-white/[0.05]"
+        onclick={() => (open = !open)}
+        aria-expanded={open}
+        aria-label="Switch server"
+      >
+        <svg class="size-4 shrink-0 text-neutral-400 dark:text-fg-faint" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M8 9l4-4 4 4M8 15l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+    </div>
     {#if open}
       <div class="listbox-panel top-9! left-1! z-[90]! w-64! min-w-0!">
         <div class="border-b border-neutral-200 p-1.5 dark:border-white/[0.08]">
@@ -169,9 +183,20 @@
     {/if}
   </span>
   {@render statusSummary()}
+  {#key server.uuid}
+    <StarToggle kind="server" uuid={server.uuid} />
+  {/key}
 </div>
 
-{#if server.proxySet}
+<!-- `@teleport('#resource-star-slot-mobile')` of livewire/server/navbar.blade.php. -->
+{#key server.uuid}
+  <div class="contents" use:teleport={'resource-star-slot-mobile'}>
+    <StarToggle kind="server" uuid={server.uuid} />
+  </div>
+{/key}
+
+<!-- v4.7.5 `$showProxyActions`: the proxy actions only on the proxy pages. -->
+{#if server.proxySet && showProxyActions(server.uuid)}
   <ServerProxyActions {server} />
 {/if}
 {/if}

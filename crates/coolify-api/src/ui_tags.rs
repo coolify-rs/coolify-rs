@@ -185,7 +185,15 @@ async fn redeploy(
         if let Some(row) =
             coolify_db::applications::find_in_team(&state.db, ctx.team_id, uuid).await?
         {
-            deploy_application(&state, &ctx, &meta, &row, false).await?;
+            deploy_application(
+                &state,
+                &ctx,
+                &meta,
+                &row,
+                false,
+                coolify_jobs::applications::queue::CancelPreviousDeployments::None,
+            )
+            .await?;
         }
     }
     for s in tag_pages::tag_services(&state.db, id).await? {

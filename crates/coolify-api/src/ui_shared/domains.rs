@@ -881,7 +881,22 @@ async fn update(
     }
     let mut warnings: Vec<String> = warnings.iter().map(ToString::to_string).collect();
     warnings.extend(dns::release_after_edit(&state, &owner, &previous_hostnames).await);
-    Ok(ok(json!({"message": "Domain updated.", "warnings": warnings})).into_response())
+    // `configureDnsAfterDomainEdit()`: a hostname the edit added gets its DNS record.
+    let dns = dns::after_domain_edit(
+        &state,
+        &ctx,
+        &kind,
+        &uuid,
+        &updated,
+        &previous_hostnames,
+        &mut warnings,
+    )
+    .await?;
+    let mut answer = json!({"message": "Domain updated.", "warnings": warnings});
+    if let Some(dns) = dns {
+        answer["dns"] = dns;
+    }
+    Ok(ok(answer).into_response())
 }
 
 /// `removeDomain()`.

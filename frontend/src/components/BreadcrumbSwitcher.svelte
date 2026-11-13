@@ -9,6 +9,8 @@
   let open = $state(false);
   let search = $state('');
   let root: HTMLDivElement | undefined = $state();
+  // `$href`: the page of the active item.
+  const href = $derived(switcher.items.find((item) => item.active)?.href);
 
   function focus(node: HTMLInputElement) {
     queueMicrotask(() => node.focus());
@@ -23,22 +25,31 @@
 <span class="shrink-0 px-0.5 text-neutral-300 dark:text-fg-faint">/</span>
 <div class="relative min-w-0 shrink" bind:this={root}>
   <div class="flex h-8 min-w-0 items-center gap-1">
-    <button
-      type="button"
-      onclick={() => {
-        open = !open;
-        search = '';
-      }}
-      title="Switch resource"
-      class="flex h-8 min-w-0 items-center gap-1.5 rounded-md px-2 opacity-70 transition-[background-color,opacity] hover:bg-neutral-100 hover:opacity-100 dark:hover:bg-white/[0.05]"
-    >
-      <span class="min-w-0 truncate font-semibold text-black dark:text-fg">{page.nameOf(switcher.uuid, switcher.label)}</span>
-      <svg class="size-4 shrink-0 text-neutral-400 dark:text-fg-faint" viewBox="0 0 24 24" fill="none">
-        <path d="M8 9l4-4 4 4M8 15l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
-    </button>
+    <div class="flex h-8 min-w-0 items-center rounded-md opacity-70 transition-opacity hover:opacity-100">
+      <a
+        {href}
+        use:link
+        title="Go to {switcher.title.replace(/s$/, '').toLowerCase()}"
+        class="flex h-8 min-w-0 items-center rounded-l-md pr-1 pl-2 transition-colors hover:bg-neutral-100 dark:hover:bg-white/[0.05]"
+      >
+        <span class="min-w-0 truncate font-semibold text-black dark:text-fg">{page.nameOf(switcher.uuid, switcher.label)}</span>
+      </a>
+      <button
+        type="button"
+        onclick={() => {
+          open = !open;
+          search = '';
+        }}
+        title="Switch resource"
+        class="flex h-8 shrink-0 items-center rounded-r-md px-0.5 transition-colors hover:bg-neutral-100 dark:hover:bg-white/[0.05]"
+      >
+        <svg class="size-4 shrink-0 text-neutral-400 dark:text-fg-faint" viewBox="0 0 24 24" fill="none">
+          <path d="M8 9l4-4 4 4M8 15l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+    </div>
     {#if switcher.usable !== undefined}
-      <span class="inline-flex h-[22px] shrink-0 items-center gap-1.5 rounded-full border border-neutral-200 bg-neutral-100 px-2.5 text-xs font-medium text-black dark:border-white/[0.12] dark:bg-white/[0.08] dark:text-fg">
+      <span class="inline-flex h-[22px] shrink-0 items-center gap-1.5 text-xs text-neutral-700 dark:text-fg">
         <span class="size-1.5 rounded-full {switcher.usable ? 'bg-[#3fb950]' : 'bg-red-500'}"></span>
         <span>{switcher.usable ? 'Connected' : 'Not usable'}</span>
       </span>

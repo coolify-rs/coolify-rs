@@ -14,7 +14,7 @@ use coolify_db::applications::{self as apps, ApplicationRow};
 use coolify_db::environment_variables as store;
 use coolify_db::records::{ENVIRONMENT_VARIABLE, Record};
 use coolify_db::servers::ColumnValue;
-use coolify_jobs::databases::env::escape_env_variables;
+use coolify_jobs::databases::env::{escape_env_variables, without_edge_whitespace};
 use coolify_remote::text::php_trim;
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -139,7 +139,7 @@ pub async fn resolve_real_value(
     let Some(value) = value.filter(|v| !v.is_empty()) else {
         return Ok(value.map(str::to_owned));
     };
-    let mut out = php_trim(value).to_owned();
+    let mut out = without_edge_whitespace(value).to_owned();
     let found: Vec<String> = SHARED_PLACEHOLDER
         .captures_iter(&out)
         .map(|c| c[1].to_owned())
@@ -189,7 +189,8 @@ fn flag(r: &Record, k: &str) -> bool {
     r.get(k).is_some_and(php_truthy)
 }
 
-/// The decrypted, trimmed `value` of a row (the model's `value` getter).
+/// The decrypted `value` of a row without the edge whitespace of a single-line value (the model's
+/// `value` getter, `withoutEdgeWhitespace()` since 4.7).
 fn plain_value(state: &AppState, row: &Record) -> Result<Option<String>, ApiError> {
     let Some(cipher) = row
         .get("value")
@@ -202,7 +203,7 @@ fn plain_value(state: &AppState, row: &Record) -> Result<Option<String>, ApiErro
     let plain = enc
         .decrypt_maybe_serialized(cipher)
         .map_err(|_| ApiError::Internal)?;
-    Ok(Some(php_trim(&plain).to_owned()))
+    Ok(Some(without_edge_whitespace(&plain).to_owned()))
 }
 
 /// How the model that is serialized was obtained.
@@ -359,7 +360,8 @@ fn new_variable(
     input: &Input,
 ) -> Result<(store::NewResourceVariable, Option<String>), ApiError> {
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-    let value = input.str("value").map(php_trim);
+    // The `value` setter: `withoutEdgeWhitespace()` (`TrimStrings` leaves `value` alone).
+    let value = input.str("value").map(without_edge_whitespace);
     let truthy = |k: &str, default: bool| input.get(k).map_or(default, php_truthy);
     Ok((
         store::NewResourceVariable {
@@ -403,7 +405,7 @@ pub async fn create_variable(
         ctx,
         scope.environment_id,
         None,
-        input.str("value").map(php_trim),
+        input.str("value").map(without_edge_whitespace),
         "value",
     )?;
     let (v, copy) = new_variable(state, &input)?;
@@ -436,7 +438,7 @@ async fn save_variable(
     let id = row.get("id").and_then(Value::as_i64).unwrap_or_default();
     let old = plain_value(state, row)?;
     let new = if input.has("value") {
-        input.str("value").map(php_trim)
+        input.str("value").map(without_edge_whitespace)
     } else {
         old.as_deref()
     };
@@ -557,7 +559,7 @@ pub async fn bulk_upsert_variables(
                     ctx,
                     scope.environment_id,
                     None,
-                    item.str("value").map(php_trim),
+                    item.str("value").map(without_edge_whitespace),
                     "value",
                 )?;
                 let (v, copy) = new_variable(state, item)?;

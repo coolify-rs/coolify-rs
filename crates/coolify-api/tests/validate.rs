@@ -55,7 +55,7 @@ async fn add_key(h: &Harness, pem: &str) -> String {
             "POST",
             "/api/v1/security/keys",
             W,
-            Some(json!({"name": "k", "private_key": pem})),
+            Some(json!({"name": "key", "private_key": pem})),
         )
         .await;
     assert_eq!(r.status, 201, "{}", r.body);
@@ -277,6 +277,41 @@ async fn changing_the_address_drops_the_pinned_host_key() {
         .await;
     assert_eq!(r.status, 201, "{}", r.body);
     assert!(pin.exists(), "a rename keeps the pin");
+    // v4.7.5: the pinned key is in `server_settings`, with a known_hosts file named by its hash.
+    sqlx::query(
+        "UPDATE server_settings SET ssh_host_key = 'ssh-ed25519 AAAA', ssh_host_key_source = 'tofu', \
+         ssh_host_key_pending = 'ssh-ed25519 BBBB' WHERE server_id = (SELECT id FROM servers WHERE uuid = $1)",
+    )
+    .bind(&uuid)
+    .execute(h.tdb.db.pool())
+    .await
+    .unwrap();
+    let hashed = pin.with_file_name(format!("known_hosts_{uuid}_0123456789abcdef"));
+    std::fs::write(&hashed, "x").unwrap();
+    let r = h
+        .call(
+            "PATCH",
+            &format!("/api/v1/servers/{uuid}"),
+            W,
+            Some(json!({"description": "same address"})),
+        )
+        .await;
+    assert_eq!(r.status, 201, "{}", r.body);
+    async fn pinned(h: &Harness, uuid: String) -> (Option<String>, Option<String>, Option<String>) {
+        sqlx::query_as(
+            "SELECT ssh_host_key, ssh_host_key_source::text, ssh_host_key_pending FROM server_settings \
+             WHERE server_id = (SELECT id FROM servers WHERE uuid = $1)",
+        )
+        .bind(uuid)
+        .fetch_one(h.tdb.db.pool())
+        .await
+        .unwrap()
+    }
+    assert_eq!(
+        pinned(&h, uuid.clone()).await.0.as_deref(),
+        Some("ssh-ed25519 AAAA"),
+        "another change keeps the pinned key"
+    );
     let r = h
         .call(
             "PATCH",
@@ -287,6 +322,16 @@ async fn changing_the_address_drops_the_pinned_host_key() {
         .await;
     assert_eq!(r.status, 201, "{}", r.body);
     assert!(!pin.exists());
+    // `Server::saved` -> `forgetSshHostKey('address_changed')`: the pinned and the pending key go.
+    assert_eq!(pinned(&h, uuid.clone()).await, (None, None, None));
+    assert!(!hashed.exists());
+    let forgotten: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE event = 'server.ssh_host_key.forgotten'",
+    )
+    .fetch_one(h.tdb.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(forgotten, 1);
 
     std::fs::write(&pin, "x").unwrap();
     let r = h

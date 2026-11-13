@@ -37,19 +37,49 @@ async fn scalar_i64(h: &Harness, sql: &str) -> i64 {
 async fn create_writes_upstream_rows_and_reads_back() {
     let h = Harness::new().await;
     let key = key_uuid(&h).await;
+    // 4.7.5 (32541a32c): names and descriptions are validated like the UI.
+    h.call(
+        "POST",
+        "/api/v1/servers",
+        W,
+        Some(json!({"name": "web <b>1</b>", "description": "x".repeat(256), "ip": "10.9.9.9", "private_key_uuid": key})),
+    )
+    .await
+    .assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"name":["The name may only contain letters (including Unicode), numbers, spaces, and these characters: - _ . \/ @ & ( ) # , : +"],"description":["The description may not be greater than 255 characters."]}}"#,
+    );
+    h.call(
+        "POST",
+        "/api/v1/servers",
+        W,
+        Some(json!({"name": "ab", "ip": "10.9.9.9", "private_key_uuid": key})),
+    )
+    .await
+    .assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"name":["The name must be at least 3 characters."]}}"#,
+    );
     let r = h
         .call(
             "POST",
             "/api/v1/servers",
             W,
-            Some(json!({"name": "web <b>1</b>", "ip": "[2001:DB8::0001]", "private_key_uuid": key, "user": " deploy ", "port": "2222", "proxy_type": "caddy"})),
+            Some(json!({"name": "web 1", "ip": "[2001:DB8::0001]", "private_key_uuid": key, "user": " deploy ", "port": "2222", "proxy_type": "caddy"})),
         )
         .await;
     assert_eq!(r.status, 201, "{}", r.body);
     let uuid = r.json()["uuid"].as_str().unwrap().to_string();
 
     // Rows written by the model hooks.
-    let (ip, user, port, proxy, name, description): (String, String, i32, String, String, String) = sqlx::query_as(
+    let (ip, user, port, proxy, name, description): (
+        String,
+        String,
+        i32,
+        String,
+        String,
+        Option<String>,
+    ) = sqlx::query_as(
         "SELECT ip, \"user\", port, proxy::text, name, description FROM servers WHERE uuid = $1",
     )
     .bind(&uuid)
@@ -64,7 +94,8 @@ async fn create_writes_upstream_rows_and_reads_back() {
         proxy,
         r#"{"redirect_enabled":true,"type":"CADDY","status":"exited"}"#
     );
-    assert_eq!((name.as_str(), description.as_str()), ("web 1", ""));
+    // `HasSafeStringAttribute` (4.7.5): a missing description stays NULL.
+    assert_eq!((name.as_str(), description.as_deref()), ("web 1", None));
     let sid = scalar_i64(&h, &format!("SELECT id FROM servers WHERE uuid = '{uuid}'")).await;
     assert_eq!(scalar_i64(&h, &format!("SELECT count(*) FROM standalone_dockers WHERE server_id = {sid} AND network = 'coolify'")).await, 1);
     let token: String = sqlx::query_scalar(&format!(
@@ -187,8 +218,51 @@ async fn create_validation_and_checks() {
     .await
     .assert(
         400,
-        r#"{"message":"A server with this IP\/Domain is already in use."}"#,
+        r#"{"message":"A server with this IP\/Domain and SSH port is already in use."}"#,
     );
+    // 4.7.5: the port is part of the SSH endpoint, so the same address with another forwarded
+    // port is another server; the same endpoint is refused again, and so is moving onto it.
+    let second = h
+        .call(
+            "POST",
+            "/api/v1/servers",
+            W,
+            Some(json!({"ip": "1.2.3.4", "port": 2222, "private_key_uuid": key})),
+        )
+        .await;
+    assert_eq!(second.status, 201, "{}", second.body);
+    h.call(
+        "POST",
+        "/api/v1/servers",
+        W,
+        Some(json!({"ip": "1.2.3.4", "port": "2222", "private_key_uuid": key})),
+    )
+    .await
+    .assert(
+        400,
+        r#"{"message":"A server with this IP\/Domain and SSH port is already in use."}"#,
+    );
+    let second_uuid = second.json()["uuid"].as_str().unwrap().to_owned();
+    h.call(
+        "PATCH",
+        &format!("/api/v1/servers/{second_uuid}"),
+        W,
+        Some(json!({"port": 22})),
+    )
+    .await
+    .assert(
+        400,
+        r#"{"message":"A server with this IP\/Domain and SSH port is already in use."}"#,
+    );
+    // remove_ssh_key is a boolean query parameter of the delete.
+    h.call(
+        "DELETE",
+        &format!("/api/v1/servers/{second_uuid}?remove_ssh_key=maybe"),
+        Some("acme_owner_delete"),
+        None,
+    )
+    .await
+    .assert(422, r#"{"message":"remove_ssh_key must be a boolean."}"#);
     // instant_validate needs SSH: refused before anything is written.
     assert_eq!(
         h.call(

@@ -121,13 +121,26 @@ fn guard(response: &str) -> Result<(), String> {
     }
 }
 
-/// `rootMountName`: `/`, else the disk that holds /data/coolify.
-pub(crate) fn root_mount_name(rows: &[Value]) -> Option<&'static str> {
-    ["/", "/app/db", "/data/coolify", "/data"]
+/// `rootMountName`: `/`, else the disk that holds /data/coolify. Sentinel 1.1.3 names a disk by
+/// its shortest host mount point, which can be any path (for example `/home` when `/data` is a
+/// symlink into a NAS volume). When none of `ROOT_MOUNTS` is reported, the only reported disk is
+/// the one under Sentinel's `/app/db`; with several, the right one is unknown.
+pub(crate) fn root_mount_name(rows: &[Value]) -> Option<&str> {
+    let mut mounts: Vec<&str> = Vec::new();
+    for mount in rows
+        .iter()
+        .filter_map(|row| row.get("mount").and_then(Value::as_str))
+    {
+        if !mounts.contains(&mount) {
+            mounts.push(mount);
+        }
+    }
+    ROOT_MOUNTS
         .into_iter()
-        .find(|mount| {
-            rows.iter()
-                .any(|row| row.get("mount").and_then(Value::as_str) == Some(*mount))
+        .find(|mount| mounts.contains(mount))
+        .or(match mounts.as_slice() {
+            [only] => Some(*only),
+            _ => None,
         })
 }
 
@@ -276,15 +289,9 @@ fn history_url(metric: &str, range: &str, from: &str) -> String {
         "memory" | "disk" | "load" | "network" => metric,
         _ => "cpu",
     };
-    let mut query = history_query(range, from);
-    if metric == "disk" {
-        // `http_build_query` encodes `/` and `,`.
-        let mounts = ROOT_MOUNTS
-            .join(",")
-            .replace('/', "%2F")
-            .replace(',', "%2C");
-        query.push_str(&format!("&mount={mounts}"));
-    }
+    // v4.7.5: no `mount` filter for disk history: `rootMountName()` can pick a disk that is not
+    // in `ROOT_MOUNTS`, and Sentinel reports only the few disks of its own mounts.
+    let query = history_query(range, from);
     format!("{BASE}/{path}/history?{query}")
 }
 
@@ -1116,12 +1123,25 @@ mod tests {
         assert!(guard("null").is_err());
     }
 
+    // v4.7.5 `rootMountName()`: the only reported disk is the root disk also under another name.
     #[test]
-    fn page_urls_ask_disk_history_for_the_root_mounts() {
+    fn a_single_disk_with_another_mount_point_is_the_root_disk() {
+        let home = vec![json!({"mount": "/home"}), json!({"mount": "/home"})];
+        assert_eq!(root_mount_name(&home), Some("/home"));
+        let several = vec![json!({"mount": "/home"}), json!({"mount": "/mnt/nas"})];
+        assert_eq!(root_mount_name(&several), None);
+        let known = vec![json!({"mount": "/home"}), json!({"mount": "/data"})];
+        assert_eq!(root_mount_name(&known), Some("/data"));
+        assert_eq!(root_mount_name(&[]), None);
+    }
+
+    // v4.7.5: no `mount` filter for the disk history.
+    #[test]
+    fn page_urls_ask_disk_history_without_a_mount_filter() {
         let from = "2026-11-08T10:00:00Z";
         assert_eq!(
             history_url("disk", "24h", from),
-            "http://localhost:8888/api/disk/history?from=2026-11-08T10:00:00Z&bucket_ms=300000&mount=%2F%2C%2Fapp%2Fdb%2C%2Fdata%2Fcoolify%2C%2Fdata"
+            "http://localhost:8888/api/disk/history?from=2026-11-08T10:00:00Z&bucket_ms=300000"
         );
         assert_eq!(
             history_url("bogus", "7d", from),

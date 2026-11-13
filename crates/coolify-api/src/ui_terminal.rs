@@ -628,6 +628,130 @@ pub struct Session {
     pub target: Target,
     pub command: String,
     pub attach: bool,
+    /// The live session record of `TerminalSessionService::redeem()` (v4.7.5).
+    pub live: LiveSession,
+}
+
+/// What upstream keeps under `terminal-live-session:{id}` while a terminal runs: who uses which
+/// server, to check the session again while it runs and to record its end.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveSession {
+    pub user_id: i64,
+    pub team_id: i64,
+    pub server_uuid: String,
+    pub server_name: String,
+    pub container: Option<String>,
+    /// `host`, `attach` or `shell`.
+    pub mode: &'static str,
+}
+
+impl LiveSession {
+    /// `auditContext()`.
+    fn audit_context(&self, action: &str) -> Value {
+        let target = self.container.as_deref().unwrap_or("host");
+        json!({
+            "resource": "server",
+            "team_id": self.team_id,
+            "user_id": self.user_id,
+            "server_uuid": self.server_uuid,
+            "server_name": self.server_name,
+            "container": self.container,
+            "mode": self.mode,
+            // The browser IP and user agent are not kept with the token in coolify-rs.
+            "actor_ip": null,
+            "actor_user_agent": null,
+            "audit_description": format!(
+                "Terminal session {action} on {} ({target})",
+                self.server_name
+            ),
+        })
+    }
+}
+
+async fn audit_session(state: &AppState, live: &LiveSession, event: &str, context: Value) {
+    // `auth()->onceUsingId($session['user_id'])`: the event is recorded as the session user.
+    let user = coolify_db::audit::actor_user(&state.db, live.user_id)
+        .await
+        .ok()
+        .flatten();
+    let actor = coolify_db::audit::Actor {
+        user_id: Some(live.user_id),
+        name: user.as_ref().map(|u| u.0.clone()),
+        email: user.map(|u| u.1),
+        ..Default::default()
+    };
+    if let Err(e) = coolify_db::audit::record(
+        &state.db,
+        Some(live.team_id),
+        event,
+        &context,
+        "info",
+        &actor,
+        None,
+        state.now(),
+    )
+    .await
+    {
+        tracing::warn!(error = %e, event, "audit event persistence failed");
+    }
+}
+
+/// `auditLog('terminal.session.started', ...)` of `redeem()`.
+pub(crate) async fn session_started(state: &AppState, live: &LiveSession) {
+    audit_session(
+        state,
+        live,
+        "terminal.session.started",
+        live.audit_context("started"),
+    )
+    .await;
+}
+
+/// `TerminalSessionService::end()`: records the end of a live session.
+pub(crate) async fn session_ended(
+    state: &AppState,
+    live: &LiveSession,
+    reason: &str,
+    duration_seconds: u64,
+) {
+    let mut context = live.audit_context("ended");
+    context["reason"] = json!(reason);
+    context["duration_seconds"] = json!(duration_seconds);
+    audit_session(state, live, "terminal.session.ended", context).await;
+}
+
+/// `TerminalSessionService::check()`: whether the user may keep a live session open. Uses the
+/// team of the server, not the session team, because the user can switch teams while the
+/// terminal runs. `Err` when the database could not answer.
+pub(crate) async fn session_allowed(state: &AppState, live: &LiveSession) -> Result<bool, ()> {
+    let row = servers::find(&state.db, live.team_id, &live.server_uuid)
+        .await
+        .map_err(|_| ())?;
+    let Some(row) = row else {
+        return Ok(false);
+    };
+    let role = coolify_db::auth::membership_role(&state.db, live.team_id, live.user_id)
+        .await
+        .map_err(|_| ())?;
+    if !role.is_some_and(|r| r.is_admin()) {
+        return Ok(false);
+    }
+    // `$server->team?->is_two_factor_required && blank($user->two_factor_confirmed_at)`.
+    let two_factor_missing: bool = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT is_two_factor_required FROM teams WHERE id = $1), false) \
+         AND (SELECT two_factor_confirmed_at IS NULL FROM users WHERE id = $2)",
+    )
+    .bind(live.team_id)
+    .bind(live.user_id)
+    .fetch_optional(state.db.pool())
+    .await
+    .map_err(|_| ())?
+    .flatten()
+    .unwrap_or(true);
+    Ok(!two_factor_missing
+        && terminal_enabled(&row)
+        && !force_disabled(&row)
+        && !ServerInfo::from_row(&row).transferred)
 }
 
 /// `TerminalSessionService::redeem()`: single use, for the user and team it was issued to, and
@@ -646,9 +770,22 @@ pub(crate) async fn redeem(state: &AppState, ctx: &AuthCtx, token: &str) -> Resu
         .await
         .map_err(|_| ())?
         .ok_or(())?;
-    if !terminal_enabled(&row) || force_disabled(&row) {
+    // v4.7.5: another instance manages a transferred server.
+    if !terminal_enabled(&row) || force_disabled(&row) || ServerInfo::from_row(&row).transferred {
         return Err(());
     }
+    let live = LiveSession {
+        user_id: ctx.user_id,
+        team_id: row.team_id,
+        server_uuid: row.uuid.clone(),
+        server_name: name_of(&row).to_owned(),
+        container: issued.container.clone(),
+        mode: match (&issued.container, issued.attach) {
+            (None, _) => "host",
+            (Some(_), true) => "attach",
+            (Some(_), false) => "shell",
+        },
+    };
     let key_id = row.record.get("private_key_id").and_then(Value::as_i64);
     let key_team: Option<i64> =
         sqlx::query_scalar("SELECT team_id FROM private_keys WHERE id = $1")
@@ -677,6 +814,7 @@ pub(crate) async fn redeem(state: &AppState, ctx: &AuthCtx, token: &str) -> Resu
         target,
         command,
         attach: issued.attach,
+        live,
     })
 }
 
@@ -737,5 +875,38 @@ mod tests {
         assert_eq!(resolve_mode(None, false), "shell");
         assert_eq!(resolve_mode(Some("other"), true), "attach");
         assert_eq!(resolve_mode(Some("other"), false), "shell");
+    }
+}
+
+#[cfg(test)]
+mod live_session_tests {
+    use super::LiveSession;
+
+    // `TerminalSessionService::auditContext()`.
+    #[test]
+    fn audit_context_names_the_server_and_the_target() {
+        let mut live = LiveSession {
+            user_id: 7,
+            team_id: 3,
+            server_uuid: "srv".into(),
+            server_name: "web-1".into(),
+            container: None,
+            mode: "host",
+        };
+        let context = live.audit_context("started");
+        assert_eq!(context["resource"], "server");
+        assert_eq!(context["team_id"], 3);
+        assert_eq!(context["user_id"], 7);
+        assert_eq!(context["mode"], "host");
+        assert_eq!(
+            context["audit_description"],
+            "Terminal session started on web-1 (host)"
+        );
+        live.container = Some("app-abc".into());
+        live.mode = "shell";
+        assert_eq!(
+            live.audit_context("ended")["audit_description"],
+            "Terminal session ended on web-1 (app-abc)"
+        );
     }
 }

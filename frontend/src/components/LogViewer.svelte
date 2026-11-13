@@ -10,6 +10,7 @@
   import { Virtualizer, elementScroll, measureElement, observeElementOffset, observeElementRect } from '@tanstack/virtual-core';
   import Reicon from './Reicon.svelte';
   import { notify } from '../lib/toast.svelte';
+  import { copyTextToClipboard } from '../lib/clipboard';
   import {
     ESTIMATED_ROW_HEIGHT,
     ESTIMATED_TEXT_ROW_HEIGHT,
@@ -338,21 +339,15 @@
     timestamps = !timestamps;
     ontimestamps?.(timestamps);
   }
-  async function copyLogs() {
+  function copyLogs() {
     menu = null;
-    let logs: string;
-    try {
-      logs = await fetchLogs({ mode: 'copy', lines: resolveLines(), timestamps });
-    } catch {
-      notify.failure('Failed to prepare logs for clipboard.');
-      return;
-    }
-    logs = logs.replace(/^([^\t\n]+)\t/gm, '$1 | ');
-    if (!navigator.clipboard?.writeText) {
+    if (!navigator.clipboard) {
       notify.failure('Clipboard is not available. Please use HTTPS or localhost.');
       return;
     }
-    navigator.clipboard.writeText(logs).then(
+    // No await before the copy: iOS accepts the write only during the click (lib/clipboard.ts).
+    const logs = fetchLogs({ mode: 'copy', lines: resolveLines(), timestamps }).then((text) => text.replace(/^([^\t\n]+)\t/gm, '$1 | '));
+    copyTextToClipboard(logs).then(
       () => notify.success('Logs copied to clipboard.'),
       () => notify.failure('Failed to copy logs to clipboard.'),
     );

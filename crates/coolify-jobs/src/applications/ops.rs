@@ -503,6 +503,29 @@ impl Jobs {
         )))
     }
 
+    /// `GetRollbackImages::allows($application, $tag)`: whether a rollback to the tag is allowed:
+    /// the tag is a listed rollback image, or the commit of a successful production deployment.
+    /// Any other commit (for example a commit of an unmerged pull request) is rejected, because a
+    /// rollback builds a missing image from source.
+    pub async fn rollback_allows(&self, a: &ApplicationRow, tag: &str) -> bool {
+        if coolify_db::deployment_queue::was_deployed(&self.0.db, a.id, tag)
+            .await
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        self.rollback_images(a).await.is_ok_and(|listed| {
+            listed
+                .get("images")
+                .and_then(Value::as_array)
+                .is_some_and(|images| {
+                    images
+                        .iter()
+                        .any(|i| i.get("tag").and_then(Value::as_str) == Some(tag))
+                })
+        })
+    }
+
     /// `GetRollbackImages::handle($application)`; an `Err` makes the route answer with an empty list.
     pub async fn rollback_images(&self, a: &ApplicationRow) -> Result<Value, String> {
         let db = &self.0.db;
@@ -523,13 +546,23 @@ impl Jobs {
             let containers = self
                 .containers_for_pull_request(&t, &server, &a.uuid, Some(0))
                 .await?;
-            // currentTag(): the one tag of the running containers.
+            let repositories = rollback_image_repositories(a);
+            // currentTag(): the one tag of the running containers. Only containers of the
+            // application images count, so the image tags of other Docker Compose services (for
+            // example `postgres:16`) do not.
             let mut tags: Vec<Option<String>> = Vec::new();
             for c in containers
                 .iter()
                 .filter(|c| c.get("State").and_then(Value::as_str) == Some("running"))
             {
-                let tag = image_tag(c.get("Image").and_then(Value::as_str).unwrap_or_default());
+                let image = c.get("Image").and_then(Value::as_str).unwrap_or_default();
+                if !repositories
+                    .iter()
+                    .any(|repository| image.starts_with(&format!("{repository}:")))
+                {
+                    continue;
+                }
+                let tag = image_tag(image);
                 if !tags.contains(&tag) {
                     tags.push(tag);
                 }
@@ -537,11 +570,6 @@ impl Jobs {
             if tags.len() == 1 {
                 current = tags.remove(0);
             }
-            let repository = a
-                .str("docker_registry_image_name")
-                .filter(|n| !n.is_empty() && *n != "0")
-                .unwrap_or(&a.uuid)
-                .to_owned();
             let output = self
                 .remote()
                 .run(
@@ -554,7 +582,8 @@ impl Jobs {
                 .unwrap_or_default();
             for line in output.trim().split('\n') {
                 let parts: Vec<&str> = line.split('#').collect();
-                if parts[0] != repository {
+                // Exact repository match only, so other images with a similar name are not listed.
+                if !repositories.iter().any(|repository| repository == parts[0]) {
                     continue;
                 }
                 let Some(tag) = parts.get(1).filter(|t| !t.trim().is_empty()) else {
@@ -566,9 +595,10 @@ impl Jobs {
                     "is_current": Some(*tag) == current.as_deref(),
                     "source": "local",
                 });
-                match images.iter_mut().find(|(k, _)| k == tag) {
-                    Some(slot) => slot.1 = image,
-                    None => images.push(((*tag).to_owned(), image)),
+                // The images of all Docker Compose services of a commit have the same tag. Docker
+                // lists the newest image first, so the newest image of each tag stays.
+                if !images.iter().any(|(k, _)| k == tag) {
+                    images.push(((*tag).to_owned(), image));
                 }
             }
         }
@@ -1254,6 +1284,31 @@ fn create_volume_command(
     }
     command.push_str(&format!(" {}", quote(target)));
     format!("sh -c {}", quote(&command))
+}
+
+/// `GetRollbackImages::imageRepositories($application)`: the repositories of the images that the
+/// application builds or pulls. A Docker Compose build names the image of each service
+/// `<uuid>_<service>`, like the Compose parser does.
+fn rollback_image_repositories(a: &ApplicationRow) -> Vec<String> {
+    if a.str("build_pack") == Some("dockercompose") {
+        // `composeServicesWithoutParse()`.
+        let parsed =
+            validate::parse_docker_compose_yaml(a.str("docker_compose_raw").unwrap_or_default())
+                .ok();
+        return match parsed.as_ref().and_then(|p| php::get(p, "services")) {
+            Some(PhpValue::Array(services)) => services
+                .iter()
+                .map(|(name, _)| format!("{}_{}", a.uuid, name.as_string()))
+                .collect(),
+            _ => Vec::new(),
+        };
+    }
+    vec![
+        a.str("docker_registry_image_name")
+            .filter(|n| !n.is_empty() && *n != "0")
+            .unwrap_or(&a.uuid)
+            .to_owned(),
+    ]
 }
 
 /// `GetRollbackImages::imageTag($imageReference)`.

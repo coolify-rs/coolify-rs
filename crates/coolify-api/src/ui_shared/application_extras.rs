@@ -78,6 +78,14 @@ async fn rollback_image(
         .await?
         .ok_or(super::NOT_FOUND)?;
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    // `GetRollbackImages::allows($this->application, $commit)`.
+    if !jobs.rollback_allows(&a, &commit).await {
+        return Ok(ok(json!({
+            "title": "Rollback did not start.",
+            "message": "The commit is not a rollback image or a successful deployment of this application.",
+        }))
+        .into_response());
+    }
     let deployment = coolify_domain::new_public_id();
     let result = jobs
         .queue_application_deployment(

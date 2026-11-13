@@ -22,11 +22,13 @@
 //! current task (tests).
 
 mod channels;
+pub mod email_settings;
 pub mod lookup;
 mod markdown;
 mod messages;
 pub mod php;
 pub mod plugin_events;
+pub mod resource_stopped;
 mod tracking;
 mod views;
 
@@ -40,9 +42,12 @@ use coolify_db::{Db, instance_settings};
 use serde_json::Value;
 
 pub use messages::{
-    CommitDetails, DatabaseBackup, Deployment, DiscordMessage, Mail, MailMessage, Notification,
-    Preview, PushoverMessage, RestartKind, RestartLimit, ServerRef, SlackMessage, SslResource,
-    Task, TaskResource, TelegramMessage, TraefikServer, VolumeBackup, git_commit_link,
+    CommitDetails, DATABASE_BACKUP_THROTTLES, DOCKER_CLEANUP_FAILED_THROTTLE, DatabaseBackup,
+    Deployment, DiscordMessage, FAILURE_REMINDER_INTERVAL_MINUTES, FAILURE_REMINDER_TEXT,
+    FailureEvent, Mail, MailMessage, Notification, Preview, PushoverMessage, RestartKind,
+    RestartLimit, ServerRef, SlackMessage, SslResource, TASK_AUTO_DISABLE_AFTER_FAILURES,
+    TASK_AUTO_DISABLE_AFTER_HOURS, TASK_FAILED_THROTTLE, Task, TaskResource, TelegramMessage,
+    TraefikServer, VOLUME_BACKUP_THROTTLES, VolumeBackup, blocked_titles, git_commit_link,
 };
 
 static VERSION: OnceLock<String> = OnceLock::new();
@@ -115,7 +120,7 @@ impl Ctx {
                 .get()
                 .cloned()
                 .or_else(|| std::env::var("COOLIFY_VERSION").ok())
-                .unwrap_or_else(|| "4.6.0".to_owned()),
+                .unwrap_or_else(|| "4.7.5".to_owned()),
             cloud: std::env::var("SELF_HOSTED").is_ok_and(|v| v == "false" || v == "0"),
             dev,
         }
@@ -343,6 +348,18 @@ pub async fn send_transactional(
     mail: Mail,
 ) -> Result<(), String> {
     channels::send_transactional(db, encrypter, to, &mail).await
+}
+
+/// `send_user_an_email($mail, $email, asNotification: true)` and the instance test email with
+/// "Send from the notification sender": mail through the instance settings that comes from the
+/// notification sender when one is set.
+pub async fn send_transactional_as_notification(
+    db: &Db,
+    encrypter: Option<&Encrypter>,
+    to: &str,
+    mail: Mail,
+) -> Result<(), String> {
+    channels::send_instance_mail(db, encrypter, to, &mail, true).await
 }
 
 /// Renders a notification on every channel, for the differential test.

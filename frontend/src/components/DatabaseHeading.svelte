@@ -279,6 +279,7 @@
 {/if}
 
 <nav class="w-full max-w-none">
+  <!-- `@teleport('#resource-star-slot-mobile')` with `<livewire:star-toggle :resource="$database">`: DatabaseTopbar above places it in the slot of the shell. -->
   <div>
     <!-- Below xl: the title and the resource actions share one row. -->
     <div class="mb-3 flex w-full min-w-0 items-start gap-3 xl:hidden">

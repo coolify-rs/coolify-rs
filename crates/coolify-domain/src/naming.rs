@@ -40,9 +40,22 @@ pub fn strip_tags(value: Option<&str>) -> String {
     out
 }
 
+/// `HasSafeStringAttribute::setDescriptionAttribute()` (4.7.5): `$value === null ? null :
+/// strip_tags($value)`, so a missing description stays NULL instead of becoming "".
+pub fn strip_tags_nullable(value: Option<&str>) -> Option<String> {
+    value.map(|v| strip_tags(Some(v)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_null_description_stays_null() {
+        assert_eq!(strip_tags_nullable(None), None);
+        assert_eq!(strip_tags_nullable(Some("<b>x</b>")).as_deref(), Some("x"));
+        assert_eq!(strip_tags_nullable(Some("")).as_deref(), Some(""));
+    }
 
     #[test]
     fn name_pattern() {

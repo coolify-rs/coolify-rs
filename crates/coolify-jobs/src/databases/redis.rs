@@ -36,6 +36,17 @@ pub(crate) fn username_updates(ctx: &StartContext<'_>) -> Vec<(i64, String)> {
         .collect()
 }
 
+/// `StartRedis::healthCheckCommand()`: the ping carries the server password and must answer PONG,
+/// because `redis-cli` exits 0 on error replies (NOAUTH, LOADING). A custom `redis.conf` with its
+/// own `requirepass` has a password Coolify does not know, so that check only requires a reply.
+/// `password_arg` is `requirePassArgument()`.
+fn health_check_command(redis_conf: Option<&str>, password_arg: &str) -> String {
+    if redis_conf.is_some_and(|c| c.contains("requirepass")) {
+        return "redis-cli ping | grep -qE 'PONG|NOAUTH'".to_owned();
+    }
+    format!("redis-cli -a {password_arg} --no-auth-warning ping | grep -q PONG")
+}
+
 pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
     let d = ctx.db;
     let name = d.uuid.as_str();
@@ -119,7 +130,13 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         ("labels", database_labels(d)),
         (
             "healthcheck",
-            healthcheck(d, &["CMD-SHELL", "redis-cli", "ping"]),
+            healthcheck(
+                d,
+                &[
+                    "CMD-SHELL",
+                    &health_check_command(d.str("redis_conf"), &password_arg),
+                ],
+            ),
         ),
     ]);
     for (k, v) in limits(d) {
@@ -170,6 +187,47 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
     if conf.is_some() {
         extra.push(format!("chown 999:999 {dir}/redis.conf"));
     }
-    finish_commands(&mut commands, d, ctx.server, &compose_yaml, ctx.now, &extra);
+    finish_commands(
+        &mut commands,
+        d,
+        ctx.server,
+        &compose_yaml,
+        ctx.now,
+        &extra,
+        &ctx.start_pins,
+    );
     (commands, compose_yaml)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::health_check_command;
+    use coolify_remote::shell::quote;
+
+    /// The ping authenticates with the server password, quoted as in the start command.
+    #[test]
+    fn health_check_pings_with_the_password() {
+        assert_eq!(
+            health_check_command(None, &quote("secret")),
+            "redis-cli -a 'secret' --no-auth-warning ping | grep -q PONG"
+        );
+        // A configuration without its own `requirepass` still uses Coolify's password.
+        assert_eq!(
+            health_check_command(Some("maxmemory 256mb"), &quote("p w")),
+            "redis-cli -a 'p w' --no-auth-warning ping | grep -q PONG"
+        );
+        // A legacy database keeps its unquoted argument (`requirePassArgument()`).
+        assert_eq!(
+            health_check_command(Some(""), "a;b"),
+            "redis-cli -a a;b --no-auth-warning ping | grep -q PONG"
+        );
+    }
+
+    #[test]
+    fn health_check_of_a_custom_requirepass_only_needs_a_reply() {
+        assert_eq!(
+            health_check_command(Some("requirepass other\nmaxmemory 1gb"), &quote("secret")),
+            "redis-cli ping | grep -qE 'PONG|NOAUTH'"
+        );
+    }
 }

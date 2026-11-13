@@ -20,6 +20,12 @@ function write(key: string, value: string): void {
 
 export type Theme = 'dark' | 'light' | 'system' | 'custom';
 
+/** Port of upstream `window.storedUiScale`. */
+export function storedUiScale(): string {
+  const scale = read('uiScale');
+  return scale !== null && ['80', '90', '100'].includes(scale) ? scale : '100';
+}
+
 /** Port of upstream `window.applyStoredTheme`. `purple` is what older versions called the custom theme. */
 export function applyStoredTheme(): void {
   const root = document.documentElement;
@@ -27,6 +33,7 @@ export function applyStoredTheme(): void {
   const theme = stored === 'purple' ? 'custom' : stored || 'dark';
   root.dataset.navStyle = read('navStyle') === 'floating' ? 'floating' : 'default';
   root.dataset.navItems = read('navItems') === 'flat' ? 'flat' : '3d';
+  root.dataset.uiScale = storedUiScale();
   write('theme', theme);
   const themeColor = read('themeColor');
   if (themeColor) write('themeColor', normalizeThemeColor(themeColor));
@@ -53,6 +60,8 @@ class LayoutState {
   theme = $state<Theme>(read('theme') === 'purple' ? 'custom' : (read('theme') as Theme) || 'dark');
   navStyle = $state(read('navStyle') === 'floating' ? 'floating' : 'default');
   navItems = $state(read('navItems') === 'flat' ? 'flat' : '3d');
+  /** '80', '90' or '100': the size of text and controls (rem sizes) from the Appearance page. */
+  uiScale = $state(storedUiScale());
 
   toggleSidebar(): void {
     this.collapsed = !this.collapsed;
@@ -74,6 +83,13 @@ class LayoutState {
     this.navItems = items;
     write('navItems', items);
     applyStoredTheme();
+  }
+
+  /** `setUiScale()` of layouts/base.blade.php. */
+  setUiScale(scale: string): void {
+    this.uiScale = scale;
+    write('uiScale', scale);
+    document.documentElement.dataset.uiScale = scale;
   }
 
   setTheme(theme: Theme): void {

@@ -224,3 +224,84 @@ fn token_grants_take_the_token_abilities() {
     assert_eq!(access::token_grants(None, &[]), None);
     assert_eq!(access::token_grants(Some("null"), &[]), None);
 }
+
+const SERVERS: &str = r#"
+INSERT INTO private_keys (id, uuid, name, private_key, team_id) VALUES (900, 'pk', 'k', 'x', 1);
+INSERT INTO servers (id, uuid, name, ip, team_id, private_key_id) VALUES
+  (901, 'srv-a', 'a', '10.0.0.1', 1, 900), (902, 'srv-b', 'b', '10.0.0.2', 1, 900),
+  (903, 'srv-c', 'c', '10.0.0.3', 1, 900);
+INSERT INTO standalone_dockers (id, name, uuid, network, server_id) VALUES
+  (911, 'a', 'd-a', 'coolify', 901), (912, 'b', 'd-b', 'coolify', 902), (913, 'c', 'd-c', 'coolify', 903);
+UPDATE services SET destination_type = 'App\Models\StandaloneDocker', destination_id = 911 WHERE uuid = 's-two';
+UPDATE services SET destination_type = 'App\Models\StandaloneDocker', destination_id = 912 WHERE uuid = 's-staging';
+INSERT INTO applications (id, uuid, name, environment_id, build_pack, git_branch, git_repository, destination_type, destination_id)
+  VALUES (931, 'a-two', 'a-two', 121, 'dockerfile', 'main', 'r', 'App\Models\StandaloneDocker', 911);
+INSERT INTO additional_destinations (application_id, server_id, standalone_docker_id) VALUES (931, 903, 913);
+"#;
+
+async fn on_server(
+    t: &TestDb,
+    a: &coolify_domain::grants::Access,
+    level: AccessLevel,
+    server: i64,
+) -> bool {
+    access::allows_on_server(&t.db, a, 1, level, server)
+        .await
+        .unwrap()
+}
+
+/// `AccessResolver::allowsOnServer` (4.7.5): the level on a resource that runs on the server, as
+/// its destination or as an additional server of an application.
+#[tokio::test]
+async fn allows_on_server_needs_the_level_on_a_resource_of_the_server() {
+    let t = TestDb::new(SEED).await;
+    sqlx::raw_sql(SERVERS).execute(t.db.pool()).await.unwrap();
+
+    // Owners and admins without a scoped token have no layers.
+    let owner = access::for_user(&t.db, 1, 1, None).await.unwrap();
+    for server in [901, 902, 903] {
+        assert!(on_server(&t, &owner, AccessLevel::Write, server).await);
+    }
+
+    // Write on the service of server a: a is allowed, b (another service) and c are not.
+    let member = Some(vec![grant(
+        AccessScope::Resource,
+        "s-two",
+        &[AccessLevel::Write],
+    )]);
+    let scoped = access::actor(&t.db, 1, member.clone(), None).await.unwrap();
+    assert!(on_server(&t, &scoped, AccessLevel::Write, 901).await);
+    assert!(on_server(&t, &scoped, AccessLevel::Read, 901).await);
+    assert!(!on_server(&t, &scoped, AccessLevel::Root, 901).await);
+    assert!(!on_server(&t, &scoped, AccessLevel::Write, 902).await);
+    assert!(!on_server(&t, &scoped, AccessLevel::Write, 903).await);
+
+    // An application counts on its destination and on its additional servers.
+    let app = access::actor(
+        &t.db,
+        1,
+        Some(vec![grant(
+            AccessScope::Resource,
+            "a-two",
+            &[AccessLevel::Write],
+        )]),
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(on_server(&t, &app, AccessLevel::Write, 901).await);
+    assert!(on_server(&t, &app, AccessLevel::Write, 903).await);
+    assert!(!on_server(&t, &app, AccessLevel::Write, 902).await);
+
+    // Both layers must allow: a read-only token over a write member grant.
+    let layered = access::actor(
+        &t.db,
+        1,
+        member,
+        Some(vec![Grant::team(vec![AccessLevel::Read])]),
+    )
+    .await
+    .unwrap();
+    assert!(!on_server(&t, &layered, AccessLevel::Write, 901).await);
+    t.drop_db().await;
+}

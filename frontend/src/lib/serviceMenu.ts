@@ -9,14 +9,15 @@ export const SERVICE_SECTIONS = [
   'environment-variables',
   'storages',
   'storage-backups',
-  'import-backup',
   'logs',
   'terminal',
   'files',
   'analytics',
+  'vulnerabilities',
   'scheduled-tasks',
   'webhooks',
   'resource-operations',
+  'maintenance',
   'tags',
   'danger',
 ];
@@ -24,7 +25,7 @@ export const SERVICE_SECTIONS = [
 export function serviceNavContext(
   base: string,
   active: string,
-  opts: { isDeployable: boolean; canAccessTerminal: boolean; storageSections?: { id: string; label: string }[] },
+  opts: { isDeployable: boolean; canAccessTerminal: boolean; storageSections?: { id: string; label: string }[]; security?: string | null },
 ): NavContext {
   const item = (label: string, section: string, icon: string, extra: Partial<NavContextItem> = {}): NavContextItem => ({
     label,
@@ -44,14 +45,15 @@ export function serviceNavContext(
       item('Runtime Logs', 'logs', 'unordered-list'),
       ...(opts.canAccessTerminal ? [item('Terminal', 'terminal', 'browser-terminal'), item('Files', 'files', 'folder', { beta: true })] : []),
       item('Analytics', 'analytics', 'analytics'),
+      // `'security' => SecurityStatus::stored($service)->status->value` (the security dot).
+      item('Security', 'vulnerabilities', 'shield-alert', { security: opts.security ?? null }),
     ],
     [
       item('Scheduled Tasks', 'scheduled-tasks', 'calendar'),
       item('Webhooks', 'webhooks', 'webhook'),
       item('Backups', 'storage-backups', 'database'),
-      item('Import Backup', 'import-backup', 'upload'),
     ],
-    [item('Resource Operations', 'resource-operations', 'server-update'), item('Tags', 'tags', 'tags')],
+    [item('Resource Operations', 'resource-operations', 'server-update'), item('Maintenance Mode', 'maintenance', 'bandage'), item('Tags', 'tags', 'tags')],
     [item('Danger Zone', 'danger', 'danger')],
   ];
   return { label: 'Dashboard', backTitle: 'Back to the main menu', ariaLabel: 'Service settings', groups };

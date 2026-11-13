@@ -35,6 +35,8 @@
   import ScheduledTasks from '../components/shared/ScheduledTasks.svelte';
   import ApplicationDomains from '../components/shared/ApplicationDomains.svelte';
   import Maintenance from '../components/shared/Maintenance.svelte';
+  import ResourceSecurity from '../components/imageScan/ResourceSecurity.svelte';
+  import { securityStatus } from '../lib/imageScanApi';
   import { appUi, dbUi, uiApi, ApiError, type ApplicationRecord, type ApplicationState, type DeploymentDetail } from '../lib/api';
   import { applicationBackupNavContext, applicationNavContext, applicationSection, APPLICATION_SECTIONS } from '../lib/applicationMenu';
   import { setProjectCrumbs } from '../lib/crumbs';
@@ -64,6 +66,8 @@
   let shownDep = $state<string | null>(null);
   let detail = $state<DeploymentDetail | null>(null);
   let switching = $state(false);
+  /** `SecurityStatus::stored($application)->status->value`: the security dot of the menu. */
+  let security = $state<string | null>(null);
 
   const active = $derived(dep ? 'deployment' : applicationSection(section));
   $effect(() => {
@@ -92,8 +96,16 @@
     record = r;
     appState = s;
     setNav(r);
+    loadSecurity();
     // `name-changed`: the breadcrumb shows a saved rename.
     page.nameChanged(app, r.name);
+  }
+
+  function loadSecurity() {
+    securityStatus('application', app).then((status) => {
+      security = status;
+      if (record) setNav(record);
+    });
   }
 
   function setNav(r: ApplicationRecord) {
@@ -106,6 +118,7 @@
       compose: bp === 'dockercompose',
       swarm: appState?.is_swarm ?? false,
       plugins: pluginNav.of('application').length > 0,
+      security,
       // `server-status-badge`.
       serverBadge:
         r.server_status === false
@@ -149,6 +162,7 @@
     const suffix = dep ? 'Deployment' : active === 'deployment' ? 'Deployments' : active === 'backups' ? 'Backups' : 'Configuration';
     document.title = `${limit10(r.name ?? '')} > ${suffix} | coolify-rs`;
     setNav(r);
+    loadSecurity();
     if (backup) {
       // `Route::redirect('/backups/{backup_uuid}/s3')` and `/retention`.
       if (backupSection === 's3' || backupSection === 'retention') return router.go(`${base}/backups/${backup}`, true);
@@ -221,6 +235,8 @@
                   initial={detail}
                   {canUpdate}
                   {timezone}
+                  sourceUrl="{base}/source"
+                  vulnerabilitiesUrl="{base}/vulnerabilities"
                   onfinished={() => refresh().catch(() => {})}
                 />
               {/key}
@@ -243,7 +259,8 @@
               <ApplicationSource uuid={app} onsaved={() => refresh().catch(() => {})} />
             {:else if active === 'domains'}
               <ApplicationDomains uuid={app} {base} onchange={() => refresh().catch(() => {})} />
-              <div class="mt-4"><Maintenance kind="application" uuid={app} /></div>
+            {:else if active === 'maintenance'}
+              <Maintenance kind="application" uuid={app} />
             {:else if active === 'environment-variables'}
               <EnvironmentVariables kind="application" uuid={app} onconfigurationchanged={() => refresh().catch(() => {})} />
               <SecretManagerLinks kind="application" uuid={app} />
@@ -300,6 +317,8 @@
               <DeploymentHistory uuid={app} {base} {serverName} {timezone} />
             {:else if active === 'danger'}
               <DatabaseDanger kind="application" {record} canDelete={canUpdate} back="/project/{uuid}/environment/{env}" />
+            {:else if active === 'vulnerabilities'}
+              <ResourceSecurity kind="application" uuid={app} onchanged={loadSecurity} />
             {:else if active === 'plugins'}
               <div class="application-settings-form flex min-w-0 flex-col gap-6"><PluginPanels slot="application" resource={app} /></div>
             {/if}

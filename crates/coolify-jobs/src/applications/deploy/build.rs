@@ -17,6 +17,7 @@ use coolify_remote::shell::quote;
 use super::git::{self, DeploymentType, GitImport, ImportInput, ImportSettings};
 use super::{B64, Cmd, Fail, Run, SEPARATOR, Step, in_docker, now};
 use crate::applications::domains;
+use crate::applications::git_ssh;
 use crate::databases::env::{self, Owner, Var};
 
 pub(super) const BUILD_TIME_ENV_PATH: &str = concat!("/artifacts/build-time.", "env");
@@ -256,6 +257,7 @@ impl Run {
         self.use_build_server = original_use_build_server;
         Box::pin(self.should_skip_build()).await?;
         self.complete_deployment().await;
+        self.image_scan_link_reused_scans().await;
         Ok(())
     }
 
@@ -296,6 +298,7 @@ impl Run {
         self.generate_build_env_variables().await?;
         self.add_build_env_variables_to_dockerfile().await?;
         self.build_image().await?;
+        self.image_scan_remember_dockerfile_base_image().await;
         self.save_runtime_environment().await?;
         self.push_to_docker_registry().await?;
         self.rolling_update().await
@@ -329,6 +332,7 @@ impl Run {
         self.generate_build_env_variables().await?;
         self.add_build_env_variables_to_dockerfile().await?;
         self.build_image().await?;
+        self.image_scan_remember_dockerfile_base_image().await;
         self.save_runtime_environment().await?;
         self.push_to_docker_registry().await?;
         self.rolling_update().await
@@ -863,10 +867,8 @@ impl Run {
         let compose_version = self.app.str("compose_parsing_version");
         if self.build_pack() != "dockercompose" || matches!(compose_version, Some("1" | "2")) {
             if !defined("COOLIFY_BRANCH") {
-                out.put(
-                    "COOLIFY_BRANCH",
-                    (!self.b.branch.is_empty()).then(|| self.b.branch.clone()),
-                );
+                // `$this->application->coolifyBranch($this->pull_request_id)`.
+                out.put("COOLIFY_BRANCH", self.coolify_branch());
             }
             if !defined("COOLIFY_RESOURCE_UUID") {
                 out.put("COOLIFY_RESOURCE_UUID", Some(self.app.uuid.clone()));
@@ -1119,7 +1121,9 @@ impl Run {
                 .save("git_commit_sha", true),
             ],
         };
-        self.exec(commands).await?;
+        let checked = self.exec(commands).await;
+        self.with_git_host_key_hint(checked).await?;
+        self.save_git_ssh_known_hosts().await?;
         let rollback = self.b.rollback;
         let output = self
             .saved
@@ -1151,9 +1155,8 @@ impl Run {
         if self.app.setting_bool("use_build_secrets") && self.commit != "HEAD" {
             self.info("Restarting helper container with actual SOURCE_COMMIT value.")
                 .await;
-            // restart_builder_container_with_actual_commit()
-            let dep = self.dep.clone();
-            self.graceful_shutdown(&dep, true).await;
+            // restart_builder_container_with_actual_commit(): prepare_builder_image() removes the
+            // current helper before it starts the new one.
             self.b.env_args = Ordered::default();
             Box::pin(self.prepare_builder_image_again(false)).await?;
         }
@@ -1162,14 +1165,14 @@ impl Run {
 
     /// `gitLsRemoteCommand($ref, $identityFile)`.
     fn ls_remote_command(&self, reference: &str, identity: Option<&str>) -> String {
-        let ssh = git::git_ssh_command(&self.b.port, identity, true);
+        let ssh = git::git_ssh_command(&self.dep, &self.b.port, identity, true);
         let git = self
             .b
             .git_https_option
             .as_ref()
             .map_or_else(|| "git".to_owned(), |o| format!("git {o}"));
         format!(
-            "GIT_SSH_COMMAND=\"{ssh}\" {git} ls-remote {} {}",
+            "GIT_SSH_COMMAND=\"{ssh}\" {git} ls-remote -- {} {}",
             quote(&self.b.full_repo_url),
             quote(reference)
         )
@@ -1241,8 +1244,8 @@ impl Run {
                 }
             }
         }
-        if let Some(branch) = self.app.str("git_branch") {
-            vars.push_str(&format!("COOLIFY_BRANCH={} ", git::shell_value(branch)));
+        if let Some(branch) = self.coolify_branch() {
+            vars.push_str(&format!("COOLIFY_BRANCH={} ", git::shell_value(&branch)));
         }
         vars.push_str(&format!(
             "COOLIFY_RESOURCE_UUID={} ",
@@ -1273,7 +1276,8 @@ impl Run {
         let mut attempt = 1;
         loop {
             let import = self.git_import().await?;
-            match self.exec(import.commands).await {
+            let imported = self.exec(import.commands).await;
+            match self.with_git_host_key_hint(imported).await {
                 Ok(()) => break,
                 Err(Fail::Error { code: 255, .. }) if attempt < max_attempts => {
                     let delay = (2u64 << (attempt - 1)).min(30);
@@ -1302,6 +1306,7 @@ impl Run {
                 Err(e) => return Err(e),
             }
         }
+        self.save_git_ssh_known_hosts().await?;
         // create_workdir()
         if self.use_build_server {
             let cfg = format!("mkdir -p {}", self.cfg);
@@ -1334,6 +1339,94 @@ impl Run {
                 &self.commit,
                 &message,
                 now(),
+            )
+            .await;
+        }
+        Ok(())
+    }
+
+    /// `withGitHostKeyHint($runGitCommands)`: logs the host key hint when a git command of
+    /// Coolify fails because of the SSH host key. The hint is logged here and not in `failed()`,
+    /// because a git command in the build (for example a Dockerfile RUN step) can fail the same way.
+    async fn with_git_host_key_hint(&mut self, result: Step) -> Step {
+        if let Err(Fail::Error { message, .. }) = &result
+            && message.contains("Host key verification failed")
+        {
+            self.log(git_ssh::GIT_HOST_KEY_CHANGED_HINT, "stderr", false)
+                .await;
+        }
+        result
+    }
+
+    /// `save_git_ssh_known_hosts()`: saves the host keys that SSH accepted on first use, so later
+    /// deployments reject a changed key.
+    async fn save_git_ssh_known_hosts(&mut self) -> Step {
+        self.saved.remove("git_ssh_known_hosts");
+        let cat = in_docker(
+            &self.dep,
+            &format!("cat {}", git_ssh::git_known_hosts_file(&self.dep)),
+        );
+        self.exec(vec![
+            Cmd::new(cat)
+                .hidden()
+                .ignore_errors()
+                .save("git_ssh_known_hosts", true),
+        ])
+        .await?;
+        let file = self
+            .saved
+            .get("git_ssh_known_hosts")
+            .cloned()
+            .unwrap_or_default();
+        // The file also has the built-in keys (gitProviderHostKeys()); they are not saved for the application.
+        let new_lines = git_ssh::new_known_hosts_lines(
+            &file,
+            self.app.str("git_ssh_known_hosts"),
+            &git_ssh::git_provider_host_keys(),
+        );
+        if new_lines.is_empty() {
+            return Ok(());
+        }
+        // Two first deployments can accept different keys at the same time; keep the key that was saved first.
+        let mut merge = git_ssh::KnownHostsMerge::default();
+        let stored = coolify_db::deployment_queue::merge_git_ssh_known_hosts(
+            &self.jobs.0.db,
+            self.app.id,
+            now(),
+            |current| {
+                merge = git_ssh::merge_known_hosts(current, &new_lines);
+                (!merge.added.is_empty()).then(|| merge.merged.clone())
+            },
+        )
+        .await
+        .map_err(|e| Fail::new(e.to_string()))?;
+        self.app.raw.insert(
+            "git_ssh_known_hosts".into(),
+            stored.map_or(Value::Null, Value::String),
+        );
+        for line in &merge.added {
+            let mut parts = line.split(' ');
+            let (host, key_type) = (
+                parts.next().unwrap_or_default(),
+                parts.next().unwrap_or_default(),
+            );
+            self.info(&format!(
+                "Saved the SSH host key of {host} ({key_type}). Later deployments accept only this key. You can see or remove it under Source."
+            ))
+            .await;
+        }
+        for line in &merge.conflicting {
+            let mut parts = line.split(' ');
+            let (host, key_type) = (
+                parts.next().unwrap_or_default(),
+                parts.next().unwrap_or_default(),
+            );
+            self.log(
+                &format!(
+                    "Coolify did not save the SSH host key of {host} ({key_type}). Another deployment saved a different key of this type at the same time. Later deployments accept only the saved key."
+                ),
+                "stderr",
+                false,
             )
             .await;
         }
@@ -1428,6 +1521,7 @@ impl Run {
             .get("local_image_found")
             .is_some_and(|v| !v.trim().is_empty());
         if found && self.is_additional {
+            self.b.skip_build = true;
             let img = self.b.production_image.clone();
             self.info(&format!(
                 "Image found ({img}) with the same Git Commit SHA. Build step skipped."
@@ -1467,6 +1561,7 @@ impl Run {
                 .await
                 .map_err(Fail::new)?;
             if !diff.requires_build() {
+                self.b.skip_build = true;
                 let img = self.b.production_image.clone();
                 self.info(&format!(
                     "No build configuration changed & image found ({img}) with the same Git Commit SHA. Build step skipped."
@@ -1969,6 +2064,11 @@ impl Run {
 
     /// `wrap_build_command_with_env_export($cmd)`.
     fn wrap(&self, cmd: &str) -> String {
+        // A build-time DOCKER_CONFIG must not move the Docker CLI away from its plugins (buildx, compose).
+        let cmd = &format!(
+            "export DOCKER_CONFIG={} && {cmd}",
+            super::HELPER_DOCKER_CONFIG
+        );
         if !self.b.launcher {
             format!(
                 "cd {} && set -a && source {BUILD_TIME_ENV_PATH} && set +a && {cmd}",
@@ -2616,6 +2716,7 @@ impl Run {
             == Some(false);
         let u = git::parse_healthcheck(
             &content,
+            self.app.str("dockerfile_target_build"),
             disabled,
             self.app.bool("custom_healthcheck_found"),
         );

@@ -10,6 +10,9 @@
   import { appUi, ApiError, type DeploymentDetail, type DeploymentLine } from '../lib/api';
   import { logTime } from '../lib/format';
   import { notify } from '../lib/toast.svelte';
+  import Callout from './Callout.svelte';
+  import { link } from '../lib/router.svelte';
+  import GateStatus from './imageScan/GateStatus.svelte';
 
   let {
     uuid,
@@ -17,6 +20,8 @@
     initial,
     canUpdate,
     timezone,
+    sourceUrl,
+    vulnerabilitiesUrl,
     onfinished,
   }: {
     uuid: string;
@@ -24,6 +29,10 @@
     initial: DeploymentDetail;
     canUpdate: boolean;
     timezone: string;
+    /** The Source page of the application (`route('project.application.source')`). */
+    sourceUrl?: string;
+    /** The Security page of the application (`route('project.application.vulnerabilities')`). */
+    vulnerabilitiesUrl?: string;
     onfinished?: () => void;
   } = $props();
 
@@ -43,9 +52,13 @@
 
   const keepAlive = $derived(detail.is_keep_alive);
   const status = $derived(detail.status);
-  const statusLabel = $derived(status === 'in_progress' ? 'In progress' : headline(status));
+  const imageScanGate = $derived(detail.image_scan_gate ?? null);
+  // A deployment the image scan gate blocked shows as "Blocked".
+  const statusLabel = $derived(imageScanGate?.blocked ? 'Blocked' : status === 'in_progress' ? 'In progress' : headline(status));
   const statusDot = $derived(
-    status === 'finished'
+    imageScanGate?.blocked
+      ? 'bg-red-500'
+      : status === 'finished'
       ? 'bg-emerald-500'
       : status === 'failed'
         ? 'bg-red-500'
@@ -54,6 +67,18 @@
           : 'bg-neutral-400 dark:bg-neutral-500',
   );
   const findShortcutLabel = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘F' : 'Ctrl+F';
+
+  /** `deployAnyway()`: queue the blocked deployment again with the gate bypassed, then open it. */
+  async function deployAnyway() {
+    try {
+      const r = await appUi.deployAnyway(uuid, dep);
+      notify.success(r.message);
+      // `redirectRoute(..., 'project.application.deployment.show')`: the page of the new deployment.
+      window.location.assign(window.location.pathname.replace(/[^/]+$/, encodeURIComponent(r.deployment_uuid)));
+    } catch (e) {
+      notify.failure(e instanceof ApiError ? e.message : String(e));
+    }
+  }
 
   function headline(s: string): string {
     return s
@@ -263,6 +288,12 @@
     : '2xl:sticky 2xl:top-4'}"
 >
   <div id="screen" class={fullscreen ? 'fullscreen flex flex-col' : 'mt-2 flex flex-1 min-h-0 flex-col overflow-hidden lg:mt-0'}>
+    {#if detail.host_key_changed && sourceUrl}
+      <Callout type="danger" title="The SSH host key of the Git host changed" class="mb-2 shrink-0">
+        The Git host sent an SSH host key that is not the saved or published key. This can be an attack. Ask the administrator of the Git host if the key changed. Then fetch the current key, compare its fingerprint with the fingerprint from the administrator, and accept it only if they are the same.
+        <a href="{sourceUrl}#ssh-host-keys" use:link class="font-medium underline underline-offset-2">Open SSH host keys</a>
+      </Callout>
+    {/if}
     <div
       class="logs-viewer flex min-h-0 w-full flex-col overflow-hidden bg-white text-neutral-800 dark:bg-log dark:text-neutral-100 {fullscreen
         ? 'h-full'
@@ -305,14 +336,27 @@
                 </button>
               {/if}
             </div>
-            <span class="flex shrink-0 items-center gap-1.5 text-xs font-medium text-neutral-600 dark:text-fg-dim">
-              {#if status === 'in_progress'}
-                <Loading compact />
-              {:else}
-                <span class="size-2 shrink-0 rounded-full {statusDot}"></span>
-              {/if}
-              {statusLabel}
-            </span>
+            {#if !imageScanGate?.blocked}
+              <span class="flex shrink-0 items-center gap-1.5 text-xs font-medium text-neutral-600 dark:text-fg-dim">
+                {#if status === 'in_progress'}
+                  <Loading compact />
+                {:else}
+                  <span class="size-2 shrink-0 rounded-full {statusDot}"></span>
+                {/if}
+                {statusLabel}
+              </span>
+            {/if}
+            {#if imageScanGate}
+              <GateStatus
+                class="shrink-0"
+                result={imageScanGate.result}
+                vulnerabilitiesUrl={vulnerabilitiesUrl ?? null}
+                showDeployAnyway
+                canDeployAnyway={imageScanGate.can_deploy_anyway}
+                action={imageScanGate.action}
+                ondeployanyway={deployAnyway}
+              />
+            {/if}
           </div>
           <div class="logs-viewer-end">
             <div class="logs-viewer-deployment-actions {status === 'queued' || status === 'in_progress' ? '' : 'hidden'}">

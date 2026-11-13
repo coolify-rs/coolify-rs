@@ -21,28 +21,45 @@ export function normalizeThemeColor(color: string | null | undefined): string {
   return strictHex(color) ?? '#6b16ed';
 }
 
-/** `window.hexToOklch()` */
-export function hexToOklch(hex: string | null | undefined): string {
+function hexToOklab(hex: string | null | undefined): [number, number, number] {
   const [r, g, b] = channels(normalizeThemeColor(hex)).map((channel) => srgbToLinear(channel / 255));
   const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
   const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
   const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
-  const okL = 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s;
-  const okA = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s;
-  const okB = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s;
+  return [
+    0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
+  ];
+}
+
+/** OKLab -> sRGB hex. Out-of-gamut channels are clipped. */
+function oklabToHex(okL: number, okA: number, okB: number): string {
+  const l = (okL + 0.3963377774 * okA + 0.2158037573 * okB) ** 3;
+  const m = (okL - 0.1055613458 * okA - 0.0638541728 * okB) ** 3;
+  const s = (okL - 0.0894841775 * okA - 1.291485548 * okB) ** 3;
+  return `#${[
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+  ]
+    .map((c) => {
+      const linear = Math.min(1, Math.max(0, c));
+      const encoded = linear <= 0.0031308 ? 12.92 * linear : 1.055 * linear ** (1 / 2.4) - 0.055;
+      return Math.round(encoded * 255)
+        .toString(16)
+        .padStart(2, '0');
+    })
+    .join('')}`;
+}
+
+/** `window.hexToOklch()` */
+export function hexToOklch(hex: string | null | undefined): string {
+  const [okL, okA, okB] = hexToOklab(hex);
   const chroma = Math.sqrt(okA * okA + okB * okB);
   let hue = (Math.atan2(okB, okA) * 180) / Math.PI;
   if (hue < 0) hue += 360;
   return `oklch(${(okL * 100).toFixed(2)}% ${chroma.toFixed(4)} ${hue.toFixed(2)})`;
-}
-
-/** `window.themeAccentForeground()` */
-export function themeAccentForeground(color: string | null | undefined): string {
-  const luminance = channels(normalizeThemeColor(color))
-    .map((channel) => (channel * 0.85 + 255 * 0.15) / 255)
-    .map(srgbToLinear)
-    .reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
-  return luminance > 0.179 ? 'oklch(0% 0 0)' : 'oklch(100% 0 0)';
 }
 
 function strictHex(color: string | null | undefined): string | null {
@@ -71,6 +88,15 @@ const mixHex = (from: string, to: string, amount: number) =>
     })
     .join('')}`;
 
+/** `window.themeAccentFill()`: the color of accent fills, the accent with 15% white, like --theme-bright-color in app.css. */
+export const themeAccentFill = (color: string | null | undefined) => mixHex(normalizeThemeColor(color), '#ffffff', 0.15);
+
+/** `window.themeAccentForeground()`: black or white, whichever has more contrast on the accent fill (WCAG ratios). */
+export function themeAccentForeground(color: string | null | undefined): string {
+  const luminance = relativeLuminance(themeAccentFill(color));
+  return 1.05 / (luminance + 0.05) > (luminance + 0.05) / 0.05 ? 'oklch(100% 0 0)' : 'oklch(0% 0 0)';
+}
+
 /** `window.isDarkColor()`: true when light text has more contrast on this color than dark text. */
 export function isDarkColor(hex: string): boolean {
   const luminance = relativeLuminance(normalizeThemeColor(hex));
@@ -79,6 +105,30 @@ export function isDarkColor(hex: string): boolean {
 
 /** `window.readableTextOn()` */
 export const readableTextOn = (hex: string) => (isDarkColor(hex) ? '#f4f4f5' : '#18181b');
+
+const contrast = (first: string, second: string) => {
+  const [dark, light] = [relativeLuminance(first), relativeLuminance(second)].sort((a, b) => a - b);
+  return (light + 0.05) / (dark + 0.05);
+};
+
+/**
+ * `window.themeAccentTextOn()`: accent text and icons on a surface. The accent, moved toward white on a dark
+ * surface or toward black on a light one until it reaches 4.5:1 (WCAG AA). It is checked on the surface with 12%
+ * of its text color, the strongest tint that the surface ladder in app.css puts under text (fills, selected rows).
+ */
+export function themeAccentTextOn(accent: string, surface: string): string {
+  const [okL, okA, okB] = hexToOklab(accent);
+  const chromaScale = Math.min(1, 0.16 / (Math.hypot(okA, okB) || 1));
+  const target = isDarkColor(surface) ? 1 : 0;
+  const tintedSurface = mixHex(normalizeThemeColor(surface), readableTextOn(surface), 0.12);
+  let color = '';
+  for (let step = 0; step <= 50; step++) {
+    const fade = chromaScale * (1 - step / 50);
+    color = oklabToHex(okL + ((target - okL) * step) / 50, okA * fade, okB * fade);
+    if (contrast(color, tintedSurface) >= 4.5) break;
+  }
+  return color;
+}
 
 const keys = ['sidebar', 'selected', 'accent', 'background'] as const;
 
@@ -137,6 +187,8 @@ export function applyCustomTheme(theme: CustomTheme): void {
     '--theme-selected-text': readableTextOn(theme.selected),
     '--theme-base-color': hexToOklch(theme.accent),
     '--theme-accent-foreground': themeAccentForeground(theme.accent),
+    '--theme-accent-text': themeAccentTextOn(theme.accent, theme.background),
+    '--theme-sidebar-accent-text': themeAccentTextOn(theme.accent, theme.sidebar),
   }).forEach(([name, value]) => root.style.setProperty(name, value));
   root.dataset.theme = 'custom';
   root.classList.toggle('dark', isDark);

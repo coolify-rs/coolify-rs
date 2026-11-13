@@ -153,9 +153,9 @@ async fn mount(
     Ok(ok(res).into_response())
 }
 
-/// `createNewPrivateKey`: `generateSSHKey()`, whose default type is RSA.
+/// `createNewPrivateKey`: `generateSSHKey()`, whose default type is Ed25519 (v4.7).
 fn generate_pair() -> Value {
-    let key = generate(KeyKind::Rsa).unwrap_or_default();
+    let key = generate(KeyKind::Ed25519).unwrap_or_default();
     let public = inspect(&key).map(|i| i.public_key).unwrap_or_default();
     json!({
         "name": crate::routes::private_keys::random_name(),
@@ -543,11 +543,20 @@ async fn action(
                     "The remote server name field is required.".to_owned(),
                 ));
             }
-            if text(&v, "remoteServerHost").is_none() {
-                e.push((
+            match text(&v, "remoteServerHost") {
+                None => e.push((
                     "remoteServerHost",
                     "The remote server host field is required.".to_owned(),
-                ));
+                )),
+                // `new ValidServerIp`.
+                Some(host) => {
+                    if let Some(message) = crate::routes::servers::valid_server_ip(&json!(host)) {
+                        e.push((
+                            "remoteServerHost",
+                            message.replace(":attribute", "remote server host"),
+                        ));
+                    }
+                }
             }
             match int(&v, "remoteServerPort") {
                 None => e.push((
@@ -577,8 +586,18 @@ async fn action(
             }
             let ip =
                 crate::routes::servers::normalize_ip(text(&v, "remoteServerHost").unwrap_or(""));
-            if servers::ip_in_use(&state.db, &ip, None).await? {
-                return Ok(error("A server with this IP/Domain already exists."));
+            // `Server::sshEndpointInUse()`.
+            if coolify_db::servers::ssh_endpoint_in_use(
+                &state.db,
+                &ip,
+                int(&v, "remoteServerPort").unwrap_or(22),
+                None,
+            )
+            .await?
+            {
+                return Ok(error(
+                    "A server with this IP/Domain and SSH port already exists.",
+                ));
             }
             let key_id = int(&v, "privateKeyId").unwrap_or(-1);
             if private_keys::find_by_id(&state.db, team, key_id)
@@ -613,9 +632,10 @@ async fn action(
                 ],
                 uuid: uuid.clone(),
                 name,
-                description: text(&v, "remoteServerDescription")
-                    .unwrap_or_default()
-                    .to_owned(),
+                description: coolify_domain::naming::strip_tags_nullable(text(
+                    &v,
+                    "remoteServerDescription",
+                )),
                 ip,
                 port: int(&v, "remoteServerPort").unwrap_or(22),
                 user: text(&v, "remoteServerUser").unwrap_or("root").to_owned(),

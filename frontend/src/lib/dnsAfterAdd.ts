@@ -12,18 +12,33 @@ export interface AfterAddDns {
   info?: string[];
 }
 
+/** The record that blocked an automatic create (`DnsRecordConfigurationFinished::$conflict`). */
+export interface BlockingRecord {
+  zone_id: number;
+  record_id: string;
+  current: string;
+  proposed: string;
+}
+
 interface Finished {
   job: string;
   successful: boolean;
   message: string;
   hostname: string;
+  conflict?: BlockingRecord | null;
 }
 
 const POLL_MS = 2000;
 const POLL_ROUNDS = 60;
 
 /** `dnsRecordConfigurationFinished`: the toast of each job, and a reload for its row. */
-export function followDnsJobs(kind: ResourceKind, uuid: string, jobs: string[], reload: () => unknown): void {
+export function followDnsJobs(
+  kind: ResourceKind,
+  uuid: string,
+  jobs: string[],
+  reload: () => unknown,
+  onconflict?: (hostname: string, conflict: BlockingRecord) => unknown,
+): void {
   let open = [...jobs];
   let round = 0;
   const tick = async () => {
@@ -33,7 +48,11 @@ export function followDnsJobs(kind: ResourceKind, uuid: string, jobs: string[], 
       for (const f of r.finished) {
         open = open.filter((j) => j !== f.job);
         if (f.successful) notify.success(f.message);
-        else notify.failure(`DNS record could not be added for ${f.hostname}: ${f.message}`);
+        else {
+          // The conflict opens the provider modal, where the user can replace the record.
+          if (f.conflict) onconflict?.(f.hostname, f.conflict);
+          notify.failure(`DNS record could not be added for ${f.hostname}: ${f.message}`);
+        }
       }
       if (r.finished.length > 0) await reload();
     } catch {

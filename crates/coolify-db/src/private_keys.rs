@@ -158,10 +158,13 @@ pub async fn update(db: &Db, id: i64, u: KeyUpdate, now: NaiveDateTime) -> DbRes
     Ok(())
 }
 
-/// `PrivateKey::isInUse`: servers, applications (both soft-deleting), Git apps.
+/// `PrivateKey::isInUse`: servers, backup storages (the key of an SFTP storage,
+/// `s3_storages.private_key_id`, v4.7.5), applications (servers and applications soft-delete),
+/// Git apps.
 pub async fn in_use(db: &Db, id: i64) -> DbResult<bool> {
     Ok(sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM servers WHERE private_key_id = $1 AND deleted_at IS NULL) \
+             OR EXISTS (SELECT 1 FROM s3_storages WHERE private_key_id = $1) \
              OR EXISTS (SELECT 1 FROM applications WHERE private_key_id = $1 AND deleted_at IS NULL) \
              OR EXISTS (SELECT 1 FROM github_apps WHERE private_key_id = $1) \
              OR EXISTS (SELECT 1 FROM gitlab_apps WHERE private_key_id = $1) \

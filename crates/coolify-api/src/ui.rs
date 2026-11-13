@@ -65,6 +65,22 @@ pub fn routes(state: AppState) -> Router<AppState> {
             axum::routing::delete(crate::ui_applications::source::remove_git_https_credential),
         )
         .route(
+            "/ui/applications/{uuid}/source/host-keys/fetch",
+            post(crate::ui_applications::source_host_keys::fetch),
+        )
+        .route(
+            "/ui/applications/{uuid}/source/host-keys/accept",
+            post(crate::ui_applications::source_host_keys::accept),
+        )
+        .route(
+            "/ui/applications/{uuid}/source/host-keys/decline",
+            post(crate::ui_applications::source_host_keys::decline),
+        )
+        .route(
+            "/ui/applications/{uuid}/source/host-keys/{id}",
+            axum::routing::delete(crate::ui_applications::source_host_keys::remove),
+        )
+        .route(
             "/ui/applications/{uuid}/state",
             get(crate::ui_applications::state),
         )
@@ -124,6 +140,10 @@ pub fn routes(state: AppState) -> Router<AppState> {
             "/ui/applications/{uuid}/deployments/{dep}/force-start",
             post(crate::ui_applications::force_start),
         )
+        .route(
+            "/ui/applications/{uuid}/deployments/{dep}/deploy-anyway",
+            post(crate::ui_applications::image_scan_gate::deploy_anyway),
+        )
         .route("/ui/databases", post(crate::ui_databases::create))
         .route(
             "/ui/databases/{uuid}",
@@ -152,6 +172,10 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/ui/team/members/{id}/role", post(set_member_role))
         .merge(crate::ui_server_destinations::routes())
         .merge(crate::ui_server_general::routes())
+        .merge(crate::ui_server_host_key::routes())
+        .merge(crate::ui_key_rotation::routes())
+        .merge(crate::ui_private_key::routes())
+        .merge(crate::ui_server_delete::routes())
         .merge(crate::ui_server_ops::routes())
         .merge(crate::ui_server_metrics::routes())
         .merge(crate::ui_fleet_metrics::routes())
@@ -164,6 +188,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .merge(crate::ui_server_proxy::routes())
         .merge(crate::ui_server_transfer::routes())
         .merge(crate::ui_sources_routes::routes())
+        .merge(crate::ui_image_scan::routes())
         .route_layer(from_fn_with_state(state, crate::session::ui_guard))
 }
 
@@ -261,12 +286,33 @@ async fn dashboard_data(
             })
         })
         .collect();
+    // `$securityUpdateNow = TeamVulnerabilities::updateNowResources(currentTeam()->id)`: the uuids
+    // of the resources that need a security update now (the dashboard callout), of the ones the
+    // user can see.
+    let security_update_now: Vec<String> = match state.jobs.as_ref() {
+        Some(jobs) => coolify_jobs::image_scan::views::team::update_now_resources(jobs, ctx.team_id)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "the resources that need a security update could not be read");
+                Vec::new()
+            })
+            .into_iter()
+            .filter(|r| {
+                crate::routes::vulnerabilities::can_access(&ctx, r, coolify_domain::grants::AccessLevel::Read)
+            })
+            .map(|r| r.uuid)
+            .collect(),
+        None => Vec::new(),
+    };
+    let starred_resources = crate::ui_stars::starred_resources(&state, &ctx, team_sections).await?;
     Ok(ok(json!({
         "projects": projects,
         "servers": servers,
         "private_keys": private_keys,
         "can_create": ctx.role.is_admin(),
         "shows_team_sections": team_sections,
+        "starred_resources": starred_resources,
+        "security_update_now": security_update_now,
     }))
     .into_response())
 }
@@ -341,8 +387,13 @@ async fn inspect_key(body: axum::body::Bytes) -> ApiResult {
         .get("private_key")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let public = coolify_compat::sshkey::inspect(key).map(|i| i.public_key);
-    Ok(ok(json!({"public_key": public})).into_response())
+    // `Create::validatePrivateKey()`: `PrivateKey::validationError($this->value)`.
+    let error = coolify_compat::sshkey::validation_error(key, true);
+    let public = error
+        .is_none()
+        .then(|| coolify_compat::sshkey::inspect(key).map(|i| i.public_key))
+        .flatten();
+    Ok(ok(json!({"public_key": public, "error": error})).into_response())
 }
 
 /// `Livewire\Team\Index::submit`: name, description and the three team
@@ -540,7 +591,6 @@ async fn set_member_role(
             "team_id": ctx.team_id,
             "member_id": id,
             "member_name": member.0,
-            "member_email": member.1,
             "role": role.as_str(),
         }),
         "info",
@@ -569,7 +619,6 @@ async fn remove_member(
             "team_id": ctx.team_id,
             "member_id": id,
             "member_name": member.0,
-            "member_email": member.1,
         }),
         "info",
     )
@@ -623,6 +672,8 @@ fn server_facts(s: &coolify_db::servers::ServerRow) -> Value {
         ("Validation required", "error")
     };
     let info = coolify_jobs::server::ServerInfo::from_row(s);
+    // `$server->canBeReEnabled()`: the "Server disabled" callout of the general page.
+    let can_be_re_enabled = info.can_be_re_enabled();
     let sentinel_enabled = !info.is_build_server()
         && !info.is_swarm()
         && info.setting_bool("force_disabled") != Some(true)
@@ -649,6 +700,9 @@ fn server_facts(s: &coolify_db::servers::ServerRow) -> Value {
         "functional": functional,
         "transferred": transferred,
         "transfer_target_url": s.record.get("server_metadata").and_then(|m| m.pointer("/transfer/target_instance_url")),
+        "can_be_re_enabled": can_be_re_enabled,
+        // `filled($server->settings->ssh_host_key_pending)`: the callout of the general page.
+        "ssh_host_key_changed": settings.get("ssh_host_key_pending").and_then(Value::as_str).is_some_and(|k| !k.trim().is_empty()),
         "is_coolify_host": s.id == 0,
         "is_localhost": ip == "host.docker.internal" || s.id == 0,
         "is_build": is_build,
@@ -703,9 +757,13 @@ async fn server_form_data(
     Extension(ctx): Extension<AuthCtx>,
 ) -> ApiResult {
     let keys = coolify_db::servers::ssh_keys_for_form(&state.db, ctx.team_id).await?;
+    // `SetsImageScanning::mountSetsImageScanning()`: the team default.
+    let scan_images =
+        coolify_db::image_scans::team_scans_new_servers(&state.db, ctx.team_id).await?;
     Ok(ok(json!({
         "keys": keys.iter().map(|(id, name)| json!({"id": id, "name": name})).collect::<Vec<_>>(),
         "name": crate::routes::private_keys::random_name(),
+        "scan_images": if scan_images { "on" } else { "off" },
     }))
     .into_response())
 }
@@ -750,8 +808,9 @@ const BY_IP_MESSAGES: crate::validation::Messages = &[
     ),
 ];
 
+/// `ValidationPatterns::SERVER_USERNAME_PATTERN` (4.7.5: no hyphen first).
 static SSH_USER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"^[a-zA-Z0-9._-]+\n?\z").unwrap_or_else(|_| unreachable!())
+    regex::Regex::new(r"^[a-zA-Z0-9_.][a-zA-Z0-9._-]*\n?\z").unwrap_or_else(|_| unreachable!())
 });
 
 /// `Livewire\Server\New\ByIp::submit`.
@@ -858,7 +917,7 @@ async fn create_server_form(
         ],
         uuid,
         name,
-        description: coolify_domain::naming::strip_tags(input.str("description")),
+        description: coolify_domain::naming::strip_tags_nullable(input.str("description")),
         ip,
         port: input
             .get("port")
@@ -879,7 +938,12 @@ async fn create_server_form(
         server_role: role,
         always_write_role: false,
     };
-    coolify_db::servers::create(&state.db, &new, state.now()).await?;
+    let server_id = coolify_db::servers::create(&state.db, &new, state.now()).await?;
+    // `SetsImageScanning::applyImageScanning()`: saved quietly on the new server.
+    if input.str("scan_images") == Some("on") {
+        coolify_db::image_scans::set_server_scan_enabled(&state.db, server_id, true, state.now())
+            .await?;
+    }
     Ok(crate::response::created(json!({"uuid": new.uuid})).into_response())
 }
 
@@ -1026,7 +1090,11 @@ async fn delete_server_form(
     let transferred = server_facts(&server)["transferred"]
         .as_bool()
         .unwrap_or(false);
-    let resources = coolify_db::servers::resource_count(&state.db, server.id).await?;
+    // v4.7.5 `$server->primaryResources()`: an application that has this server only as an
+    // additional destination is detached, not deleted, so it does not block the delete.
+    let resources = coolify_db::servers::primary_resource_names(&state.db, server.id)
+        .await?
+        .len();
     let force = actions.contains(&"force_delete_resources");
     if resources > 0 && !force && !transferred {
         return Err(ApiError::Message(
@@ -1047,6 +1115,10 @@ async fn delete_server_form(
         digitalocean: actions.contains(&"delete_from_digitalocean"),
         hostinger: actions.contains(&"delete_from_hostinger"),
     };
+    // v4.7.5: "Remove the public key of this server's SSH key from ~/.ssh/authorized_keys".
+    if actions.contains(&"remove_ssh_key") && !from.any() {
+        crate::ui_server_delete::remove_ssh_key(&state, &ctx, &meta, &server).await?;
+    }
     let audit = json!({
         "team_id": ctx.team_id,
         "server_uuid": server.uuid,

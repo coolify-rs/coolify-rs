@@ -15,6 +15,11 @@ use sha2::{Digest, Sha256};
 
 use crate::Jobs;
 
+mod connection_host;
+pub use connection_host::{
+    ConnectionHost, DEFAULT_PORTS, HostStatus, default_port, preferred_ip, scheme_error,
+};
+
 /// `ValidationPatterns::isValidS3BucketName`.
 pub fn valid_bucket_name(v: &str) -> bool {
     let len = v.chars().count();
@@ -279,6 +284,8 @@ struct ParsedUrl {
     host: String,
     port: u16,
     authority: String,
+    /// The path without a trailing slash; empty for `scheme://host[:port]`.
+    path: String,
 }
 
 /// The parts of `parse_url` the rule reads, after `FILTER_VALIDATE_URL`.
@@ -292,6 +299,12 @@ fn parse_url(url: &str) -> Option<ParsedUrl> {
         return None;
     }
     let authority = rest.split(['/', '?', '#']).next()?;
+    let path = rest[authority.len()..]
+        .split(['?', '#'])
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('/')
+        .to_owned();
     let hostport = authority.rsplit('@').next()?;
     if hostport.is_empty() || hostport.chars().any(char::is_whitespace) {
         return None;
@@ -313,12 +326,13 @@ fn parse_url(url: &str) -> Option<ParsedUrl> {
         return None;
     }
     let scheme = scheme.to_ascii_lowercase();
-    let port = port.unwrap_or(if scheme == "https" { 443 } else { 80 });
+    let port = port.unwrap_or_else(|| default_port(&scheme).unwrap_or(80));
     Some(ParsedUrl {
         scheme,
         authority: hostport.to_owned(),
         host,
         port,
+        path,
     })
 }
 
@@ -351,6 +365,18 @@ pub async fn endpoint_error(
     policy: &UrlPolicy,
     settings_url: &str,
 ) -> Option<String> {
+    endpoint_error_for(url, attribute, policy, settings_url, &["http", "https"]).await
+}
+
+/// `SafeWebhookUrl::validate` of a rule with `schemes` (Coolify v4.7.0): the URL schemes to
+/// accept, for example `sftp` for a backup storage.
+pub async fn endpoint_error_for(
+    url: &str,
+    attribute: &str,
+    policy: &UrlPolicy,
+    settings_url: &str,
+    schemes: &[&str],
+) -> Option<String> {
     let private_message = || {
         format!(
             "The {attribute} points to a local or private address that is not allowed. Configure allowed internal targets: {settings_url}#endpoint-section"
@@ -359,9 +385,10 @@ pub async fn endpoint_error(
     let Some(parsed) = parse_url(url) else {
         return Some(format!("The {attribute} must be a valid URL."));
     };
-    if parsed.scheme != "https" && parsed.scheme != "http" {
+    if !schemes.contains(&parsed.scheme.as_str()) {
         return Some(format!(
-            "The {attribute} must use the http or https scheme."
+            "The {attribute} must use the {} scheme.",
+            schemes.join(" or ")
         ));
     }
     if parsed.host.ends_with('.') {
@@ -410,11 +437,37 @@ pub async fn safe_url_pin(
     url: &str,
     policy: &UrlPolicy,
 ) -> Result<(String, Vec<IpAddr>, u16), String> {
+    safe_url_pin_for(url, policy, &["http", "https"]).await
+}
+
+/// `SafeWebhookUrl::pinnedAddress($url, $schemes, $trustedInternalHosts)`: the address to connect
+/// to for an endpoint that is not HTTP (SFTP, FTPS): the validated IP of its host, IPv4 first, so
+/// a DNS change after the check cannot send the connection to another address. The host itself
+/// when it is an IP address.
+pub async fn pinned_address(
+    url: &str,
+    policy: &UrlPolicy,
+    schemes: &[&str],
+) -> Result<String, String> {
+    let (host, ips, _) = safe_url_pin_for(url, policy, schemes).await?;
+    Ok(ips
+        .iter()
+        .find(|ip| ip.is_ipv4())
+        .or(ips.first())
+        .map_or(host, IpAddr::to_string))
+}
+
+/// `SafeWebhookUrl::resolveUrlForRequest()` with the URL schemes to accept.
+pub async fn safe_url_pin_for(
+    url: &str,
+    policy: &UrlPolicy,
+    schemes: &[&str],
+) -> Result<(String, Vec<IpAddr>, u16), String> {
     let parsed = parse_url(url).ok_or("Webhook URL is invalid.")?;
     if parsed.host.ends_with('.') {
         return Err("Webhook URL host must not end with a trailing dot.".to_owned());
     }
-    if parsed.scheme != "http" && parsed.scheme != "https" {
+    if !schemes.contains(&parsed.scheme.as_str()) {
         return Err("Webhook URL scheme is unsafe.".to_owned());
     }
     let host = parsed.host.to_lowercase();
@@ -651,6 +704,9 @@ pub struct S3Target {
     pub secret: String,
     /// `usesPathStyleEndpoint()`: `endpoint/bucket` URLs, else `bucket.endpoint`.
     pub path_style: bool,
+    /// `skip_tls_verification` (v4.7.0): no check of the TLS certificate of the endpoint, for a
+    /// storage with a self-signed or private CA certificate.
+    pub skip_tls_verification: bool,
 }
 
 impl std::fmt::Debug for S3Target {
@@ -676,7 +732,30 @@ impl S3Target {
             key: secret("key")?,
             secret: secret("secret")?,
             path_style: uses_path_style_endpoint(row),
+            skip_tls_verification: parts::bool_of(row, "skip_tls_verification"),
         })
+    }
+
+    /// [`S3Target::locate`] below the path of the endpoint (`https://host/storage/v1/s3`).
+    fn locate_url(&self, parsed: &ParsedUrl, encoded_key: &str) -> (String, String) {
+        let (authority, path) = self.locate(&parsed.authority, encoded_key);
+        (authority, format!("{}{path}", parsed.path))
+    }
+
+    /// `S3Storage::minioClientEnvOptions()`: the `docker run` options of the MinIO client helper.
+    /// `MC_REGION` makes mc sign requests for the storage region, as `filesystem()` does. Without
+    /// it, mc signs for us-east-1, and providers that enforce the region reject the requests.
+    /// `MC_INSECURE` turns off the TLS certificate check, as `httpClientOptions()` does.
+    pub fn minio_client_env_options(&self) -> String {
+        format!(
+            "-e {}{}",
+            coolify_remote::shell::quote(&format!("MC_REGION={}", self.region)),
+            if self.skip_tls_verification {
+                " -e MC_INSECURE=true"
+            } else {
+                ""
+            }
+        )
     }
 
     /// The host and the path of an object (`key`, already encoded; empty for the bucket): the
@@ -702,6 +781,8 @@ impl S3Target {
             .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(15))
             .redirect(reqwest::redirect::Policy::none())
+            // `httpClientOptions()`: `'verify' => ! $this->skip_tls_verification`.
+            .danger_accept_invalid_certs(self.skip_tls_verification)
             .build()
             .map_err(|e| e.to_string())
     }
@@ -719,7 +800,7 @@ impl S3Target {
         } else {
             key.split('/').map(uri_encode).collect::<Vec<_>>().join("/")
         };
-        let (authority, path) = self.locate(&parsed.authority, &encoded_key);
+        let (authority, path) = self.locate_url(&parsed, &encoded_key);
         let mut pairs: Vec<(String, String)> = query
             .iter()
             .map(|(k, v)| (uri_encode(k), uri_encode(v)))
@@ -793,7 +874,7 @@ impl S3Target {
     pub fn presigned_get(&self, key: &str, expires_seconds: u64) -> Result<String, String> {
         let parsed = parse_url(&self.endpoint).ok_or("S3 endpoint is invalid.")?;
         let encoded_key = key.split('/').map(uri_encode).collect::<Vec<_>>().join("/");
-        let (authority, path) = self.locate(&parsed.authority, &encoded_key);
+        let (authority, path) = self.locate_url(&parsed, &encoded_key);
         let now = Utc::now();
         let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
         let date = now.format("%Y%m%d").to_string();
@@ -803,6 +884,36 @@ impl S3Target {
             uri_encode(&format!("{}/{scope}", self.key))
         );
         let canonical = format!("GET\n{path}\n{query}\nhost:{authority}\n\nhost\nUNSIGNED-PAYLOAD");
+        let to_sign = format!(
+            "AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}",
+            hex(&Sha256::digest(canonical.as_bytes()))
+        );
+        let k_date = hmac(format!("AWS4{}", self.secret).as_bytes(), date.as_bytes());
+        let k_region = hmac(&k_date, self.region.as_bytes());
+        let k_service = hmac(&k_region, b"s3");
+        let k_signing = hmac(&k_service, b"aws4_request");
+        let signature = hex(&hmac(&k_signing, to_sign.as_bytes()));
+        Ok(format!(
+            "{}://{authority}{path}?{query}&X-Amz-Signature={signature}",
+            parsed.scheme
+        ))
+    }
+
+    /// `$disk->temporaryUploadUrl($key, $expiration)['url']`: a presigned PUT that signs only the
+    /// host, for the curl transfer of an endpoint with a path (`prepareCurlUpload()`).
+    pub fn presigned_upload(&self, key: &str, expires_seconds: u64) -> Result<String, String> {
+        let parsed = parse_url(&self.endpoint).ok_or("S3 endpoint is invalid.")?;
+        let encoded_key = key.split('/').map(uri_encode).collect::<Vec<_>>().join("/");
+        let (authority, path) = self.locate_url(&parsed, &encoded_key);
+        let now = Utc::now();
+        let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+        let date = now.format("%Y%m%d").to_string();
+        let scope = format!("{date}/{}/s3/aws4_request", self.region);
+        let query = format!(
+            "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential={}&X-Amz-Date={amz_date}&X-Amz-Expires={expires_seconds}&X-Amz-SignedHeaders=host",
+            uri_encode(&format!("{}/{scope}", self.key))
+        );
+        let canonical = format!("PUT\n{path}\n{query}\nhost:{authority}\n\nhost\nUNSIGNED-PAYLOAD");
         let to_sign = format!(
             "AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}",
             hex(&Sha256::digest(canonical.as_bytes()))
@@ -828,7 +939,7 @@ impl S3Target {
     ) -> Result<String, String> {
         let parsed = parse_url(&self.endpoint).ok_or("S3 endpoint is invalid.")?;
         let encoded_key = key.split('/').map(uri_encode).collect::<Vec<_>>().join("/");
-        let (authority, path) = self.locate(&parsed.authority, &encoded_key);
+        let (authority, path) = self.locate_url(&parsed, &encoded_key);
         let now = Utc::now();
         let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
         let date = now.format("%Y%m%d").to_string();
@@ -877,7 +988,7 @@ impl S3Target {
             };
             let url = match parse_url(&self.endpoint) {
                 Some(p) if !self.path_style => {
-                    format!("{}://{}.{}/", p.scheme, self.bucket, p.authority)
+                    format!("{}://{}.{}{}/", p.scheme, self.bucket, p.authority, p.path)
                 }
                 _ => format!("{}/{}/", self.endpoint.trim_end_matches('/'), self.bucket),
             };
@@ -900,6 +1011,9 @@ impl S3Target {
     }
 
     /// `$disk->delete($filenames)`: the object keys have no leading slash.
+    /// A storage that is not S3 never gets here: `deleteBackupsFromS3()` hands it to
+    /// `deleteBackupsFromFileStorage()` ([`Jobs::delete_backups_from_storage`]). The request client
+    /// skips the TLS check with `skip_tls_verification` (`'http' => ['verify' => ...]`).
     pub async fn delete_objects(&self, filenames: &[String]) -> Result<(), String> {
         for f in filenames {
             let (status, _, _) = self
@@ -966,38 +1080,165 @@ fn friendly(message: String) -> String {
 impl Jobs {
     /// `S3Storage::testConnection(shouldSave: true)`: stores `is_usable`, and the URL style when
     /// the provider rejected path-style URLs. Returns the URL style to use (`usesPathStyleEndpoint`).
+    /// A background test: an SFTP storage without a saved host key is refused.
     pub async fn test_s3_connection(&self, row: &Record) -> Result<bool, String> {
+        self.test_storage_connection(row, false).await
+    }
+
+    /// `S3Storage::testConnection(shouldSave: true, acceptNewHostKey: $acceptNewHostKey)` for every
+    /// storage type. With `accept_new_host_key` (an admin validates the storage), an SFTP storage
+    /// without a saved host key saves the presented key.
+    pub async fn test_storage_connection(
+        &self,
+        row: &Record,
+        accept_new_host_key: bool,
+    ) -> Result<bool, String> {
         let id = parts::id_of(row);
-        let (result, path_style) = self.check_s3_connection_style(row).await;
-        let _ = parts::s3_set_usable(&self.0.db, id, result.is_ok(), Jobs::now()).await;
-        if path_style != uses_path_style_endpoint(row) {
+        let mut check = self
+            .check_storage_connection(row, accept_new_host_key)
+            .await;
+        if check.result.is_ok()
+            && let Some(host_key) = &check.new_sftp_host_key
+            && let Err(e) = self.pin_sftp_host_key(row, host_key).await
+        {
+            check.result = Err(e);
+        }
+        let _ = parts::s3_set_usable(&self.0.db, id, check.result.is_ok(), Jobs::now()).await;
+        if check.path_style != uses_path_style_endpoint(row) {
             let _ = parts::update_row(
                 &self.0.db,
                 "s3_storages",
                 id,
                 &[(
                     "use_path_style_endpoint",
-                    coolify_db::servers::ColumnValue::Bool(path_style),
+                    coolify_db::servers::ColumnValue::Bool(check.path_style),
                 )],
                 Jobs::now(),
             )
             .await;
         }
-        result.map(|()| path_style)
+        check.result.map(|()| check.path_style)
     }
 
     /// `S3Storage::testConnection()` on a model that is not saved.
     pub async fn check_s3_connection(&self, row: &Record) -> Result<(), String> {
-        self.check_s3_connection_style(row).await.0
+        self.check_storage_connection(row, false).await.result
     }
 
     /// `S3Storage::testConnection()`, with the URL style the storage has afterwards: a storage
     /// that uses path-style URLs and is rejected for that is tried again with virtual-hosted-style
     /// URLs, which it keeps when they work (`listFilesWithAddressingStyleFallback`).
     pub async fn check_s3_connection_style(&self, row: &Record) -> (Result<(), String>, bool) {
+        let check = self.check_storage_connection(row, false).await;
+        (check.result, check.path_style)
+    }
+
+    /// `S3Storage::testConnection(acceptNewHostKey: $acceptNewHostKey)` without saving, for every
+    /// storage type: the result, the URL style of an S3 storage afterwards, and the host key that
+    /// an SFTP server without a saved key presented.
+    pub async fn check_storage_connection(
+        &self,
+        row: &Record,
+        accept_new_host_key: bool,
+    ) -> super::file_storage::ConnectionCheck {
         let mut path_style = uses_path_style_endpoint(row);
+        if !super::storage_type::is_s3(row) {
+            let (result, new_sftp_host_key) = self
+                .check_file_storage_connection(row, accept_new_host_key)
+                .await;
+            return super::file_storage::ConnectionCheck {
+                result,
+                path_style,
+                new_sftp_host_key,
+            };
+        }
         let result = self.check_s3_connection_with(row, &mut path_style).await;
-        (result, path_style)
+        super::file_storage::ConnectionCheck {
+            result,
+            path_style,
+            new_sftp_host_key: None,
+        }
+    }
+
+    /// `S3Storage::prepareCurlUpload()`: prepares the upload of `local_path` in `container` to
+    /// `key` and returns the command that runs it.
+    pub(crate) async fn prepare_curl_upload(
+        &self,
+        target: &coolify_remote::Target,
+        s3: &S3Target,
+        container: &str,
+        local_path: &str,
+        key: &str,
+    ) -> Result<String, coolify_remote::RemoteError> {
+        use super::storage_type as st;
+        let url = s3
+            .presigned_upload(key, st::CURL_TRANSFER_URL_TTL_SECONDS)
+            .map_err(|message| coolify_remote::RemoteError {
+                message,
+                code: None,
+            })?;
+        self.prepare_curl_transfer(
+            target,
+            s3,
+            container,
+            &url,
+            &st::curl_upload_options(local_path),
+        )
+        .await
+    }
+
+    /// `S3Storage::prepareCurlDownload()`: prepares the download of `key` to `local_path` in
+    /// `container` and returns the command that runs it.
+    pub(crate) async fn prepare_curl_download(
+        &self,
+        target: &coolify_remote::Target,
+        s3: &S3Target,
+        container: &str,
+        key: &str,
+        local_path: &str,
+    ) -> Result<String, coolify_remote::RemoteError> {
+        use super::storage_type as st;
+        let url = s3
+            .presigned_get(key, st::CURL_TRANSFER_URL_TTL_SECONDS)
+            .map_err(|message| coolify_remote::RemoteError {
+                message,
+                code: None,
+            })?;
+        self.prepare_curl_transfer(
+            target,
+            s3,
+            container,
+            &url,
+            &st::curl_download_options(local_path),
+        )
+        .await
+    }
+
+    /// `S3Storage::prepareCurlTransfer()`: writes the curl config of a transfer into `container`.
+    /// The config holds the presigned URL, so the URL is not in the arguments of any process, and
+    /// the S3 keys never reach the server. The `resolve` line pins the endpoint host to its
+    /// validated IPs, as `minioClientResolveOptions()` does for mc.
+    async fn prepare_curl_transfer(
+        &self,
+        target: &coolify_remote::Target,
+        s3: &S3Target,
+        container: &str,
+        url: &str,
+        options: &[String],
+    ) -> Result<String, coolify_remote::RemoteError> {
+        use super::storage_type as st;
+        let entries = minio_resolve_options(&s3.endpoint).await;
+        let config = st::curl_transfer_config(url, options, &entries, s3.skip_tls_verification);
+        let write =
+            st::write_in_container_command(container, st::CURL_TRANSFER_CONFIG_PATH, &config);
+        self.remote()
+            .run(
+                target,
+                &[write.as_str()],
+                coolify_remote::RunOptions::op("s3.curl"),
+            )
+            .await?;
+        Ok(st::curl_transfer_command(container))
     }
 
     async fn check_s3_connection_with(
@@ -1183,6 +1424,7 @@ mod tests {
             key: "k".into(),
             secret: "s".into(),
             path_style: true,
+            skip_tls_verification: false,
         };
         let authority = "oss-cn-hangzhou.aliyuncs.com";
         assert_eq!(
@@ -1212,6 +1454,111 @@ mod tests {
         assert!(
             url.starts_with("https://backups.oss-cn-hangzhou.aliyuncs.com/a/b.gz?X-Amz-Algorithm="),
             "{url}"
+        );
+    }
+
+    fn supabase() -> S3Target {
+        S3Target {
+            endpoint: "https://project.supabase.co/storage/v1/s3/".into(),
+            bucket: "backups".into(),
+            region: "eu-central-1".into(),
+            key: "k".into(),
+            secret: "s".into(),
+            path_style: true,
+            skip_tls_verification: false,
+        }
+    }
+
+    #[test]
+    fn endpoints_with_a_path_keep_it_in_every_url() {
+        let u = parse_url("https://project.supabase.co/storage/v1/s3/").unwrap();
+        assert_eq!(u.path, "/storage/v1/s3");
+        assert_eq!(parse_url("https://s3.example.com").unwrap().path, "");
+        assert_eq!(parse_url("https://s3.example.com/?x=1").unwrap().path, "");
+        let t = supabase();
+        assert_eq!(
+            t.locate_url(&u, "data/a.dmp"),
+            (
+                "project.supabase.co".to_owned(),
+                "/storage/v1/s3/backups/data/a.dmp".to_owned()
+            )
+        );
+        let upload = t.presigned_upload("data/a b.dmp", 86400).unwrap();
+        assert!(
+            upload.starts_with(
+                "https://project.supabase.co/storage/v1/s3/backups/data/a%20b.dmp?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=k%2F"
+            ),
+            "{upload}"
+        );
+        assert!(upload.contains("&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature="));
+        let download = t.presigned_get("data/a.dmp", 60).unwrap();
+        assert!(
+            download.starts_with("https://project.supabase.co/storage/v1/s3/backups/data/a.dmp?"),
+            "{download}"
+        );
+    }
+
+    #[test]
+    fn the_minio_client_gets_the_region_and_the_tls_setting() {
+        let mut t = supabase();
+        assert_eq!(t.minio_client_env_options(), "-e 'MC_REGION=eu-central-1'");
+        t.skip_tls_verification = true;
+        assert_eq!(
+            t.minio_client_env_options(),
+            "-e 'MC_REGION=eu-central-1' -e MC_INSECURE=true"
+        );
+        let mut row = Record::new();
+        for k in ["endpoint", "bucket", "region"] {
+            row.insert(k.into(), "x".into());
+        }
+        row.insert("skip_tls_verification".into(), serde_json::json!(true));
+        assert!(parts::bool_of(&row, "skip_tls_verification"));
+    }
+
+    #[tokio::test]
+    async fn other_schemes_have_their_own_default_ports() {
+        assert_eq!(parse_url("sftp://backup.example.com/srv").unwrap().port, 22);
+        assert_eq!(parse_url("ftps://backup.example.com").unwrap().port, 21);
+        assert_eq!(parse_url("http://backup.example.com").unwrap().port, 80);
+        let policy = UrlPolicy::default();
+        // An IP host is its own pinned address.
+        assert_eq!(
+            pinned_address("sftp://8.8.8.8:2222/srv", &policy, &["sftp"]).await,
+            Ok("8.8.8.8".to_owned())
+        );
+        assert_eq!(
+            pinned_address("https://8.8.8.8", &policy, &["sftp"]).await,
+            Err("Webhook URL scheme is unsafe.".to_owned())
+        );
+        assert_eq!(
+            pinned_address("sftp://10.0.0.5", &policy, &["sftp"]).await,
+            Err("Webhook URL resolved to an unsafe IP address.".to_owned())
+        );
+        assert_eq!(
+            endpoint_error_for(
+                "https://8.8.8.8",
+                "endpoint",
+                &policy,
+                "http://c",
+                &["sftp"]
+            )
+            .await,
+            Some("The endpoint must use the sftp scheme.".to_owned())
+        );
+        assert_eq!(
+            endpoint_error("ftp://8.8.8.8", "endpoint", &policy, "http://c").await,
+            Some("The endpoint must use the http or https scheme.".to_owned())
+        );
+        assert_eq!(
+            endpoint_error_for(
+                "sftp://8.8.8.8:22/srv",
+                "endpoint",
+                &policy,
+                "http://c",
+                &["sftp"]
+            )
+            .await,
+            None
         );
     }
 

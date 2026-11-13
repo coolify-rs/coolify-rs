@@ -803,7 +803,8 @@ impl Jobs {
                     .ok()
                     .flatten();
                 let Some(storage) = storage.filter(|r: &Record| {
-                    valid_bucket_name(parts::str_of(r, "bucket").unwrap_or_default())
+                    !super::storage_type::is_s3(r)
+                        || valid_bucket_name(parts::str_of(r, "bucket").unwrap_or_default())
                 }) else {
                     return fail("S3 storage was not found or has an invalid bucket.");
                 };
@@ -828,17 +829,42 @@ impl Jobs {
                     message: e,
                     status: 500,
                 })?;
-                match s3.object_size(&key).await {
+                // `$storage->filesystem()`: `exists($key)` and `size($key)` for every storage type.
+                match self.storage_file_size(&storage, &key).await {
                     Ok(Some(size)) if size <= MAX_BYTES => {}
                     _ => return fail("The S3 backup was not found or exceeds the 10 GiB limit."),
                 }
                 let helper = format!("s3-restore-{operation}");
-                let resolve = self.start_s3_helper(&s3, &t, &helper, &network).await?;
-                let source_arg = quote(&format!("s3temp/{}/{key}", s3.bucket));
-                commands.push(format!(
-                    "docker exec {} mc cp{resolve} {source_arg} /tmp/restore",
-                    quote(&helper)
-                ));
+                let download = if super::storage_type::is_s3(&storage) {
+                    self.start_s3_helper(&s3, &t, &helper, &network, &key)
+                        .await?
+                } else {
+                    // The rclone image has the BusyBox tools that `stream_from_helper` needs.
+                    let started = match self.rclone_transfer(&storage, &helper).await {
+                        Ok(transfer) => self
+                            .rclone_start(&t, &transfer, &[], Some(network.as_str()), None)
+                            .await
+                            .map_err(|e| e.message)
+                            .and_then(|()| transfer.download_command(&key, "/tmp/restore")),
+                        Err(e) => Err(e),
+                    };
+                    match started {
+                        Ok(command) => command,
+                        Err(_) => {
+                            let remove =
+                                format!("docker rm -f {} >/dev/null 2>&1 || true", quote(&helper));
+                            self.remote()
+                                .run_quiet(
+                                    &t,
+                                    &[remove.as_str()],
+                                    RunOptions::op("database.import"),
+                                )
+                                .await;
+                            return fail("Unable to start the restore helper.");
+                        }
+                    }
+                };
+                commands.push(download);
                 commands.extend(stream_from_helper(&helper, &container, &container_path));
                 commands.push(format!(
                     "docker rm -f {} 2>/dev/null || true",
@@ -1053,18 +1079,19 @@ impl Jobs {
         Ok(out)
     }
 
-    /// `startS3Helper()`: starts the S3 restore helper and sets its `s3temp` mc alias. The S3
-    /// keys reach mc on its stdin, so they are not in the arguments of any process or in the
-    /// helper's environment. Upstream pipes them into a separate ssh process; here they travel
-    /// inside the script (like every command input of coolify-rs) through the shell's builtin
-    /// `echo`. The helper is removed when either step fails. Returns the mc `--resolve` option that
-    /// pins the endpoint host.
+    /// `startS3Helper()`: starts the S3 restore helper and sets its `s3temp` mc alias, or the curl
+    /// config for endpoints with a path. The S3 keys reach mc on its stdin, so they are not in the
+    /// arguments of any process or in the helper's environment. Upstream pipes them into a
+    /// separate ssh process; here they travel inside the script (like every command input of
+    /// coolify-rs) through the shell's builtin `echo`. The helper is removed when either step
+    /// fails. Returns the command that downloads `key` to /tmp/restore in the helper.
     async fn start_s3_helper(
         &self,
         s3: &S3Target,
         t: &Target,
         helper: &str,
         network: &str,
+        key: &str,
     ) -> Result<String, ImportError> {
         use base64::Engine as _;
         let raw_image = helper_image(self);
@@ -1072,10 +1099,10 @@ impl Jobs {
         let start = [
             format!("docker rm -f {} 2>/dev/null || true", quote(helper)),
             format!(
-                "docker run -d --network {} --name {} -e {} {image} sleep 86400",
+                "docker run -d --network {} --name {} {} {image} sleep 86400",
                 quote(network),
                 quote(helper),
-                quote(&format!("MC_REGION={}", s3.region)),
+                s3.minio_client_env_options(),
             ),
         ];
         let refs: Vec<&str> = start.iter().map(String::as_str).collect();
@@ -1086,7 +1113,17 @@ impl Jobs {
             .run(t, &refs, RunOptions::op("database.import"))
             .await
             .is_ok();
-        if started {
+        // `usesCurlTransfer()`: an endpoint with a path downloads with curl and a presigned URL.
+        let mut curl_download = None;
+        if started && super::storage_type::endpoint_has_path(&s3.endpoint) {
+            match self
+                .prepare_curl_download(t, s3, helper, key, "/tmp/restore")
+                .await
+            {
+                Ok(command) => curl_download = Some(command),
+                Err(_) => started = false,
+            }
+        } else if started {
             resolve = super::s3::minio_client_resolve_options(
                 self,
                 t,
@@ -1115,7 +1152,13 @@ impl Jobs {
                 .await;
             return fail("Unable to start the S3 restore helper.");
         }
-        Ok(resolve)
+        Ok(curl_download.unwrap_or_else(|| {
+            format!(
+                "docker exec {} mc cp{resolve} {} /tmp/restore",
+                quote(helper),
+                quote(&format!("s3temp/{}/{key}", s3.bucket))
+            )
+        }))
     }
 }
 

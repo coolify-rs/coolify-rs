@@ -6,6 +6,7 @@
   import Pager from './Pager.svelte';
   import Reicon from './Reicon.svelte';
   import SettingsSection from './SettingsSection.svelte';
+  import SortHeader from './SortHeader.svelte';
   import StatusBadge from './StatusBadge.svelte';
   import { diffForHumans, parseTimestamp } from '../lib/format';
   import { downloadBackup, formatBytes, volumeBackupsUi, type ServiceExecution } from '../lib/volumeBackupsApi';
@@ -20,9 +21,32 @@
   let s3Downloads = $state(false);
   let loaded = $state(false);
   let selected = $state<ServiceExecution | null>(null);
+  // `$sortBy`: a column and a direction, the newest first by default.
+  let sortBy = $state('started_desc');
+  let sorting = $state(false);
+  let copied = $state(false);
+
+  /** `sortExecutions`: sorts on the server and goes back to the first page. */
+  async function sortExecutions(value: string) {
+    sortBy = value;
+    page = 1;
+    sorting = true;
+    try {
+      await load();
+    } finally {
+      sorting = false;
+    }
+  }
+
+  /** `x-copy-button`: copies the backup path. */
+  function copyPath(path: string) {
+    navigator.clipboard?.writeText(path).catch(() => {});
+    copied = true;
+    setTimeout(() => (copied = false), 1000);
+  }
 
   async function load() {
-    const r = await volumeBackupsUi.serviceExecutions(service, page, perPage);
+    const r = await volumeBackupsUi.serviceExecutions(service, page, perPage, sortBy);
     executions = r.executions;
     total = r.total;
     page = r.page;
@@ -64,7 +88,6 @@
   }
   const headline = (s: string) => s.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   const statusType = (s: string): 'success' | 'error' | 'warning' | 'neutral' => (s === 'success' ? 'success' : s === 'failed' ? 'error' : s === 'running' ? 'warning' : 'neutral');
-  const grid = 'grid-cols-[minmax(150px,1.4fr)_100px_100px_110px_190px_90px_4.5rem]';
 </script>
 
 {#if selected}
@@ -78,7 +101,17 @@
         <div><p class="text-xs text-neutral-500 dark:text-fg-dim">Size</p><p class="mt-1 text-sm font-medium">{formatBytes(e.size)}</p></div>
       </div>
       {#if e.filename}
-        <div><p class="text-xs text-neutral-500 dark:text-fg-dim">Backup path</p><code class="mt-1 block overflow-x-auto rounded-md bg-neutral-100 p-3 text-xs dark:bg-black/20">{e.filename}</code></div>
+        <div>
+          <p class="text-xs text-neutral-500 dark:text-fg-dim">Backup path</p>
+          <div class="mt-1 flex items-center gap-2 rounded-md bg-neutral-100 p-3 dark:bg-black/20">
+            <code class="min-w-0 flex-1 overflow-x-auto text-xs">{e.filename}</code>
+            <button type="button" title="Copy backup path" aria-label="Copy backup path" class="icon-button group shrink-0" onclick={() => copyPath(e.filename ?? '')}>
+              <span class="inline-flex transition-transform duration-150 ease-out group-active:scale-75">
+                {#if copied}<Reicon name="check" class="size-3.5 text-success" />{:else}<Reicon name="copy" class="size-3.5" />{/if}
+              </span>
+            </button>
+          </div>
+        </div>
       {/if}
       {#if e.message}
         <div><p class="text-xs text-neutral-500 dark:text-fg-dim">Output</p><pre class="mt-1 max-h-80 overflow-auto rounded-md bg-neutral-100 p-3 font-mono text-xs whitespace-pre-wrap dark:bg-black/20">{e.message}</pre></div>
@@ -93,8 +126,15 @@
       <Empty size="sm" title="No backup executions" description="Execution history appears here after a backup schedule runs." iconName="browser-terminal" />
     {:else}
       <div class="data-table relative w-full overflow-x-auto">
-        <div class="data-table-header grid min-w-[900px] {grid}">
-          <span>Target</span><span>Type</span><span>Schedule</span><span>Status</span><span>Started</span><span>Size</span><span class="text-right">Actions</span>
+        <div class="flex min-w-[64rem] flex-col">
+        <div class="data-table-header service-backup-table-grid">
+          <SortHeader server loading={sorting} label="Target" asc="target_asc" desc="target_desc" current={sortBy} onsort={sortExecutions} />
+          <SortHeader server loading={sorting} label="Type" asc="type_asc" desc="type_desc" current={sortBy} onsort={sortExecutions} />
+          <SortHeader server loading={sorting} label="Schedule" asc="schedule_asc" desc="schedule_desc" current={sortBy} onsort={sortExecutions} />
+          <SortHeader server loading={sorting} label="Status" asc="status_asc" desc="status_desc" current={sortBy} onsort={sortExecutions} />
+          <SortHeader server loading={sorting} label="Started" asc="started_asc" desc="started_desc" first="desc" current={sortBy} onsort={sortExecutions} />
+          <SortHeader server loading={sorting} label="Size" asc="size_asc" desc="size_desc" first="desc" current={sortBy} onsort={sortExecutions} />
+          <span class="text-right">Actions</span>
         </div>
         {#each executions as e (e.id)}
           <div
@@ -102,19 +142,18 @@
             onkeydown={(ev) => ev.key === 'Enter' && (selected = e)}
             role="button"
             tabindex="0"
-            class="data-table-row grid min-w-[900px] cursor-pointer {grid} text-left text-[13px] text-neutral-700 dark:text-fg-dim"
+            class="data-table-row service-backup-table-grid cursor-pointer text-left text-[13px] text-neutral-700 dark:text-fg-dim"
           >
             <span class="flex min-w-0 items-center gap-2 font-medium text-neutral-950 dark:text-fg">
               <span class="truncate" title={e.target}>{e.target}</span>
-              <span tabindex="0" role="note" data-tooltip={e.s3_tooltip} aria-label={e.s3_tooltip} class="shrink-0 text-neutral-500 dark:text-fg-dim">
-                <Reicon name="cloud" class="size-3.5" />
-              </span>
+              {#if e.s3_tooltip}
+                <span tabindex="0" role="note" data-tooltip={e.s3_tooltip} aria-label={e.s3_tooltip} class="shrink-0 rounded-full bg-neutral-100 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-neutral-600 dark:bg-white/[0.06] dark:text-fg-dim">S3</span>
+              {/if}
             </span>
             <span>{e.type}</span><span>{e.schedule}</span>
             <span><StatusBadge label={headline(e.status)} type={statusType(e.status)} /></span>
             <span>
-              <span class="block">{serverDate(e.started_at)}</span>
-              <span class="text-[11px] text-neutral-500 dark:text-fg-faint">{diffForHumans(e.started_at)}</span>
+              <span tabindex="0" role="note" data-tooltip={serverDate(e.started_at)}>{diffForHumans(e.started_at)}</span>
             </span>
             <span>{formatBytes(e.size)}</span>
             <span class="flex justify-end">
@@ -139,6 +178,7 @@
             </span>
           </div>
         {/each}
+        </div>
         {#if total > perPage}
           <Pager {total} bind:page bind:pageSize={perPage} separator="–" sizeSelect={false} />
         {/if}

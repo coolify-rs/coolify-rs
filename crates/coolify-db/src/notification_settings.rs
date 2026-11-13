@@ -35,6 +35,7 @@ macro_rules! events {
             concat!("server_unreachable_", $ch, "_notifications"),
             concat!("server_patch_", $ch, "_notifications"),
             concat!("traefik_outdated_", $ch, "_notifications"),
+            concat!("image_vulnerabilities_", $ch, "_notifications"),
         ]
     };
 }
@@ -74,7 +75,7 @@ const TELEGRAM_THREADS: [&str; 14] = [
     "telegram_notifications_server_patch_thread_id",
 ];
 
-static EMAIL_FILLABLE: [&str; 30] = cat::<14, 16, 30>(
+static EMAIL_FILLABLE: [&str; 33] = cat::<16, 17, 33>(
     [
         "smtp_enabled",
         "smtp_from_address",
@@ -89,6 +90,8 @@ static EMAIL_FILLABLE: [&str; 30] = cat::<14, 16, 30>(
         "smtp_ehlo_domain",
         "resend_enabled",
         "resend_api_key",
+        "resend_from_address",
+        "resend_from_name",
         "use_instance_email_settings",
     ],
     [
@@ -108,20 +111,21 @@ static EMAIL_FILLABLE: [&str; 30] = cat::<14, 16, 30>(
         "server_unreachable_email_notifications",
         "server_patch_email_notifications",
         "traefik_outdated_email_notifications",
+        "image_vulnerabilities_email_notifications",
     ],
 );
-static DISCORD_FILLABLE: [&str; 18] = cat::<17, 1, 18>(
-    cat::<2, 15, 17>(
+static DISCORD_FILLABLE: [&str; 19] = cat::<18, 1, 19>(
+    cat::<2, 16, 18>(
         ["discord_enabled", "discord_webhook_url"],
         events!("discord"),
     ),
     ["discord_ping_enabled"],
 );
-static SLACK_FILLABLE: [&str; 17] =
-    cat::<2, 15, 17>(["slack_enabled", "slack_webhook_url"], events!("slack"));
-static WEBHOOK_FILLABLE: [&str; 17] =
-    cat::<2, 15, 17>(["webhook_enabled", "webhook_url"], events!("webhook"));
-static PUSHOVER_FILLABLE: [&str; 18] = cat::<3, 15, 18>(
+static SLACK_FILLABLE: [&str; 18] =
+    cat::<2, 16, 18>(["slack_enabled", "slack_webhook_url"], events!("slack"));
+static WEBHOOK_FILLABLE: [&str; 18] =
+    cat::<2, 16, 18>(["webhook_enabled", "webhook_url"], events!("webhook"));
+static PUSHOVER_FILLABLE: [&str; 19] = cat::<3, 16, 19>(
     [
         "pushover_enabled",
         "pushover_user_key",
@@ -129,25 +133,31 @@ static PUSHOVER_FILLABLE: [&str; 18] = cat::<3, 15, 18>(
     ],
     events!("pushover"),
 );
-static TELEGRAM_BASE: [&str; 18] = cat::<3, 15, 18>(
+static TELEGRAM_BASE: [&str; 19] = cat::<3, 16, 19>(
     ["telegram_enabled", "telegram_token", "telegram_chat_id"],
     events!("telegram"),
 );
-static TELEGRAM_FILLABLE: [&str; 33] = cat::<18, 15, 33>(
-    cat::<3, 15, 18>(
+static TELEGRAM_FILLABLE: [&str; 35] = cat::<19, 16, 35>(
+    cat::<3, 16, 19>(
         ["telegram_enabled", "telegram_token", "telegram_chat_id"],
         events!("telegram"),
     ),
-    cat::<14, 1, 15>(
+    cat::<14, 2, 16>(
         TELEGRAM_THREADS,
-        ["telegram_notifications_traefik_outdated_thread_id"],
+        [
+            "telegram_notifications_traefik_outdated_thread_id",
+            "telegram_notifications_image_vulnerabilities_thread_id",
+        ],
     ),
 );
-static TELEGRAM_SECRET: [&str; 17] = cat::<2, 15, 17>(
+static TELEGRAM_SECRET: [&str; 18] = cat::<2, 16, 18>(
     ["telegram_token", "telegram_chat_id"],
-    cat::<14, 1, 15>(
+    cat::<14, 2, 16>(
         TELEGRAM_THREADS,
-        ["telegram_notifications_traefik_outdated_thread_id"],
+        [
+            "telegram_notifications_traefik_outdated_thread_id",
+            "telegram_notifications_image_vulnerabilities_thread_id",
+        ],
     ),
 );
 
@@ -155,6 +165,7 @@ pub static EMAIL: Channel = Channel {
     name: "email",
     table: "email_notification_settings",
     fillable: &EMAIL_FILLABLE,
+    // `HasSmtpServers::initializeHasSmtpServers` adds `smtp_servers` to both lists.
     hidden: &[
         "smtp_from_address",
         "smtp_from_name",
@@ -163,6 +174,9 @@ pub static EMAIL: Channel = Channel {
         "smtp_username",
         "smtp_password",
         "resend_api_key",
+        "resend_from_address",
+        "resend_from_name",
+        SMTP_SERVERS,
     ],
     encrypted: &[
         "smtp_from_address",
@@ -172,8 +186,16 @@ pub static EMAIL: Channel = Channel {
         "smtp_username",
         "smtp_password",
         "resend_api_key",
+        "resend_from_address",
+        "resend_from_name",
+        SMTP_SERVERS,
     ],
 };
+
+/// `HasSmtpServers`: the name of the SMTP server in use. Not `$fillable`.
+pub const SMTP_SERVER_NAME: &str = "smtp_server_name";
+/// `HasSmtpServers`: the other saved SMTP servers, an `encrypted:array` cast. Not `$fillable`.
+pub const SMTP_SERVERS: &str = "smtp_servers";
 pub static DISCORD: Channel = Channel {
     name: "discord",
     table: "discord_notification_settings",

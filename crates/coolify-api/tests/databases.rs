@@ -55,7 +55,7 @@ async fn fixture() -> Fixture {
             "POST",
             "/api/v1/security/keys",
             W,
-            Some(json!({"name": "k", "private_key": pem})),
+            Some(json!({"name": "key", "private_key": pem})),
         )
         .await
         .json()["uuid"]
@@ -67,7 +67,7 @@ async fn fixture() -> Fixture {
             "POST",
             "/api/v1/servers",
             W,
-            Some(json!({"name": "s", "ip": "203.0.113.50", "private_key_uuid": key})),
+            Some(json!({"name": "srv", "ip": "203.0.113.50", "private_key_uuid": key})),
         )
         .await
         .json()["uuid"]
@@ -145,7 +145,19 @@ fn scripts(dir: &std::path::Path) -> Vec<String> {
 async fn create_show_list_and_lifecycle() {
     let f = fixture().await;
     let h = &f.h;
-    let body = json!({"server_uuid": f.server, "project_uuid": f.project, "environment_name": "production", "name": "orders <b>db</b>"});
+    // 4.7.5 (32541a32c): names and descriptions are validated like the UI.
+    h.call(
+        "POST",
+        "/api/v1/databases/postgresql",
+        W,
+        Some(json!({"server_uuid": f.server, "project_uuid": f.project, "environment_name": "production", "name": "orders <b>db</b>", "description": "50% off"})),
+    )
+    .await
+    .assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"name":["The name may only contain letters (including Unicode), numbers, spaces, and these characters: - _ . \/ @ & ( ) # , : +"],"description":["The description may only contain letters (including Unicode), numbers, spaces, and common punctuation: - _ . , ! ? ( ) ' \" + = * \/ @ &"]}}"#,
+    );
+    let body = json!({"server_uuid": f.server, "project_uuid": f.project, "environment_name": "production", "name": "orders db"});
     let r = h
         .call(
             "POST",
@@ -163,7 +175,8 @@ async fn create_show_list_and_lifecycle() {
     );
     let uuid = created["uuid"].as_str().unwrap().to_owned();
 
-    // The model's `created` hook adds the data volume.
+    // The model's `created` hook adds the data volume. The default image is `postgres:18-alpine`
+    // since v4.7, and PostgreSQL 18 keeps its data in `/var/lib/postgresql`.
     let (vol, mount): (String, String) = sqlx::query_as(
         "SELECT name, mount_path FROM local_persistent_volumes WHERE resource_type = 'App\\Models\\StandalonePostgresql' \
          AND resource_id = (SELECT id FROM standalone_postgresqls WHERE uuid = $1)",
@@ -174,7 +187,7 @@ async fn create_show_list_and_lifecycle() {
     .unwrap();
     assert_eq!(
         (vol, mount.as_str()),
-        (format!("postgres-data-{uuid}"), "/var/lib/postgresql/data")
+        (format!("postgres-data-{uuid}"), "/var/lib/postgresql")
     );
 
     let show = h

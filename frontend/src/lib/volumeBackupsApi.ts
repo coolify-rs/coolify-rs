@@ -6,8 +6,12 @@ export type BackupOwner = 'application' | 'service';
 
 export interface S3Label {
   name: string;
-  bucket: string;
+  /** Storages that are not S3 have no bucket. */
+  bucket: string | null;
   team_id: number;
+  /** `s3`, `sftp`, `ftps` or `webdav`. */
+  type: string;
+  type_label: string;
 }
 
 export interface VolumeSchedule {
@@ -108,7 +112,8 @@ export interface ServiceExecution {
   target: string;
   type: string;
   schedule: string;
-  s3_tooltip: string;
+  /** The storages that this run was sent to; null for a run that is not stored in S3. */
+  s3_tooltip: string | null;
   status: string;
   started_at: string;
   size: string | number | null;
@@ -159,10 +164,10 @@ export const volumeBackupsUi = {
   deleteExecution: (kind: BackupOwner, uuid: string, backup: string, id: number, password: string, selected: string[]) =>
     post<Toasted & { deleted?: boolean }>(`${base(kind, uuid)}/${backup}/executions/${id}/delete`, { password, selected }),
   backupNow: (service: string, type: 'database' | 'storage', backup: string) => post(`/ui/services/${encodeURIComponent(service)}/backup-now`, { type, backup }),
-  serviceExecutions: (service: string, page: number, perPage: number) =>
-    request<{ executions: ServiceExecution[]; total: number; page: number; per_page: number; last_page: number; server_timezone: string | null; s3_downloads: boolean }>(
+  serviceExecutions: (service: string, page: number, perPage: number, sort: string) =>
+    request<{ executions: ServiceExecution[]; total: number; page: number; per_page: number; last_page: number; server_timezone: string | null; sort: string; s3_downloads: boolean }>(
       'GET',
-      `/ui/services/${encodeURIComponent(service)}/backup-executions?page=${page}&per_page=${perPage}`,
+      `/ui/services/${encodeURIComponent(service)}/backup-executions?page=${page}&per_page=${perPage}&sort=${encodeURIComponent(sort)}`,
     ),
   importDatabases: (service: string) => request<{ databases: { uuid: string; name: string }[] }>('GET', `/ui/services/${encodeURIComponent(service)}/import-databases`),
 };

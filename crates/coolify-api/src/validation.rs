@@ -424,14 +424,65 @@ pub mod patterns {
     pub fn description() -> Field {
         Field {
             name: "description",
-            rules: vec![
-                Rule::Nullable,
-                Rule::String,
-                Rule::Max(DESCRIPTION_MAX),
-                Rule::Regex(&DESCRIPTION_PATTERN),
-            ],
+            rules: description_rules(),
         }
     }
+
+    /// `ValidationPatterns::descriptionRules()`.
+    pub fn description_rules() -> Vec<Rule> {
+        vec![
+            Rule::Nullable,
+            Rule::String,
+            Rule::Max(DESCRIPTION_MAX),
+            Rule::Regex(&DESCRIPTION_PATTERN),
+        ]
+    }
+
+    /// `ValidationPatterns::nameRules(required: false)`: optional and nullable.
+    pub fn optional_name_rules() -> Vec<Rule> {
+        vec![
+            Rule::Nullable,
+            Rule::String,
+            Rule::Min(NAME_MIN),
+            Rule::Max(NAME_MAX),
+            Rule::Regex(&NAME_PATTERN),
+        ]
+    }
+
+    /// `ValidationPatterns::nameRules(required: false, nullable: false)` (4.7.5): an optional
+    /// field that may be left out but not set to null. The API validates resource names like
+    /// the UI since 32541a32c.
+    pub fn present_name_rules() -> Vec<Rule> {
+        vec![
+            Rule::String,
+            Rule::Min(NAME_MIN),
+            Rule::Max(NAME_MAX),
+            Rule::Regex(&NAME_PATTERN),
+        ]
+    }
+
+    /// `customApiValidator($input, $rules, ValidationPatterns::combinedMessages())`: the
+    /// `required` message of `customApiValidator` with the name and description messages.
+    pub const API_COMBINED_MESSAGES: Messages = &[
+        ("required", "This field is required."),
+        (
+            "name.regex",
+            "The name may only contain letters (including Unicode), numbers, spaces, and these characters: - _ . / @ & ( ) # , : +",
+        ),
+        ("name.min", "The name must be at least :min characters."),
+        (
+            "name.max",
+            "The name may not be greater than :max characters.",
+        ),
+        (
+            "description.regex",
+            "The description may only contain letters (including Unicode), numbers, spaces, and common punctuation: - _ . , ! ? ( ) ' \" + = * / @ &",
+        ),
+        (
+            "description.max",
+            "The description may not be greater than :max characters.",
+        ),
+    ];
 
     pub const NAME_MESSAGES: Messages = &[
         (

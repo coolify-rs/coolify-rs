@@ -11,6 +11,7 @@
   import { router } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
   import { notify } from '../lib/toast.svelte';
+  import { vulnerabilitySearchItem } from '../lib/securityCallout';
 
   interface PageItem {
     label: string;
@@ -61,7 +62,10 @@
   const searchResults = $derived.by(() => {
     if (scope === 'page' || !searchQuery || loading) return [];
     const q = searchQuery.toLowerCase().trim();
-    return allItems.filter((i) => i.search_text && i.search_text.toLowerCase().includes(q)).slice(0, 20);
+    const results = allItems.filter((i) => i.search_text && i.search_text.toLowerCase().includes(q)).slice(0, 20);
+    // A vulnerability ID opens the Security page with that search (resources/js/vulnerability-search.js).
+    const vulnerability: SearchItem | null = vulnerabilitySearchItem(searchQuery, '/vulnerabilities');
+    return vulnerability ? [vulnerability, ...results].slice(0, 20) : results;
   });
 
   const filteredCreatable = $derived.by(() => {

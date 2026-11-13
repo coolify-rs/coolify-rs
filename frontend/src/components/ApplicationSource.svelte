@@ -1,23 +1,37 @@
 <script lang="ts">
   // Port of upstream livewire/project/application/source.blade.php (+
   // Project\Application\Source): repository, branch and commit, the deploy key
-  // and the Git provider App.
+  // the SSH host keys, the deploy key and the Git provider App.
+  import Callout from './Callout.svelte';
   import ConfirmModal from './ConfirmModal.svelte';
   import Empty from './Empty.svelte';
   import FormInput from './FormInput.svelte';
+  import FormTextarea from './FormTextarea.svelte';
+  import Loading from './Loading.svelte';
   import Reicon from './Reicon.svelte';
   import SettingsSection from './SettingsSection.svelte';
   import StatusBadge from './StatusBadge.svelte';
   import UnsavedBar from './UnsavedBar.svelte';
   import { appUi, ApiError, type ApplicationSource, type SourceCard } from '../lib/api';
   import { link } from '../lib/router.svelte';
+  import { sourceHostKeysUi, type FetchedHostKey, type HostKeyFingerprint, type SourceHostKeys } from '../lib/sourceHostKeysApi';
   import { notify } from '../lib/toast.svelte';
 
   let { uuid, onsaved }: { uuid: string; onsaved: () => Promise<void> } = $props();
 
-  type Form = { gitRepository: string; gitBranch: string; gitCommitSha: string; gitHttpsUsername: string; gitHttpsPassword: string };
-  const empty: Form = { gitRepository: '', gitBranch: '', gitCommitSha: '', gitHttpsUsername: '', gitHttpsPassword: '' };
-  let data = $state<ApplicationSource | null>(null);
+  type Form = { gitRepository: string; gitBranch: string; gitCommitSha: string; gitHttpsUsername: string; gitHttpsPassword: string; gitSshKnownHosts: string };
+  const empty: Form = { gitRepository: '', gitBranch: '', gitCommitSha: '', gitHttpsUsername: '', gitHttpsPassword: '', gitSshKnownHosts: '' };
+  let data = $state<(ApplicationSource & SourceHostKeys) | null>(null);
+  // `$loadedGitSshKnownHosts`: the saved host keys when the form was loaded. Save writes the host
+  // keys only when the user changed them.
+  let loadedGitSshKnownHosts = $state<string | null>(null);
+  // `$fetchedHostKeys`: the keys that the Git host sends now.
+  let fetchedHostKeys = $state<FetchedHostKey[]>([]);
+  let editManually = $state(false);
+  let fetching = $state(false);
+  let knownHostsError = $state<string | undefined>(undefined);
+  let removing = $state<HostKeyFingerprint | null>(null);
+  let settingKey = $state<number | null>(null);
   let form = $state<Form>({ ...empty });
   let saved = $state<Form>({ ...empty });
   let saving = $state(false);
@@ -30,14 +44,16 @@
   const GITEA = 'App\\Models\\GiteaApp';
 
   async function load() {
-    const d = await appUi.source(uuid);
+    const d = (await appUi.source(uuid)) as ApplicationSource & SourceHostKeys;
     data = d;
+    loadedGitSshKnownHosts = d.git_ssh_known_hosts ?? null;
     const next = {
       gitRepository: d.git_repository ?? '',
       gitBranch: d.git_branch ?? '',
       gitCommitSha: d.git_commit_sha ?? '',
       gitHttpsUsername: d.git_https_username ?? '',
       gitHttpsPassword: '',
+      gitSshKnownHosts: d.git_ssh_known_hosts ?? '',
     };
     form = { ...next };
     saved = { ...next };
@@ -51,22 +67,80 @@
   async function submit() {
     if (!canUpdate || saving) return;
     saving = true;
+    knownHostsError = undefined;
     try {
-      const r = await appUi.updateSource(uuid, {
+      const body = {
         git_repository: form.gitRepository,
         git_branch: form.gitBranch,
         git_commit_sha: form.gitCommitSha,
         git_https_username: form.gitHttpsUsername,
         git_https_password: form.gitHttpsPassword,
-      });
+        // Only sent while the section shows, as the textarea is only rendered then.
+        ...(data?.show_ssh_host_keys ? { git_ssh_known_hosts: form.gitSshKnownHosts, loaded_git_ssh_known_hosts: loadedGitSshKnownHosts } : {}),
+      };
+      const r = await appUi.updateSource(uuid, body);
       notify.success(r.message);
       await load();
       await onsaved();
     } catch (e) {
-      notify.failure(e instanceof ApiError ? e.message : String(e));
+      const fieldError = e instanceof ApiError ? e.field('gitSshKnownHosts') : undefined;
+      if (fieldError) {
+        // `known-hosts-invalid`: the error shows under the field in the manual editor.
+        knownHostsError = fieldError;
+        editManually = true;
+      } else {
+        notify.failure(e instanceof ApiError ? e.message : String(e));
+      }
     } finally {
       saving = false;
     }
+  }
+
+  /** `fetchHostKeys()`. */
+  async function fetchHostKeys() {
+    if (fetching) return;
+    fetching = true;
+    fetchedHostKeys = [];
+    try {
+      const r = await sourceHostKeysUi.fetch(uuid);
+      for (const message of r.success) notify.success(message);
+      if (r.error) notify.failure(r.error);
+      fetchedHostKeys = r.fetched_host_keys;
+    } catch (e) {
+      notify.failure(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      fetching = false;
+    }
+  }
+
+  /** `acceptFetchedHostKeys()`. */
+  async function acceptFetchedHostKeys() {
+    try {
+      const r = await sourceHostKeysUi.accept(uuid);
+      fetchedHostKeys = [];
+      notify.success(r.message);
+      await load();
+    } catch (e) {
+      notify.failure(e instanceof ApiError ? e.message : String(e));
+    }
+  }
+
+  /** `declineFetchedHostKeys()`. */
+  function declineFetchedHostKeys() {
+    fetchedHostKeys = [];
+    sourceHostKeysUi.decline(uuid).catch(() => {});
+  }
+
+  /** `removeHostKey($id)`. */
+  async function removeHostKey(key: HostKeyFingerprint): Promise<string | void> {
+    try {
+      const r = await sourceHostKeysUi.remove(uuid, key.id);
+      notify.success(r.message);
+    } catch (e) {
+      notify.failure(e instanceof ApiError ? e.message : String(e));
+    }
+    removing = null;
+    await load();
   }
 
   /** `removeGitHttpsCredential()`. */
@@ -83,6 +157,8 @@
 
   /** `setPrivateKey()`. */
   async function setPrivateKey(id: number) {
+    if (settingKey !== null) return;
+    settingKey = id;
     try {
       const r = await appUi.changeSource(uuid, { private_key_id: id });
       notify.success(r.message);
@@ -90,6 +166,8 @@
       await onsaved();
     } catch (e) {
       notify.failure(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      settingKey = null;
     }
   }
 
@@ -174,23 +252,110 @@
           </div>
         {/snippet}
 
-        {#if data.private_key_id == null}
-          <div
-            class="mb-4 flex items-center justify-between gap-3 rounded-lg bg-neutral-50 px-3 py-2.5 ring-1 ring-neutral-200 dark:bg-white/[0.05] dark:ring-white/[0.07]"
-          >
-            <span class="text-[12px] text-neutral-500 dark:text-fg-dim">Connected source</span>
-            <span class="text-[12px] font-medium text-neutral-900 dark:text-fg">
-              {data.current_source?.name ?? 'No source connected'}
-            </span>
-          </div>
-        {/if}
-
         <div class="grid gap-4 lg:grid-cols-2">
           <FormInput placeholder="coollabsio/coolify-example" id="gitRepository" label="Repository" disabled={!canUpdate} bind:value={form.gitRepository} />
           <FormInput placeholder="main" id="gitBranch" label="Branch" disabled={!canUpdate} bind:value={form.gitBranch} />
           <FormInput placeholder="HEAD" id="gitCommitSha" label="Commit SHA" disabled={!canUpdate} bind:value={form.gitCommitSha} />
         </div>
       </SettingsSection>
+
+      {#if data.show_ssh_host_keys}
+        <SettingsSection
+          id="ssh-host-keys"
+          title="SSH host keys"
+          flush
+          description="The host keys that git over SSH accepts for self-hosted Git hosts. On the first deployment, coolify-rs saves the key that the host sends, and later deployments fail if the key changes. To accept a new key (also of a submodule host), click Fetch current host key, compare the fingerprint with the fingerprint from the administrator of the Git host, and click Accept. GitHub, GitLab.com, and Bitbucket Cloud always accept their published keys. If GitHub or Bitbucket Cloud changes its keys, click Fetch current host key to read the new keys from their official HTTPS endpoint. If GitLab.com changes its keys, click Fetch current host key and compare the fingerprint with the keys on docs.gitlab.com."
+        >
+          {#snippet actions()}
+            {#if canUpdate}
+              <button type="button" class="button" onclick={() => (editManually = !editManually)} aria-expanded={editManually} aria-controls="manual-host-keys">
+                <Reicon name="edit" class="size-3.5" />
+                Edit manually
+              </button>
+              <button type="button" class="button" onclick={fetchHostKeys} disabled={fetching}>Fetch current host key</button>
+            {/if}
+          {/snippet}
+          {#if fetchedHostKeys.length > 0}
+            <Callout type="warning" title="Compare these fingerprints before you accept them" class="mb-4">
+              <p>These are the keys that the Git host sends now. Accept them only if the fingerprint is the same as the fingerprint from the administrator of the Git host.</p>
+              <ul class="my-2 flex flex-col gap-1">
+                {#each fetchedHostKeys as fingerprint (`${fingerprint.host} ${fingerprint.type} ${fingerprint.fingerprint}`)}
+                  <li class="break-all">
+                    <span class="font-medium">{fingerprint.host}</span>
+                    {fingerprint.type} <span class="font-mono">{fingerprint.fingerprint}</span>
+                  </li>
+                {/each}
+              </ul>
+              <div class="flex flex-wrap gap-2">
+                <button type="button" class="button" onclick={acceptFetchedHostKeys}>Accept</button>
+                <button type="button" class="button" onclick={declineFetchedHostKeys}>Decline</button>
+              </div>
+            </Callout>
+          {/if}
+          {#if data.host_key_fingerprints.length === 0}
+            <Empty size="sm" iconName="keys" title="No saved host keys" description="The next deployment saves the key that the Git host sends. To save it now, click Fetch current host key." />
+          {:else}
+            <div class="data-table">
+              <div class="min-w-[36rem]">
+                <div
+                  class="grid grid-cols-[minmax(0,1fr)_7rem_minmax(0,2fr)_1.75rem] items-center gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-2.5 text-[13px] font-medium text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-fg-faint"
+                >
+                  <span class="pl-11">Host</span><span>Type</span><span>Fingerprint</span><span></span>
+                </div>
+                <ul class="divide-y divide-neutral-200 dark:divide-white/[0.07]">
+                  {#each data.host_key_fingerprints as fingerprint (fingerprint.id)}
+                    <li class="grid min-h-14 grid-cols-[minmax(0,1fr)_7rem_minmax(0,2fr)_1.75rem] items-center gap-3 px-4 py-2.5 transition-colors hover:bg-neutral-50 dark:hover:bg-white/[0.025]">
+                      <div class="flex min-w-0 items-center gap-3">
+                        <div
+                          class="flex size-8 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-fg-dim"
+                        >
+                          <Reicon name="keys" class="size-4" />
+                        </div>
+                        <div class="min-w-0">
+                          <span class="break-all text-[13px] font-semibold text-black dark:text-fg">{fingerprint.host}</span>
+                          {#if fingerprint.published}
+                            <p class="text-[12px] text-neutral-500 dark:text-fg-dim">Published by the provider, used for every deployment</p>
+                          {/if}
+                        </div>
+                      </div>
+                      <span class="text-[12px] text-neutral-500 dark:text-fg-dim">{fingerprint.type}</span>
+                      <span class="break-all font-mono text-[12px] text-neutral-500 dark:text-fg-dim">{fingerprint.fingerprint}</span>
+                      {#if fingerprint.published}
+                        <span></span>
+                      {:else if canUpdate}
+                        <button
+                          type="button"
+                          class="icon-button shrink-0 text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
+                          title="Remove host key"
+                          aria-label="Remove host key of {fingerprint.host}"
+                          onclick={() => (removing = fingerprint)}
+                        >
+                          <Reicon name="trash" class="size-3.5" />
+                        </button>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            </div>
+          {/if}
+          {#if canUpdate && editManually}
+            <div id="manual-host-keys" class="p-4">
+              <div>
+                <FormTextarea
+                  id="gitSshKnownHosts"
+                  rows={4}
+                  label="Known hosts"
+                  helper="One line for each key: host key-type key. Use [host]:port for a custom SSH port. GitHub and Bitbucket Cloud use their published keys and cannot be added here. Click Save to apply."
+                  placeholder="[git.example.com]:2222 ssh-ed25519 AAAA..."
+                  bind:value={form.gitSshKnownHosts}
+                  error={knownHostsError}
+                />
+              </div>
+            </div>
+          {/if}
+        </SettingsSection>
+      {/if}
 
       {#if data.deployment_type_other}
         <SettingsSection
@@ -226,28 +391,60 @@
     </form>
 
     {#if data.private_key_id != null}
-      <SettingsSection title="Deploy key" description="The SSH key coolify-rs uses to clone this private repository.">
-        <div
-          class="mb-4 flex items-center justify-between gap-3 rounded-lg bg-neutral-50 px-3 py-2.5 ring-1 ring-neutral-200 dark:bg-white/[0.05] dark:ring-white/[0.07]"
-        >
-          <span class="text-[12px] text-neutral-500 dark:text-fg-dim">Attached private key</span>
-          <span class="text-[12px] font-medium text-neutral-900 dark:text-fg">{data.private_key_name ?? ''}</span>
-        </div>
-        {#if canUpdate}
-          <div class="grid gap-2 sm:grid-cols-2">
-            {#each data.private_keys as key (key.id)}
-              <button
-                type="button"
-                onclick={() => setPrivateKey(key.id)}
-                class="flex min-h-11 items-center rounded-lg border border-neutral-200 bg-white px-3 text-left text-[12px] font-medium transition-colors hover:bg-neutral-50 dark:border-white/[0.08] dark:bg-white/[0.05] dark:hover:bg-white/[0.05]"
-              >
-                {key.name}
-              </button>
-            {:else}
-              <Empty title="No alternative private keys" description="Add another private key from Keys & Tokens before switching." iconName="keys" size="sm" />
-            {/each}
+      <SettingsSection title="Deploy key" description="The SSH key coolify-rs uses to clone this private repository." flush>
+        <div class="data-table">
+          <div
+            class="grid grid-cols-[minmax(0,1fr)_7rem] items-center gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-2.5 text-[13px] font-medium text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-fg-faint"
+          >
+            <span class="pl-11">Private key</span>
+            <span class="text-right">Selection</span>
           </div>
-        {/if}
+          <div
+            class="grid min-h-14 w-full grid-cols-[minmax(0,1fr)_7rem] items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-neutral-50 dark:hover:bg-white/[0.025] border-b border-neutral-200 last:border-b-0 dark:border-white/[0.07]"
+          >
+            <div class="flex min-w-0 items-center gap-3">
+              <div
+                class="flex size-8 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-fg-dim"
+              >
+                <Reicon name="keys" class="size-4" />
+              </div>
+              <span class="truncate text-[13px] font-semibold text-black dark:text-fg">{data.private_key_name ?? ''}</span>
+            </div>
+            <div class="flex justify-end"><StatusBadge label="Selected" type="success" /></div>
+          </div>
+          {#if canUpdate}
+            {#each data.private_keys as key (key.id)}
+              <div
+                class="grid min-h-14 w-full grid-cols-[minmax(0,1fr)_7rem] items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-neutral-50 dark:hover:bg-white/[0.025] border-b border-neutral-200 last:border-b-0 dark:border-white/[0.07]"
+              >
+                <div class="flex min-w-0 items-center gap-3">
+                  <div
+                    class="flex size-8 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-fg-dim"
+                  >
+                    <Reicon name="keys" class="size-4" />
+                  </div>
+                  <span class="truncate text-[13px] font-semibold text-black dark:text-fg">{key.name}</span>
+                </div>
+                <div class="flex justify-end">
+                  <button
+                    type="button"
+                    onclick={() => setPrivateKey(key.id)}
+                    disabled={settingKey !== null}
+                    title="Select {key.name}"
+                    aria-label="Select {key.name}"
+                    class="icon-button disabled:cursor-wait disabled:opacity-60"
+                  >
+                    {#if settingKey === key.id}
+                      <span><Loading compact /><span class="sr-only">Applying {key.name}</span></span>
+                    {:else}
+                      <span><Reicon name="link" class="size-3.5" /></span>
+                    {/if}
+                  </button>
+                </div>
+              </div>
+            {/each}
+          {/if}
+        </div>
       </SettingsSection>
     {:else if canUpdate}
       <SettingsSection title="Git source" description="Switch the Git provider App coolify-rs uses to clone this repository.">
@@ -269,7 +466,6 @@
                 </div>
                 <p class="mt-0.5 truncate text-[11px] text-neutral-500 dark:text-fg-faint">{data.current_source.subtitle}</p>
               </div>
-              <Reicon name="check" class="size-4 shrink-0 text-black dark:text-fg" />
             </div>
           {/if}
 
@@ -317,6 +513,19 @@
       </SettingsSection>
     {/if}
   </div>
+{/if}
+
+{#if removing}
+  {@const key = removing}
+  <ConfirmModal
+    title="Remove host key?"
+    actions={[`The host key ${key.fingerprint} of ${key.host} will be removed.`, 'The next deployment saves the key that the Git host sends then, without a check.']}
+    confirmWithPassword={false}
+    confirmWithText={false}
+    step2ButtonText="Remove host key"
+    onconfirm={() => removeHostKey(key)}
+    onclose={() => (removing = null)}
+  />
 {/if}
 
 {#if changing}

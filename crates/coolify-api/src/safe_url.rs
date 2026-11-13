@@ -151,7 +151,7 @@ impl Policy {
 }
 
 /// The URL of `settings.advanced`, from the request host (`route()` uses the current request).
-fn settings_url(headers: &HeaderMap) -> String {
+pub(crate) fn settings_url(headers: &HeaderMap) -> String {
     let host = headers
         .get(axum::http::header::HOST)
         .and_then(|h| h.to_str().ok())

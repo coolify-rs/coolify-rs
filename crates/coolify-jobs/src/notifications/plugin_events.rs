@@ -52,7 +52,9 @@ pub fn event_kind(n: &Notification) -> Option<&'static str> {
         Notification::HetznerDeletionFailed { .. } => kind::SERVER_HETZNER_DELETION_FAILED,
         Notification::HighDiskUsage { .. } => kind::SERVER_HIGH_DISK_USAGE,
         Notification::Reachable { .. } => kind::SERVER_REACHABLE,
-        Notification::Unreachable { .. } => kind::SERVER_UNREACHABLE,
+        Notification::Unreachable { .. } | Notification::HostKeyChanged { .. } => {
+            kind::SERVER_UNREACHABLE
+        }
         Notification::ServerPatchCheck { .. } => kind::SERVER_PATCH_CHECK,
         Notification::TraefikVersionOutdated { .. } => kind::PROXY_TRAEFIK_OUTDATED,
         Notification::VolumeBackupSuccess { .. } => kind::VOLUME_BACKUP_SUCCEEDED,
@@ -60,7 +62,13 @@ pub fn event_kind(n: &Notification) -> Option<&'static str> {
         Notification::VolumeBackupMissing { .. } => kind::VOLUME_BACKUP_MISSING,
         Notification::VolumeBackupRecoveryFailed { .. } => kind::VOLUME_BACKUP_RECOVERY_FAILED,
         Notification::ApiTokenExpiring { .. } => kind::API_TOKEN_EXPIRING,
+        Notification::ApiTokenFailing { .. } => kind::API_TOKEN_FAILING,
+        Notification::ScheduledJobRecovered { .. } => kind::SCHEDULED_JOB_RECOVERED,
         Notification::SslExpiration { .. } => kind::SSL_CERTIFICATES_EXPIRING,
+        // Upstream has no plugin events; coolify-rs has no event name for image scanning yet.
+        Notification::ImageExploitedProblem(_) | Notification::ImageVulnerabilityDigest(_) => {
+            return None;
+        }
         Notification::Test { .. } => return None,
     })
 }

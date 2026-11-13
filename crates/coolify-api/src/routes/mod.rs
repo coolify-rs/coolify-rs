@@ -40,11 +40,15 @@ pub mod storage_backups;
 pub mod storages;
 pub mod tags;
 pub mod teams;
+pub mod vulnerabilities;
 
 pub mod cloud_providers;
 pub mod cloud_tokens;
 pub mod destinations;
 pub mod git_apps;
+pub mod gitea_apps;
+pub mod image_scan;
+pub mod server_image_scanning;
 pub mod server_proxy;
 pub mod server_settings;
 use axum::Router;
@@ -931,8 +935,20 @@ pub const ROUTES: &[RouteSpec] = &[
         abilities: DEL,
     },
     RouteSpec {
+        method: "GET",
+        uri: "api/v1/gitea-apps",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
         method: "POST",
         uri: "api/v1/applications/private-github-app",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/applications/private-gitea-app",
         group: Group::Main,
         abilities: W,
     },
@@ -1341,6 +1357,12 @@ pub const ROUTES: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         uri: "api/v1/servers/{uuid}/validate",
+        group: Group::Main,
+        abilities: W,
+    },
+    RouteSpec {
+        method: "POST",
+        uri: "api/v1/servers/{uuid}/host-key/reset",
         group: Group::Main,
         abilities: W,
     },
@@ -2136,6 +2158,43 @@ pub const ROUTES: &[RouteSpec] = &[
         group: Group::Main,
         abilities: W,
     },
+    // Image scanning (4.7.x): `VulnerabilitiesController`, `ServerImageScanningController`.
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/vulnerabilities",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/applications/{uuid}/vulnerabilities",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/databases/{uuid}/vulnerabilities",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/services/{uuid}/vulnerabilities",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "GET",
+        uri: "api/v1/servers/{uuid}/image-scanning",
+        group: Group::Main,
+        abilities: R,
+    },
+    RouteSpec {
+        method: "PATCH",
+        uri: "api/v1/servers/{uuid}/image-scanning",
+        group: Group::Main,
+        abilities: W,
+    },
 ];
 
 /// Prefix of the browser-session bridge: `/ui/api/v1/...` mirrors the main
@@ -2707,10 +2766,16 @@ pub fn router(state: AppState) -> Router {
             "api/v1/gitlab-apps/{gitlab_app_id}",
             del(git_apps::gitlab_destroy),
         ),
+        ("GET", "api/v1/gitea-apps", on_get(gitea_apps::gitea_index)),
         (
             "POST",
             "api/v1/applications/private-github-app",
             on_post(applications::create_private_github_app),
+        ),
+        (
+            "POST",
+            "api/v1/applications/private-gitea-app",
+            on_post(applications::create_private_gitea_app),
         ),
         (
             "POST",
@@ -3111,6 +3176,11 @@ pub fn router(state: AppState) -> Router {
             "POST",
             "api/v1/servers/{uuid}/validate",
             on_post(servers::validate_server),
+        ),
+        (
+            "POST",
+            "api/v1/servers/{uuid}/host-key/reset",
+            on_post(servers::reset_host_key),
         ),
         (
             "DELETE",
@@ -3777,6 +3847,36 @@ pub fn router(state: AppState) -> Router {
             "api/v1/servers/hostinger",
             on_post(cloud_providers::hostinger_create_server),
         ),
+        (
+            "GET",
+            "api/v1/vulnerabilities",
+            on_get(vulnerabilities::index),
+        ),
+        (
+            "GET",
+            "api/v1/applications/{uuid}/vulnerabilities",
+            on_get(vulnerabilities::application),
+        ),
+        (
+            "GET",
+            "api/v1/databases/{uuid}/vulnerabilities",
+            on_get(vulnerabilities::database),
+        ),
+        (
+            "GET",
+            "api/v1/services/{uuid}/vulnerabilities",
+            on_get(vulnerabilities::service),
+        ),
+        (
+            "GET",
+            "api/v1/servers/{uuid}/image-scanning",
+            on_get(server_image_scanning::show),
+        ),
+        (
+            "PATCH",
+            "api/v1/servers/{uuid}/image-scanning",
+            patch(server_image_scanning::update),
+        ),
     ];
 
     // Group handlers by path so one MethodRouter serves all verbs of a path.
@@ -3865,6 +3965,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::ui_security::routes(state.clone()))
         .merge(crate::ui_api_tokens::routes(state.clone()))
         .merge(crate::ui_storages::routes(state.clone()))
+        .merge(crate::ui_stars::routes(state.clone()))
         .merge(crate::ui_database_general::routes(state.clone()))
         .merge(crate::ui_database_backups::routes(state.clone()))
         .merge(crate::ui_volume_backups::routes(state.clone()))
@@ -3878,10 +3979,16 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::ui_help::routes(state.clone()))
         .merge(crate::ui_terminal::routes(state.clone()))
         .merge(crate::ui_plugins::routes(state.clone()))
+        .merge(image_scan::routes(state.clone()))
         .fallback(crate::fallback::fallback)
         .layer(from_fn_with_state(
             state.clone(),
             crate::session::secure_cookies_over_https,
+        ))
+        // `ThrottleFailedApiRequests`: global, so API routes that do not exist count too.
+        .layer(from_fn_with_state(
+            state.clone(),
+            crate::throttle_failed_api::middleware,
         ))
         .with_state(state)
 }

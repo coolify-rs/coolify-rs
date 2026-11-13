@@ -6,6 +6,7 @@
   import ConfirmModal from '../components/ConfirmModal.svelte';
   import Empty from '../components/Empty.svelte';
   import SkeletonTable from '../components/SkeletonTable.svelte';
+  import StatusBadge from '../components/StatusBadge.svelte';
   import ServerFrame from '../components/ServerFrame.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
   import { get, post, failure } from '../lib/serverApi';
@@ -16,12 +17,15 @@
   const WARNING_DELETE = 'The proxy keeps using the certificate until you restart it. If a route still uses the domain, Traefik requests a new certificate after the restart. You can restore the backup below to undo this.';
   const WARNING_RESTORE = 'Until the proxy restarts, it keeps its loaded certificates and can write them back to acme.json. Certificates issued after this backup are removed from acme.json.';
   const RESTART_LABEL = 'Restart the proxy now. Sites on this server are unavailable for a few seconds.';
-  type Cert = { id: string; resolver: string; main_domain: string; sans: string[]; store: string | null; expires_at: string | null };
+  /** `in_use` (v4.7.5): false when no route and no resource on the server uses a domain of the certificate, null when it could not be checked. */
+  type Cert = { id: string; resolver: string; main_domain: string; sans: string[]; store: string | null; expires_at: string | null; in_use?: boolean | null };
   type Backup = { name: string; created_at: string; size: number };
   let certs = $state<Cert[]>([]);
   let backups = $state<Backup[]>([]);
   let keep = $state(10);
   let deleting = $state<Cert | null>(null);
+  let deletingUnused = $state(false);
+  const unused = $derived(certs.filter((c) => c.in_use === false));
   let restoring = $state<Backup | null>(null);
   let deletingBackup = $state<Backup | null>(null);
   const base = $derived(`/server-page/${encodeURIComponent(uuid)}/proxy/certificates`);
@@ -38,6 +42,17 @@
     try {
       const r = await post<{ message: string }>(`${base}/${path}`, body);
       notify.success(r.message);
+      await load();
+    } catch (e) {
+      failure(e);
+    }
+  }
+  /** `deleteUnusedTraefikCertificates`. */
+  async function deleteUnused() {
+    try {
+      const r = await post<{ message?: string; info?: string }>(`${base}/delete-unused`, {});
+      if (r.message) notify.success(r.message);
+      else if (r.info) notify.info(r.info);
       await load();
     } catch (e) {
       failure(e);
@@ -68,9 +83,12 @@
           <SettingsSection
             id="server-proxy-certificates-section"
             title="TLS certificates"
-            description="Review certificates stored in Traefik's acme.json file. Deleting an entry removes it from local ACME storage. It does not revoke the certificate at the certificate authority. If a route still uses the domain, Traefik requests a new certificate after the restart."
+            description="Review certificates stored in Traefik's acme.json file. Traefik renews every certificate in this file, also when no route uses its domain any more. Deleting an entry removes it from local ACME storage. It does not revoke the certificate at the certificate authority. If a route still uses the domain, Traefik requests a new certificate after the restart."
           >
             {#snippet actions()}
+              {#if unused.length > 0 && canEdit}
+                <button type="button" class="button button-error" onclick={() => (deletingUnused = true)}>Delete unused ({unused.length})</button>
+              {/if}
               <button type="button" class="button" disabled={!loaded} onclick={load}>Refresh</button>
             {/snippet}
             {#if !loaded}
@@ -93,7 +111,19 @@
                     <tbody>
                       {#each certs as c (c.id)}
                         <tr>
-                          <td class="font-medium text-neutral-950 dark:text-fg">{c.main_domain}</td>
+                          <td class="font-medium text-neutral-950 dark:text-fg">
+                            <div class="flex flex-col items-start gap-1">
+                              {c.main_domain}
+                              {#if c.in_use === false}
+                                <StatusBadge
+                                  label="Not used"
+                                  type="warning"
+                                  size="sm"
+                                  title="No route and no resource on this server uses this domain. Traefik renews the certificate until you delete it."
+                                />
+                              {/if}
+                            </div>
+                          </td>
                           <td>
                             <span class="font-mono text-xs">{c.resolver}</span>
                             {#if c.store}<span class="text-xs text-neutral-500 dark:text-fg-dim">({c.store})</span>{/if}
@@ -203,6 +233,21 @@
     step2ButtonText="Delete Certificate"
     onconfirm={() => act('delete', { id: c.id })}
     onclose={() => (deleting = null)}
+  />
+{/if}
+{#if deletingUnused}
+  <ConfirmModal
+    title="Delete Unused TLS Certificates?"
+    actions={[
+      'Save the current acme.json as a backup that you can restore below.',
+      `Delete ${unused.length} certificates that no route and no resource on this server uses: ${unused.map((c) => c.main_domain).join(', ')}.`,
+    ]}
+    warningMessage="The proxy keeps using the certificates until you restart it. If a route still uses a domain, Traefik requests a new certificate after the restart. You can restore the backup below to undo this."
+    confirmWithText={false}
+    confirmWithPassword={false}
+    step2ButtonText="Delete Certificates"
+    onconfirm={deleteUnused}
+    onclose={() => (deletingUnused = false)}
   />
 {/if}
 {#if restoring}

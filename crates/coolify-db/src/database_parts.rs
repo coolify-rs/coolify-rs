@@ -31,6 +31,14 @@ pub static S3_STORAGE: ModelSpec = ModelSpec {
         "unusable_email_sent",
         // v4.5.3 (`2026_10_27_142752_add_use_path_style_endpoint_to_s3_storages_table`).
         "use_path_style_endpoint",
+        // v4.7.0 (`add_type_to_s3_storages_table`, `add_sftp_host_key_to_s3_storages_table`,
+        // `add_skip_tls_verification_to_s3_storages_table`): the protocol (s3, sftp, ftps,
+        // webdav), the private key of an SFTP login, the pinned SFTP host key (a public key),
+        // and the TLS certificate check of an S3 endpoint.
+        "type",
+        "private_key_id",
+        "sftp_host_key",
+        "skip_tls_verification",
     ],
     hidden: &[],
     timestamps: &["created_at", "updated_at"],
@@ -489,6 +497,39 @@ pub async fn s3_by_id(db: &Db, id: i64) -> DbResult<Option<Record>> {
     find_row(db, "s3_storages", id).await
 }
 
+/// `->with('privateKey:id,uuid')`: the UUID of the private key of a storage.
+pub async fn s3_private_key_uuid(db: &Db, private_key_id: i64) -> DbResult<Option<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT uuid FROM private_keys WHERE id = $1")
+            .bind(private_key_id)
+            .fetch_optional(db.pool())
+            .await?,
+    )
+}
+
+/// `PrivateKey::query()->where('team_id', $teamId)->where('is_git_related', false)->where('uuid', $uuid)->value('id')`:
+/// a private key that an SFTP storage of the team can log in with.
+pub async fn s3_login_key_id(db: &Db, team_id: TeamId, uuid: &str) -> DbResult<Option<i64>> {
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM private_keys WHERE team_id = $1 AND is_git_related = false AND uuid = $2 LIMIT 1",
+    )
+    .bind(team_id)
+    .bind(uuid)
+    .fetch_optional(db.pool())
+    .await?)
+}
+
+/// The private keys that an SFTP storage of the team can log in with (`SelectsSftpLogin`):
+/// `(id, uuid, name)` by name.
+pub async fn s3_login_keys(db: &Db, team_id: TeamId) -> DbResult<Vec<(i64, String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT id, uuid, name FROM private_keys WHERE team_id = $1 AND is_git_related = false ORDER BY name",
+    )
+    .bind(team_id)
+    .fetch_all(db.pool())
+    .await?)
+}
+
 /// `exists:s3_storages,uuid`.
 pub async fn s3_uuid_exists(db: &Db, uuid: &str) -> DbResult<bool> {
     Ok(
@@ -505,12 +546,21 @@ pub struct NewS3Storage<'a> {
     pub name: &'a str,
     pub description: Option<&'a str>,
     pub endpoint: Option<&'a str>,
-    pub bucket: &'a str,
+    /// `type` (v4.7.0): `s3`, `sftp`, `ftps` or `webdav`.
+    pub kind: &'a str,
+    /// Storages that are not S3 have no bucket.
+    pub bucket: Option<&'a str>,
     pub region: &'a str,
     pub key_encrypted: &'a str,
     pub secret_encrypted: &'a str,
     /// `use_path_style_endpoint` (v4.5.3).
     pub use_path_style_endpoint: bool,
+    /// `skip_tls_verification` (v4.7.0).
+    pub skip_tls_verification: bool,
+    /// The private key that an SFTP storage logs in with (v4.7.0).
+    pub private_key_id: Option<i64>,
+    /// The SFTP host key that the connection test of an unsaved storage recorded (v4.7.0).
+    pub sftp_host_key: Option<&'a str>,
     pub is_usable: bool,
 }
 
@@ -518,8 +568,8 @@ pub async fn s3_create(db: &Db, n: &NewS3Storage<'_>, now: NaiveDateTime) -> DbR
     db.ensure_writable()?;
     let uuid = new_public_id();
     sqlx::query(
-        "INSERT INTO s3_storages (uuid, name, description, region, key, secret, bucket, endpoint, team_id, is_usable, created_at, updated_at, use_path_style_endpoint) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12)",
+        "INSERT INTO s3_storages (uuid, name, description, region, key, secret, bucket, endpoint, team_id, is_usable, created_at, updated_at, use_path_style_endpoint, type, skip_tls_verification, private_key_id, sftp_host_key) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13, $14, $15, $16)",
     )
     .bind(&uuid)
     .bind(n.name)
@@ -533,6 +583,10 @@ pub async fn s3_create(db: &Db, n: &NewS3Storage<'_>, now: NaiveDateTime) -> DbR
     .bind(n.is_usable)
     .bind(now)
     .bind(n.use_path_style_endpoint)
+    .bind(n.kind)
+    .bind(n.skip_tls_verification)
+    .bind(n.private_key_id)
+    .bind(n.sftp_host_key)
     .execute(db.pool())
     .await?;
     Ok(uuid)
@@ -1309,14 +1363,18 @@ pub async fn replicate_variables(
         .map(|c| format!("\"{c}\""))
         .collect::<Vec<_>>()
         .join(", ");
-    let ids: Vec<i64> = sqlx::query_scalar(
-        "SELECT id FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 ORDER BY id",
+    let rows: Vec<(i64, String, bool)> = sqlx::query_as(
+        "SELECT id, key, is_preview FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 ORDER BY id",
     )
     .bind(morph)
     .bind(from)
     .fetch_all(db.pool())
     .await?;
-    for id in ids {
+    for (id, key, is_preview) in rows {
+        // `EnvironmentVariable::performInsert()` (v4.7): a second row of the key is refused.
+        let mut tx = db.pool().begin().await?;
+        crate::environment_variables::refuse_duplicate_key(&mut tx, morph, to, is_preview, &key)
+            .await?;
         sqlx::query(&format!(
             "INSERT INTO environment_variables (resourceable_id, created_at, updated_at, {list}) \
              SELECT $1, $2, $2, {list} FROM environment_variables WHERE id = $3"
@@ -1324,8 +1382,9 @@ pub async fn replicate_variables(
         .bind(to)
         .bind(now)
         .bind(id)
-        .execute(db.pool())
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
     }
     Ok(())
 }
@@ -1538,6 +1597,10 @@ pub async fn create_variable(
     now: NaiveDateTime,
 ) -> DbResult<Record> {
     db.ensure_writable()?;
+    // `EnvironmentVariable::performInsert()` (v4.7): inserts of one key wait for each other, and a
+    // second row is refused like a unique index refuses it.
+    let mut tx = db.pool().begin().await?;
+    crate::environment_variables::refuse_duplicate_key(&mut tx, morph, id, false, key).await?;
     let text: String = sqlx::query_scalar(
         "INSERT INTO environment_variables (key, value, is_literal, is_multiline, is_shown_once, comment, resourceable_type, resourceable_id, is_shared, is_runtime, is_buildtime, uuid, version, created_at, updated_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, true, $10, $11, $12, $12) RETURNING row_to_json(environment_variables)::text",
@@ -1554,8 +1617,9 @@ pub async fn create_variable(
     .bind(new_public_id())
     .bind(version)
     .bind(now)
-    .fetch_one(db.pool())
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     decode(&text, "environment_variables")
 }
 

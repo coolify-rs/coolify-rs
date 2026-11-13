@@ -14,6 +14,7 @@ use serde_json::Value;
 use super::backup::compressor_command;
 use super::common::{helper_image, now, slug};
 use super::s3::{S3Target, minio_client_resolve_options};
+use super::storage_type as st;
 use crate::Jobs;
 use crate::notifications::{Notification, VolumeBackup, notify};
 use crate::server::ServerInfo;
@@ -243,7 +244,13 @@ impl Jobs {
             .map_err(text)?;
         let disable_local =
             backup.get("disable_local_backup").and_then(Value::as_bool) == Some(true);
-        let stream = disable_local && destinations.len() == 1;
+        // Streaming writes no local archive, so it can upload to one destination only. Only S3
+        // storages stream, and a curl upload needs the size of the file before it starts, so it
+        // cannot stream.
+        let stream = disable_local
+            && destinations.len() == 1
+            && st::is_s3(&destinations[0])
+            && !st::uses_curl_transfer(&destinations[0]);
 
         let t = match server.target(self).await {
             Ok(t) => t,
@@ -304,8 +311,10 @@ impl Jobs {
             }
         };
         let _ = vb::update_execution(db, execution, &[F::Finished], now()).await;
-        // `$team->notify(new BackupSuccess(...))` and `failed()`.
+        // `$team->notify(new BackupSuccess(...))` and `failed()`; after a run without warning,
+        // `notifyIfRecovered($team)`.
         let details = self.volume_backup_details(&backup, &target).await;
+        let recovered = matches!(outcome, Ok(None)).then(|| details.clone());
         let (notification, result) = match outcome {
             Ok(warning) => (
                 Notification::VolumeBackupSuccess {
@@ -323,7 +332,57 @@ impl Jobs {
             ),
         };
         notify(db, self.0.encrypter.as_ref(), team_id, notification).await;
+        if let Some(details) = recovered {
+            self.notify_if_volume_backup_recovered(
+                team_id,
+                backup_id,
+                str_of(&backup, "uuid"),
+                &details,
+            )
+            .await;
+        }
         result
+    }
+
+    /// `VolumeBackupJob::notifyIfRecovered($team)`: after a run without warning, tell the team once
+    /// that a backup that failed (or warned) before works again.
+    async fn notify_if_volume_backup_recovered(
+        &self,
+        team_id: i64,
+        backup_id: i64,
+        backup_uuid: &str,
+        details: &VolumeBackup,
+    ) {
+        use crate::notifications::{self, FailureEvent, VOLUME_BACKUP_THROTTLES};
+        let db = &self.0.db;
+        let (model, classes) = VOLUME_BACKUP_THROTTLES;
+        let mut released = false;
+        // `$wasFailing`, then `$hadWarning`: both are released.
+        for class in classes {
+            match notifications::release_throttle(db, model, backup_id, class).await {
+                Ok(true) => released = true,
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(backup_id, error = %e, "could not release a storage backup notification throttle");
+                }
+            }
+        }
+        if !released {
+            return;
+        }
+        notify(
+            db,
+            self.0.encrypter.as_ref(),
+            team_id,
+            Notification::ScheduledJobRecovered {
+                failure_event: FailureEvent::BackupFailure,
+                title: format!("Storage backup of {} works again.", details.target),
+                webhook_event: "volume_backup_recovered".to_owned(),
+                url: details.url.clone(),
+                webhook_data: serde_json::json!({ "backup_uuid": backup_uuid }),
+            },
+        )
+        .await;
     }
 
     /// The fields the `VolumeBackup` notifications read from the schedule.
@@ -355,6 +414,7 @@ impl Jobs {
             target: format!("{kind} {name}"),
             frequency: str_of(backup, "frequency").to_owned(),
             url: url.map(|path| format!("{}{path}", base.trim_end_matches('/'))),
+            backup_id: parts::id_of(backup),
         }
     }
 
@@ -645,23 +705,24 @@ impl Jobs {
                 .await
                 .map_err(text)?;
         } else if save_s3 && destinations.is_empty() {
-            warning =
-                Some("S3 upload failed: The selected S3 storage no longer exists.".to_owned());
+            warning = Some(
+                "Storage upload failed: The selected backup storage no longer exists.".to_owned(),
+            );
         } else if save_s3 {
             cleanup_pending = true;
             vb::update_execution(db, execution, &[F::CleanupPending(true)], now())
                 .await
                 .map_err(text)?;
             let errors = self
-                .upload_volume_archive(run, execution_uuid, location, directory, &image)
+                .upload_volume_archive(run, execution_uuid, location, size, directory, &image)
                 .await?;
             if errors.is_empty() {
                 cleanup_pending = false;
             } else {
-                let mut w = format!("S3 upload failed: {}", errors.join(" "));
+                let mut w = format!("Storage upload failed: {}", errors.join(" "));
                 match self.cleanup_volume_upload(run.execution, location).await {
                     Ok(()) => cleanup_pending = false,
-                    Err(e) => w.push_str(&format!(" Partial S3 upload cleanup failed: {e}")),
+                    Err(e) => w.push_str(&format!(" Partial storage upload cleanup failed: {e}")),
                 }
                 warning = Some(w);
             }
@@ -704,6 +765,7 @@ impl Jobs {
         run: &Run,
         execution_uuid: &str,
         location: &str,
+        size: i64,
         directory: &str,
         image: &str,
     ) -> Result<Vec<String>, String> {
@@ -724,10 +786,19 @@ impl Jobs {
                 str_of(r, "name").to_owned()
             });
             let result = match &row {
-                None => Err("The selected S3 storage no longer exists.".to_owned()),
+                None => Err("The selected backup storage no longer exists.".to_owned()),
                 Some(r) => {
-                    self.upload_volume_one(run, enc, r, execution_uuid, location, directory, image)
-                        .await
+                    self.upload_volume_one(
+                        run,
+                        enc,
+                        r,
+                        execution_uuid,
+                        location,
+                        size,
+                        directory,
+                        image,
+                    )
+                    .await
                 }
             };
             match result {
@@ -757,52 +828,92 @@ impl Jobs {
         row: &Record,
         execution_uuid: &str,
         location: &str,
+        size: i64,
         directory: &str,
         image: &str,
     ) -> Result<(), String> {
         let path_style = self.test_s3_connection(row).await?;
-        let s3 = S3Target::from_row(enc, row)?;
-        let name = quote(&format!("volume-upload-{execution_uuid}"));
-        let resolve =
-            minio_client_resolve_options(self, &run.target, &s3.endpoint, image, None).await;
+        let container = format!("volume-upload-{execution_uuid}");
+        if !st::is_s3(row) {
+            // SFTP, FTPS and WebDAV storages: rclone in its own container.
+            let transfer = self.rclone_transfer(row, &container).await?;
+            let result = match self
+                .rclone_start(
+                    &run.target,
+                    &transfer,
+                    &[format!("{location}:{location}:ro")],
+                    None,
+                    Some(run.timeout),
+                )
+                .await
+            {
+                Ok(()) => {
+                    self.rclone_upload(
+                        &run.target,
+                        &transfer,
+                        location,
+                        location,
+                        Some(run.timeout),
+                    )
+                    .await
+                }
+                Err(e) => Err(e),
+            };
+            let remove = transfer.remove_command();
+            self.remote()
+                .run_quiet(&run.target, &[remove.as_str()], RunOptions::op(OP))
+                .await;
+            return result.map_err(|e| e.message);
+        }
+        let mut s3 = S3Target::from_row(enc, row)?;
+        s3.path_style = path_style;
+        let name = quote(&container);
         let commands = [
             format!("docker rm -f {name} >/dev/null 2>&1 || true"),
             format!(
-                "docker run -d --name {name} --rm -e {} -v {} {}",
-                quote(&format!("MC_REGION={}", s3.region)),
+                "docker run -d --name {name} --rm {} -v {} {}",
+                s3.minio_client_env_options(),
                 quote(&format!("{location}:{location}:ro")),
                 quote(image)
             ),
         ];
         let refs: Vec<&str> = commands.iter().map(String::as_str).collect();
-        let alias = super::backup::minio_alias_command(
-            &format!("volume-upload-{execution_uuid}"),
-            &resolve,
-            &s3,
-            path_style,
-        );
-        let copy = format!(
-            "docker exec {name} mc cp{resolve} {} {}",
-            quote(location),
-            quote(&format!("temporary/{}{directory}/", s3.bucket))
-        );
         let opts = RunOptions::op(OP).timeout(run.timeout);
-        let result = match self.remote().run(&run.target, &refs, opts).await {
-            Ok(_) => match self
-                .remote()
+        let prepared: Result<String, coolify_remote::RemoteError> = async {
+            self.remote().run(&run.target, &refs, opts).await?;
+            if st::uses_curl_transfer(row) {
+                let key = format!(
+                    "{}/{}",
+                    directory.trim_start_matches('/'),
+                    location.rsplit('/').next().unwrap_or(location)
+                );
+                return self
+                    .prepare_curl_upload(&run.target, &s3, &container, location, &key)
+                    .await;
+            }
+            let resolve =
+                minio_client_resolve_options(self, &run.target, &s3.endpoint, image, None).await;
+            let alias = super::backup::minio_alias_command(&container, &resolve, &s3, path_style);
+            self.remote()
                 .run(&run.target, &[alias.as_str()], RunOptions::op(OP))
+                .await?;
+            Ok(format!(
+                "docker exec {} {name} mc cp{resolve} {} {}",
+                st::minio_client_part_size_option(size.max(0).unsigned_abs()),
+                quote(location),
+                quote(&format!("temporary/{}{directory}/", s3.bucket))
+            ))
+        }
+        .await;
+        let result = match prepared {
+            // `S3Storage::retryMinioClientUpload()` around the copy.
+            Ok(upload) => {
+                let upload = [upload.as_str()];
+                super::s3::retry_minio_client_upload(|| {
+                    self.remote().run(&run.target, &upload, opts)
+                })
                 .await
-            {
-                // `S3Storage::retryMinioClientUpload()` around the copy.
-                Ok(_) => {
-                    let copy = [copy.as_str()];
-                    super::s3::retry_minio_client_upload(|| {
-                        self.remote().run(&run.target, &copy, opts)
-                    })
-                    .await
-                }
-                Err(e) => Err(e),
-            },
+            }
             Err(e) => Err(e),
         };
         let remove = format!("docker rm -f {name}");
@@ -835,9 +946,9 @@ impl Jobs {
             verify.to_owned(),
             format!("docker rm -f {} >/dev/null 2>&1 || true", quote(container)),
             format!(
-                "docker run -d --rm --name {} -e {} -v {} {} >/dev/null",
+                "docker run -d --rm --name {} {} -v {} {} >/dev/null",
                 quote(container),
-                quote(&format!("MC_REGION={}", s3.region)),
+                s3.minio_client_env_options(),
                 quote(&format!("{source}:/volume:ro")),
                 quote(image)
             ),
@@ -895,8 +1006,7 @@ impl Jobs {
     async fn cleanup_volume_upload(&self, execution: i64, location: &str) -> Result<(), String> {
         let db = &self.0.db;
         let text = |e: coolify_db::DbError| e.to_string();
-        let enc = self
-            .0
+        self.0
             .encrypter
             .as_ref()
             .ok_or("No application encryption key has been specified.")?;
@@ -917,8 +1027,7 @@ impl Jobs {
                 self.check_s3_connection(&row)
                     .await
                     .map_err(|_| "One or more S3 backup files could not be deleted.".to_owned())?;
-                S3Target::from_row(enc, &row)?
-                    .delete_objects(&[location.to_owned()])
+                self.delete_backups_from_storage(&row, &[location.to_owned()])
                     .await
             }
             .await;
@@ -1074,8 +1183,7 @@ impl Jobs {
                 .map_err(text)?;
         }
         if backup.get("save_s3").and_then(Value::as_bool) == Some(true) {
-            let enc = self
-                .0
+            self.0
                 .encrypter
                 .as_ref()
                 .ok_or("No application encryption key has been specified.")?;
@@ -1113,9 +1221,7 @@ impl Jobs {
                         .filter(|f| !f.is_empty())
                         .collect();
                     if !files.is_empty() {
-                        S3Target::from_row(enc, &row)?
-                            .delete_objects(&files)
-                            .await?;
+                        self.delete_backups_from_storage(&row, &files).await?;
                     }
                 }
                 for e in &expired {
@@ -1189,9 +1295,8 @@ impl Jobs {
                 };
                 let row = row.ok_or("The S3 storage used by an existing backup is unavailable.")?;
                 if !file.is_empty() {
-                    let enc = enc.ok_or("No application encryption key has been specified.")?;
-                    S3Target::from_row(enc, &row)?
-                        .delete_objects(&[file.to_owned()])
+                    enc.ok_or("No application encryption key has been specified.")?;
+                    self.delete_backups_from_storage(&row, &[file.to_owned()])
                         .await?;
                 }
                 vb::mark_replica_deleted(db, replica, now())

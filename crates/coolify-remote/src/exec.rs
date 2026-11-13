@@ -17,6 +17,12 @@ use tokio::process::Command;
 use tokio::sync::Semaphore;
 use zeroize::Zeroizing;
 
+use crate::host_key::{
+    HOST_KEY_CHANGED_MESSAGE, HOST_KEY_SCAN_MAX_CONNECT_TIMEOUT_SECONDS, HostKeyCheck, HostKeyMode,
+    HostKeyScan, HostKeyWarningFilter, delete_stale_known_hosts_files, host_key_alias,
+    known_hosts_file_owner, mismatch_names_server, normalize_ssh_host_keys, str_limit,
+    strip_host_key_changed_warning, sync_known_hosts_file,
+};
 use crate::retry::{DEFAULT_MAX_ATTEMPTS, is_retryable_failure, retry_delay};
 use crate::sudo::parse_commands_by_line_for_sudo;
 use crate::text::{command_output, php_trim, sanitize_utf8};
@@ -31,19 +37,13 @@ const SERVER_ALIVE_INTERVAL: u32 = 20;
 const STDOUT_CAP: usize = 16 * 1024 * 1024;
 const STDERR_CAP: usize = 1024 * 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HostKeyPolicy {
-    /// Trust on first use, pinned per server (default).
-    Pin,
-    /// Upstream behaviour: `StrictHostKeyChecking=no`, no known_hosts.
-    Ignore,
-}
-
 #[derive(Debug, Clone)]
 pub struct RemoteConfig {
     pub data_dir: PathBuf,
     pub ssh_binary: PathBuf,
-    pub host_keys: HostKeyPolicy,
+    /// Upstream `constants.ssh.host_key_checking` (`SSH_HOST_KEY_CHECKING`): the mode of the
+    /// instance. The mode of one server comes with its [`Target`].
+    pub host_key_checking: HostKeyMode,
     pub max_concurrency: usize,
     /// Upstream `constants.ssh.command_timeout` (`SSH_COMMAND_TIMEOUT`).
     pub command_timeout: Duration,
@@ -54,7 +54,7 @@ impl RemoteConfig {
         Self {
             data_dir: data_dir.into(),
             ssh_binary: PathBuf::from("ssh"),
-            host_keys: HostKeyPolicy::Pin,
+            host_key_checking: HostKeyMode::Warn,
             max_concurrency: 32,
             command_timeout: Duration::from_secs(3600),
         }
@@ -128,7 +128,23 @@ pub struct Target {
     pub connection_timeout: Option<i64>,
     pub cloudflare_tunnel: bool,
     pub force_disabled: bool,
+    /// `SshMultiplexingHelper::hostKeyOptions()`: how this connection checks the host key.
+    pub host_key: HostKeyCheck,
 }
+
+/// One SSH process as it ended, without upstream's error handling (`Process::run()`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawOutput {
+    /// `None` when the process did not end in time.
+    pub code: Option<i32>,
+    pub stdout: String,
+    /// The stderr of ssh as it was, with the changed host key warning.
+    pub stderr: String,
+    pub timed_out: bool,
+}
+
+/// Receives `(server uuid, stderr of ssh)` when an SSH process reports a changed host key.
+pub type HostKeyMismatchListener = tokio::sync::mpsc::UnboundedSender<(String, String)>;
 
 impl Target {
     pub fn is_non_root(&self) -> bool {
@@ -210,6 +226,9 @@ pub type Tap = tokio::sync::mpsc::UnboundedSender<(Stream, String)>;
 pub struct Remote {
     cfg: Arc<RemoteConfig>,
     permits: Arc<Semaphore>,
+    /// Gets the uuid of a server whose ssh process reported a changed host key
+    /// (`noticeHostKeyMismatch()`).
+    mismatch_listener: Arc<std::sync::Mutex<Option<HostKeyMismatchListener>>>,
 }
 
 fn safe_path_chars(p: &Path) -> bool {
@@ -251,6 +270,7 @@ impl Remote {
         Ok(Self {
             cfg: Arc::new(cfg),
             permits,
+            mismatch_listener: Arc::default(),
         })
     }
 
@@ -258,32 +278,222 @@ impl Remote {
         self.cfg.data_dir.join("ssh")
     }
 
-    fn known_hosts(&self, server_uuid: &str) -> Option<PathBuf> {
-        let ok = !server_uuid.is_empty()
-            && server_uuid
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
-        ok.then(|| self.ssh_dir().join("known_hosts").join(server_uuid))
+    /// The private directory of the temporary key files (`sftp.rs`).
+    pub(crate) fn key_dir(&self) -> PathBuf {
+        self.ssh_dir().join("keys")
     }
 
-    /// Drops a server's pinned host key (IP or port changed, server deleted).
-    pub fn forget_host_key(&self, server_uuid: &str) {
-        if let Some(p) = self.known_hosts(server_uuid) {
+    pub(crate) fn ssh_home(&self) -> PathBuf {
+        self.ssh_dir().join("home")
+    }
+
+    pub(crate) fn ssh_binary(&self) -> &Path {
+        &self.cfg.ssh_binary
+    }
+
+    fn known_hosts_dir(&self) -> PathBuf {
+        self.ssh_dir().join("known_hosts")
+    }
+
+    /// The host key mode of the instance (`config('constants.ssh.host_key_checking')`).
+    pub fn host_key_checking(&self) -> HostKeyMode {
+        self.cfg.host_key_checking
+    }
+
+    /// `noticeHostKeyMismatch()` reports to this listener. Upstream dispatches
+    /// `ServerConnectionCheckJob` there; the job queue is not part of this crate.
+    pub fn on_host_key_mismatch(&self, listener: HostKeyMismatchListener) {
+        *self
+            .mismatch_listener
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(listener);
+    }
+
+    /// `SshMultiplexingHelper::noticeHostKeyMismatch()`.
+    fn notice_host_key_mismatch(&self, t: &Target, stderr: &str) {
+        if !mismatch_names_server(stderr, &t.server_uuid) {
+            return;
+        }
+        if let Some(listener) = self
+            .mismatch_listener
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+        {
+            let _ = listener.send((t.server_uuid.clone(), stderr.to_owned()));
+        }
+    }
+
+    fn safe_server_uuid(server_uuid: &str) -> bool {
+        !server_uuid.is_empty()
+            && server_uuid
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    }
+
+    /// The pin file coolify-rs wrote before 4.7.5 (`StrictHostKeyChecking=accept-new`), named by
+    /// the server uuid alone.
+    fn legacy_known_hosts(&self, server_uuid: &str) -> Option<PathBuf> {
+        Self::safe_server_uuid(server_uuid).then(|| self.known_hosts_dir().join(server_uuid))
+    }
+
+    /// The host keys coolify-rs pinned in a file before the pinned key moved to
+    /// `server_settings.ssh_host_key`, as "type base64" lines.
+    pub fn legacy_host_keys(&self, server_uuid: &str) -> Option<String> {
+        let path = self.legacy_known_hosts(server_uuid)?;
+        normalize_ssh_host_keys(std::fs::read_to_string(path).ok().as_deref())
+    }
+
+    /// Removes the pin file of before 4.7.5 once its keys are saved in the database.
+    pub fn forget_legacy_host_keys(&self, server_uuid: &str) {
+        if let Some(p) = self.legacy_known_hosts(server_uuid) {
             let _ = std::fs::remove_file(p);
         }
     }
 
-    /// Drops the pins of servers that no longer exist, for example servers
+    /// `SshMultiplexingHelper::deleteStaleKnownHostsFiles($uuid, null)`: drops every known_hosts
+    /// file of a server (IP or port changed, server deleted).
+    pub fn forget_host_key(&self, server_uuid: &str) {
+        if !Self::safe_server_uuid(server_uuid) {
+            return;
+        }
+        self.forget_legacy_host_keys(server_uuid);
+        delete_stale_known_hosts_files(&self.known_hosts_dir(), server_uuid, None);
+    }
+
+    /// `SshMultiplexingHelper::deleteStaleKnownHostsFiles()`: keeps only the file of the pinned key.
+    pub fn delete_stale_known_hosts_files(&self, server_uuid: &str, pinned_key: Option<&str>) {
+        if Self::safe_server_uuid(server_uuid) {
+            delete_stale_known_hosts_files(&self.known_hosts_dir(), server_uuid, pinned_key);
+        }
+    }
+
+    /// Drops the known_hosts files of servers that no longer exist, for example servers
     /// deleted by upstream Coolify on a shared database. Returns how many.
     pub fn retain_host_keys(&self, live_server_uuids: &std::collections::HashSet<String>) -> usize {
-        let Ok(entries) = std::fs::read_dir(self.ssh_dir().join("known_hosts")) else {
+        let Ok(entries) = std::fs::read_dir(self.known_hosts_dir()) else {
             return 0;
         };
         entries
             .flatten()
-            .filter(|e| !live_server_uuids.contains(e.file_name().to_string_lossy().as_ref()))
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                // A scan file belongs to a scan that is running.
+                if name.starts_with("scan_") {
+                    return false;
+                }
+                let owner = known_hosts_file_owner(&name).unwrap_or(name.as_ref());
+                !live_server_uuids.contains(owner)
+            })
             .filter(|e| std::fs::remove_file(e.path()).is_ok())
             .count()
+    }
+
+    /// `SshMultiplexingHelper::readHostKey()`: reads the host key that the server sends now. The
+    /// probe has every login method off, so it offers no key and runs no command: ssh saves the
+    /// host key during the key exchange, then the login fails by design.
+    pub async fn scan_host_key(&self, t: &Target) -> HostKeyScan {
+        let failed = |error: String| HostKeyScan { key: None, error };
+        // The scan trusts no pinned key, so only the address of the target is checked.
+        if let Err(e) = self.check_address(t) {
+            return failed(e.message);
+        }
+        let connect_timeout = t
+            .connection_timeout
+            .filter(|v| *v > 0)
+            .unwrap_or(DEFAULT_CONNECT_TIMEOUT)
+            .min(HOST_KEY_SCAN_MAX_CONNECT_TIMEOUT_SECONDS);
+        let scan_file = match tempfile::Builder::new()
+            .prefix(&format!("scan_{}_", t.server_uuid))
+            .rand_bytes(8)
+            .tempfile_in(self.known_hosts_dir())
+        {
+            Ok(f) => f,
+            Err(e) => return failed(format!("Could not write the scan file: {e}")),
+        };
+        let mut argv: Vec<OsString> = vec!["-F".into(), "/dev/null".into()];
+        let mut opt = |o: String| {
+            argv.push("-o".into());
+            argv.push(o.into());
+        };
+        if t.cloudflare_tunnel {
+            opt("ProxyCommand=cloudflared access ssh --hostname %h".into());
+        }
+        opt(format!("HostKeyAlias={}", host_key_alias(&t.server_uuid)));
+        opt(format!("UserKnownHostsFile={}", scan_file.path().display()));
+        for o in [
+            "GlobalKnownHostsFile=/dev/null",
+            "StrictHostKeyChecking=accept-new",
+            "BatchMode=yes",
+            "PubkeyAuthentication=no",
+            "PasswordAuthentication=no",
+            "KbdInteractiveAuthentication=no",
+            "HostbasedAuthentication=no",
+        ] {
+            opt(o.into());
+        }
+        opt(format!("ConnectTimeout={connect_timeout}"));
+        opt("LogLevel=ERROR".into());
+        argv.extend([
+            "-l".into(),
+            (&t.user).into(),
+            "-p".into(),
+            t.port.to_string().into(),
+            "--".into(),
+            (&t.host).into(),
+            "true".into(),
+        ]);
+        let mut cmd = Command::new(&self.cfg.ssh_binary);
+        cmd.env_clear()
+            .env(
+                "PATH",
+                std::env::var_os("PATH").unwrap_or_else(|| "/usr/local/bin:/usr/bin:/bin".into()),
+            )
+            .env("HOME", self.ssh_dir().join("home"))
+            .args(argv)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        // `hostKeyScanProcessTimeout()`.
+        let limit = Duration::from_secs(connect_timeout.unsigned_abs() + 5);
+        let error = match cmd.spawn() {
+            Err(e) => format!("Failed to start ssh: {e}"),
+            Ok(child) => match tokio::time::timeout(limit, child.wait_with_output()).await {
+                Err(_) => "The connection timed out.".to_owned(),
+                Ok(Err(e)) => format!("Failed to run ssh: {e}"),
+                Ok(Ok(output)) => str_limit(php_trim(&sanitize_utf8(&output.stderr)), 300),
+            },
+        };
+        let key =
+            normalize_ssh_host_keys(std::fs::read_to_string(scan_file.path()).ok().as_deref());
+        let old = PathBuf::from(format!("{}.old", scan_file.path().display()));
+        let _ = std::fs::remove_file(old);
+        drop(scan_file);
+        HostKeyScan { key, error }
+    }
+
+    /// One SSH process with the script on stdin, as upstream's
+    /// `ServerConnectionCheckJob::runSsh()` reads it: the exit code and both outputs, without
+    /// a retry and without error handling.
+    pub async fn probe(
+        &self,
+        target: &Target,
+        command: &str,
+        timeout: Duration,
+        op: &'static str,
+    ) -> Result<RawOutput, RemoteError> {
+        let raw = self
+            .exec_once(target, command, timeout, op, 1, None)
+            .await?;
+        self.notice_host_key_mismatch(target, &raw.stderr);
+        Ok(RawOutput {
+            code: raw.code,
+            stdout: sanitize_utf8(&raw.stdout),
+            stderr: raw.stderr,
+            timed_out: raw.timed_out,
+        })
     }
 
     /// `instant_remote_process($commands, $server, throwError: true, ...)`.
@@ -309,10 +519,7 @@ impl Remote {
             {
                 Ok(stdout) => return Ok(command_output(&stdout)),
                 Err(e) => {
-                    // A changed host key does not fix itself between attempts.
-                    let retry = is_retryable_failure(e.code, &e.message)
-                        && !e.message.starts_with(HOST_KEY_CHANGED)
-                        && attempt + 1 < attempts;
+                    let retry = is_retryable_failure(e.code, &e.message) && attempt + 1 < attempts;
                     last = e;
                     if !retry {
                         break;
@@ -428,7 +635,24 @@ impl Remote {
         }
     }
 
+    /// Checks the target and writes the known_hosts file of its pinned host key
+    /// (`syncKnownHostsFile()`). Returns `/dev/null` when the connection checks no host key.
     fn check_target(&self, t: &Target) -> Result<PathBuf, RemoteError> {
+        self.check_address(t)?;
+        match &t.host_key {
+            HostKeyCheck::Off => Ok(PathBuf::from("/dev/null")),
+            HostKeyCheck::Pinned { keys, .. } => {
+                sync_known_hosts_file(&self.known_hosts_dir(), &t.server_uuid, keys).map_err(|e| {
+                    RemoteError::new(
+                        format!("Failed to write the SSH host key to filesystem: {e}"),
+                        None,
+                    )
+                })
+            }
+        }
+    }
+
+    fn check_address(&self, t: &Target) -> Result<(), RemoteError> {
         if t.force_disabled {
             return Err(RemoteError::new("Server is disabled.", Some(0)));
         }
@@ -457,8 +681,10 @@ impl Remote {
         if !(1..=65535).contains(&t.port) {
             return Err(RemoteError::new("Invalid SSH port.", None));
         }
-        self.known_hosts(&t.server_uuid)
-            .ok_or_else(|| RemoteError::new("Invalid server.", None))
+        if !Self::safe_server_uuid(&t.server_uuid) {
+            return Err(RemoteError::new("Invalid server.", None));
+        }
+        Ok(())
     }
 
     fn write_key(&self, key: &PrivateKey) -> Result<tempfile::NamedTempFile, RemoteError> {
@@ -517,14 +743,19 @@ impl Remote {
             args.push("-o".into());
             args.push(o.into());
         };
-        match self.cfg.host_keys {
-            HostKeyPolicy::Pin => {
-                opt("StrictHostKeyChecking=accept-new".into());
-                opt(format!("UserKnownHostsFile={}", known_hosts.display()));
-            }
-            HostKeyPolicy::Ignore => {
+        // `SshMultiplexingHelper::hostKeyOptions()`.
+        match &t.host_key {
+            HostKeyCheck::Off => {
                 opt("StrictHostKeyChecking=no".into());
                 opt("UserKnownHostsFile=/dev/null".into());
+            }
+            HostKeyCheck::Pinned { enforce, .. } => {
+                opt(format!("HostKeyAlias={}", host_key_alias(&t.server_uuid)));
+                opt(format!("UserKnownHostsFile={}", known_hosts.display()));
+                opt(format!(
+                    "StrictHostKeyChecking={}",
+                    if *enforce { "yes" } else { "no" }
+                ));
             }
         }
         for o in [
@@ -627,6 +858,7 @@ impl Remote {
         })
     }
 
+    /// One attempt with upstream's error handling (`excludeCertainErrors()`).
     async fn run_once(
         &self,
         t: &Target,
@@ -636,6 +868,36 @@ impl Remote {
         attempt: u32,
         tap: Option<&Tap>,
     ) -> Result<Vec<u8>, RemoteError> {
+        let raw = self.exec_once(t, script, timeout, op, attempt, tap).await?;
+        self.notice_host_key_mismatch(t, &raw.stderr);
+        if raw.timed_out {
+            return Err(RemoteError::new(
+                format!(
+                    "The command on the server timed out after {} seconds.",
+                    timeout.as_secs()
+                ),
+                Some(124),
+            ));
+        }
+        if raw.code == Some(0) {
+            return Ok(raw.stdout);
+        }
+        Err(RemoteError::new(
+            remote_error_message(&raw.stderr, raw.code),
+            raw.code,
+        ))
+    }
+
+    /// Spawns ssh once and waits for it. `Err` only when ssh could not run at all.
+    async fn exec_once(
+        &self,
+        t: &Target,
+        script: &str,
+        timeout: Duration,
+        op: &'static str,
+        attempt: u32,
+        tap: Option<&Tap>,
+    ) -> Result<ExecOutput, RemoteError> {
         let known_hosts = self.check_target(t)?;
         let _permit = self
             .permits
@@ -678,44 +940,28 @@ impl Remote {
             Err(_) => {
                 let _ = child.start_kill();
                 let _ = child.wait().await;
-                Err(RemoteError::new(
-                    format!(
-                        "The command on the server timed out after {} seconds.",
-                        timeout.as_secs()
-                    ),
-                    Some(124),
-                ))
+                Ok(ExecOutput {
+                    code: Some(124),
+                    stdout: Vec::new(),
+                    stderr: String::new(),
+                    timed_out: true,
+                })
             }
             Ok((Err(e), _, _)) => Err(RemoteError::new(format!("Failed to run ssh: {e}"), None)),
-            Ok((Ok(status), out, err)) => {
-                let code = exit_code(status);
-                if code == Some(0) {
-                    Ok(out)
-                } else {
-                    // ssh names the identity file in some errors; it is a temporary path here.
-                    let stderr =
-                        sanitize_utf8(&err).replace(&key_path, &format!("ssh_key@{}", t.key.uuid));
-                    let msg = php_trim(&stderr);
-                    let msg = if let Some(changed) = host_key_changed(msg) {
-                        changed
-                    } else if msg.is_empty() {
-                        format!(
-                            "SSH command failed with exit code: {}",
-                            code.map(|c| c.to_string()).unwrap_or_default()
-                        )
-                    } else {
-                        msg.to_owned()
-                    };
-                    Err(RemoteError::new(msg, code))
-                }
-            }
+            Ok((Ok(status), out, err)) => Ok(ExecOutput {
+                code: exit_code(status),
+                stdout: out,
+                // ssh names the identity file in some errors; it is a temporary path here.
+                stderr: sanitize_utf8(&err).replace(&key_path, &format!("ssh_key@{}", t.key.uuid)),
+                timed_out: false,
+            }),
         };
         tracing::info!(
             target: "audit",
             server_uuid = %t.server_uuid,
             op,
             attempt,
-            exit_code = result.as_ref().map_or_else(|e| e.code, |_| Some(0)),
+            exit_code = result.as_ref().ok().and_then(|o| o.code),
             duration_ms = started.elapsed().as_millis() as u64,
             "remote command"
         );
@@ -723,35 +969,36 @@ impl Remote {
     }
 }
 
-pub(crate) const HOST_KEY_CHANGED: &str =
-    "Host key verification failed: the server's SSH host key changed";
+/// What one ssh process left behind.
+struct ExecOutput {
+    code: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: String,
+    timed_out: bool,
+}
 
-/// OpenSSH's "REMOTE HOST IDENTIFICATION HAS CHANGED" banner names the pin
-/// file (a path on the control plane) and gives no way forward in Coolify.
-/// Upstream never pins keys, so this message is coolify-rs's own.
-fn host_key_changed(stderr: &str) -> Option<String> {
-    if !stderr.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") {
-        return None;
+/// `excludeCertainErrors()`: the message of the exception upstream throws for a failed command.
+fn remote_error_message(stderr: &str, code: Option<i32>) -> String {
+    let fallback = || {
+        format!(
+            "SSH command failed with exit code: {}",
+            code.map(|c| c.to_string()).unwrap_or_default()
+        )
+    };
+    let mut message = php_trim(stderr).to_owned();
+    if message.is_empty() {
+        message = fallback();
     }
-    let fingerprint = stderr
-        .lines()
-        .skip_while(|l| !l.starts_with("The fingerprint for the "))
-        .take(2)
-        .collect::<Vec<_>>()
-        .join(" ");
-    let offered = fingerprint
-        .strip_prefix("The fingerprint for the ")
-        .and_then(|rest| {
-            let (kind, after) = rest.split_once(" key sent by the remote host is")?;
-            Some(format!(
-                " It now offers this {kind} key: {}",
-                after.trim().trim_end_matches('.')
-            ))
-        })
-        .unwrap_or_default();
-    Some(format!(
-        "{HOST_KEY_CHANGED} since coolify-rs first connected to it.{offered}. If you reinstalled the server or replaced its SSH host keys, re-enter its IP address or port to accept the new key. Otherwise someone may be intercepting the connection."
-    ))
+    if code == Some(255) && message.contains("Host key verification failed") {
+        message = HOST_KEY_CHANGED_MESSAGE.to_owned();
+    }
+    let stripped = strip_host_key_changed_warning(&message);
+    let stripped = php_trim(&stripped);
+    if stripped.is_empty() {
+        fallback()
+    } else {
+        stripped.to_owned()
+    }
 }
 
 /// Symfony Process reports a signal as `128 + signal`.
@@ -769,17 +1016,23 @@ async fn read_capped(
     let mut out = Vec::new();
     let mut pending: Vec<u8> = Vec::new();
     let mut buf = [0u8; 8192];
-    let send = |bytes: &[u8]| {
-        if let Some((t, stream)) = tap
-            && !bytes.is_empty()
-        {
-            let _ = t.send((stream, sanitize_utf8(bytes)));
+    // `ExecuteRemoteCommand`: the changed host key warning of ssh is left out of streamed stderr.
+    let mut filter = matches!(tap, Some((_, Stream::Err))).then(HostKeyWarningFilter::new);
+    let mut send = |bytes: &[u8], last: bool| {
+        if let Some((t, stream)) = tap {
+            let mut text = sanitize_utf8(bytes);
+            if let Some(f) = filter.as_mut() {
+                text = f.push(&text, last);
+            }
+            if !text.is_empty() {
+                let _ = t.send((stream, text));
+            }
         }
     };
     loop {
         match r.read(&mut buf).await {
             Ok(0) | Err(_) => {
-                send(&pending);
+                send(&pending, true);
                 return out;
             }
             Ok(n) => {
@@ -790,7 +1043,7 @@ async fn read_capped(
                     // Whole lines only, so a secret is never split between two chunks.
                     if let Some(end) = pending.iter().rposition(|b| *b == b'\n' || *b == b'\r') {
                         let rest = pending.split_off(end + 1);
-                        send(&pending);
+                        send(&pending, false);
                         pending = rest;
                     }
                 }
@@ -801,18 +1054,41 @@ async fn read_capped(
 
 #[cfg(test)]
 mod tests {
-    use super::host_key_changed;
+    use super::remote_error_message;
+    use crate::host_key::HOST_KEY_CHANGED_MESSAGE;
 
+    const WARNING: &str = "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\nIT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\nSomeone could be eavesdropping on you right now (man-in-the-middle attack)!\nIt is also possible that a host key has just been changed.\nThe fingerprint for the ED25519 key sent by the remote host is\nSHA256:P/QnH16tWXGbHRqp4+IUWllIA/aw5lP/GZvdfsdVilk.\nPlease contact your system administrator.\nAdd correct host key in /data/coolify-rs/ssh/known_hosts/known_hosts_abc_0123456789abcdef to get rid of this message.\nOffending ED25519 key in /data/coolify-rs/ssh/known_hosts/known_hosts_abc_0123456789abcdef:1\n";
+
+    // `excludeCertainErrors()` at v4.7.5.
     #[test]
-    fn rewrites_the_changed_host_key_banner() {
-        // OpenSSH 10.3 output for a pinned key that changed.
-        let stderr = "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\nIT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\nSomeone could be eavesdropping on you right now (man-in-the-middle attack)!\nIt is also possible that a host key has just been changed.\nThe fingerprint for the ED25519 key sent by the remote host is\nSHA256:P/QnH16tWXGbHRqp4+IUWllIA/aw5lP/GZvdfsdVilk.\nPlease contact your system administrator.\nAdd correct host key in /data/coolify-rs/ssh/known_hosts/abc to get rid of this message.\nOffending ED25519 key in /data/coolify-rs/ssh/known_hosts/abc:1\nHost key for h.example has changed and you have requested strict checking.\nHost key verification failed.";
-        let msg = host_key_changed(stderr).unwrap_or_default();
+    fn error_messages_follow_upstream() {
+        assert_eq!(remote_error_message("  boom \n", Some(3)), "boom");
         assert_eq!(
-            msg,
-            "Host key verification failed: the server's SSH host key changed since coolify-rs first connected to it. It now offers this ED25519 key: SHA256:P/QnH16tWXGbHRqp4+IUWllIA/aw5lP/GZvdfsdVilk. If you reinstalled the server or replaced its SSH host keys, re-enter its IP address or port to accept the new key. Otherwise someone may be intercepting the connection."
+            remote_error_message("", Some(255)),
+            "SSH command failed with exit code: 255"
         );
-        assert!(!msg.contains("/data/"));
-        assert_eq!(host_key_changed("Permission denied (publickey)."), None);
+        // Enforce mode: ssh refuses the changed key and exits with 255.
+        let refused = format!(
+            "{WARNING}Host key for coolify-abc has changed and you have requested strict checking.\nHost key verification failed.\n"
+        );
+        assert_eq!(
+            remote_error_message(&refused, Some(255)),
+            HOST_KEY_CHANGED_MESSAGE
+        );
+        // Warn mode: ssh connects, and the error of the command stays without the warning.
+        let warned = format!(
+            "{WARNING}Password authentication is disabled to avoid man-in-the-middle attacks.\ndocker: command not found\n"
+        );
+        assert_eq!(
+            remote_error_message(&warned, Some(127)),
+            "docker: command not found"
+        );
+        // Upstream trims before it strips, so a warning without anything after it stays.
+        assert_eq!(remote_error_message(WARNING, Some(1)), WARNING.trim_end());
+        // git on the server reports its own host key problem: another exit code, the text stays.
+        assert_eq!(
+            remote_error_message("Host key verification failed.", Some(128)),
+            "Host key verification failed."
+        );
     }
 }

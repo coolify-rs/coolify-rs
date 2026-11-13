@@ -28,6 +28,7 @@
   import ServerCloudflareTunnel from './ServerCloudflareTunnel.svelte';
   import ServerGithubRunners from './ServerGithubRunners.svelte';
   import ServerPlugins from './ServerPlugins.svelte';
+  import ServerVulnerabilities from './ServerVulnerabilities.svelte';
   import { router } from '../lib/router.svelte';
 
   let { uuid, section, sub }: { uuid: string; section: string; sub?: string } = $props();
@@ -54,8 +55,12 @@
     resources: ServerResources,
     swarm: ServerSwarm,
     terminal: ServerTerminal,
+    // v4.7.5: `/server/{uuid}/security` is the Security page (host key and terminal access);
+    // upstream redirects `/security/terminal-access` to its section there.
+    security: ServerTerminalAccess,
     'security/terminal-access': ServerTerminalAccess,
     'security/patches': ServerPatches,
+    'security/vulnerabilities': ServerVulnerabilities,
     'cloudflare-tunnel': ServerCloudflareTunnel,
     'github-runners': ServerGithubRunners,
     // coolify-rs plugins (ADR 0013); the page itself goes home when the team has no server panel.
@@ -64,7 +69,9 @@
   const Page = $derived(pages[sub ? `${section}/${sub}` : section]);
   // A path routes/web.php does not have, also `/security` (`redirect(route('dashboard'))`), goes home.
   $effect(() => {
-    if (!Page) router.go('/', true);
+    // `/security/image-scanning` redirects to the Vulnerabilities page.
+    if (section === 'security' && sub === 'image-scanning') router.go(`/server/${uuid}/security/vulnerabilities`, true);
+    else if (!Page) router.go('/', true);
   });
 </script>
 

@@ -2,7 +2,8 @@
 //!
 //! Writes reproduce upstream model behaviour:
 //! * `HasSafeStringAttribute` runs `strip_tags` on name/description when they
-//!   are assigned (so an assigned `null` becomes `""`);
+//!   are assigned (an assigned `null` name becomes `""`; since 4.7.5 a `null`
+//!   description stays `NULL`);
 //! * `Project::created` inserts a `project_settings` row and a `production`
 //!   environment;
 //! * `Project::deleting` deletes its environments and settings.
@@ -251,7 +252,8 @@ pub async fn create(
     )
     .bind(new_public_id())
     .bind(strip_tags(name))
-    .bind(strip_tags(description))
+    // `HasSafeStringAttribute`: a null description stays NULL (4.7.5).
+    .bind(coolify_domain::naming::strip_tags_nullable(description))
     .bind(team_id)
     .bind(now)
     .fetch_one(&mut *tx)
@@ -287,7 +289,7 @@ pub async fn update(
     db.ensure_writable()?;
     let new_name = name.map(strip_tags).unwrap_or_else(|| project.name.clone());
     let new_desc = match description {
-        Some(d) => Some(strip_tags(d)),
+        Some(d) => coolify_domain::naming::strip_tags_nullable(d),
         None => project.description.clone(),
     };
     let dirty = new_name != project.name || new_desc != project.description;
@@ -374,7 +376,7 @@ pub async fn update_environment(
     db.ensure_writable().map_err(CreateEnvError::Db)?;
     let new_name = name.map(strip_tags).unwrap_or_else(|| env.name.clone());
     let new_desc = match description {
-        Some(d) => Some(strip_tags(d)),
+        Some(d) => coolify_domain::naming::strip_tags_nullable(d),
         None => env.description.clone(),
     };
     if new_name == env.name && new_desc == env.description {

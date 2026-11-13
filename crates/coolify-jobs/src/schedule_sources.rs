@@ -210,11 +210,10 @@ impl ScheduleSource for DatabaseBackupSource {
             let Some(team_id) = int(&backup, "team_id") else {
                 return;
             };
-            let details = lookup::database_backup(
+            let details = lookup::scheduled_database_backup(
                 db,
-                database.str("name").unwrap_or_default(),
-                &database.uuid,
-                database.int("environment_id"),
+                occurrence.resource_id,
+                &database,
                 Some(name.as_deref().unwrap_or("unknown")),
                 text(&backup, "frequency"),
             )

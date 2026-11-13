@@ -257,3 +257,169 @@ pub async fn logout(srv: &Srv, registry: &str) -> Result<(), String> {
     );
     run(srv, command, &[], None).await
 }
+
+/// What `DockerRegistryLogins::registryAuthConfig()` found for one registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegistryAuth {
+    /// A base64 Docker config that holds only the `auths` login of the registry.
+    Ok(String),
+    /// A credential helper or store holds the login; it cannot be read.
+    Helper,
+    None,
+}
+
+/// `DockerRegistryLogins::registryAuthConfig()` (v4.7.5): the `auths` login of one registry from
+/// the server's Docker config, for the scanner commands. The result is never stored or logged.
+pub async fn registry_auth_config(srv: &Srv, registry: &str) -> RegistryAuth {
+    let config = srv
+        .run_quiet(
+            &[r#"cat "$HOME/.docker/config.json" 2>/dev/null || true"#.to_string()],
+            "server.registries",
+        )
+        .await;
+    single_registry_config(config.as_deref(), registry)
+}
+
+/// `DockerRegistryLogins::singleRegistryConfig()`.
+pub fn single_registry_config(config: Option<&str>, registry: &str) -> RegistryAuth {
+    use base64::Engine as _;
+    let registry = normalize_registry(registry);
+    let Ok(Value::Object(decoded)) = serde_json::from_str::<Value>(config.unwrap_or_default())
+    else {
+        return RegistryAuth::None;
+    };
+    // Docker reads a credential helper or store before `auths`, so an `auths` entry next to one
+    // may be stale.
+    let has_helper = decoded
+        .get("credHelpers")
+        .and_then(Value::as_object)
+        .is_some_and(|helpers| helpers.keys().any(|k| normalize_registry(k) == registry));
+    let has_store = decoded
+        .get("credsStore")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.is_empty());
+    if has_store || has_helper {
+        return RegistryAuth::Helper;
+    }
+    let Some(auths) = decoded.get("auths").and_then(Value::as_object) else {
+        return RegistryAuth::None;
+    };
+    for (key, entry) in auths {
+        if !entry.is_object() || normalize_registry(key) != registry {
+            continue;
+        }
+        if let Some(auth) = basic_auth(entry) {
+            let config_key = if registry == "docker.io" {
+                "https://index.docker.io/v1/"
+            } else {
+                registry.as_str()
+            };
+            // `json_encode(..., JSON_UNESCAPED_SLASHES)`.
+            let config = serde_json::json!({"auths": {config_key: {"auth": auth}}}).to_string();
+            return RegistryAuth::Ok(base64::engine::general_purpose::STANDARD.encode(config));
+        }
+    }
+    RegistryAuth::None
+}
+
+/// `basicAuth()`: the base64 "username:password" of an `auths` entry, from "auth" or from
+/// "username" and "password".
+fn basic_auth(entry: &Value) -> Option<String> {
+    use base64::Engine as _;
+    let auth = entry
+        .get("auth")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let well_formed = !auth.is_empty()
+        && auth.trim_end_matches('=').len() + 2 >= auth.len()
+        && auth
+            .trim_end_matches('=')
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/');
+    if well_formed
+        && base64::engine::general_purpose::STANDARD
+            .decode(auth)
+            .is_ok_and(|decoded| decoded.contains(&b':'))
+    {
+        return Some(auth.to_owned());
+    }
+    let username = entry.get("username").and_then(Value::as_str)?;
+    let password = entry.get("password").and_then(Value::as_str)?;
+    if username.is_empty() || username.contains(':') || password.is_empty() {
+        return None;
+    }
+    Some(base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}")))
+}
+
+#[cfg(test)]
+mod registry_auth_tests {
+    use super::*;
+
+    fn decode(config: &RegistryAuth) -> String {
+        use base64::Engine as _;
+        match config {
+            RegistryAuth::Ok(c) => String::from_utf8(
+                base64::engine::general_purpose::STANDARD
+                    .decode(c)
+                    .unwrap_or_default(),
+            )
+            .unwrap_or_default(),
+            other => format!("{other:?}"),
+        }
+    }
+
+    // `DockerRegistryLogins::singleRegistryConfig()` (upstream tests/Unit/DockerRegistryLoginsTest).
+    #[test]
+    fn one_registry_login_becomes_a_config_of_its_own() {
+        // "user:pass".
+        let config = r#"{"auths":{"ghcr.io":{"auth":"dXNlcjpwYXNz"},"https://index.docker.io/v1/":{"username":"me","password":"secret"}}}"#;
+        assert_eq!(
+            decode(&single_registry_config(Some(config), "ghcr.io")),
+            r#"{"auths":{"ghcr.io":{"auth":"dXNlcjpwYXNz"}}}"#
+        );
+        // Docker Hub keeps its legacy key; "me:secret".
+        assert_eq!(
+            decode(&single_registry_config(Some(config), "docker.io")),
+            r#"{"auths":{"https://index.docker.io/v1/":{"auth":"bWU6c2VjcmV0"}}}"#
+        );
+        assert_eq!(
+            single_registry_config(Some(config), "quay.io"),
+            RegistryAuth::None
+        );
+        assert_eq!(single_registry_config(None, "ghcr.io"), RegistryAuth::None);
+        assert_eq!(
+            single_registry_config(Some("not json"), "ghcr.io"),
+            RegistryAuth::None
+        );
+    }
+
+    #[test]
+    fn a_credential_helper_or_store_wins_over_auths() {
+        let store = r#"{"credsStore":"desktop","auths":{"ghcr.io":{"auth":"dXNlcjpwYXNz"}}}"#;
+        assert_eq!(
+            single_registry_config(Some(store), "ghcr.io"),
+            RegistryAuth::Helper
+        );
+        let helper = r#"{"credHelpers":{"ghcr.io":"gh"},"auths":{"ghcr.io":{"auth":"dXNlcjpwYXNz"},"quay.io":{"auth":"dXNlcjpwYXNz"}}}"#;
+        assert_eq!(
+            single_registry_config(Some(helper), "ghcr.io"),
+            RegistryAuth::Helper
+        );
+        assert!(matches!(
+            single_registry_config(Some(helper), "quay.io"),
+            RegistryAuth::Ok(_)
+        ));
+    }
+
+    #[test]
+    fn an_entry_without_a_usable_login_is_no_login() {
+        // "auth" that is not base64 of "user:password", and no username.
+        let config = r#"{"auths":{"ghcr.io":{"auth":"bm9jb2xvbg=="},"quay.io":{"username":"a:b","password":"x"},"r.example":{"identitytoken":"t"}}}"#;
+        for registry in ["ghcr.io", "quay.io", "r.example"] {
+            assert_eq!(
+                single_registry_config(Some(config), registry),
+                RegistryAuth::None
+            );
+        }
+    }
+}

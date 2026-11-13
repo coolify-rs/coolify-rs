@@ -219,6 +219,7 @@ impl Run {
             });
         }
         self.reload_app().await?;
+        self.image_scan_forget_stale_compose_image_overrides().await;
 
         let raw_mode = self.app.setting_bool("is_raw_compose_deployment_enabled");
         let (yaml, compose_file) = if raw_mode {
@@ -295,13 +296,17 @@ impl Run {
             Some(c) => self.can_reuse_compose_images(c).await?,
             None => false,
         };
-        if !reuse {
+        if reuse {
+            self.b.skip_build = true;
+        } else {
             self.build_compose_images(compose_file.as_ref()).await?;
         }
 
         self.b.compose_env = Some(self.compose_runtime_env().await?);
         self.save_runtime_environment().await?;
         self.pull_compose_images().await?;
+        self.image_scan_compose_start_pins_and_gate().await?;
+        self.start_deploy_phase().await?;
         self.stop_running_container(true).await?;
         self.info("Starting new application.").await;
         let network = if self.b.is_preview() {
@@ -531,7 +536,7 @@ impl Run {
         self.save_buildtime_environment_variables_with(Some(build_env))
             .await?;
         let (u, w, loc) = (
-            self.app.uuid.clone(),
+            self.compose_project_name(),
             self.workdir.clone(),
             self.b.compose_location.clone(),
         );
@@ -873,7 +878,7 @@ impl Run {
             .collect::<Vec<_>>()
             .join(" ");
         let (u, w, loc) = (
-            self.app.uuid.clone(),
+            self.compose_project_name(),
             self.workdir.clone(),
             self.b.compose_location.clone(),
         );
@@ -887,12 +892,70 @@ impl Run {
         self.exec(vec![Cmd::new(command).hidden()]).await
     }
 
+    /// `remove_containers_with_removed_volumes()`: removes the containers that `docker compose up`
+    /// would give a volume that the user deleted in Coolify (see
+    /// `compose_containers_with_removed_volumes()`).
+    async fn remove_containers_with_removed_volumes(&mut self) -> Step {
+        use crate::compose_parser::removed_volumes as removed;
+        self.exec(vec![
+            Cmd::new(removed::compose_project_mounts_command(&self.app.uuid))
+                .hidden()
+                .ignore_errors()
+                .save("compose_project_mounts", false),
+        ])
+        .await?;
+        let parsed = crate::compose_parser::validate::parse_docker_compose_yaml(
+            self.generated_compose.as_deref().unwrap_or_default(),
+        )
+        .ok();
+        let services = match parsed
+            .as_ref()
+            .and_then(|p| crate::compose_parser::php::get(p, "services"))
+        {
+            Some(coolify_compat::yaml::PhpValue::Array(items)) => items.clone(),
+            _ => Vec::new(),
+        };
+        let storage_names: Vec<String> = apps::volume_rows(&self.jobs.0.db, self.app.id)
+            .await
+            .map_err(|e| Fail::new(e.to_string()))?
+            .into_iter()
+            .map(|(_, name, _, _)| name)
+            .collect();
+        let mounts = self
+            .saved
+            .get("compose_project_mounts")
+            .cloned()
+            .unwrap_or_default();
+        let containers = removed::compose_containers_with_removed_volumes(
+            &mounts,
+            &services,
+            &self.app.uuid,
+            &storage_names,
+        );
+        for (container, volume) in containers {
+            self.info(&format!(
+                "Removing container {container}, so that it does not keep the deleted volume {volume}."
+            ))
+            .await;
+            // Without --time, Docker waits the stop_grace_period of the Compose file, as Compose does.
+            self.exec(vec![
+                Cmd::new(format!("docker stop {}", quote(&container)))
+                    .hidden()
+                    .ignore_errors(),
+            ])
+            .await?;
+            self.remove_container(&container).await;
+        }
+        Ok(())
+    }
+
     /// `start_docker_compose_services()`.
     async fn start_compose_services(&mut self) -> Step {
         self.write_missing_content_files().await?;
+        self.remove_containers_with_removed_volumes().await?;
         let server_workdir = self.cfg.clone();
         let (u, w, dep) = (
-            self.app.uuid.clone(),
+            self.compose_project_name(),
             self.workdir.clone(),
             self.dep.clone(),
         );

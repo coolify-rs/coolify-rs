@@ -145,21 +145,22 @@ pub async fn private_key_row(db: &Db, id: i64) -> DbResult<Option<(Option<i64>, 
     Ok(row)
 }
 
-/// `in_progress` deployments run by `worker` (`horizon_job_worker`) → `failed`.
+/// `in_progress` deployments run by `worker` (`horizon_job_worker`) → `failed`. Returns the IDs of
+/// the rows it changed, so the caller can sync their status to GitHub.
 pub async fn fail_in_progress_for_worker(
     db: &Db,
     worker: &str,
     now: NaiveDateTime,
-) -> DbResult<usize> {
+) -> DbResult<Vec<i64>> {
     if worker.is_empty() || db.ensure_writable().is_err() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
-    let done = sqlx::query(
-        "UPDATE application_deployment_queues SET status = 'failed', updated_at = $1 WHERE status = 'in_progress' AND horizon_job_worker = $2",
+    let ids: Vec<i64> = sqlx::query_scalar(
+        "UPDATE application_deployment_queues SET status = 'failed', updated_at = $1 WHERE status = 'in_progress' AND horizon_job_worker = $2 RETURNING id",
     )
     .bind(now)
     .bind(worker)
-    .execute(db.pool())
+    .fetch_all(db.pool())
     .await?;
-    Ok(usize::try_from(done.rows_affected()).unwrap_or(0))
+    Ok(ids)
 }

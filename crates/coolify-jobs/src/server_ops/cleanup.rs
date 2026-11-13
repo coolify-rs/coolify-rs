@@ -97,6 +97,29 @@ pub(crate) fn railpack_bootstrap_script() -> &'static str {
     "exec 8>/root/.docker/buildx/coolify-railpack-bootstrap.lock; flock -x 8; DOCKER_CONFIG=/root/.docker docker buildx inspect --bootstrap coolify-railpack >/dev/null 2>&1; flock -u 8"
 }
 
+/// `railpackBuilderHelperCommand(railpackBuildxMetadataVolume($server), $helperImage, $command)`:
+/// runs `command` for the Railpack builder from a temporary helper container, then stops the
+/// builder when no build uses it.
+pub(crate) fn railpack_builder_helper_command(helper_image: &str, command: &str) -> String {
+    format!(
+        "docker run --rm -v $HOME/.docker/buildx:/root/.docker/buildx -v /var/run/docker.sock:/var/run/docker.sock {helper_image} bash -c '{}' 2>/dev/null || true",
+        railpack_locked_script(command)
+    )
+}
+
+/// `coolifyHelperImage().':'.getHelperVersion()`.
+pub(crate) async fn helper_image(db: &coolify_db::Db) -> String {
+    let settings = ops::instance_server_settings(db).await.unwrap_or_default();
+    let registry = settings
+        .docker_registry_url
+        .filter(|r| !r.is_empty())
+        .unwrap_or_else(|| "docker.io".to_string());
+    format!(
+        "{registry}/coollabsio/coolify-helper:{}",
+        helper_version(settings.helper_version.as_deref())
+    )
+}
+
 /// `railpackBuilderHelperCommand(..., railpackBuilderBootstrapScript().'; docker buildx prune ...')`.
 pub(crate) fn railpack_prune_command(helper_image: &str) -> String {
     let script = railpack_locked_script(&format!(
@@ -407,6 +430,17 @@ pub async fn docker_cleanup_job(
     result
 }
 
+/// The `ScheduledJobRecovered` of `DockerCleanupJob::notifySuccess()`.
+fn recovered_notification(base_url: &str, server_name: &str, server_uuid: &str) -> Notification {
+    Notification::ScheduledJobRecovered {
+        failure_event: notifications::FailureEvent::DockerCleanupFailure,
+        title: format!("Docker cleanup job works again on {server_name}."),
+        webhook_event: "docker_cleanup_recovered".to_owned(),
+        url: Some(format!("{base_url}/server/{server_uuid}")),
+        webhook_data: serde_json::json!({"server_name": server_name, "server_uuid": server_uuid}),
+    }
+}
+
 async fn run_job(srv: &Srv, manual: bool, volumes: bool, networks: bool) -> Result<(), String> {
     let db = srv.db();
     let now = Jobs::now;
@@ -430,15 +464,30 @@ async fn run_job(srv: &Srv, manual: bool, volumes: bool, networks: bool) -> Resu
         .await;
         return Ok(());
     }
-    // `$this->server->team?->notify(new DockerCleanupSuccess|DockerCleanupFailed(...))`.
+    // `notifySuccess()` and `$this->server->team?->notify(new DockerCleanupFailed(...))`.
     let notify = |message: String, success: bool| async move {
         if let Some((team_id, server)) = lookup::server(db, srv.id()).await {
-            let n = if success {
-                Notification::DockerCleanupSuccess { server, message }
-            } else {
-                Notification::DockerCleanupFailed { server, message }
-            };
-            notifications::notify(db, srv.jobs.0.encrypter.as_ref(), team_id, n).await;
+            let encrypter = srv.jobs.0.encrypter.as_ref();
+            if !success {
+                let n = Notification::DockerCleanupFailed { server, message };
+                notifications::notify(db, encrypter, team_id, n).await;
+                return;
+            }
+            let recovered = recovered_notification(
+                &notifications::Ctx::load(db).await.base_url,
+                &server.name,
+                &server.uuid,
+            );
+            let n = Notification::DockerCleanupSuccess { server, message };
+            notifications::notify(db, encrypter, team_id, n).await;
+            // Also tells the team once that a cleanup that failed before works again.
+            let (model, class) = notifications::DOCKER_CLEANUP_FAILED_THROTTLE;
+            let released = notifications::release_throttle(db, model, srv.id(), class)
+                .await
+                .unwrap_or(false);
+            if released {
+                notifications::notify(db, encrypter, team_id, recovered).await;
+            }
         }
     };
     let inner = async {
@@ -596,6 +645,15 @@ mod tests {
     fn prune_commands() {
         assert!(image_prune_command(&["a.b".into()], "1.0.19").contains(r"'^(a\.b)[_:@].+'"));
         assert!(coolify_image_cleanup_command("1.0.19").contains(r"coolify-helper:1\.0\.19$"));
+    }
+
+    #[test]
+    fn a_cancelled_railpack_build_stops_the_idle_builder() {
+        // `railpackBuilderHelperCommand(railpackBuildxMetadataVolume($server), $helperImage, 'true')`
+        assert_eq!(
+            railpack_builder_helper_command("helper:1", "true"),
+            "docker run --rm -v $HOME/.docker/buildx:/root/.docker/buildx -v /var/run/docker.sock:/var/run/docker.sock helper:1 bash -c 'exec 9>/root/.docker/buildx/coolify-railpack.lock; if flock -s 9; then :; else exit $?; fi; true; status=$?; if flock -n -x 9; then DOCKER_CONFIG=/root/.docker docker buildx stop coolify-railpack >/dev/null 2>&1; fi; exit $status' 2>/dev/null || true"
+        );
     }
 
     #[test]

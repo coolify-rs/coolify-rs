@@ -151,6 +151,8 @@ async fn seed_private_key(
     };
     let stored = format_private_key(&key);
     let fingerprint = inspect(&stored).map(|info| info.fingerprint);
+    // `$localhostKey->allowLegacyKey = true`: the install script created this key, so an older key
+    // type must not block the localhost server. The row is written without the key type check.
     sqlx::query(
         "INSERT INTO private_keys (id, uuid, name, description, private_key, team_id, fingerprint, created_at, updated_at) \
          VALUES (0, $1, 'localhost''s key', 'The private key for the Coolify host machine (localhost).', $2, 0, $3, $4, $4)",

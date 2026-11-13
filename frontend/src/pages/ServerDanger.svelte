@@ -6,6 +6,7 @@
   import ServerLayout from '../components/ServerLayout.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
   import { serversUi, ApiError, type ServerFacts, type ServersPageData } from '../lib/api';
+  import { get } from '../lib/serverApi';
   import { loadServerContext } from '../lib/serverPage.svelte';
   import { router } from '../lib/router.svelte';
 
@@ -15,6 +16,21 @@
   let confirm = $state<ServersPageData['confirm']>({ text: true, password: true });
   let missing = $state(false);
   let deleting = $state(false);
+
+  /** `Server\Delete::render` at v4.7.5: what the delete removes and what it only detaches. */
+  interface DeleteData {
+    transferred: boolean;
+    resources_to_delete: string[];
+    detached_applications: { name: string; server_name: string | null; action: string }[];
+    checkboxes: { id: string; label: string; default_warning: string }[];
+  }
+  let plan = $state<DeleteData | null>(null);
+
+  $effect(() => {
+    get<DeleteData>(`/server-page/${encodeURIComponent(uuid)}/delete`)
+      .then((d) => (plan = d))
+      .catch(() => (plan = null));
+  });
 
   $effect(() => {
     loadServerContext(uuid, 'danger').then((ctx) => {
@@ -33,12 +49,9 @@
     if (!facts || facts.transferred) return [];
     const list: { id: string; label: string; defaultWarning: string }[] = [];
     const f = facts as ServerFacts & Record<string, unknown>;
-    if (f.resources > 0) {
-      list.push({
-        id: 'force_delete_resources',
-        label: `Delete all resources (${f.resources} total)`,
-        defaultWarning: 'Server cannot be deleted while it has resources.',
-      });
+    // "Delete all resources (n total): names" and the SSH key option.
+    for (const c of plan?.checkboxes ?? []) {
+      list.push({ id: c.id, label: c.label, defaultWarning: c.default_warning });
     }
     if (f.hetzner_server_id) {
       list.push({ id: 'delete_from_hetzner', label: 'Also delete server from Hetzner Cloud', defaultWarning: 'The actual server on Hetzner Cloud will NOT be deleted.' });
@@ -86,10 +99,30 @@
                 {#if facts.transferred}
                   This server was transferred to another coolify-rs instance. Only the records on this instance are deleted, also the records of its resources. The
                   server, its containers, and its data stay as they are.
-                {:else if facts.resources > 0}
+                {:else if plan && plan.resources_to_delete.length > 0}
                   It currently contains managed resources. Enable force deletion in the confirmation only if those resources should also be removed.
                 {/if}
               </p>
+              {#if !facts.transferred && plan && plan.resources_to_delete.length > 0}
+                <div>
+                  <p>Deleted with "Delete all resources":</p>
+                  <ul class="list-disc pl-5">
+                    {#each plan.resources_to_delete as name, i (i)}
+                      <li>{name}</li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
+              {#if plan && plan.detached_applications.length > 0}
+                <div>
+                  <p>Removed only from this server (not deleted):</p>
+                  <ul class="list-disc pl-5">
+                    {#each plan.detached_applications as application, i (i)}
+                      <li>{application.name} will keep running on {application.server_name}</li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
               <p>Type the server name in the confirmation dialog to continue.</p>
               {#snippet action()}
                 <div class="relative h-auto max-w-full inline-flex w-auto">
@@ -109,7 +142,7 @@
     title="Confirm Server Deletion?"
     actions={facts.transferred
       ? ['This server and the records of its resources will be permanently deleted from this coolify-rs instance. Nothing on the server changes.']
-      : ['This server will be permanently deleted from coolify-rs.']}
+      : ['This server will be permanently deleted from coolify-rs.', ...(plan?.detached_applications ?? []).map((a) => a.action)]}
     {checkboxes}
     confirmWithText={confirm.text}
     confirmWithPassword={confirm.password}

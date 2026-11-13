@@ -89,6 +89,40 @@ fn pull_request_status_line(
     }
 }
 
+/// PHP's `(bool) $value` for a decoded JSON value.
+fn php_truthy(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
+        Value::String(s) => !s.is_empty() && s != "0",
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(_) => true,
+    }
+}
+
+/// `imageScanLine()`: "Image scan: passed" or "Image scan: blocked" with a link to the
+/// deployment. PR comments can be public, so it never shows counts or vulnerability IDs. Empty
+/// when the gate did not scan. `scan_gate_result` is the column of the deployment.
+fn image_scan_line(scan_gate_result: Option<&Value>, build_logs_url: &str) -> String {
+    // The column is stored as JSON text by some writers.
+    let decoded = match scan_gate_result {
+        Some(Value::String(s)) => serde_json::from_str::<Value>(s).ok(),
+        other => other.cloned(),
+    };
+    let Some(result) = decoded.filter(|r| r.is_object() || r.is_array()) else {
+        return String::new();
+    };
+    // `isImageScanBlocked()`.
+    if result.get("blocked").is_some_and(php_truthy) {
+        return format!("Image scan: blocked. [Open in Coolify]({build_logs_url})\n\n");
+    }
+    if result.get("scan_ran") == Some(&Value::Bool(true)) {
+        return format!("Image scan: passed. [Open in Coolify]({build_logs_url})\n\n");
+    }
+    String::new()
+}
+
 /// `generatedPreviewDomain($sourceDomain)`: the URL and the port override.
 fn generated_preview_domain(
     a: &ApplicationRow,
@@ -203,6 +237,9 @@ impl Jobs {
         preview: &Record,
     ) {
         let db = &self.0.db;
+        // `SyncGithubDeploymentJob::deactivatePullRequest()`: GitHub must not show a closed pull
+        // request as deployed, also when the server is down.
+        self.deactivate_github_deployments_of_pull_request(a.id, pull_request_id);
         let Some(server_id) = a.server_id() else {
             return;
         };
@@ -227,6 +264,8 @@ impl Jobs {
         let now = Utc::now().naive_utc();
         for (id, uuid) in &active {
             let _ = apps::transition_status(db, *id, "cancelled-by-user", now).await;
+            // The status change of the model queues `SyncGithubDeploymentJob::dispatchFor()`.
+            self.sync_github_deployment(*id);
             let entry = apps::LogEntry {
                 command: None,
                 output: "Deployment cancelled: Pull request closed.".into(),
@@ -372,9 +411,25 @@ impl Jobs {
             "{base}/project/{project}/environment/{env}/application/{}",
             a.uuid
         );
-        body.push_str(&format!(
-            "[Open Build Logs]({app_url}/deployment/{}) | [Open Application Logs]({app_url}/logs)\n\n\n",
+        let build_logs_url = format!(
+            "{app_url}/deployment/{}",
             deployment_uuid.unwrap_or_default()
+        );
+        // `imageScanLine()`: the gate result of this deployment of this application.
+        if let Some(uuid) = deployment_uuid.filter(|u| !u.is_empty()) {
+            let gate: Option<Option<String>> = sqlx::query_scalar(
+                "SELECT scan_gate_result::text FROM application_deployment_queues WHERE deployment_uuid = $1 AND application_id = $2 ORDER BY id LIMIT 1",
+            )
+            .bind(uuid)
+            .bind(a.id.to_string())
+            .fetch_optional(db.pool())
+            .await
+            .map_err(|e| e.to_string())?;
+            let gate = gate.flatten().map(Value::String);
+            body.push_str(&image_scan_line(gate.as_ref(), &build_logs_url));
+        }
+        body.push_str(&format!(
+            "[Open Build Logs]({build_logs_url}) | [Open Application Logs]({app_url}/logs)\n\n\n"
         ));
         body.push_str(&format!(
             "Last updated at: {} CET",
@@ -445,6 +500,39 @@ mod tests {
         assert_eq!(
             pull_request_status_line(PullRequestStatus::Cancelled, "web", None, &p),
             "The preview deployment for **web** was cancelled. 🚫\n\n"
+        );
+    }
+
+    #[test]
+    fn image_scan_line_names_the_gate_result_only() {
+        let url = "https://c.test/deployment/d1";
+        // The gate did not run for this deployment.
+        assert_eq!(image_scan_line(None, url), "");
+        assert_eq!(image_scan_line(Some(&Value::Null), url), "");
+        assert_eq!(image_scan_line(Some(&json!({"scan_ran": false})), url), "");
+        assert_eq!(
+            image_scan_line(Some(&json!({"error": "scanner unavailable"})), url),
+            ""
+        );
+        assert_eq!(
+            image_scan_line(
+                Some(&json!({"scan_ran": true, "blocked": false, "critical": 3})),
+                url
+            ),
+            "Image scan: passed. [Open in Coolify](https://c.test/deployment/d1)\n\n"
+        );
+        // Blocked wins, and no counts or vulnerability IDs are shown.
+        assert_eq!(
+            image_scan_line(
+                Some(&json!({"scan_ran": true, "blocked": true, "ids": ["CVE-2026-0001"]})),
+                url
+            ),
+            "Image scan: blocked. [Open in Coolify](https://c.test/deployment/d1)\n\n"
+        );
+        // A text column holding JSON.
+        assert_eq!(
+            image_scan_line(Some(&json!("{\"scan_ran\":true}")), url),
+            "Image scan: passed. [Open in Coolify](https://c.test/deployment/d1)\n\n"
         );
     }
 

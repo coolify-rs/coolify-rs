@@ -27,6 +27,7 @@
       [
         { key: 'status_change', label: 'Resource status changes' },
         { key: 'restart_limit_reached', label: 'Restart limit reached' },
+        { key: 'image_vulnerabilities', label: 'Image vulnerabilities' },
       ],
     ],
     [

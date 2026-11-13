@@ -5,7 +5,7 @@ use coolify_db::Db;
 
 use super::messages::{
     CommitDetails, DatabaseBackup, Deployment, Notification, RestartKind, RestartLimit, ServerRef,
-    Task, TaskResource, git_commit_link,
+    Task, TaskResource, blocked_titles, git_commit_link,
 };
 
 /// `environment.project.*`.
@@ -96,17 +96,28 @@ pub async fn notify_deployment(
     let Some(team_id) = env.team_id else {
         return;
     };
-    let queue: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT deployment_uuid::text, commit_message::text, parent_deployment_uuid::text \
-         FROM application_deployment_queues WHERE id = $1",
+    #[allow(clippy::type_complexity)]
+    let queue: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT deployment_uuid::text, commit_message::text, parent_deployment_uuid::text, \
+         scan_gate_result::text FROM application_deployment_queues WHERE id = $1",
     )
     .bind(queue_id)
     .fetch_optional(db.pool())
     .await
     .ok()
     .flatten();
-    let Some((deployment_uuid, commit_message, parent)) = queue else {
+    let Some((deployment_uuid, commit_message, parent, scan_gate_result)) = queue else {
         return;
+    };
+    // `DeploymentFailed`: the headline of the image scan gate when it stopped the deployment.
+    // The scan engine writes `scan_gate_result`.
+    let gate: Option<serde_json::Value> = scan_gate_result
+        .as_deref()
+        .and_then(|text| serde_json::from_str(text).ok());
+    let (blocked_title, blocked_chat_title) = if success {
+        (None, None)
+    } else {
+        blocked_titles(gate.as_ref())
     };
     // `sendMultiServerDeploymentNotification`: the main deployment reports for all servers.
     if parent.is_some_and(|p| !p.trim().is_empty()) {
@@ -135,6 +146,8 @@ pub async fn notify_deployment(
         fqdn,
         preview: None,
         commit: Some(details),
+        blocked_title,
+        blocked_chat_title,
     };
     let n = if success {
         Notification::DeploymentSuccess(d)
@@ -174,7 +187,40 @@ pub async fn database_backup(
         environment_uuid: env.as_ref().map(|e| e.environment_uuid.clone()),
         database_name: database_name.map(str::to_owned),
         frequency: frequency.to_owned(),
+        backup_id: 0,
+        service_uuid: None,
+        is_instance_database: false,
     }
+}
+
+/// [`database_backup`] for the database of the backup schedule `backup_id`: with the schedule
+/// (the throttle subject of its failures) and what `link()` reads (the service of a service
+/// database, `isInstanceDatabase()` of the instance database).
+pub async fn scheduled_database_backup(
+    db: &Db,
+    backup_id: i64,
+    database: &coolify_db::databases::DatabaseRow,
+    database_name: Option<&str>,
+    frequency: &str,
+) -> DatabaseBackup {
+    let mut backup = database_backup(
+        db,
+        database.str("name").unwrap_or_default(),
+        &database.uuid,
+        database.int("environment_id"),
+        database_name,
+        frequency,
+    )
+    .await;
+    backup.backup_id = backup_id;
+    if database.is_service() {
+        backup.service_uuid = database.str("__service_uuid").map(str::to_owned);
+    } else {
+        // `StandalonePostgresql::isInstanceDatabase()`: `$this->id === 0`.
+        backup.is_instance_database =
+            database.kind == coolify_db::databases::Kind::Postgresql && database.id == 0;
+    }
+    backup
 }
 
 /// `$backup->s3->uuid`.
@@ -212,6 +258,12 @@ pub async fn scheduled_task(
             project_uuid: env.as_ref().map(|e| e.project_uuid.clone()),
             environment_uuid: env.as_ref().map(|e| e.environment_uuid.clone()),
         }),
+        // The failure streak belongs to `TaskFailed`; the job fills it in.
+        id: 0,
+        disabled: false,
+        disabled_reason: None,
+        consecutive_failures: 0,
+        failing_since: None,
     }
 }
 

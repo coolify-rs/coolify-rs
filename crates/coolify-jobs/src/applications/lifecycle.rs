@@ -9,7 +9,16 @@ use coolify_remote::shell::quote;
 use serde_json::Value;
 
 use crate::Jobs;
+use crate::notifications::resource_stopped;
 use crate::server::ServerInfo;
+
+/// `$application->settings->stopGracePeriodSeconds()`.
+fn stop_grace_seconds(a: &ApplicationRow) -> u64 {
+    a.setting_int("stop_grace_period")
+        .filter(|g| (1..=3600).contains(g))
+        .and_then(|g| u64::try_from(g).ok())
+        .unwrap_or(30)
+}
 
 impl Jobs {
     /// The application's containers on its server (`getCurrentApplicationContainerStatus`).
@@ -73,6 +82,7 @@ impl Jobs {
         reset_restart_count: bool,
         remove: bool,
     ) -> Option<String> {
+        resource_stopped::expect_stop(resource_stopped::APPLICATION, a.id, stop_grace_seconds(a));
         let db = &self.0.db;
         let server_id = a.server_id()?;
         let mut server_ids = vec![server_id];
@@ -216,6 +226,11 @@ impl Jobs {
         reset_restart_count: bool,
         remove_container: bool,
     ) {
+        resource_stopped::expect_stop(
+            resource_stopped::APPLICATION_PREVIEW,
+            preview_id,
+            stop_grace_seconds(a),
+        );
         let db = &self.0.db;
         let now = Self::now();
         if let Some(server_id) = a.server_id()
@@ -352,6 +367,13 @@ impl Jobs {
             } else {
                 Vec::new()
             };
+            // `HasImageScans` (the model's `deleting` hook): the scans, scan rules, ignores and
+            // notification state of the application go with it.
+            if let Err(e) =
+                coolify_db::image_scans::delete_resource_data(&db, apps::MORPH, a.id).await
+            {
+                tracing::warn!(application = %a.uuid, error = %e, "image scan data could not be deleted");
+            }
             if let Err(e) = apps::force_delete(&db, a.id, Utc::now().naive_utc()).await {
                 tracing::warn!(application = %a.uuid, error = %e, "application rows could not be deleted");
             }
@@ -383,6 +405,19 @@ impl Jobs {
                 rows.push(row);
             }
         }
+        // A removed helper cannot stop the Railpack builder, which keeps the memory of its builds.
+        let railpack = matches!(
+            apps::find_with_trashed(db, d.application_id).await,
+            Ok(Some(a)) if a.str("build_pack") == Some("railpack")
+        );
+        let stop_builder = if railpack {
+            Some(crate::server_ops::cleanup::railpack_builder_helper_command(
+                &crate::server_ops::cleanup::helper_image(db).await,
+                "true",
+            ))
+        } else {
+            None
+        };
         // `Server::whereTeamId($teamId)`: the team of the deployment server.
         let team = rows
             .iter()
@@ -419,6 +454,12 @@ impl Jobs {
                     )
                     .await;
                 stopped = true;
+                if let Some(command) = &stop_builder {
+                    let _ = self
+                        .remote()
+                        .run_quiet(&t, &[command.as_str()], RunOptions::op("deployment.cancel"))
+                        .await;
+                }
             }
         }
         let message = if stopped {

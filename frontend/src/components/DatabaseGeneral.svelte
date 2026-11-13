@@ -38,7 +38,7 @@
   // Per-type strings and options of the views.
   const names: Record<string, string> = {
     postgresql: 'PostgreSQL',
-    redis: 'Redis',
+    redis: 'Redis / Valkey',
     keydb: 'KeyDB',
     dragonfly: 'Dragonfly',
     mongodb: 'MongoDB',
@@ -48,7 +48,7 @@
   };
   const imageHelpers: Record<string, string | undefined> = {
     postgresql: 'Use a published PostgreSQL image from Docker Hub.',
-    redis: 'Use a published Redis image from Docker Hub.',
+    redis: 'Use a published Redis or Valkey image from Docker Hub, for example valkey/valkey:9-alpine or redis:8.',
     keydb: 'Use a published eqalpha/keydb image from Docker Hub.',
     dragonfly: undefined,
     mongodb: 'Use a published MongoDB image from Docker Hub.',
@@ -71,8 +71,8 @@
     postgresql: { column: 'postgres_conf', label: 'Custom PostgreSQL configuration', section: 'Override the PostgreSQL configuration used by this container.' },
     redis: {
       column: 'redis_conf',
-      label: 'Custom Redis configuration',
-      section: 'Override only the Redis directives you need. All other defaults remain active.',
+      label: 'Custom Redis / Valkey configuration',
+      section: 'Override only the Redis / Valkey directives you need. All other defaults remain active.',
       helper: 'coolify-rs automatically applies requirepass using the password above. If you override requirepass here, keep both values identical.',
       placeholder: '# maxmemory 256mb\n    # maxmemory-policy allkeys-lru\n    # timeout 300',
     },
@@ -91,7 +91,7 @@
   // The status-info label (`databaseLabel()`).
   const urlLabels: Record<string, string> = {
     postgresql: 'Postgres',
-    redis: 'Redis',
+    redis: 'Redis / Valkey',
     keydb: 'KeyDB',
     dragonfly: 'Dragonfly',
     mongodb: 'Mongo',
@@ -443,7 +443,7 @@
       </div>
     </DatabaseSubsection>
   {:else if kind === 'redis'}
-    <DatabaseSubsection id="credentials-section" title="Credentials" helper="Keep these values aligned with the credentials configured inside Redis.">
+    <DatabaseSubsection id="credentials-section" title="Credentials" helper="Keep these values aligned with the credentials configured inside Redis / Valkey.">
       <Callout type="warning" title={started ? 'Keep credentials synchronized' : 'Verify the initial credentials'}>
         {#if started}
           Changing values here does not update Redis. Update Redis first, then synchronize the values here so automations continue working.

@@ -20,7 +20,7 @@ use tokio::time::Instant;
 
 use crate::auth::AuthCtx;
 use crate::state::AppState;
-use crate::ui_terminal::{Session, redeem};
+use crate::ui_terminal::{LiveSession, Session, redeem};
 
 /// `TERMINAL_CLOSE_CODES`.
 const AUTH_REJECTED: u16 = 4401;
@@ -30,6 +30,11 @@ const AUTH_UNAVAILABLE: u16 = 1011;
 const HEARTBEAT: Duration = Duration::from_secs(30);
 /// `MAX_TERMINAL_SESSION_TIMEOUT_SECONDS`.
 const MAX_SESSION: Duration = Duration::from_secs(8 * 60 * 60);
+/// `TERMINAL_SESSION_CHECK_INTERVAL_MS`: how often each live PTY checks that the user may still
+/// use it. (`TERMINAL_IDLE_TIMEOUT_SECONDS` is 0 upstream: there is no idle limit, as here.)
+const SESSION_CHECK_INTERVAL: Duration = Duration::from_secs(60);
+/// `TERMINAL_SESSION_CHECK_MAX_FAILURES`: consecutive failed checks that end a PTY.
+const SESSION_CHECK_MAX_FAILURES: u32 = 3;
 /// The output a PTY may queue between its reader and the socket.
 const OUTPUT_QUEUE: usize = 64;
 
@@ -111,6 +116,34 @@ async fn redeem_for(state: &AppState, headers: &HeaderMap, token: &str) -> Resul
     redeem(state, &ctx, token).await
 }
 
+/// `terminalSessionCheckResult()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionCheck {
+    Active,
+    Revoked,
+    Failed,
+}
+
+/// `POST /terminal/session/check` (`TerminalSessionService::check()`): the session cookie must
+/// still be a signed-in user, the same user, and the user must still be allowed on the server.
+async fn session_check_result(
+    state: &AppState,
+    headers: &HeaderMap,
+    live: &LiveSession,
+) -> SessionCheck {
+    match crate::session::terminal_ctx(state, headers).await {
+        Ok(ctx) if ctx.user_id == live.user_id => {}
+        Ok(_) => return SessionCheck::Revoked,
+        Err(crate::response::ApiError::Internal) => return SessionCheck::Failed,
+        Err(_) => return SessionCheck::Revoked,
+    }
+    match crate::ui_terminal::session_allowed(state, live).await {
+        Ok(true) => SessionCheck::Active,
+        Ok(false) => SessionCheck::Revoked,
+        Err(()) => SessionCheck::Failed,
+    }
+}
+
 enum Event {
     Output(u64, String),
     Exited(u64),
@@ -134,9 +167,24 @@ struct Running {
     attach: bool,
     deadline: Instant,
     expired: bool,
+    /// The live session of this PTY until its end is recorded (`terminal.session.ended`).
+    live: Option<LiveSession>,
+    started: Instant,
 }
 
 impl Running {
+    /// `TerminalSessionService::end()`: records the end once, with upstream's reasons
+    /// (`exited`, `replaced`, `disconnected`, `max_duration`, `revoked`).
+    fn end(&mut self, state: &AppState, reason: &'static str) {
+        let Some(live) = self.live.take() else {
+            return;
+        };
+        let (state, seconds) = (state.clone(), self.started.elapsed().as_secs());
+        tokio::spawn(async move {
+            crate::ui_terminal::session_ended(&state, &live, reason, seconds).await;
+        });
+    }
+
     fn stopper(&self) -> Stopper {
         Stopper {
             input: self.input.clone(),
@@ -324,6 +372,8 @@ fn start_tasks(
         attach,
         deadline: Instant::now() + MAX_SESSION,
         expired: false,
+        live: None,
+        started: Instant::now(),
     }
 }
 
@@ -359,6 +409,10 @@ async fn run(mut socket: WebSocket, state: AppState, headers: HeaderMap) {
     let mut alive = true;
     let mut heartbeat = tokio::time::interval(HEARTBEAT);
     heartbeat.tick().await;
+    // `watchTerminalSession()`: each live PTY checks that the user may still use it.
+    let mut session_check = tokio::time::interval(SESSION_CHECK_INTERVAL);
+    session_check.tick().await;
+    let mut failed_checks = 0u32;
 
     loop {
         let deadline = current.as_ref().filter(|c| !c.expired).map(|c| c.deadline);
@@ -395,16 +449,44 @@ async fn run(mut socket: WebSocket, state: AppState, headers: HeaderMap) {
                     break;
                 }
             }
+            _ = session_check.tick(), if current.as_ref().is_some_and(|c| c.live.is_some()) => {
+                let Some(live) = current.as_ref().and_then(|c| c.live.clone()) else {
+                    continue;
+                };
+                let notice = match session_check_result(&state, &headers, &live).await {
+                    SessionCheck::Active => {
+                        failed_checks = 0;
+                        continue;
+                    }
+                    SessionCheck::Revoked => "access to this terminal was revoked.",
+                    // coolify-rs could not answer. Fail closed after a few minutes.
+                    SessionCheck::Failed => {
+                        failed_checks += 1;
+                        if failed_checks < SESSION_CHECK_MAX_FAILURES {
+                            continue;
+                        }
+                        "Coolify could not verify access to this terminal."
+                    }
+                };
+                // `endTerminalSession(userSession, ptyProcess, 'revoked', notice)`.
+                let _ = socket.send(text(format!("Terminal session ended: {notice}"))).await;
+                if let Some(c) = current.as_mut() {
+                    c.end(&state, "revoked");
+                    tokio::spawn(c.stopper().stop());
+                }
+            }
             () = async { tokio::time::sleep_until(deadline.unwrap_or_else(Instant::now)).await }, if deadline.is_some() => {
                 if let Some(c) = current.as_mut() {
                     c.expired = true;
+                    c.end(&state, "max_duration");
                     tokio::spawn(c.stopper().stop());
                 }
             }
         }
     }
     // `handleClose()`.
-    if let Some(c) = current.take() {
+    if let Some(mut c) = current.take() {
+        c.end(&state, "disconnected");
         tokio::spawn(c.stopper().stop());
     }
 }
@@ -421,15 +503,18 @@ async fn handle_message(
     for (key, value) in parsed {
         match key.as_str() {
             "ping" => socket.send(text("pong")).await.map_err(|_| ())?,
-            "checkActive" => match current.as_ref() {
+            "checkActive" => match current.as_mut() {
                 Some(c) if value == "force" => {
+                    // `session.endReason = 'replaced'`.
+                    c.end(state, "replaced");
                     tokio::spawn(c.stopper().stop());
                 }
-                // `session.ws.send(session.isActive)`: ws turns a boolean into an empty binary frame.
-                _ => socket
-                    .send(Message::Binary(Vec::new().into()))
-                    .await
-                    .map_err(|_| ())?,
+                // v4.7.5 `session.ws.send(String(session.isActive))`: a text frame, because
+                // binary frames are PTY output now.
+                active => {
+                    let is_active = if active.is_some() { "true" } else { "false" };
+                    socket.send(text(is_active)).await.map_err(|_| ())?;
+                }
             },
             "terminalToken" => {
                 let Some(token) = token_shape_ok(&value) else {
@@ -494,11 +579,19 @@ async fn handle_event(
         Event::Output(id, data) => {
             // A previous PTY can still be draining while its replacement runs.
             if current.as_ref().is_some_and(|c| c.id == id) {
-                socket.send(text(data)).await.map_err(|_| ())?;
+                // v4.7.5 `ws.send(Buffer.from(data, 'utf8'))`: PTY output goes in binary frames
+                // and control messages in text frames, so output cannot spoof them.
+                socket
+                    .send(Message::Binary(data.into_bytes().into()))
+                    .await
+                    .map_err(|_| ())?;
             }
         }
         Event::Exited(id) => {
             if current.as_ref().is_some_and(|c| c.id == id) {
+                if let Some(c) = current.as_mut() {
+                    c.end(state, "exited");
+                }
                 *current = None;
                 socket.send(text("pty-exited")).await.map_err(|_| ())?;
             }
@@ -526,7 +619,8 @@ async fn open(
     current: &mut Option<Running>,
     session: Box<Session>,
 ) -> Result<(), ()> {
-    if let Some(c) = current.as_ref() {
+    if let Some(c) = current.as_mut() {
+        c.end(state, "replaced");
         let stop = c.stopper().stop();
         let events = events.clone();
         tokio::spawn(async move {
@@ -548,7 +642,10 @@ async fn open(
             .map_err(|_| ());
     };
     match spawn(invocation, session.attach, events.clone()) {
-        Ok(running) => {
+        Ok(mut running) => {
+            // `auditLog('terminal.session.started', ...)`.
+            crate::ui_terminal::session_started(state, &session.live).await;
+            running.live = Some(session.live.clone());
             *current = Some(running);
             socket.send(text("pty-ready")).await.map_err(|_| ())
         }

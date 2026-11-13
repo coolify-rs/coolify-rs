@@ -227,6 +227,14 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
     } else {
         Vec::new()
     };
-    finish_commands(&mut commands, d, ctx.server, &compose_yaml, ctx.now, &extra);
+    finish_commands(
+        &mut commands,
+        d,
+        ctx.server,
+        &compose_yaml,
+        ctx.now,
+        &extra,
+        &ctx.start_pins,
+    );
     (commands, compose_yaml)
 }

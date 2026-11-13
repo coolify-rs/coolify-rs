@@ -28,6 +28,12 @@
   let restoring = $state(false);
   const base = $derived(`/server-page/${encodeURIComponent(uuid)}/sentinel`);
   const canEdit = $derived(session.isAdmin);
+  /**
+   * `isPushUrlInsecure()` (v4.7.5): Sentinel sends its token in the Authorization header of every
+   * push, readable on the network over plain HTTP. Only the known local internal endpoint stays on
+   * the coolify Docker network.
+   */
+  const pushUrlInsecure = $derived(!(data?.is_localhost && url === 'http://coolify:8080') && url.toLowerCase().startsWith('http://'));
   const dirty = $derived(url !== saved.url || token !== saved.token);
   let poll: ReturnType<typeof setInterval> | undefined;
 
@@ -154,9 +160,16 @@
                     <button type="button" class="button" disabled={!canEdit} onclick={() => call('regenerate', 'Token regenerated. Restarting Sentinel.')}>Regenerate token</button>
                   </div>
                 {/snippet}
-                <div class="grid gap-4 lg:grid-cols-2">
-                  <FormInput disabled={!canEdit} id="sentinelCustomUrl" required label="coolify-rs URL" helper="Public URL used by Sentinel to reach this coolify-rs instance." bind:value={url} error={error?.field('sentinel_custom_url')} />
-                  <FormInput disabled={!canEdit} type="password" id="sentinelToken" label="Sentinel token" required helper="Authentication token used by Sentinel." bind:value={token} error={error?.field('sentinel_token')} />
+                <div class="flex flex-col gap-4">
+                  {#if pushUrlInsecure}
+                    <Callout type="warning" title="Sentinel reports over plain HTTP">
+                      Sentinel sends its token with every report. Over HTTP, the token and the server data are not encrypted on the network. Set an HTTPS coolify-rs URL.
+                    </Callout>
+                  {/if}
+                  <div class="grid gap-4 lg:grid-cols-2">
+                    <FormInput disabled={!canEdit} id="sentinelCustomUrl" required label="coolify-rs URL" helper="Public URL used by Sentinel to reach this coolify-rs instance." bind:value={url} error={error?.field('sentinel_custom_url')} />
+                    <FormInput disabled={!canEdit} type="password" id="sentinelToken" label="Sentinel token" required helper="Authentication token used by Sentinel." bind:value={token} error={error?.field('sentinel_token')} />
+                  </div>
                 </div>
               </SettingsSection>
             {/if}

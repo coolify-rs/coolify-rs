@@ -118,14 +118,18 @@ const ALLOWED: &[&str] = &[
     "preview_url_template",
     "max_restart_count",
     "github_app_uuid",
+    "gitea_app_uuid",
     "dockerfile",
     // APPLICATION_SETTING_FIELDS
     "is_git_submodules_enabled",
     "is_git_lfs_enabled",
     "is_git_shallow_clone_enabled",
+    "is_auto_cancel_queued_deployments_enabled",
+    "is_auto_cancel_building_deployments_enabled",
     "disable_build_cache",
     "inject_build_args_to_dockerfile",
     "include_source_commit_in_build",
+    "include_network_hosts_in_build",
     "is_env_sorting_enabled",
     "redact_all_env_values_in_logs",
     "include_coolify_default_variables",
@@ -146,6 +150,7 @@ const ALLOWED: &[&str] = &[
     "gpu_device_ids",
     "gpu_options",
     "is_consistent_container_name_enabled",
+    "is_image_scan_enabled",
     "custom_internal_name",
     "custom_container_name_prefix",
 ];
@@ -165,12 +170,23 @@ static PORTS_EXPOSES: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::n
 });
 
 /// The rules of `update_by_uuid`, with `ManualWebhookSecret` given the stored values.
-fn rules(input: &Input, stored_secrets: &[Option<String>; 4]) -> Vec<crate::validation::Field> {
+/// `repository_changed`: `$request->input('git_repository') !== $application->git_repository &&
+/// ! $request->has('gitea_app_uuid')`, which checks the repository with
+/// `new ValidGitRepositoryUrl(allowRepositoryPath: true)`.
+fn rules(
+    input: &Input,
+    stored_secrets: &[Option<String>; 4],
+    repository_changed: bool,
+) -> Vec<crate::validation::Field> {
     let mut overrides = vec![
-        field("name", vec![Rule::String, Rule::Max(255)]),
+        field("name", crate::validation::patterns::present_name_rules()),
         field("github_app_uuid", vec![Rule::String]),
+        field("gitea_app_uuid", vec![Rule::String]),
         field("dockerfile", vec![Rule::String]),
-        field("description", vec![Rule::String, Rule::Nullable]),
+        field(
+            "description",
+            crate::validation::patterns::description_rules(),
+        ),
         field("watch_paths", vec![Rule::String, Rule::Nullable]),
         field("docker_compose_domains", vec![Rule::Array, Rule::Nullable]),
         field(
@@ -209,7 +225,31 @@ fn rules(input: &Input, stored_secrets: &[Option<String>; 4]) -> Vec<crate::vali
             vec![Rule::Nullable, Rule::String, Rule::Evaluated(failure)],
         ));
     }
+    if repository_changed {
+        // A change of Gitea source checks the repository against the Gitea instance instead.
+        overrides.push(field(
+            "git_repository",
+            vec![
+                Rule::String,
+                Rule::CustomOwned(crate::git_urls::valid_git_repository_url_or_path),
+            ],
+        ));
+    }
     shared_rules(overrides)
+}
+
+/// `$request->input('git_repository') !== $application->git_repository && ! $request->has('gitea_app_uuid')`.
+/// A missing field runs no rule, so only a sent value counts.
+fn repository_rule_applies(input: &Input, stored: Option<&str>) -> bool {
+    if input.has("gitea_app_uuid") {
+        return false;
+    }
+    match input.get("git_repository") {
+        None => false,
+        Some(Value::String(s)) => Some(s.as_str()) != stored,
+        Some(Value::Null) => stored.is_some(),
+        Some(_) => true,
+    }
 }
 
 /// `Application::deploymentType()`.
@@ -238,6 +278,9 @@ async fn is_other_deployment(state: &AppState, a: &ApplicationRow) -> Result<boo
     }
     Ok(a.int("private_key_id") != Some(0))
 }
+
+/// `$giteaApp->getMorphClass()`.
+const GITEA_APP_MORPH: &str = r"App\Models\GiteaApp";
 
 /// `GithubApp::isConnected()`.
 fn github_app_connected(app: &Map<String, Value>) -> bool {
@@ -369,10 +412,20 @@ pub async fn update(
     ];
     // The validator holds the data as it is now, and fails only further down.
     let keys: Vec<&str> = input.keys().map(String::as_str).collect();
-    let validated = if gpu_options_throws(&input) {
+    let repository_changed = repository_rule_applies(&input, found.str("git_repository"));
+    // The rule object throws a TypeError on a non-empty array.
+    let validated = if gpu_options_throws(&input)
+        || (repository_changed && crate::git_urls::rule_throws(input.get("git_repository")))
+    {
         Err(SERVER_ERROR)
     } else {
-        validate(&input, &rules(&input, &stored_secrets), &[], &keys)
+        // `[...ValidationPatterns::combinedMessages(), 'docker_compose_domains.*.array' => ...]`.
+        validate(
+            &input,
+            &rules(&input, &stored_secrets, repository_changed),
+            crate::validation::patterns::COMBINED_MESSAGES,
+            &keys,
+        )
     };
 
     if input.filled("ports_exposes") {
@@ -427,18 +480,65 @@ pub async fn update(
         return Err(ApiError::Validation(errors));
     }
     let mut github_app = None;
-    if input.has("github_app_uuid") {
-        if found.str("build_pack") == Some("dockerimage")
-            || found
-                .str("dockerfile")
-                .is_some_and(|d| !d.trim().is_empty())
-            || is_deploy_key(&state, &found).await?
+    let mut gitea = None;
+    // 4.7.5 (cc996a1d9): a request names one Git source.
+    if input.has("github_app_uuid") && input.has("gitea_app_uuid") {
+        let mut errors = Map::new();
+        errors.insert(
+            "gitea_app_uuid".into(),
+            json!("Send only one of github_app_uuid or gitea_app_uuid."),
+        );
+        return Err(ApiError::Validation(errors));
+    }
+    for source_field in ["github_app_uuid", "gitea_app_uuid"] {
+        if input.has(source_field)
+            && (found.str("build_pack") == Some("dockerimage")
+                || found
+                    .str("dockerfile")
+                    .is_some_and(|d| !d.trim().is_empty())
+                || is_deploy_key(&state, &found).await?)
         {
             return Err(field_error(
-                "github_app_uuid",
-                "The github_app_uuid can only be changed for applications deployed from a GitHub App or public repository.",
+                source_field,
+                format!(
+                    "The {source_field} can only be changed for applications deployed from a Git source or public repository."
+                ),
             ));
         }
+    }
+    if input.has("gitea_app_uuid") {
+        let source = super::gitea_apps::team_source_by_uuid(
+            &state,
+            "gitea_apps",
+            input.str("gitea_app_uuid").unwrap_or_default(),
+            ctx.team_id,
+        )
+        .await?
+        .filter(super::gitea_apps::is_connected)
+        .ok_or(ApiError::Message(
+            StatusCode::NOT_FOUND,
+            "Gitea App not found.",
+        ))?;
+        // `if (! $application->source?->is($newSource)) $this->authorize('useTeamCredentials', $application)`.
+        let source_id = source.get("id").and_then(Value::as_i64);
+        let same_source = found.str("source_type") == Some(GITEA_APP_MORPH)
+            && found.int("source_id").is_some()
+            && found.int("source_id") == source_id;
+        if !same_source {
+            ctx.authorize_team_credentials()?;
+        }
+        // Gitea clones and webhooks need owner/name and the repository ID of the new source:
+        // `giteaAppRepository($newSource, (string) $request->input('git_repository', $application->git_repository))`.
+        let repository = match input.get("git_repository") {
+            Some(v) => fields::php_text(v)?.unwrap_or_default(),
+            None => found.str("git_repository").unwrap_or_default().to_owned(),
+        };
+        match super::gitea_apps::gitea_app_repository(&state, Some(source), &repository).await {
+            Ok(found_repository) => gitea = Some(found_repository),
+            Err(response) => return Ok(response),
+        }
+    }
+    if input.has("github_app_uuid") {
         let app = apps::github_app_for_team(
             &state.db,
             ctx.team_id,
@@ -450,6 +550,14 @@ pub async fn update(
             StatusCode::NOT_FOUND,
             "Github App not found.",
         ))?;
+        // 4.7.5 (8011d0d6a): `if (! $application->source?->is($newSource))
+        // $this->authorize('useTeamCredentials', $application)`.
+        let same_source = found.str("source_type") == Some("App\\Models\\GithubApp")
+            && found.int("source_id").is_some()
+            && found.int("source_id") == app.get("id").and_then(Value::as_i64);
+        if !same_source {
+            ctx.authorize_team_credentials()?;
+        }
         github_app = Some(app);
     }
 
@@ -571,6 +679,7 @@ pub async fn update(
         Applied {
             app_settings,
             github_app,
+            gitea,
             compose_entries: compose_entries_json,
             has_basic_auth,
             instant,
@@ -583,6 +692,8 @@ pub async fn update(
 struct Applied {
     app_settings: Vec<(&'static str, Value)>,
     github_app: Option<Map<String, Value>>,
+    /// `$giteaRepository`: the new Gitea source with owner/name and the repository ID.
+    gitea: Option<super::gitea_apps::GiteaRepository>,
     compose_entries: Map<String, Value>,
     has_basic_auth: bool,
     instant: bool,
@@ -601,6 +712,7 @@ async fn apply(
     let Applied {
         app_settings,
         github_app,
+        gitea,
         compose_entries,
         has_basic_auth,
         instant,
@@ -760,6 +872,32 @@ async fn apply(
             p.set("repository_project_id", ColumnValue::Text(None));
         }
     }
+    if let Some(found_repository) = gitea {
+        let id = found_repository
+            .source
+            .get("id")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        if original.int("source_id") != Some(id)
+            || original.str("source_type") != Some(GITEA_APP_MORPH)
+        {
+            p.set("source_id", ColumnValue::Int(id));
+            p.set(
+                "source_type",
+                ColumnValue::Text(Some(GITEA_APP_MORPH.into())),
+            );
+        }
+        p.set(
+            "git_repository",
+            ColumnValue::Text(Some(found_repository.repository)),
+        );
+        p.set(
+            "repository_project_id",
+            found_repository
+                .repository_project_id
+                .map_or(ColumnValue::Text(None), ColumnValue::Int),
+        );
+    }
     let has_noindex = input.has("noindex_domains");
     if has_noindex {
         let json = fields::noindex_json(
@@ -902,5 +1040,43 @@ mod tests {
         assert_eq!(php_int("80"), 80);
         assert_eq!(php_int("1e3"), 1000);
         assert_eq!(php_int("5.9"), 5);
+    }
+
+    fn input(v: Value) -> Input {
+        match v {
+            Value::Object(m) => Input(m),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn a_changed_repository_without_a_gitea_source_gets_the_url_rule() {
+        let stored = Some("acme/web");
+        assert!(!repository_rule_applies(&input(json!({})), stored));
+        assert!(!repository_rule_applies(
+            &input(json!({"git_repository": "acme/web"})),
+            stored
+        ));
+        assert!(repository_rule_applies(
+            &input(json!({"git_repository": "acme/api"})),
+            stored
+        ));
+        assert!(repository_rule_applies(
+            &input(json!({"git_repository": 5})),
+            stored
+        ));
+        assert!(repository_rule_applies(
+            &input(json!({"git_repository": null})),
+            stored
+        ));
+        assert!(!repository_rule_applies(
+            &input(json!({"git_repository": null})),
+            None
+        ));
+        // A change of Gitea source checks the repository on the Gitea instance instead.
+        assert!(!repository_rule_applies(
+            &input(json!({"git_repository": "acme/api", "gitea_app_uuid": "x"})),
+            stored
+        ));
     }
 }

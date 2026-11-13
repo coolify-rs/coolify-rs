@@ -167,6 +167,7 @@
   async function validate() {
     clearTimeout(poll);
     progress = null;
+    background = false;
     validating = true;
     try {
       await serversUi.validate(uuid);
@@ -190,6 +191,14 @@
       poll = setTimeout(watch, 1000);
       return;
     }
+    if (background) {
+      // v4.7.5 `background-validation-finished`: the dialog was opened for a background
+      // validation job, which does not drive its checkpoints; it closes when the job ends.
+      background = false;
+      validating = false;
+      await load();
+      return;
+    }
     if (v.progress && !v.progress.error) {
       notify.ok('Server validated.');
       await load();
@@ -199,6 +208,22 @@
       if (ctx) facts = ctx.facts;
     }
   }
+
+  /** `:open="$isValidating"`: a validation that runs in the background opens the dialog. */
+  let background = $state(false);
+  $effect(() => {
+    void uuid;
+    serversUi
+      .validation(uuid)
+      .then((v) => {
+        if (!v.progress?.running || validating) return;
+        background = true;
+        progress = v.progress;
+        validating = true;
+        watch();
+      })
+      .catch(() => {});
+  });
 
   $effect(() => () => clearTimeout(poll));
 
@@ -274,6 +299,26 @@
   {/if}
 {/snippet}
 
+{#snippet forceDisabledCallout()}
+  <!-- Port of upstream livewire/server/partials/force-disabled-callout.blade.php. -->
+  {#if facts?.can_be_re_enabled}
+    <Callout type="danger" title="Server disabled" class="mb-4">
+      coolify-rs disabled this server because it was unreachable for more than 7 days. coolify-rs does not connect to it. Correct the connection settings,
+      then click <strong>Validate connection</strong>. When the connection works, the server is enabled again.
+    </Callout>
+  {/if}
+{/snippet}
+
+{#snippet hostKeyChangedCallout()}
+  <!-- v4.7.5 livewire/server/show.blade.php: outside the layout switch, so that the localhost server shows it too. -->
+  {#if facts?.ssh_host_key_changed}
+    <Callout type="danger" title="The SSH host key of this server changed" class="mb-4">
+      The server sent a host key that does not match the key that coolify-rs trusts. Check it on the
+      <a href={`/server/${uuid}/security#server-host-key-section`} use:link class="underline">Security</a> page.
+    </Callout>
+  {/if}
+{/snippet}
+
 {#snippet refreshDetailsButton()}
   <span class="relative inline-flex" title={facts?.functional ? undefined : 'Validate the connection first.'}>
     <button type="button" class="button" disabled={!facts?.functional || fetchingDetails} onclick={refreshDetails}>
@@ -297,6 +342,7 @@
   </div>
 {:else if facts}
   <ServerLayout name={facts.name}>
+    {@render hostKeyChangedCallout()}
     {#if facts.is_localhost && form}
       <!-- Port of upstream livewire/server/partials/localhost-general.blade.php. -->
       <form
@@ -315,6 +361,7 @@
               {facts?.functional ? 'Revalidate connection' : 'Validate connection'}
             </button>
           {/snippet}
+          {@render forceDisabledCallout()}
           <div class="flex items-start gap-3">
             <div class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-neutral-600 dark:bg-white/[0.06] dark:text-fg-dim">
               <Reicon name="servers" class="size-4.5" />
@@ -398,6 +445,8 @@
             </Callout>
           {/if}
           <ServerTransferFinish {uuid} />
+
+          {@render forceDisabledCallout()}
 
           <div class="grid gap-4 sm:grid-cols-2">
             <FormInput id="name" label="Name" required disabled={!canEdit} bind:value={form.name} error={err('name')} />

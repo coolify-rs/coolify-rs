@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::StartContext;
 use super::common::{
-    CONFIGURATION_DIR, b64, docker_stop_command, readme, server_docker_config_prefix, slug,
+    CONFIGURATION_DIR, b64, docker_stop_command, pull_image_commands, readme, slug,
 };
 use super::env::{add_coolify_variables, has_key};
 
@@ -279,9 +279,10 @@ pub(super) fn start_commands(p: &StartContext<'_>) -> (Vec<String>, String) {
         "echo {}",
         quote(&format!("Pulling {} image.", s("image")))
     ));
-    commands.push(format!(
-        "{}docker compose -f {dir}/docker-compose.yml pull",
-        server_docker_config_prefix(p.server)
+    commands.extend(pull_image_commands(
+        &format!("{dir}/docker-compose.yml"),
+        p.server,
+        &p.start_pins,
     ));
     if d.bool("enable_ssl") {
         commands.push(format!(

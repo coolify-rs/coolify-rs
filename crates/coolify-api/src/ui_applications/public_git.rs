@@ -28,10 +28,10 @@ struct PublicGithub {
     html_url: String,
 }
 
-/// `GithubApp::where('name', 'Public GitHub')->first()`.
+/// `GithubApp::query()->whereKey(0)->where('is_public', true)->first()`.
 async fn public_github(state: &AppState) -> Result<Option<PublicGithub>, ApiError> {
     let row: Option<(i64, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT id, api_url, html_url FROM github_apps WHERE name = 'Public GitHub' LIMIT 1",
+        "SELECT id, api_url, html_url FROM github_apps WHERE id = 0 AND is_public = true LIMIT 1",
     )
     .fetch_optional(state.db.pool())
     .await
@@ -837,7 +837,13 @@ pub async fn create(
     Ok(created(json!({"uuid": uuid})).into_response())
 }
 
-/// `importDetectedEnvironmentVariables()`: `EnvironmentVariable::create()` per valid key in one
+/// Whether `updateOrCreate()` writes the detected value over the stored one (Eloquent saves only
+/// a dirty model).
+fn detected_value_changes(current: Option<&str>, detected: Option<&str>) -> bool {
+    current != detected
+}
+
+/// `importDetectedEnvironmentVariables()`: `updateOrCreate()` per valid key in one
 /// transaction, each with the preview copy the model's `created` hook adds (from the in-memory
 /// model, so with its default flags; not for a generated magic variable of a compose
 /// application) and the version it writes.
@@ -863,6 +869,37 @@ pub(super) async fn import_variables(
         let key = key.trim();
         let value = value.as_deref().map(str::trim);
         let shared = value.is_some_and(|v| !v.is_empty() && SHARED_REFERENCE.is_match(v));
+        // `$application->environment_variables()->updateOrCreate(['key' => $key], [...])`: the
+        // created hook of the application can already have added a default for this key. An
+        // update fires no `created` hook, so it adds no preview copy.
+        let existing: Option<(i64, Option<String>)> = sqlx::query_as(
+            "SELECT id, value FROM environment_variables WHERE key = $1 AND resourceable_type = $2 AND resourceable_id = $3 AND is_preview = false ORDER BY id LIMIT 1",
+        )
+        .bind(key)
+        .bind(apps::MORPH)
+        .bind(application_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        if let Some((id, stored)) = existing {
+            let current = stored.and_then(|c| enc.decrypt_maybe_serialized(&c).ok());
+            if !detected_value_changes(current.as_deref(), value) {
+                continue;
+            }
+            sqlx::query(
+                "UPDATE environment_variables SET value = $1, is_shared = $2, \
+                 preserve_compose_null = CASE WHEN $1::text IS NOT NULL THEN false ELSE preserve_compose_null END, \
+                 updated_at = $3 WHERE id = $4",
+            )
+            .bind(value.map(|v| enc.encrypt_serialized(v)))
+            .bind(shared)
+            .bind(now)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+            continue;
+        }
         for preview in [false, true] {
             if preview {
                 let found: bool = sqlx::query_scalar(
@@ -885,6 +922,14 @@ pub(super) async fn import_variables(
                     continue;
                 }
             }
+            coolify_db::environment_variables::refuse_duplicate_key(
+                &mut tx,
+                apps::MORPH,
+                application_id,
+                preview,
+                key,
+            )
+            .await?;
             sqlx::query(
                 "INSERT INTO environment_variables (key, value, is_preview, is_multiline, is_literal, is_runtime, is_buildtime, \
                  is_required, is_shown_once, comment, resourceable_type, resourceable_id, is_shared, uuid, version, created_at, updated_at) \
@@ -911,6 +956,16 @@ pub(super) async fn import_variables(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_detected_value_replaces_a_default_only_when_it_differs() {
+        // The application's created hook added the same value: nothing is written.
+        assert!(!detected_value_changes(Some("22"), Some("22")));
+        assert!(!detected_value_changes(None, None));
+        assert!(detected_value_changes(Some("20"), Some("22")));
+        assert!(detected_value_changes(None, Some("")));
+        assert!(detected_value_changes(Some("x"), None));
+    }
 
     #[test]
     fn directory_paths_are_normalized() {

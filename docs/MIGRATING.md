@@ -9,18 +9,18 @@ You can go back to Coolify the same way (see [Going back to Coolify](#going-back
 
 ## Which Coolify versions can move
 
-A coolify-rs release matches exactly one Coolify release, named in its version: **coolify-rs `4.6.0-rs.5` takes over
-Coolify `4.6.0`**.
+A coolify-rs release matches exactly one Coolify release, named in its version: **coolify-rs `4.7.5-rs.1` takes over
+Coolify `4.7.5`**.
 
 | Your Coolify | What to do |
 |---|---|
-| 4.6.0 | Migrate as described below. |
-| Older than 4.6.0 | Upgrade Coolify to 4.6.0 first: `curl -fsSL https://cdn.coollabs.io/coolify/install.sh \| sudo bash -s 4.6.0`. Then migrate. |
-| Newer than 4.6.0 | Not yet. Coolify cannot be downgraded, and coolify-rs starts read-only on a database with migrations it does not know. Wait for the coolify-rs release that matches your version. |
+| 4.7.5 | Migrate as described below. |
+| Older than 4.7.5 | Upgrade Coolify to 4.7.5 first: `curl -fsSL https://cdn.coollabs.io/coolify/install.sh \| sudo bash -s 4.7.5`. Then migrate. |
+| Newer than 4.7.5 | Not yet. Coolify cannot be downgraded, and coolify-rs starts read-only on a database with migrations it does not know. Wait for the coolify-rs release that matches your version. |
 
-On Coolify 4.5.3, coolify-rs would also start: on its first start it applies Coolify 4.6.0's own schema changes, as
-Coolify's upgrade would. From then on only Coolify 4.6.0 can take the database back, so upgrading Coolify first is the
-simpler way.
+On Coolify 4.5.3 or 4.6.0, coolify-rs would also start: on its first start it applies Coolify 4.7.5's own schema
+changes, as Coolify's upgrade would. From then on only Coolify 4.7.5 can take the database back, so upgrading Coolify
+first is the simpler way.
 
 To see your version, open Settings in Coolify, or run:
 
@@ -35,14 +35,14 @@ refuses writes and says why in the dashboard and the log, instead of risking you
 
 1. **Read [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md).** It lists every difference from Coolify we know of. Make sure
    none of them matters for you.
-2. **Turn off Coolify's automatic updates** (Settings → Update), so Coolify does not move past 4.6.0 before you migrate.
+2. **Turn off Coolify's automatic updates** (Settings → Update), so Coolify does not move past 4.7.5 before you migrate.
 3. **Wait until nothing is running:** no deployment, backup, scheduled task or server transfer in progress. Coolify's
    queue is in Redis, and coolify-rs runs its own, so work Coolify has queued but not started is not carried over.
 4. **Back up the database and the secrets**, as root on the Coolify server:
 
    ```bash
    mkdir -p /root/coolify-backup
-   docker exec coolify-db pg_dump -U coolify -d coolify -Fc > /root/coolify-backup/coolify-4.6.0.dump
+   docker exec coolify-db pg_dump -U coolify -d coolify -Fc > /root/coolify-backup/coolify-4.7.5.dump
    cp -a /data/coolify/source /root/coolify-backup/source
    ```
 
@@ -53,7 +53,7 @@ refuses writes and says why in the dashboard and the log, instead of risking you
 
    ```bash
    docker run --rm --network coolify --env-file /data/coolify/source/.env -e DB_HOST=coolify-db \
-     ghcr.io/coolify-rs/coolify-rs:4.6.0-rs.5 check-schema
+     ghcr.io/coolify-rs/coolify-rs:4.7.5-rs.1 check-schema
    ```
 
    `"read_only_reason": null` means it can. Anything else says why not; nothing has changed, and Coolify keeps running.
@@ -80,9 +80,9 @@ The switch takes a minute or two. Everyone is signed out.
 
 ## Check it
 
-1. Open the dashboard at the same address and sign in with your Coolify account. Settings shows version `4.6.0-rs.5`.
+1. Open the dashboard at the same address and sign in with your Coolify account. Settings shows version `4.7.5-rs.1`.
 2. `docker exec coolify coolify-rs check-schema` shows `"read_only_reason": null`. If not, the reason is there (usually
-   a Coolify version other than 4.6.0); [go back to Coolify](#going-back-to-coolify) and see the version table above.
+   a Coolify version other than 4.7.5); [go back to Coolify](#going-back-to-coolify) and see the version table above.
 3. Open each server and click **Validate**. They should be reachable with their existing keys.
 4. Redeploy one application, and run one database backup, to see a full round trip.
 
@@ -90,7 +90,7 @@ The coolify-rs log: `docker logs coolify`.
 
 ## Going back to Coolify
 
-coolify-rs writes rows exactly as Coolify does, so Coolify 4.6.0 can take the database back, including what you changed
+coolify-rs writes rows exactly as Coolify does, so Coolify 4.7.5 can take the database back, including what you changed
 while on coolify-rs. First let coolify-rs confirm it:
 
 ```bash
@@ -101,7 +101,7 @@ It exits 0 when Coolify can take the database back, and otherwise lists the rows
 plugin created that Coolify would not understand). Then run Coolify's own installer for the same version:
 
 ```bash
-curl -fsSL https://cdn.coollabs.io/coolify/install.sh | sudo bash -s 4.6.0
+curl -fsSL https://cdn.coollabs.io/coolify/install.sh | sudo bash -s 4.7.5
 ```
 
 It keeps the same `.env`, database and keys, and brings back Coolify's containers. The `COOLIFY_RS_*` lines in `.env`
@@ -110,7 +110,7 @@ are ignored by Coolify.
 If something went wrong with the data itself, restore your backup after going back:
 
 ```bash
-docker exec -i coolify-db pg_restore -U coolify -d coolify --clean --if-exists < /root/coolify-backup/coolify-4.6.0.dump
+docker exec -i coolify-db pg_restore -U coolify -d coolify --clean --if-exists < /root/coolify-backup/coolify-4.7.5.dump
 docker restart coolify
 ```
 

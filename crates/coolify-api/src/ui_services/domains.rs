@@ -20,6 +20,17 @@ use crate::state::AppState;
 const MULTIPLE_DOMAINS: &str = "Some services do not support multiple domains, which can lead to problems and is NOT RECOMMENDED.<br><br>Only use multiple domains if you know what you are doing.";
 const SSLIP: &str = "Your configuration is saved, but sslip domain with https is <span class='dark:text-red-500 text-red-500 font-bold'>NOT</span> recommended, because Let's Encrypt servers with this public domain are rate limited (SSL certificate validation will fail). <br><br>Use your own domain instead.";
 
+/// `ServiceApplication::extractPortFromUrl($fqdn)`: the port a domain asks for, if any.
+fn requested_port(fqdn: &str) -> Option<i64> {
+    let fqdn = fqdn.trim();
+    let with_scheme = if fqdn.starts_with("http://") || fqdn.starts_with("https://") {
+        fqdn.to_owned()
+    } else {
+        format!("http://{fqdn}")
+    };
+    app_domains::UrlParts::parse(&with_scheme).and_then(|p| p.port_number())
+}
+
 fn split(value: Option<&str>) -> Vec<String> {
     value
         .unwrap_or_default()
@@ -173,8 +184,12 @@ fn row_json(s: &ServiceRow, app: &SubRow, url: &str) -> Value {
         .and_then(Value::as_str)
         .filter(|v| !v.is_empty());
     let mut parts = parts_json(url);
-    if has_override && let Value::Object(m) = &mut parts {
-        m.insert("port".into(), json!(port.unwrap_or_default().to_string()));
+    // `filled($row['internal_port'])`: the edit form shows the port the domain routes to, also
+    // when it is inherited from the service.
+    if let Some(shown) = port
+        && let Value::Object(m) = &mut parts
+    {
+        m.insert("port".into(), json!(shown.to_string()));
     }
     json!({
         "service_application_id": app.id,
@@ -279,15 +294,21 @@ async fn save_list(
             ));
         }
     }
+    // `ServiceApplication::portRequiresConfirmation($fqdn, $requiredPort)` (4.7: a domain
+    // without a port routes to the required port).
     if options.check_ports
         && !options.force_port
         && let Some(required) = required_port(s, app)
-        && list
+        && let Some(asked) = list
             .iter()
-            .any(|f| port_requires_confirmation(app, f, required, app.str("fqdn")))
+            .find(|f| port_requires_confirmation(app, f, required))
     {
+        // `$this->requestedPort = ServiceApplication::extractPortFromUrl($fqdn)`.
         return Ok((
-            Some(ok(json!({"port_warning": required})).into_response()),
+            Some(
+                ok(json!({"port_warning": required, "requested_port": requested_port(asked)}))
+                    .into_response(),
+            ),
             Vec::new(),
         ));
     }
@@ -569,7 +590,22 @@ pub async fn update(
     warnings.extend(
         crate::ui_shared::dns::release_after_edit(&state, &owner, &previous_hostnames).await,
     );
-    Ok(ok(json!({"message": "Domain updated.", "warnings": warnings})).into_response())
+    // `configureDnsAfterDomainEdit()`: a hostname the edit added gets its DNS record.
+    let dns = crate::ui_shared::dns::after_domain_edit(
+        &state,
+        &ctx,
+        "service",
+        &uuid,
+        &updated,
+        &previous_hostnames,
+        &mut warnings,
+    )
+    .await?;
+    let mut answer = json!({"message": "Domain updated.", "warnings": warnings});
+    if let Some(dns) = dns {
+        answer["dns"] = dns;
+    }
+    Ok(ok(answer).into_response())
 }
 
 /// `Domains::removeDomain`.

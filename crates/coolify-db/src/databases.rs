@@ -870,6 +870,8 @@ pub async fn soft_delete(db: &Db, kind: Kind, id: i64, now: NaiveDateTime) -> Db
     .bind(id)
     .execute(db.pool())
     .await?;
+    // `HasStars::bootHasStars()`.
+    crate::stars::delete_for(db, kind.morph(), id).await?;
     Ok(())
 }
 

@@ -13,6 +13,7 @@ use coolify_db::database_parts as parts;
 use coolify_db::databases::{self as dbs, DatabaseRow};
 use coolify_db::records::Record;
 use coolify_db::servers::ColumnValue;
+use coolify_jobs::databases::env::without_edge_whitespace;
 use coolify_jobs::databases::variables as jobvars;
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -132,7 +133,7 @@ fn stored_plain(state: &AppState, row: &Record) -> Option<String> {
         .filter(|c| !c.is_empty())?;
     enc.decrypt_maybe_serialized(cipher)
         .ok()
-        .map(|v| v.trim().to_owned())
+        .map(|v| without_edge_whitespace(&v).to_owned())
 }
 
 /// `EnvironmentVariable::authorizeAddedSharedVariableReferencesIn` for a database variable.
@@ -173,10 +174,11 @@ async fn present(
         .and_then(|v| v.as_str().map(str::to_owned));
     let plain = match cipher.as_deref().filter(|c| !c.is_empty()) {
         Some(c) => Some(
-            enc.decrypt_maybe_serialized(c)
-                .map_err(|_| ApiError::Internal)?
-                .trim()
-                .to_owned(),
+            without_edge_whitespace(
+                &enc.decrypt_maybe_serialized(c)
+                    .map_err(|_| ApiError::Internal)?,
+            )
+            .to_owned(),
         ),
         None => None,
     };
@@ -329,7 +331,10 @@ pub async fn create(
         ));
     }
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-    let value = input.str("value").map(|v| v.trim().to_owned());
+    // The `value` setter: `withoutEdgeWhitespace()` (`TrimStrings` leaves `value` alone).
+    let value = input
+        .str("value")
+        .map(|v| without_edge_whitespace(v).to_owned());
     check_references(&ctx, &d, None, value.as_deref())?;
     let row = parts::create_variable(
         &state.db,
@@ -384,7 +389,9 @@ pub async fn update(
     let mut values: Vec<(&'static str, ColumnValue)> = Vec::new();
     // `if ($request->has('value'))`: a request without a value keeps the stored one.
     if input.has("value") {
-        let value = input.str("value").map(|v| v.trim().to_owned());
+        let value = input
+            .str("value")
+            .map(|v| without_edge_whitespace(v).to_owned());
         let stored = stored_plain(&state, &row);
         if stored.as_deref() != value.as_deref() {
             check_references(&ctx, &d, stored.as_deref(), value.as_deref())?;
@@ -461,7 +468,9 @@ pub async fn bulk(
         normalize_key(&mut item);
         validate(&item, &rules(), CUSTOM_API_MESSAGES, &no_extra_check(&item))?;
         let key = stored_key(&item);
-        let value = item.str("value").map(|v| v.trim().to_owned());
+        let value = item
+            .str("value")
+            .map(|v| without_edge_whitespace(v).to_owned());
         let existing = parts::variable_by_key(&state.db, d.kind.morph(), d.id, &key).await?;
         let cipher = value.as_deref().map(|v| enc.encrypt_serialized(v));
         let shared = is_shared_reference(value.as_deref());

@@ -253,6 +253,8 @@ pub async fn push_server_update(jobs: &Jobs, server_id: i64, data: Value) -> Res
         .await
         .map_err(|e| e.to_string())?;
     jobs.apply_service_containers(&services, &inspected).await;
+    // `NotifyResourceStoppedJob::upResourceIds()` before the statuses change and
+    // `dispatchForStopped()` after: each `apply_*_containers` above does both for its resources.
     // `checkLogDrainContainer()`
     let on = |k: &str| srv.info.setting_bool(k) == Some(true);
     if on("is_logdrain_newrelic_enabled")

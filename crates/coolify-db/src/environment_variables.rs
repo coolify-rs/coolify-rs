@@ -124,6 +124,76 @@ impl std::fmt::Debug for Variable {
     }
 }
 
+/// The first part of `EnvironmentVariable::performInsert()` (v4.7). The table has no unique index
+/// on resource and key, so two requests that create the same key at the same time (parallel
+/// Compose parses or saves) could both insert it. Inserts of one key wait for each other: the
+/// advisory lock is held until the transaction commits, so the next insert of this key sees this
+/// row. Returns the id of a variable of the resource and preview flag that already has the key;
+/// upstream then refuses the insert like a unique index (`firstOrCreate()` returns that row).
+pub async fn lock_key_for_insert(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    resource_type: &str,
+    resource_id: i64,
+    is_preview: bool,
+    key: &str,
+) -> DbResult<Option<i64>> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(insert_lock_name(
+            resource_type,
+            resource_id,
+            is_preview,
+            key,
+        ))
+        .execute(&mut **tx)
+        .await?;
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 \
+         AND is_preview = $3 AND key = $4 ORDER BY id LIMIT 1",
+    )
+    .bind(resource_type)
+    .bind(resource_id)
+    .bind(is_preview)
+    .bind(key)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// The text upstream hashes for the advisory lock of one key.
+pub fn insert_lock_name(
+    resource_type: &str,
+    resource_id: i64,
+    is_preview: bool,
+    key: &str,
+) -> String {
+    format!(
+        "environment_variables:{resource_type}:{resource_id}:{}:{key}",
+        i32::from(is_preview)
+    )
+}
+
+/// The message of the `UniqueConstraintViolationException` that `performInsert()` throws.
+pub fn duplicate_key_message(key: &str) -> String {
+    format!("Environment variable {key} already exists.")
+}
+
+/// `EnvironmentVariable::performInsert()` before one insert inside `tx`: waits for other inserts
+/// of the key, and refuses a second row like a unique index refuses it.
+pub async fn refuse_duplicate_key(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    resource_type: &str,
+    resource_id: i64,
+    is_preview: bool,
+    key: &str,
+) -> DbResult<()> {
+    if lock_key_for_insert(tx, resource_type, resource_id, is_preview, key)
+        .await?
+        .is_some()
+    {
+        return Err(DbError::Schema(duplicate_key_message(key)));
+    }
+    Ok(())
+}
+
 pub(crate) async fn insert(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     resource_type: &str,
@@ -131,6 +201,8 @@ pub(crate) async fn insert(
     v: &NewVariable,
     now: NaiveDateTime,
 ) -> DbResult<()> {
+    // `performInsert()` (v4.7): the row is not a preview row (the column default).
+    refuse_duplicate_key(tx, resource_type, resource_id, false, &v.key).await?;
     sqlx::query(
         "INSERT INTO environment_variables (key, value, resourceable_type, resourceable_id, is_shared, uuid, version, created_at, updated_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)",
@@ -165,6 +237,15 @@ pub async fn create_for_application(
     db.ensure_writable()?;
     let mut tx = db.pool().begin().await?;
     for (value, is_preview) in [(value_encrypted, false), (preview_value_encrypted, true)] {
+        // `performInsert()` (v4.7) of each row.
+        refuse_duplicate_key(
+            &mut tx,
+            crate::applications::MORPH,
+            application_id,
+            is_preview,
+            key,
+        )
+        .await?;
         sqlx::query(
             "INSERT INTO environment_variables (key, value, is_multiline, is_literal, is_buildtime, is_runtime, is_preview, \
              is_required, is_shown_once, comment, resourceable_type, resourceable_id, is_shared, uuid, version, created_at, updated_at) \
@@ -389,6 +470,14 @@ async fn insert_resource_variable(
     version: &str,
     now: NaiveDateTime,
 ) -> DbResult<Record> {
+    // `performInsert()`: a second row with the key is refused like a unique index refuses it.
+    let mut tx = db.pool().begin().await?;
+    if lock_key_for_insert(&mut tx, resource_type, resource_id, v.is_preview, &v.key)
+        .await?
+        .is_some()
+    {
+        return Err(DbError::Schema(duplicate_key_message(&v.key)));
+    }
     let row: String = sqlx::query_scalar(
         "INSERT INTO environment_variables (key, value, is_preview, is_literal, is_multiline, is_shown_once, is_runtime, is_buildtime, \
          comment, resourceable_type, resourceable_id, is_shared, uuid, version, created_at, updated_at) \
@@ -409,8 +498,9 @@ async fn insert_resource_variable(
     .bind(new_public_id())
     .bind(version)
     .bind(now)
-    .fetch_one(db.pool())
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     decode_row(&row)
 }
 
@@ -512,10 +602,18 @@ pub async fn save_dirty(
 ) -> DbResult<Record> {
     if !dirty.is_empty() {
         db.ensure_writable()?;
+        // The `saving` hook (v4.7): a lock is permanent. No UI or API path can unlock a variable
+        // and show its value again; a new value can still replace the locked one.
         let set = dirty
             .iter()
             .enumerate()
-            .map(|(i, (c, _))| format!("\"{c}\" = ${}", i + 3))
+            .map(|(i, (c, _))| {
+                if *c == "is_shown_once" {
+                    format!("\"{c}\" = (\"{c}\" OR ${})", i + 3)
+                } else {
+                    format!("\"{c}\" = ${}", i + 3)
+                }
+            })
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!("UPDATE environment_variables SET {set}, updated_at = $1 WHERE id = $2");
@@ -545,6 +643,23 @@ pub async fn force_delete(db: &Db, id: i64) -> DbResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The advisory lock of `performInsert()` is taken on the same text as upstream.
+    #[test]
+    fn insert_lock_names() {
+        assert_eq!(
+            insert_lock_name(r"App\Models\Application", 12, false, "DATABASE_URL"),
+            r"environment_variables:App\Models\Application:12:0:DATABASE_URL"
+        );
+        assert_eq!(
+            insert_lock_name(r"App\Models\Service", 3, true, "KEY"),
+            r"environment_variables:App\Models\Service:3:1:KEY"
+        );
+        assert_eq!(
+            duplicate_key_message("KEY"),
+            "Environment variable KEY already exists."
+        );
+    }
 
     #[test]
     fn generated_magic_variables() {

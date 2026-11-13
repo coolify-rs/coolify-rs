@@ -14,6 +14,7 @@
   import DatabaseStatusSummary from './DatabaseStatusSummary.svelte';
   import { appUi, ApiError, type ApplicationRecord, type ApplicationState } from '../lib/api';
   import { teleport } from '../lib/databaseMenu';
+  import GateStatus from './imageScan/GateStatus.svelte';
   import { router, link } from '../lib/router.svelte';
   import { notify } from '../lib/toast.svelte';
 
@@ -36,6 +37,8 @@
   const functional = $derived(record.server_status !== false);
   const canDeploy = $derived(!!appState?.can_deploy);
   // stoppedAfterRestartLimit()
+  /** `Heading::imageScanGate()`: the gate of the latest deployment. */
+  const imageScanGate = $derived(appState?.image_scan_gate ?? null);
   const restartLimit = $derived.by(() => {
     if (!exited || record.container_present !== true || record.restart_limit_reached !== true) return null;
     return Math.max(Number(record.restart_count ?? 0), Number(record.max_restart_count ?? 0));
@@ -317,6 +320,20 @@
   <DatabaseTopbar label={record.name} items={resources} {status} {healthcheckUrl} {restartLimit} statusTitle="Application status" />
 </div>
 
+{#if imageScanGate}
+  <!-- From xl the topbar shows the gate. Below xl the in-flow heading repeats it. -->
+  <div use:teleport={'configuration-warning-hud-slot'}>
+    <div class="hidden items-center xl:flex">
+      <GateStatus
+        result={imageScanGate.result}
+        action={imageScanGate.action}
+        vulnerabilitiesUrl="{base}/vulnerabilities"
+        deploymentUrl="{base}/deployment/{imageScanGate.deployment_uuid}"
+      />
+    </div>
+  </div>
+{/if}
+
 {#if configurationChanged}
   <div use:teleport={'configuration-warning-hud-slot'}>{@render warning('desktop')}</div>
   {#if hasMobileWarningSlot}
@@ -346,7 +363,16 @@
               >
             {/if}
           </div>
-          <div class="flex w-full flex-wrap gap-1"></div>
+          <div class="flex w-full flex-wrap gap-1">
+            {#if imageScanGate}
+              <GateStatus
+                result={imageScanGate.result}
+                action={imageScanGate.action}
+                vulnerabilitiesUrl="{base}/vulnerabilities"
+                deploymentUrl="{base}/deployment/{imageScanGate.deployment_uuid}"
+              />
+            {/if}
+          </div>
         </div>
       </div>
       <div class="shrink-0">

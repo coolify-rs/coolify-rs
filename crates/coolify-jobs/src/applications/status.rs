@@ -60,6 +60,8 @@ pub fn aggregate(statuses: &[String]) -> String {
     let (mut degraded, mut restarting, mut running, mut unhealthy, mut unknown) =
         (false, false, false, false, false);
     let (mut exited, mut starting, mut paused, mut dead) = (false, false, false, false);
+    // `$hasHealthStarting`: a running container whose health check is still in its start period.
+    let mut health_starting = false;
     for s in statuses {
         if s.contains("degraded") {
             degraded = true;
@@ -75,6 +77,9 @@ pub fn aggregate(statuses: &[String]) -> String {
             }
             if s.contains("unknown") {
                 unknown = true;
+            }
+            if s.contains("starting") {
+                health_starting = true;
             }
         } else if s.contains("exited") {
             exited = true;
@@ -97,6 +102,8 @@ pub fn aggregate(statuses: &[String]) -> String {
     } else if running {
         if unhealthy {
             "running:unhealthy"
+        } else if health_starting {
+            "running:starting"
         } else if unknown {
             "running:unknown"
         } else {
@@ -329,8 +336,47 @@ impl Jobs {
             .await;
     }
 
-    /// The application part of `GetContainersStatus` and `PushServerUpdateJob`.
+    /// The application part of `GetContainersStatus` and `PushServerUpdateJob`, with
+    /// `NotifyResourceStoppedJob::upResourceIds()` of the applications and their previews before
+    /// the statuses change and `dispatchForStopped()` after.
     pub async fn apply_application_containers(
+        &self,
+        applications: &[ApplicationRow],
+        containers: &[Value],
+        snapshot: Snapshot,
+        swarm: bool,
+    ) {
+        use crate::notifications::resource_stopped;
+        let mut previews: Vec<(i64, Option<String>)> = Vec::new();
+        for a in applications {
+            for p in coolify_db::application_ops::previews(&self.0.db, a.id)
+                .await
+                .unwrap_or_default()
+            {
+                if let Some(id) = p.get("id").and_then(Value::as_i64) {
+                    let status = p.get("status").and_then(Value::as_str).map(str::to_owned);
+                    previews.push((id, status));
+                }
+            }
+        }
+        let up = resource_stopped::up_resources(
+            applications
+                .iter()
+                .map(|a| (resource_stopped::APPLICATION, a.id, a.str("status")))
+                .chain(previews.iter().map(|(id, status)| {
+                    (
+                        resource_stopped::APPLICATION_PREVIEW,
+                        *id,
+                        status.as_deref(),
+                    )
+                })),
+        );
+        self.apply_application_container_statuses(applications, containers, snapshot, swarm)
+            .await;
+        resource_stopped::dispatch_for_stopped(self, &up).await;
+    }
+
+    async fn apply_application_container_statuses(
         &self,
         applications: &[ApplicationRow],
         containers: &[Value],
@@ -670,7 +716,21 @@ mod tests {
     #[test]
     fn aggregation() {
         assert_eq!(aggregate(&["running:healthy".into()]), "running:healthy");
-        assert_eq!(aggregate(&["running:starting".into()]), "running:healthy");
+        // A health check in its start period shows as starting (v4.7), after unhealthy and
+        // before unknown.
+        assert_eq!(aggregate(&["running:starting".into()]), "running:starting");
+        assert_eq!(
+            aggregate(&["running:starting".into(), "running:healthy".into()]),
+            "running:starting"
+        );
+        assert_eq!(
+            aggregate(&["running:starting".into(), "running:unhealthy".into()]),
+            "running:unhealthy"
+        );
+        assert_eq!(
+            aggregate(&["running:starting".into(), "running:unknown".into()]),
+            "running:starting"
+        );
         assert_eq!(
             aggregate(&["running:unknown".into(), "exited".into()]),
             "degraded:unhealthy"

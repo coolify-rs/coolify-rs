@@ -11,6 +11,7 @@
   import ResourceStatus, { statusLabel, statusState } from '../components/ResourceStatus.svelte';
   import { uiApi, dbUi, ApiError, type ProjectPageData, type DatabaseRecord, type ApplicationRecord } from '../lib/api';
   import { link } from '../lib/router.svelte';
+  import ScanMarker, { type Marker } from '../components/imageScan/ScanMarker.svelte';
   import { listView } from '../lib/listview.svelte';
   import { setProjectCrumbs } from '../lib/crumbs';
 
@@ -67,6 +68,8 @@
     hrefLink: string;
     server: string;
     tags: { id: number | string; name: string }[];
+    /** `VulnerabilityMarkers::for($resources)[ResourceScans::key($item)] ?? null`. */
+    security: Marker | null;
   }
 
   function toItem(db: DatabaseRecord): Item {
@@ -90,6 +93,7 @@
       hrefLink: `/project/${uuid}/environment/${env}/database/${db.uuid}`,
       server: db.destination?.server?.name || 'Unknown',
       tags,
+      security: ((db as unknown as { security?: Marker | null }).security ?? null),
     };
   }
 
@@ -118,6 +122,7 @@
       hrefLink: `/project/${uuid}/environment/${env}/application/${app.uuid}`,
       server: app.destination?.server?.name || 'Unknown',
       tags: Array.isArray(app.tags) ? (app.tags as { id: number | string; name: string }[]) : [],
+      security: ((app as unknown as { security?: Marker | null }).security ?? null),
     };
   }
 
@@ -139,6 +144,7 @@
       hrefLink: `/project/${uuid}/environment/${env}/service/${s.uuid}`,
       server: s.server || 'Unknown',
       tags: s.tags ?? [],
+      security: ((s as unknown as { security?: Marker | null }).security ?? null),
     };
   }
 
@@ -495,6 +501,7 @@
                     <div class="min-w-0 flex-1">
                       <div class="flex min-w-0 items-center gap-1.5">
                         <h2 class="truncate text-[13px]! leading-4! font-semibold! text-black dark:text-fg">{item.name}</h2>
+                        <ScanMarker marker={item.security} class="relative" />
                       </div>
                       <p class="mt-0.5 text-[11px] text-neutral-500 dark:text-fg-faint">{item.typeLabel}</p>
                     </div>
@@ -557,6 +564,7 @@
                         use:link
                         class="relative block truncate text-[13px] font-semibold text-black hover:underline dark:text-fg">{item.name}</a
                       >
+                      <ScanMarker marker={item.security} class="relative" />
                     </div>
                     {#if item.description?.trim()}
                       <p class="truncate text-[11px] text-neutral-500 dark:text-fg-faint">{item.description}</p>

@@ -15,7 +15,7 @@
     children,
   }: {
     label?: string;
-    type?: 'neutral' | 'success' | 'warning' | 'error';
+    type?: 'neutral' | 'success' | 'warning' | 'error' | 'severity-critical' | 'severity-high' | 'severity-medium' | 'severity-low';
     class?: string;
     as?: 'span' | 'button';
     title?: string;
@@ -35,14 +35,19 @@
     success: 'bg-emerald-500',
     warning: 'bg-warning',
     error: 'bg-red-500',
+    'severity-critical': 'bg-error',
+    'severity-high': 'bg-severity-high',
+    'severity-medium': 'bg-severity-medium',
+    'severity-low': 'bg-neutral-400 dark:bg-neutral-500',
   };
   const sizes = {
-    sm: 'h-4 gap-1 px-1.5 text-[10px]',
-    md: 'h-6 gap-1.5 px-2 text-xs',
+    sm: 'gap-1 text-[11px]',
+    md: 'gap-1.5 text-[13px]',
   };
-  const base = $derived(
-    `inline-flex max-w-full items-center whitespace-nowrap rounded-full border border-neutral-200 bg-neutral-100 font-medium leading-none text-neutral-700 dark:border-white/[0.12] dark:bg-white/[0.07] dark:text-white ${sizes[size]}`,
-  );
+  // Bare: a colored dot and text, no pill. Interactive badges draw their hover background outside the box, so the dot stays aligned with plain text.
+  const base = $derived(`inline-flex max-w-full items-center whitespace-nowrap text-neutral-700 dark:text-fg ${sizes[size]}`);
+  const interactive =
+    'relative isolate before:absolute before:-inset-x-1.5 before:-inset-y-1 before:-z-10 before:rounded-md before:transition-colors hover:before:bg-neutral-100 dark:hover:before:bg-white/[0.07]';
 </script>
 
 {#snippet content()}
@@ -67,7 +72,7 @@
 {/snippet}
 
 {#if as === 'button'}
-  <button type="button" class="{base} transition-colors {klass}" {title} {onclick}>{@render content()}</button>
+  <button type="button" class="{base} {interactive} {klass}" {title} {onclick}>{@render content()}</button>
 {:else}
   <span class="{base} {klass}" {title}>{@render content()}</span>
 {/if}

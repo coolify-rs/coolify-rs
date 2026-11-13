@@ -1,7 +1,9 @@
 //! Against the real SSH test host (scripts/testing-host-up.sh). Skipped unless
 //! `COOLIFY_RS_TEST_SSH=host:port` and `COOLIFY_RS_TEST_SSH_KEY=<private key path>` are set.
 
-use coolify_remote::{PrivateKey, Remote, RemoteConfig, RunOptions, Target};
+use coolify_remote::{
+    HOST_KEY_CHANGED_MESSAGE, HostKeyCheck, PrivateKey, Remote, RemoteConfig, RunOptions, Target,
+};
 
 fn host() -> Option<(String, i64, String)> {
     let addr = std::env::var("COOLIFY_RS_TEST_SSH").ok()?;
@@ -20,6 +22,7 @@ fn target(h: &str, port: i64, key: &str, user: &str) -> Target {
         connection_timeout: Some(5),
         cloudflare_tunnel: false,
         force_disabled: false,
+        host_key: HostKeyCheck::Off,
     }
 }
 
@@ -66,43 +69,64 @@ async fn runs_as_root_and_through_real_sudo() {
 }
 
 #[tokio::test]
-async fn pins_the_host_key_on_first_use() {
+async fn scans_pins_and_checks_the_host_key() {
     let Some((h, port, key)) = host() else { return };
-    let (d, r) = remote();
-    let t = target(&h, port, &key, "root");
-    assert!(r.run(&t, &["true"], RunOptions::op("test")).await.is_ok());
-    let pin = d
-        .path()
-        .canonicalize()
-        .unwrap_or_else(|_| unreachable!())
-        .join("d/ssh/known_hosts/live");
-    let pinned = std::fs::read_to_string(&pin).unwrap_or_default();
+    let (_d, r) = remote();
+    let mut t = target(&h, port, &key, "root");
+
+    // `readHostKey()`: the scan logs in with nothing and still reads the key.
+    let scan = r.scan_host_key(&t).await;
+    let pinned = scan.key.unwrap_or_else(|| panic!("no key: {}", scan.error));
     assert!(
-        pinned.contains("ssh-ed25519") || pinned.contains("ecdsa"),
+        pinned.contains("ssh-ed25519") || pinned.contains("ecdsa") || pinned.contains("ssh-rsa"),
         "{pinned}"
     );
 
-    // Another key for the same host: OpenSSH refuses, and the error is not retried forever.
-    let host_field = pinned.split_whitespace().next().unwrap_or_default();
-    std::fs::write(&pin, format!("{host_field} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFuGmoeGq/pojrsyP1pszcNVuZx9iFkCELtxrh31QJ68\n"))
-        .unwrap_or_else(|_| unreachable!());
+    // The pinned key: both modes connect.
+    for enforce in [false, true] {
+        t.host_key = HostKeyCheck::Pinned {
+            keys: pinned.clone(),
+            enforce,
+        };
+        assert!(r.run(&t, &["true"], RunOptions::op("test")).await.is_ok());
+    }
+
+    // Another key for the same host.
+    let other = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFuGmoeGq/pojrsyP1pszcNVuZx9iFkCELtxrh31QJ68";
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    r.on_host_key_mismatch(tx);
+
+    // Enforce mode: OpenSSH refuses, and the error is upstream's message without the file path.
+    t.host_key = HostKeyCheck::Pinned {
+        keys: other.to_owned(),
+        enforce: true,
+    };
     let err = r
         .run(&t, &["true"], RunOptions::op("test").attempts(1))
         .await
         .err()
         .unwrap_or_else(|| unreachable!());
-    assert!(
-        err.message
-            .starts_with("Host key verification failed: the server's SSH host key changed"),
-        "{}",
-        err.message
-    );
-    // The pin file is a path on the control plane; it must not reach users.
-    assert!(!err.message.contains("known_hosts"), "{}", err.message);
+    assert_eq!(err.message, HOST_KEY_CHANGED_MESSAGE);
     assert_eq!(err.code, Some(255));
+    let (uuid, stderr) = rx.try_recv().unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(uuid, "live");
+    assert!(
+        stderr.contains("REMOTE HOST IDENTIFICATION HAS CHANGED"),
+        "{stderr}"
+    );
+
+    // Warn mode: OpenSSH connects, and the mismatch is reported.
+    t.host_key = HostKeyCheck::Pinned {
+        keys: other.to_owned(),
+        enforce: false,
+    };
+    assert!(r.run(&t, &["true"], RunOptions::op("test")).await.is_ok());
+    assert_eq!(
+        rx.try_recv().map(|(uuid, _)| uuid).ok().as_deref(),
+        Some("live")
+    );
 
     r.forget_host_key("live");
-    assert!(r.run(&t, &["true"], RunOptions::op("test")).await.is_ok());
 }
 
 #[tokio::test]

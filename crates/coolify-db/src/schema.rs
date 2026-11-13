@@ -21,8 +21,8 @@ pub const SUPPORTED_MIGRATIONS_FILE: &str =
 pub const HISTORICAL_MIGRATIONS_FILE: &str =
     include_str!("../../../compat/baseline/historical-migrations.txt");
 
-/// Tables whose columns are discovered at startup. Several get columns from v4.6.0's
-/// migrations, so code can work on a database that has not been upgraded yet.
+/// Tables whose columns are discovered at startup. Several get columns from the migrations of
+/// v4.6.0 and v4.7.5, so code can work on a database that has not been upgraded yet.
 const INSPECTED_TABLES: &[&str] = &[
     "teams",
     "users",
@@ -41,6 +41,33 @@ const INSPECTED_TABLES: &[&str] = &[
     "scheduled_task_executions",
     "scheduled_database_backup_executions",
     "scheduled_volume_backup_executions",
+    // Tables the v4.7.5 migrations add columns to.
+    "application_settings",
+    "application_deployment_queues",
+    "s3_storages",
+    "service_applications",
+    "service_databases",
+    "scheduled_tasks",
+    "github_apps",
+    "email_notification_settings",
+    "discord_notification_settings",
+    "telegram_notification_settings",
+    "slack_notification_settings",
+    "pushover_notification_settings",
+    "webhook_notification_settings",
+];
+
+/// Tables the v4.7.5 migrations create. Their columns are discovered like those of
+/// [`INSPECTED_TABLES`], but a database that has not been upgraded yet does not have them:
+/// [`SchemaInfo::has_table`] is false there.
+const NEW_TABLES: &[&str] = &[
+    "image_scan_policies",
+    "image_scan_ignores",
+    "image_sboms",
+    "image_scans",
+    "image_scan_notification_states",
+    "server_host_scans",
+    "stars",
 ];
 
 fn names(file: &str) -> BTreeSet<String> {
@@ -80,6 +107,12 @@ impl SchemaInfo {
             .get(table)
             .is_some_and(|cols| cols.iter().any(|c| c == column))
     }
+
+    /// Whether one of the tables created since the oldest supported database (the image scanning
+    /// tables, `server_host_scans`, `stars`) exists. False for a table that is not inspected.
+    pub fn has_table(&self, table: &str) -> bool {
+        self.columns.contains_key(table)
+    }
 }
 
 pub async fn inspect(pool: &PgPool, allow_unknown: bool) -> DbResult<SchemaInfo> {
@@ -99,7 +132,13 @@ pub async fn inspect(pool: &PgPool, allow_unknown: bool) -> DbResult<SchemaInfo>
          WHERE table_schema = current_schema() AND table_name = ANY($1) \
          ORDER BY table_name, ordinal_position",
     )
-    .bind(INSPECTED_TABLES)
+    .bind(
+        INSPECTED_TABLES
+            .iter()
+            .chain(NEW_TABLES)
+            .copied()
+            .collect::<Vec<&str>>(),
+    )
     .fetch_all(pool)
     .await?;
     let mut columns: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -193,12 +232,33 @@ mod tests {
     #[test]
     fn embedded_list_is_the_main_baseline() {
         let s = supported_migrations();
-        assert_eq!(s.len(), 493);
+        assert_eq!(s.len(), 520);
         assert!(s.contains("2026_10_25_115811_add_is_two_factor_required_to_teams_table"));
         assert!(
             s.contains("2026_10_28_124421_keep_dockerfile_healthcheck_for_existing_applications")
         );
         assert!(s.contains("2026_11_01_142702_add_update_channel_to_instance_settings_table"));
+        // v4.7.5: the first and the last of its twenty-seven, and the two that share a timestamp.
+        assert!(s.contains("2026_10_29_100000_create_image_scanning_tables"));
+        assert!(s.contains("2026_10_30_120000_add_git_ssh_known_hosts_to_applications_table"));
+        assert!(s.contains("2026_10_30_120000_add_ssh_host_key_to_server_settings_table"));
+        assert!(s.contains(
+            "2026_11_09_140000_add_image_scanner_time_and_cpu_limits_to_server_settings_table"
+        ));
+        // Every migration since the oldest dump `bootstrap` loads (v4.6.0) is one boot can run.
+        let boot: BTreeSet<&str> = crate::bootstrap::MIGRATIONS
+            .iter()
+            .map(|m| m.name)
+            .collect();
+        let since_4_6_0: Vec<&String> = s
+            .iter()
+            .filter(|m| !crate::bootstrap::MIGRATIONS_SQL.contains(&format!("'{m}'")))
+            .collect();
+        assert_eq!(since_4_6_0.len(), 27);
+        for m in since_4_6_0 {
+            assert!(boot.contains(m.as_str()), "{m}");
+        }
+        assert_eq!(crate::bootstrap::MIGRATIONS.len(), 47);
         // `bootstrap::MIGRATIONS` only names migrations the guard accepts, in name order.
         for m in crate::bootstrap::MIGRATIONS {
             assert!(s.contains(m.name), "{}", m.name);
@@ -214,8 +274,10 @@ mod tests {
     #[test]
     fn historical_list_is_disjoint_from_the_tree() {
         let h = historical_migrations();
-        assert_eq!(h.len(), 64);
-        // What a real Coolify 4.6.0 installation lists beyond the v4.6.0 tree.
+        assert_eq!(h.len(), 65);
+        // What a real Coolify 4.6.0 installation lists beyond the v4.6.0 tree. Generated at
+        // v4.7.5: no migration of the v4.6.0 tree is gone, and one name that only builds between
+        // the two releases ran is added (`add_auto_disable_columns_to_scheduled_tasks`).
         for name in [
             "2018_08_08_100000_create_telescope_entries_table",
             "2025_10_10_120000_create_cloud_init_scripts_table",

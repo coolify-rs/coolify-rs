@@ -90,6 +90,8 @@ export type AvailableVars = Record<'team' | 'project' | 'environment' | 'server'
 export interface EnvInput {
   key: string;
   value: string | null;
+  /** A new value for a locked variable (`$newLockedValue`); null keeps the locked value. */
+  new_locked_value?: string | null;
   comment: string | null;
   is_multiline: boolean;
   is_literal: boolean;

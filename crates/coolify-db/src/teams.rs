@@ -42,6 +42,27 @@ pub async fn members(db: &Db, team_id: TeamId) -> DbResult<Vec<Record>> {
 }
 
 /// `PATCH /team`: only touches `updated_at` when the value changes (Eloquent dirty check).
+/// `$team->update(['scan_images_on_new_servers' => ...])` (4.7.5, `PATCH /teams/current`): whether
+/// image scanning is turned on for servers added to the team from now on.
+pub async fn set_scan_images_on_new_servers(
+    db: &Db,
+    team_id: TeamId,
+    enabled: bool,
+    now: NaiveDateTime,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    sqlx::query(
+        "UPDATE teams SET scan_images_on_new_servers = $2, updated_at = $3 \
+         WHERE id = $1 AND scan_images_on_new_servers IS DISTINCT FROM $2",
+    )
+    .bind(team_id)
+    .bind(enabled)
+    .bind(now)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
 pub async fn set_build_server_fallback(
     db: &Db,
     team_id: TeamId,
@@ -82,8 +103,8 @@ pub async fn update_settings(
 ) -> DbResult<()> {
     db.ensure_writable()?;
     let name = coolify_domain::naming::strip_tags(Some(&s.name));
-    // An assigned null becomes "" (strip_tags on null), as for projects.
-    let description = coolify_domain::naming::strip_tags(s.description.as_deref());
+    // `HasSafeStringAttribute`: an assigned null stays NULL (4.7.5).
+    let description = coolify_domain::naming::strip_tags_nullable(s.description.as_deref());
     sqlx::query(
         "UPDATE teams SET name = $2, description = $3, is_mcp_server_enabled = $4, \
          is_build_server_fallback_enabled = $5, is_two_factor_required = $6, updated_at = $7 \

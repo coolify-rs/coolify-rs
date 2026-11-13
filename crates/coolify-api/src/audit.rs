@@ -120,6 +120,56 @@ pub async fn log(
     }
 }
 
+/// PHP `! $changes` for the `changes` of a model mutation: null or an empty array.
+pub(crate) fn changes_are_empty(changes: &Value) -> bool {
+    match changes {
+        Value::Null => true,
+        Value::Array(a) => a.is_empty(),
+        Value::Object(o) => o.is_empty(),
+        _ => false,
+    }
+}
+
+/// `auditFailureDeduplicationWindow()` for a refused API request (4.7.5): `api.auth.ability_denied`
+/// and `api.auth.scope_denied` are recorded once per token (and required abilities, and reason)
+/// every 300 seconds, like `api.auth.unauthenticated` is per source address. True when this
+/// failure is the first of its window and gets a row.
+pub(crate) fn first_denial_in_window(
+    state: &AppState,
+    event: &str,
+    token_id: i64,
+    reason: Option<&str>,
+    required_abilities: &[&str],
+) -> bool {
+    // The token identifies the client, so a token used from many addresses gets one row. Token
+    // ids are per database, so the database is part of the key (upstream's cache is per instance).
+    let options = state.db.pool().connect_options();
+    let key = denial_key(
+        options.get_database().unwrap_or_default(),
+        event,
+        token_id,
+        reason,
+        required_abilities,
+    );
+    crate::rules::throttle(&key, 1, std::time::Duration::from_secs(300)).is_none()
+}
+
+/// The fingerprint of `shouldRecordAuditEvent()` for a refused API request: the event, the token,
+/// the reason and the required abilities. The path is not part of it.
+pub(crate) fn denial_key(
+    database: &str,
+    event: &str,
+    token_id: i64,
+    reason: Option<&str>,
+    required_abilities: &[&str],
+) -> String {
+    format!(
+        "audit-failure-dedup:{database}:{event}:{token_id}:{}:{}",
+        reason.unwrap_or_default(),
+        required_abilities.join(",")
+    )
+}
+
 /// `Auditable::recordAuditMutation`: `{api|ui}.{resource}.{action}` with `changes`.
 pub async fn mutation(
     state: &AppState,
@@ -132,10 +182,16 @@ pub async fn mutation(
 ) {
     let source = if ctx.token_id != 0 { "api" } else { "ui" };
     let event = format!("{source}.{resource}.{action}");
-    let changes = state
-        .encrypter
-        .as_ref()
-        .map(|e| e.encrypt_string(&coolify_compat::php_json::encode(&changes)));
+    // 4.7.5 (b7d0e6be2): `recordWithChanges($event, $context, $changes ?: null)`: no empty
+    // `changes` value.
+    let changes = if changes_are_empty(&changes) {
+        None
+    } else {
+        state
+            .encrypter
+            .as_ref()
+            .map(|e| e.encrypt_string(&coolify_compat::php_json::encode(&changes)))
+    };
     let actor = actor(state, ctx, meta).await;
     if let Err(e) = audit::record(
         &state.db,
@@ -277,5 +333,49 @@ pub async fn log_system(
     .await
     {
         tracing::warn!(error = %e, event, "audit event persistence failed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// `recordModelMutation` (4.7.5): `$changes ?: null`.
+    #[test]
+    fn empty_changes_are_not_stored() {
+        assert!(changes_are_empty(&json!({})));
+        assert!(changes_are_empty(&json!([])));
+        assert!(changes_are_empty(&Value::Null));
+        assert!(!changes_are_empty(
+            &json!({"name": {"old": "a", "new": "b"}})
+        ));
+    }
+
+    /// `shouldRecordAuditEvent` (4.7.5): the token, the reason and the required abilities make
+    /// the fingerprint of a refused API request.
+    #[test]
+    fn denial_fingerprints() {
+        let a = denial_key("db", "api.auth.ability_denied", 7, Some("r"), &["write"]);
+        assert_eq!(
+            a,
+            denial_key("db", "api.auth.ability_denied", 7, Some("r"), &["write"])
+        );
+        assert_ne!(
+            a,
+            denial_key("db", "api.auth.ability_denied", 8, Some("r"), &["write"])
+        );
+        assert_ne!(
+            a,
+            denial_key("db", "api.auth.ability_denied", 7, Some("r"), &["deploy"])
+        );
+        assert_ne!(
+            a,
+            denial_key("db", "api.auth.scope_denied", 7, Some("r"), &["write"])
+        );
+        assert_ne!(
+            a,
+            denial_key("other", "api.auth.ability_denied", 7, Some("r"), &["write"])
+        );
     }
 }

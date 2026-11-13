@@ -381,6 +381,8 @@ pub(crate) fn sub_json(sub: &SubRow) -> Value {
         "status": flag("status"),
         "fqdn": flag("fqdn"),
         "configuration_required": sub.bool("configuration_required"),
+        // No longer in the compose file (`markServicePartsRemovedFromCompose()`).
+        "is_removed_from_compose": sub.bool("is_removed_from_compose"),
         "container_present": flag("container_present"),
         "restart_limit_reached": sub.bool("restart_limit_reached"),
         "restart_count": flag("restart_count"),
@@ -599,7 +601,10 @@ async fn save_extra_fields(
         if key.is_empty() {
             continue;
         }
-        let encrypted = value.as_deref().map(|v| enc.encrypt_serialized(v.trim()));
+        // The `value` setter: `withoutEdgeWhitespace()`.
+        let encrypted = value.as_deref().map(|v| {
+            enc.encrypt_serialized(coolify_jobs::databases::env::without_edge_whitespace(v))
+        });
         if let Some(row) = svc::env_row_by_key(&state.db, s.id, key).await? {
             let current = row
                 .get("value")
@@ -814,6 +819,10 @@ pub async fn validate_compose(
     body: axum::body::Bytes,
 ) -> ApiResult {
     let s = find_service(&state, &ctx, &uuid).await?;
+    // `$this->authorize('update', $this->service)` (v4.7): the validation runs a command on the server.
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Unauthorized);
+    }
     let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     let compose = body
         .get("docker_compose_raw")
@@ -897,13 +906,12 @@ pub async fn action(
     Ok(ok(json!({"message": "queued"})).into_response())
 }
 
-/// `Project\Resource\Create` for `?type=one-click-service-{name}`.
+/// `Project\Resource\Create::createResource()` for `?type=one-click-service-{name}`.
 pub async fn create(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
     body: axum::body::Bytes,
 ) -> ApiResult {
-    require_admin(&ctx)?;
     let input: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     let text = |k: &str| {
         input
@@ -925,6 +933,10 @@ pub async fn create(
                 StatusCode::NOT_FOUND,
                 "Environment not found.",
             ))?;
+    // `$this->authorize('createAnyResource', [$environment])`.
+    if !ctx.can_create_in(Some(env.id)) {
+        return Err(ApiError::Unauthorized);
+    }
     let (destination_id, destination_type, server_id) =
         svc::team_destination_by_uuid(&state.db, ctx.team_id, &text("destination_uuid"))
             .await?
@@ -975,13 +987,40 @@ pub async fn create(
         let (key, value) = line
             .split_once('=')
             .unwrap_or((line.as_str(), line.as_str()));
+        // `$service->environment_variables()->updateOrCreate(['key' => $key], [...])`: a key the
+        // template lists twice keeps one variable, with the last value.
+        if let Some(row) = svc::env_row_by_key(&state.db, id, key).await? {
+            let current = row
+                .get("value")
+                .and_then(Value::as_str)
+                .and_then(|v| enc.decrypt_maybe_serialized(v).ok());
+            if current.as_deref()
+                != Some(coolify_jobs::databases::env::without_edge_whitespace(value))
+            {
+                svc::env_update_columns(
+                    &state.db,
+                    row.get("id").and_then(Value::as_i64).unwrap_or_default(),
+                    &[(
+                        "value",
+                        ColumnValue::Text(Some(enc.encrypt_serialized(
+                            coolify_jobs::databases::env::without_edge_whitespace(value),
+                        ))),
+                    )],
+                    now,
+                )
+                .await?;
+            }
+            continue;
+        }
         coolify_db::compose::env_insert(
             &state.db,
             svc::MORPH,
             id,
             &NewEnv {
                 key: key.to_owned(),
-                value_encrypted: Some(enc.encrypt_serialized(value.trim())),
+                value_encrypted: Some(enc.encrypt_serialized(
+                    coolify_jobs::databases::env::without_edge_whitespace(value),
+                )),
                 is_preview: false,
                 is_required: false,
                 is_multiline: false,
@@ -1006,7 +1045,8 @@ pub async fn create(
     Ok(created(json!({"uuid": uuid})).into_response())
 }
 
-/// `serviceWebsiteUrl()`.
+/// `serviceWebsiteUrl()`: the site of the service, from its documentation URL. Shared hosts keep the
+/// path that identifies the project. The `ref` tells the site that the visitor came from Coolify.
 fn website_url(documentation: Option<&str>) -> Value {
     let Some(doc) = documentation else {
         return Value::Null;
@@ -1035,7 +1075,7 @@ fn website_url(documentation: Option<&str>) -> Value {
         .take(segments)
         .collect();
     let url = format!("{scheme}://{host}/{}", project.join("/"));
-    json!(url.trim_end_matches('/'))
+    json!(format!("{}?ref=coolify.io", url.trim_end_matches('/')))
 }
 
 /// `Str::headline`.
@@ -1191,5 +1231,45 @@ mod headline_tests {
         assert_eq!(headline("9router"), "9Router");
         assert_eq!(headline("n8n-with-postgresql"), "N8N With Postgresql");
         assert_eq!(headline("wordpress"), "Wordpress");
+    }
+}
+
+#[cfg(test)]
+mod website_tests {
+    use serde_json::{Value, json};
+
+    use super::website_url;
+
+    /// `Select::serviceWebsiteUrl()`: the host root, or the project path on shared hosts, with the ref.
+    #[test]
+    fn website_keeps_the_project_path_on_shared_hosts_and_adds_the_ref() {
+        assert_eq!(
+            website_url(Some("https://plausible.io/docs/self-hosting")),
+            json!("https://plausible.io?ref=coolify.io")
+        );
+        assert_eq!(
+            website_url(Some("https://github.com/owner/repo/tree/main/docs")),
+            json!("https://github.com/owner/repo?ref=coolify.io")
+        );
+        assert_eq!(
+            website_url(Some("https://www.GitLab.com/group/project/-/wikis")),
+            json!("https://www.GitLab.com/group/project?ref=coolify.io")
+        );
+        assert_eq!(
+            website_url(Some("https://hub.docker.com/r/owner/image/tags")),
+            json!("https://hub.docker.com/r/owner/image?ref=coolify.io")
+        );
+        assert_eq!(
+            website_url(Some("https://example.com/")),
+            json!("https://example.com?ref=coolify.io")
+        );
+    }
+
+    #[test]
+    fn website_is_null_without_an_http_url() {
+        assert_eq!(website_url(None), Value::Null);
+        assert_eq!(website_url(Some("")), Value::Null);
+        assert_eq!(website_url(Some("ftp://example.com/docs")), Value::Null);
+        assert_eq!(website_url(Some("not a url")), Value::Null);
     }
 }

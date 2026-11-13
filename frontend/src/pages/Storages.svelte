@@ -8,8 +8,11 @@
   import FormInput from '../components/FormInput.svelte';
   import Checkbox from '../components/Checkbox.svelte';
   import EndpointInput from '../components/EndpointInput.svelte';
+  import Listbox from '../components/Listbox.svelte';
+  import StorageServerFields from '../components/StorageServerFields.svelte';
+  import StorageSftpLogin from '../components/StorageSftpLogin.svelte';
   import { ApiError } from '../lib/api';
-  import { storagesUi, composeEndpoint, detectPathStyleEndpoint, type EndpointParts, type StorageRow } from '../lib/storagesApi';
+  import { storagesUi, composeEndpoint, detectPathStyleEndpoint, type EndpointParts, type PrivateKeyOption, type ServerParts, type StorageRow, type StorageType } from '../lib/storagesApi';
   import { link, router } from '../lib/router.svelte';
   import { notify } from '../lib/toast.svelte';
 
@@ -17,12 +20,16 @@
 
   let storages = $state<StorageRow[] | null>(null);
   let canCreate = $state(false);
+  let types = $state<{ value: StorageType; label: string }[]>([]);
+  let privateKeys = $state<PrivateKeyOption[]>([]);
   storagesUi.list().then((d) => {
     storages = d.storages;
     canCreate = d.can_create;
+    types = d.types;
+    privateKeys = d.private_keys;
   });
 
-  const describe = (s: StorageRow) => s.description || 'S3-compatible storage';
+  const describe = (s: StorageRow) => s.description || (s.type === 's3' ? 'S3-compatible storage' : `${s.type_label} storage`);
   const status = (s: StorageRow) => (s.is_usable ? 'Connected' : 'Not usable');
   let search = $state('');
   let viewMode = $state(readView());
@@ -50,6 +57,7 @@
   // New storage.
   // GlobalSearch's `open-create-modal-storage` arrives as `?create=1`.
   let creating = $state(router.query('create') === '1');
+  let type = $state<StorageType>('s3');
   let name = $state('');
   let description = $state('');
   let parts = $state<EndpointParts>({ scheme: 'https', host: '', port: '', path: '' });
@@ -59,6 +67,10 @@
   let secret = $state('');
   let usePathStyleEndpoint = $state(true);
   let usePathStyleEndpointChanged = $state(false);
+  let skipTlsVerification = $state(false);
+  let serverParts = $state<ServerParts>({ host: '', port: '', path: '' });
+  let sftpAuth = $state('password');
+  let privateKeyId = $state<number | null>(null);
   let busy = $state(false);
 
   /** `updatedEndpointParts`: the URL style follows the provider until the user picks one. */
@@ -70,7 +82,21 @@
     e.preventDefault();
     busy = true;
     try {
-      const r = await storagesUi.create({ name, description, endpoint: composeEndpoint(parts), bucket, region, key, secret, use_path_style_endpoint: usePathStyleEndpoint });
+      const r = await storagesUi.create({
+        type,
+        name,
+        description,
+        endpoint: composeEndpoint(parts),
+        server_parts: serverParts,
+        bucket,
+        region,
+        key,
+        secret,
+        use_path_style_endpoint: usePathStyleEndpoint,
+        skip_tls_verification: skipTlsVerification,
+        sftp_auth: sftpAuth,
+        private_key_id: privateKeyId,
+      });
       router.go(`/storages/${r.uuid}`);
     } catch (err) {
       const error = err instanceof ApiError ? err : new ApiError(0, String(err));
@@ -85,7 +111,7 @@
 <div class="application-settings-form w-full">
   <header class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
     <div class="min-w-0">
-      <h1 class="truncate text-[24px]! leading-7! font-semibold! tracking-tight!">S3 Storage</h1>
+      <h1 class="truncate text-[24px]! leading-7! font-semibold! tracking-tight!">Storage</h1>
       <p class="mt-1 text-[13px] text-neutral-500 dark:text-fg-dim">
         {#if storages}
           {storages.length} {storages.length === 1 ? 'storage destination' : 'storage destinations'} for backups
@@ -106,7 +132,7 @@
 
   {#if storages}
     {#if storages.length === 0}
-      <Empty title="No S3 storage yet" description="Add an S3-compatible destination to store backups outside your servers." iconName="storages" />
+      <Empty title="No storage yet" description="Add an S3-compatible, SFTP, FTPS, or WebDAV destination to store backups outside your servers." iconName="storages" />
     {:else}
       <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div class="w-full sm:max-w-sm">
@@ -115,7 +141,7 @@
             <input
               bind:value={search}
               type="search"
-              placeholder="Search S3 storages"
+              placeholder="Search storages"
               class="input w-full pl-8! h-8! rounded-lg! border-neutral-200! bg-white! py-0! pr-8! text-[12px]! shadow-none! placeholder:text-neutral-400 focus:border-accent! focus:ring-0! dark:border-white/[0.08]! dark:bg-white/[0.035]! dark:text-fg! dark:placeholder:text-fg-faint"
             />
           </div>
@@ -177,31 +203,56 @@
 </div>
 
 {#if creating}
-  <Modal title="New S3 Storage" onclose={() => (creating = false)}>
+  <Modal title="New Storage" onclose={() => (creating = false)}>
     <div class="w-full">
       <div class="mb-4">
         For more details, please visit the <a class="underline dark:text-brand-light" href="https://coolify.io/docs/knowledge-base/s3/introduction" target="_blank">Coolify Docs</a>.
       </div>
       <form class="flex flex-col gap-2" onsubmit={submit}>
+        <div class="w-64">
+          <Listbox required id="type" label="Type" options={types} bind:value={type} />
+        </div>
         <div class="flex gap-2">
           <FormInput required label="Name" id="name" bind:value={name} />
           <FormInput label="Description" id="description" bind:value={description} />
         </div>
-        <!-- Sends the endpoint right away, so the URL style below follows the provider. -->
-        <div onchange={endpointChanged}>
-          <EndpointInput bind:parts />
-        </div>
-        <div class="flex gap-2">
-          <FormInput required label="Bucket" id="bucket" bind:value={bucket} />
-          <FormInput required helper="Region only required for AWS. Leave it as-is for other providers." label="Region" id="region" bind:value={region} />
-        </div>
-        <div class="flex gap-2">
-          <FormInput required type="password" label="Access Key" id="key" bind:value={key} />
-          <FormInput required type="password" label="Secret Key" id="secret" bind:value={secret} />
-        </div>
-        <div class="w-64">
-          <Checkbox id="usePathStyleEndpoint" label="Use path-style URLs" helper="Turn this off for providers that only accept virtual-hosted-style URLs (bucket.endpoint). coolify-rs turns it off for Alibaba Cloud OSS, Tencent Cloud COS, and Volcengine TOS, and when the provider rejects path-style URLs." bind:checked={usePathStyleEndpoint} onchange={() => (usePathStyleEndpointChanged = true)} />
-        </div>
+        {#if type === 's3'}
+          <!-- Sends the endpoint right away, so the URL style below follows the provider. -->
+          <div onchange={endpointChanged}>
+            <EndpointInput bind:parts />
+          </div>
+          <div class="flex gap-2">
+            <FormInput required label="Bucket" id="bucket" bind:value={bucket} />
+            <FormInput required helper="Region only required for AWS. Leave it as-is for other providers." label="Region" id="region" bind:value={region} />
+          </div>
+          <div class="flex gap-2">
+            <FormInput required type="password" label="Access Key" id="key" bind:value={key} />
+            <FormInput required type="password" label="Secret Key" id="secret" bind:value={secret} />
+          </div>
+          <div class="w-64">
+            <Checkbox id="usePathStyleEndpoint" label="Use path-style URLs" helper="Turn this off for providers that only accept virtual-hosted-style URLs (bucket.endpoint). coolify-rs turns it off for Alibaba Cloud OSS, Tencent Cloud COS, and Volcengine TOS, and when the provider rejects path-style URLs." bind:checked={usePathStyleEndpoint} onchange={() => (usePathStyleEndpointChanged = true)} />
+            <Checkbox id="skipTlsVerification" label="Skip TLS certificate verification" helper="Turn this on only for an endpoint with a self-signed or private CA certificate. coolify-rs and the backup helper then accept any certificate, so an attacker on the network path can read or change your backups. Browsers that download files from this storage must still trust the certificate." bind:checked={skipTlsVerification} />
+          </div>
+        {:else}
+          {#if type === 'webdav'}
+            <EndpointInput bind:parts hostPlaceholder="cloud.example.com" portPlaceholder="443" pathPlaceholder="/remote.php/dav/files/USER/backups" pathHelper="The path of the backup directory on the WebDAV server, for example /remote.php/dav/files/USER/backups for Nextcloud." />
+          {:else}
+            <StorageServerFields bind:parts={serverParts} defaultPort={type === 'sftp' ? 22 : 21} />
+          {/if}
+          {#if type === 'sftp'}
+            <FormInput required label="Username" id="key" autocomplete="off" bind:value={key} />
+            <StorageSftpLogin bind:auth={sftpAuth} bind:privateKeyId bind:secret {privateKeys} />
+          {:else}
+            <div class="flex gap-2">
+              <FormInput required label="Username" id="key" autocomplete="off" bind:value={key} />
+              <FormInput required type="password" label="Password" id="secret" bind:value={secret} />
+            </div>
+          {/if}
+          <p class="text-xs text-neutral-500 dark:text-fg-dim">
+            Backups keep their full path on the server (for example data/coolify/backups/...) below this directory. coolify-rs connects from its own container to check, restore, download, and delete backups, and from each server to upload them.
+          </p>
+        {/if}
+
         <button class="button mt-4" type="submit" disabled={busy}>Validate Connection & Continue</button>
       </form>
     </div>

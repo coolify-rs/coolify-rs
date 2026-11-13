@@ -1,0 +1,4883 @@
+{
+  "schema_version": 1,
+  "run_id": "run-0becfba91-378ce3735",
+  "upstream_from": "0becfba9113063336b09860579627fd218cb3fc4",
+  "upstream_to": "378ce3735c4522ebb6b68e93b909b0511f278763",
+  "stage": "analyzed",
+  "commits": [
+    {
+      "sha": "33c0f6e5719aa4f389d7d2c69769148ba5c94d7b",
+      "subject": "fix(release): sync the preview channel of the CDN before the stable one",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "fa128d86c9d78421bf11170a36d3761b187a67c4",
+      "subject": "feat(release): name the stable CDN pull request after its version",
+      "categories": [
+        "documentation",
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "80574bc164993da36e05d5c3c9b6e5492b24cf84",
+      "subject": "ci: run the nightly and main builds during working hours",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "db1cf006d531fd6d20b1e49e47fe0ef99adaba90",
+      "subject": "ci: upload the list of the manifests to delete in every run",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "67b29ff24af8d54905341f8de8585c3302f67311",
+      "subject": "feat(scripts): delete the unused untagged manifests on docker.io",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "64d0015622080411c8b27fb7903792a3e784a45f",
+      "subject": "fix(scripts): delete the unreferenced images before the other indexes",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "6d9c027d1c7259489134812c72bc382fb6df416a",
+      "subject": "fix(scripts): count the docker.io layers once where ghcr.io has the manifest",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "156f998745ef47c962dfb8b06ef0f182d19d3fc3",
+      "subject": "docs(scripts): mark the Docker Hub manifests endpoint as undocumented",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "82d89589a2b29233d2eb3ec47dc2b2ed4289bc9e",
+      "subject": "fix(scripts): delete a shared image after the last index that references it",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "1da3124e102fd75921500ca3f09a71e45d09eec6",
+      "subject": "docs(readme): add Bragly to small sponsors",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "c3a21eceebe4a9185d45af814afc4dadad2582ef",
+      "subject": "fix(dns): replace unused Coolify records and show conflicts on automatic create",
+      "categories": [
+        "documentation",
+        "frontend",
+        "domain_logic",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 7
+    },
+    {
+      "sha": "b063a41624bcd0650042c3b78630cff56ede7495",
+      "subject": "fix(mcp): save MCP deployments as MCP, not as API deployments",
+      "categories": [
+        "documentation",
+        "frontend",
+        "api_change",
+        "database_schema",
+        "domain_logic",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 13
+    },
+    {
+      "sha": "37b4a8b4e71c4f8b3bc55d3e579c49aeeed80423",
+      "subject": "fix(mcp): keep the deployment source on additional servers and audit MCP calls as MCP",
+      "categories": [
+        "documentation",
+        "domain_logic",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "daf0e1a70cf1c375bea850afcccd23e47ef2ca09",
+      "subject": "fix(dns): add the Cloudflare record when a domain is edited to a managed zone",
+      "categories": [
+        "documentation",
+        "frontend",
+        "container_integration"
+      ],
+      "security_sensitive": false,
+      "files": 7
+    },
+    {
+      "sha": "cf1e0e70c5d8565fb550dd30626cdfb2f2f5b313",
+      "subject": "feat(deployments): cancel superseded deployments when a newer one is queued",
+      "categories": [
+        "documentation",
+        "frontend",
+        "api_change",
+        "database_schema",
+        "domain_logic",
+        "deployment_engine",
+        "background_jobs"
+      ],
+      "security_sensitive": true,
+      "files": 17
+    },
+    {
+      "sha": "1a888610ad4ec62ce1ee990e8d3b24cbddd36773",
+      "subject": "fix(scripts): delete the docker.io manifests deleted on ghcr.io",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "ef88ea07dac0bad85c83cea7768b77d8bcb6a737",
+      "subject": "ci: disable the manifest cleanup after a failed run",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "75f0ad7459a7047d6589ce96466fcd8c50d3bb31",
+      "subject": "feat(scripts): use the undocumented docker.io endpoint only for untagged manifests",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "c42222a8813adf90701b42e556580d2d7bd395ba",
+      "subject": "refactor(scripts): move the manifest types to a variable",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "19f82b6e07464f4908f5e58b13f89cf65428cf16",
+      "subject": "Merge branch 'main' of https://github.com/coollabsio/coolify",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "domain_logic",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 13
+    },
+    {
+      "sha": "ed03a31b3ae0d8f5da5198f61e540f6edbc697f6",
+      "subject": "fix(server): keep ip and user as strings after save",
+      "categories": [
+        "documentation",
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "6254f44f168c38d9eafc4228322997c4cb959306",
+      "subject": "fix(metrics): show disk usage when Sentinel names the data disk by another mount",
+      "categories": [
+        "documentation",
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 5
+    },
+    {
+      "sha": "688134a994fa5e771d92030e34a324bc7ccac768",
+      "subject": "feat(backups): import backups from a dialog on the backups page",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": true,
+      "files": 17
+    },
+    {
+      "sha": "c94411fb928b8423dd2e2a812b2e015540e747d9",
+      "subject": "fix(clone): do not copy preview records when an application is cloned",
+      "categories": [
+        "documentation",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "777362cd976279d9b24aa8edb3c5cb203df9ae6d",
+      "subject": "feat(proxy): mark unused Traefik certificates and delete them in one step",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "domain_logic",
+        "container_integration"
+      ],
+      "security_sensitive": true,
+      "files": 9
+    },
+    {
+      "sha": "bb6dfd147ec6fdaa4e7c1e75fea7f4c05aededc4",
+      "subject": "fix(mcp): queue MCP deployments behind a deployment in progress",
+      "categories": [
+        "documentation",
+        "tests",
+        "domain_logic",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 6
+    },
+    {
+      "sha": "9c6138fe184de42df2144171ad479f28a2983b1b",
+      "subject": "fix(cleanup): stop loading deployment logs and unused backup executions",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "domain_logic",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 9
+    },
+    {
+      "sha": "f057aaf2e679816b7f81cc149d050dbbe3a5ada3",
+      "subject": "fix(rollback): list the commit images of Docker Compose applications",
+      "categories": [
+        "documentation",
+        "tests",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "7ec000ab86116b4337ae48237fc9f1bbaf7d3c9d",
+      "subject": "fix(service): pin usesend template to v1.10.0",
+      "categories": [
+        "documentation",
+        "service_templates"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "b7defddc32000f552ed215e42282e3c516e2ce05",
+      "subject": "fix(dns): verify the Cloudflare origin and add records for clones and API-created resources",
+      "categories": [
+        "documentation",
+        "tests",
+        "api_change",
+        "domain_logic",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 11
+    },
+    {
+      "sha": "83a5667387d4ea9edcf3ea371f9541eb929b4940",
+      "subject": "fix(server): detach additional-destination apps instead of deleting them on server delete",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "api_change",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 9
+    },
+    {
+      "sha": "ccaa04ce336fc05b3e99e991468ea181b1e51768",
+      "subject": "fix(service): use postgresql in the bugsink template",
+      "categories": [
+        "documentation",
+        "service_templates"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "e9028e1338c29baf4024768bfb6bfef73e277d44",
+      "subject": "fix(service): allow the redirect_to header in appflowy gotrue cors",
+      "categories": [
+        "documentation",
+        "service_templates"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "8f7d1be7a9054532ff6a6df64eca0ca643d20767",
+      "subject": "fix(service): limit supabase vector to the logs of its own stack",
+      "categories": [
+        "documentation",
+        "service_templates"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "dd8ea3dc93d565c0f5a7a513782476d8b8690673",
+      "subject": "fix(service): use postgres 16 in the outline template",
+      "categories": [
+        "documentation",
+        "service_templates"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "a487d7c9d3b02265fe64f33e55fd198d63a40b15",
+      "subject": "fix(service): prefix the litellm master key with sk- and add a salt key",
+      "categories": [
+        "documentation",
+        "service_templates"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "7f521e496dce64ca52c3afb94e082205432194f5",
+      "subject": "fix(s3): add a setting to skip TLS verification for S3 storages",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "api_change",
+        "database_schema",
+        "domain_logic",
+        "container_integration",
+        "background_jobs"
+      ],
+      "security_sensitive": true,
+      "files": 23
+    },
+    {
+      "sha": "b7a2c75739830cef62d74e9ee719c1caafe44a28",
+      "subject": "fix(github): check clock skew only from failed GitHub App responses",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "domain_logic",
+        "external_integrations",
+        "background_jobs"
+      ],
+      "security_sensitive": true,
+      "files": 18
+    },
+    {
+      "sha": "d70801aaa17c12246772eb7b2b554399024586c3",
+      "subject": "fix(github): retry GitHub API reads on server and connection errors",
+      "categories": [
+        "documentation",
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "e20e652c00d0927fa84cfe5d2d5b8e921bd46ef8",
+      "subject": "fix(dns): check the closest Cloudflare wildcard for deeper domain names",
+      "categories": [
+        "documentation",
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 5
+    },
+    {
+      "sha": "f21acdc3e4eb5bb1818a29f113d5acf63c647f77",
+      "subject": "fix(notifications): notify when a resource stops unexpectedly",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "domain_logic",
+        "deployment_engine",
+        "container_integration",
+        "external_integrations",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 17
+    },
+    {
+      "sha": "d3ef4d1c57e6d99a5052e8e49b5ec8cda47741bb",
+      "subject": "fix(service): route the rybbit /api path to the backend",
+      "categories": [
+        "documentation",
+        "tests",
+        "domain_logic",
+        "service_templates"
+      ],
+      "security_sensitive": false,
+      "files": 6
+    },
+    {
+      "sha": "71814b4541c8eee43418085ebfa81af542db688c",
+      "subject": "fix(deployment): use one COOLIFY_BRANCH value for preview deployments",
+      "categories": [
+        "documentation",
+        "tests",
+        "domain_logic",
+        "deployment_engine"
+      ],
+      "security_sensitive": true,
+      "files": 5
+    },
+    {
+      "sha": "52a78cdb0f0d790e5a29349e49c7134adc532cd2",
+      "subject": "fix(env): keep the trailing newline of multiline environment variables",
+      "categories": [
+        "documentation",
+        "tests",
+        "domain_logic",
+        "authentication_authorization"
+      ],
+      "security_sensitive": true,
+      "files": 5
+    },
+    {
+      "sha": "8c6774e17fa6f1553840500ce1679ddb31bb2b8c",
+      "subject": "fix(deploy): keep the helper Docker CLI on its buildx plugin",
+      "categories": [
+        "documentation",
+        "tests",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "e13652ee12e5b9917ec4c07e43d0ef86e9a055d5",
+      "subject": "chore(changelog): remove scheduled task entries added by mistake",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "d6405d5545b32ea3c6e1c8af02f79fd72ef20fe8",
+      "subject": "fix(deployment): remove the helper container before restarting it with the same name",
+      "categories": [
+        "documentation",
+        "tests",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "e29dcf70d94f136d6cfc1447b80a1e6e96451057",
+      "subject": "fix(service): mark parts that are no longer in the Compose file",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "database_schema",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 9
+    },
+    {
+      "sha": "a05fe524f8bef31bd319a5303fba1566adc9f6db",
+      "subject": "fix(storage): confirm volume renames because the data stays in the old volume",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": true,
+      "files": 4
+    },
+    {
+      "sha": "fc027be2481aa04cc87dec52c208257571e0da2b",
+      "subject": "fix(compose): warn when the Compose file is in a subdirectory of the base directory",
+      "categories": [
+        "documentation",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 8
+    },
+    {
+      "sha": "d6acd9a3c5b05bdc863c1d6a6226d3cbf1b2312d",
+      "subject": "fix(docker): use the Ubuntu and Debian repositories in the Docker install fallback",
+      "categories": [
+        "documentation",
+        "container_integration"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "5431d4954dbf72821dd6e77ebeb810c72a0bea66",
+      "subject": "fix(server): run the connection check Docker commands through SSH mux",
+      "categories": [
+        "documentation",
+        "tests",
+        "domain_logic",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 6
+    },
+    {
+      "sha": "1ff99b0dc870504d82cec8c017bf970e54c7cdc0",
+      "subject": "fix(logs): start the log copy during the click so it works on iOS",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": true,
+      "files": 8
+    },
+    {
+      "sha": "06c41f57d66af2ba37ce7b669515848663e1e5a5",
+      "subject": "feat(notifications): throttle repeated scheduled job failures and disable failing tasks",
+      "categories": [
+        "documentation",
+        "frontend",
+        "api_change",
+        "database_schema",
+        "domain_logic",
+        "external_integrations",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 29
+    },
+    {
+      "sha": "3f929edfc695bb447bcccb8dc1abcbbeed4a4c6f",
+      "subject": "chore(dev): reach Mailpit as coolify-mail in scripts/dev instances",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "2fbe9d2abe9cb0ca07e3b68b816f0606de41afea",
+      "subject": "fix(proxy): notify once for each new Traefik patch version",
+      "categories": [
+        "documentation",
+        "tests",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "6497cc73a625cc8b36cf9b9ae7debcc5f45897d0",
+      "subject": "docs(agents): tell agents not to edit CHANGELOG.md",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "fcf92b751f24605c670f41d6ab6df13265254c7c",
+      "subject": "fix(healthcheck): read the Dockerfile HEALTHCHECK only from the built stage",
+      "categories": [
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "3895ca05f3b0f85a64cf32bd6f95557bfc4b2a52",
+      "subject": "fix(service): pull Convex images from the renamed ghcr.io/convex namespace",
+      "categories": [
+        "service_templates"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "666ac84efbdd6468628465ecd0425d2f4c018c74",
+      "subject": "fix(status): show running:starting while a health check is in its start period",
+      "categories": [
+        "tests",
+        "frontend",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "50af95a70b021f6bd4e17589564444491e0b1031",
+      "subject": "fix(service): show a starting health check as a warning on the resource card",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "b919af5f7eaf417b58e2ecd862597ab2803bc155",
+      "subject": "docs(readme): remove Best Consultant from big sponsors",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "a5b4e1d32e2f6fc5830771294d7c92b8ad3a00d5",
+      "subject": "feat(email): add a separate notification sender to the instance email settings",
+      "categories": [
+        "frontend",
+        "api_change",
+        "database_schema",
+        "domain_logic",
+        "external_integrations",
+        "background_jobs"
+      ],
+      "security_sensitive": true,
+      "files": 14
+    },
+    {
+      "sha": "33cb5e3c6a901ceb46a79aeb9defac7123684555",
+      "subject": "test: cover OAuth redirect URI, multi-domain previews, server clones",
+      "categories": [
+        "tests",
+        "service_templates"
+      ],
+      "security_sensitive": false,
+      "files": 5
+    },
+    {
+      "sha": "3dc89cfe05eb0a57deabcf8f01352f1c01e7dc03",
+      "subject": "fix(oauth): require redirect URI to point at the provider callback route",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "21d1ad4874eee2468935ae0e59333813f76371f7",
+      "subject": "fix(backups): upload to S3 endpoints with a path, like Supabase Storage",
+      "categories": [
+        "tests",
+        "domain_logic",
+        "container_integration",
+        "background_jobs"
+      ],
+      "security_sensitive": true,
+      "files": 9
+    },
+    {
+      "sha": "ecb14e6cd52e928620a8a29b51d375981268b911",
+      "subject": "fix(server): allow servers with the same IP and different SSH ports",
+      "categories": [
+        "tests",
+        "frontend",
+        "api_change",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 12
+    },
+    {
+      "sha": "5c71067481134c7b7222e0894bd99eb16c348f20",
+      "subject": "fix(backups): limit the full backup run to its timeout",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 7
+    },
+    {
+      "sha": "780d67ccbbcf8b8c8c21389b0d1f7be6f04dd895",
+      "subject": "fix(storage): stop a deleted volume from coming back after a redeploy",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "deployment_engine",
+        "container_integration"
+      ],
+      "security_sensitive": true,
+      "files": 8
+    },
+    {
+      "sha": "3c87879e6b20bc0d998c4b796c37b927db39895c",
+      "subject": "fix(compose): keep service names as hostnames in preview deployments",
+      "categories": [
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 6
+    },
+    {
+      "sha": "f4a1e3e427f8e2d23c328fd033dff3a65b8ff76f",
+      "subject": "fix(proxy): keep Caddy WebSockets open across config reloads",
+      "categories": [
+        "tests",
+        "domain_logic",
+        "container_integration"
+      ],
+      "security_sensitive": false,
+      "files": 10
+    },
+    {
+      "sha": "4b9fe035dc3ece6e4a46f50548779156f39a1733",
+      "subject": "fix(deployment): trust the server CA bundle in the helper container",
+      "categories": [
+        "tests",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "e0b94662e9a955455cdd2947be5f5c2cfca66634",
+      "subject": "fix(deployments): apply the concurrent build limit of build servers",
+      "categories": [
+        "tests",
+        "domain_logic",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 5
+    },
+    {
+      "sha": "31c3fcf50d7abca3d266b17e2dfc277936f42990",
+      "subject": "feat(scheduled-tasks): add an option to run a task without a shell",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "api_change",
+        "database_schema",
+        "domain_logic",
+        "background_jobs"
+      ],
+      "security_sensitive": true,
+      "files": 20
+    },
+    {
+      "sha": "dec776025e4af36c543bfe2e410869629ea67073",
+      "subject": "fix(upgrade): finish the upgrade modal when the new version answers",
+      "categories": [
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 5
+    },
+    {
+      "sha": "1b571f45094ccddef74c099cd4d78eb95f58c495",
+      "subject": "fix(logs): cap streamed log reads so dockerd does not scan the full log file",
+      "categories": [
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "618d377d8785e6878c360623414deba1a16d09c3",
+      "subject": "fix(ui): keep the dark theme during page loads and wire:navigate",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "0b89b857edf33e3e7f743f1cde72366a20740b69",
+      "subject": "fix(backups): make the database backup executions table fit and readable",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "8126a5c1282288bdfe482d79835c31d28640054f",
+      "subject": "fix(backups): limit S3 uploads to 1000 parts for providers like Scaleway",
+      "categories": [
+        "tests",
+        "domain_logic",
+        "background_jobs"
+      ],
+      "security_sensitive": true,
+      "files": 6
+    },
+    {
+      "sha": "960471984c91ec2b7cb8cc761b2eb3c16f2006ac",
+      "subject": "fix(cleanup): delete sessions older than the session lifetime",
+      "categories": [
+        "tests",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "c3e5b4ba734129d32ec7ef55ee5c5e6d3a3d14bf",
+      "subject": "test(env): cover spaced shared variable inside a longer value (#7202)",
+      "categories": [
+        "tests"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "a7b7aa350ab4bf54b2fcd8db3861273d3f8da193",
+      "subject": "fix(telegram): send button links as text when Telegram rejects the button URL",
+      "categories": [
+        "tests",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "0b45d8dd6c3229da931d8f777843a2070dff3c36",
+      "subject": "fix(env): quote old multi-line JSON values in the .env file",
+      "categories": [
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "19e3918831fa78618d93a6f8a34d4b9829701b5a",
+      "subject": "test(webhook): cover manual webhooks for two applications of one repository",
+      "categories": [
+        "tests"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "e0ae59decaa2e1dacf53a556a77800df6f59f258",
+      "subject": "fix(storage): explain the UUID prefix of new volume names",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "b83b97f7e6aada62dcd1885d5329b0264b08ad37",
+      "subject": "fix(server): show the SSH error when a new private key cannot connect",
+      "categories": [
+        "tests",
+        "frontend",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "8d07d178f0c2da133fdde2eed0bb079781706979",
+      "subject": "fix(log-drain): send Coolify labels to Fluent Bit drains",
+      "categories": [
+        "tests",
+        "domain_logic",
+        "container_integration"
+      ],
+      "security_sensitive": false,
+      "files": 7
+    },
+    {
+      "sha": "da7779d061843afc74ebd5f08d6e7370c5066498",
+      "subject": "fix(env): keep locked variables locked but allow a new value",
+      "categories": [
+        "tests",
+        "frontend",
+        "api_change",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 14
+    },
+    {
+      "sha": "232e8b8616414bbf0584750dd96e49e14ea483df",
+      "subject": "fix(backups): back up all databases by default for Odoo services",
+      "categories": [
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 6
+    },
+    {
+      "sha": "927e3f0b429bc1c381abb59d1e6cf731d3e50664",
+      "subject": "fix(service): route Ente public album links and fix Ente startup",
+      "categories": [
+        "service_templates"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "997396b926973c4f840d454d5caead1d0daa8d14",
+      "subject": "feat(cloud): save deleted users' emails and keep unsubscribed teams for 60 days",
+      "categories": [
+        "tests",
+        "configuration",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "d09480973ebadc9c242123724f0391a6a9353902",
+      "subject": "fix(previews): give each Compose preview its own project name",
+      "categories": [
+        "tests",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "860e7864815ea75812f363fed37c4e5ede11352d",
+      "subject": "fix(backups): back up the instance database on localhost and show why the pre-update backup failed",
+      "categories": [
+        "frontend",
+        "container_integration",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "ca27224628c0fadfba6892fbd24dfe5f4f154678",
+      "subject": "fix(server): refresh the page after the localhost connection is validated",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "25b4236e356a796af65b778be6f0855cca4ec3ca",
+      "subject": "fix(api): check deploy access before a deploy writes a Docker image preview",
+      "categories": [
+        "tests",
+        "api_change"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "f9bde1cd7a5f5d3c01da78b3ea963a032997f4a8",
+      "subject": "fix(env): prevent duplicate environment variables and allow removing extra copies",
+      "categories": [
+        "tests",
+        "frontend",
+        "api_change",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 15
+    },
+    {
+      "sha": "455b22f26c334ceaad6efb1e7c23766200c92894",
+      "subject": "fix(deploy): explain SSH exit 255 and handle non-map compose services",
+      "categories": [
+        "tests",
+        "domain_logic",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 7
+    },
+    {
+      "sha": "4d932b30788736776cea649668bd63ab6098033b",
+      "subject": "fix(services): update resource card status together with the heading badge",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "84d21b8bfa8b5662da8da006d41fbba690c68df4",
+      "subject": "Merge remote-tracking branch 'origin/main'",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "9e64998d688306568877251e16811fdb628f2708",
+      "subject": "refactor(ui): drop deprecated -webkit-overflow-scrolling declarations",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 9
+    },
+    {
+      "sha": "59481c7bb6cd71c08c4f0b54ef1789ee304b9b3c",
+      "subject": "fix(api-tokens): keep token search in sync after create, edit, and revoke",
+      "categories": [
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "5eee9933ca0ba0cea8e108f2ca1666160a96755b",
+      "subject": "fix(theme): use sidebar text color for menu entries when the sidebar scheme differs",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "65187349356eb9c69740270f12c0fecac4c14a78",
+      "subject": "fix(theme): keep custom accent text and fills readable",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "51a7e9761978354ebe8e7a8f2714e1e0af246504",
+      "subject": "fix(healthcheck): import Dockerfile HEALTHCHECK options like Docker",
+      "categories": [
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "4bdf03db692d87340f5a706581e16a24a37e111a",
+      "subject": "fix(keys): generate 4096-bit RSA keys",
+      "categories": [
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "3bc82eb71d8aa3d7cea60fef185abc32a2146ea1",
+      "subject": "feat(api): add Gitea App endpoints for sources and applications",
+      "categories": [
+        "tests",
+        "api_change",
+        "domain_logic"
+      ],
+      "security_sensitive": true,
+      "files": 11
+    },
+    {
+      "sha": "32541a32cec22a051f972c56ce8510c566b2e84b",
+      "subject": "fix(api): validate resource names and descriptions like the UI",
+      "categories": [
+        "tests",
+        "api_change",
+        "domain_logic"
+      ],
+      "security_sensitive": true,
+      "files": 7
+    },
+    {
+      "sha": "05e52fc41ddaa5dd79b76e81180251d1afed3b40",
+      "subject": "fix(compose): keep dotted service names literal and validate service names",
+      "categories": [
+        "tests",
+        "domain_logic",
+        "container_integration"
+      ],
+      "security_sensitive": false,
+      "files": 6
+    },
+    {
+      "sha": "6ab538d0f1e5dbcb57c6306f505b18ffdebe1573",
+      "subject": "fix(deploy): keep short-lived containers out of build --add-host",
+      "categories": [
+        "documentation",
+        "tests",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "cc996a1d9fe350c2ba1471cb8afd42fcc3375b37",
+      "subject": "fix(api): accept gitea_app_uuid when creating and updating applications",
+      "categories": [
+        "tests",
+        "api_change"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "30a8e3357a8f15a6da9dcf1cf17662bbc5da88be",
+      "subject": "fix(server): refresh the server page after background validation",
+      "categories": [
+        "frontend",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "19762a79502972920c47e9330f27c3ddd4f51964",
+      "subject": "fix(ui): keep volume data checkboxes next to their labels",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "9a6cc8316e922397b8672eac7667c0516e38bb19",
+      "subject": "fix(horizon): route Sentinel push jobs to a dedicated cloud sentinel queue",
+      "categories": [
+        "documentation",
+        "tests",
+        "domain_logic",
+        "configuration",
+        "background_jobs",
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 7
+    },
+    {
+      "sha": "5c34a1b3d41aca560331229ecf9877ee62230e9a",
+      "subject": "fix(sentinel): stop rejected Sentinel pushes and reduce their audit rows",
+      "categories": [
+        "api_change",
+        "domain_logic",
+        "container_integration"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "e7e952fcadb8e3221ee3b4f1e9b97c84cbdf5fe8",
+      "subject": "fix(deploy): keep preview and build server hosts out of build --add-host",
+      "categories": [
+        "frontend",
+        "api_change",
+        "database_schema",
+        "domain_logic",
+        "deployment_engine"
+      ],
+      "security_sensitive": true,
+      "files": 10
+    },
+    {
+      "sha": "0e01f2149cf815e267b132a3137770c933e0422d",
+      "subject": "fix(sentinel): send Retry-After for unreachable servers and invalid tokens",
+      "categories": [
+        "api_change"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "13298591d81ecf5083712d98ce79d53e8bdfa3aa",
+      "subject": "fix(api): throttle API clients that keep failing and notify the token's team",
+      "categories": [
+        "tests",
+        "frontend",
+        "domain_logic",
+        "authentication_authorization",
+        "configuration",
+        "external_integrations"
+      ],
+      "security_sensitive": true,
+      "files": 8
+    },
+    {
+      "sha": "b7d0e6be2a62ec51eef30ea04fd287c67e5a16ca",
+      "subject": "fix(audit): stop duplicate and empty audit rows",
+      "categories": [
+        "api_change",
+        "database_schema",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 10
+    },
+    {
+      "sha": "3379fa448ac5b81153d88ea056f2a42f9b60ece2",
+      "subject": "fix(audit): keep personal data and credentials out of audit events",
+      "categories": [
+        "tests",
+        "frontend",
+        "api_change",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 14
+    },
+    {
+      "sha": "70adcc2b0e6782bdcc73e8933012c205c90ccd2e",
+      "subject": "feat(databases): use newer default images for standalone databases",
+      "categories": [
+        "frontend",
+        "database_schema",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "7fbc5d779777fb35a88a07a8499f0c5eb1a48132",
+      "subject": "fix(ui): align service backup tables and sort executions by column",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "3115980c7782e581a2458de7ba7874dbfe04311d",
+      "subject": "fix(ui): copy service backup path and show S3 badge only for runs stored in S3",
+      "categories": [
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "ba966846e105c76d3ee69a1d0f1581363405021d",
+      "subject": "fix(ui): show relative start time with exact date tooltip in service backup executions",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "b12c965fbe2c53c5ecb19c0088d3b756b9648d9c",
+      "subject": "fix(ui): use bare status badges and show backup S3 storage as plain text",
+      "categories": [
+        "documentation",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 9
+    },
+    {
+      "sha": "c8c639e3d6818fa2af3176d0efdf13b78db30908",
+      "subject": "fix(realtime): keep Reverb handshake under its size limit with large cookie headers",
+      "categories": [
+        "tests",
+        "authentication_authorization",
+        "configuration"
+      ],
+      "security_sensitive": true,
+      "files": 8
+    },
+    {
+      "sha": "bd499de1fb47d45ab0ac64c04f920724787c3685",
+      "subject": "feat(ui): add UI scale option to appearance settings",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 7
+    },
+    {
+      "sha": "693cf0486dd261df5076f6e6f9b6deb830595caf",
+      "subject": "fix(ui): link secret manager token forms to their provider dashboards",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "00d0b4be1dae60d110c82d17e1e2f111d5b408de",
+      "subject": "fix(ui): add coolify.io ref to integration token provider links",
+      "categories": [
+        "frontend",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "106a6d7ac037ddfe31419b47e4a9f78e6f3911c4",
+      "subject": "fix(env): resolve and redact server-scoped shared variables in compose",
+      "categories": [
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "91d233be59a6058fd39259e1d957db1e613970b8",
+      "subject": "feat(ui): add list view to the new resource page",
+      "categories": [
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "5960814df5798c2d06ccf9162537811b43f8ce8a",
+      "subject": "fix(ui): match deploy canvas card border to resource tiles",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "878d77bd668eda80fe2e525e25b5fbc930fc5f23",
+      "subject": "fix(database): make the Redis health check ping with the password",
+      "categories": [
+        "container_integration"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "41877198b35e26e34a9893720428eae6ded270ea",
+      "subject": "feat(database): offer Valkey as an image of the Redis database type",
+      "categories": [
+        "frontend",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 10
+    },
+    {
+      "sha": "52d7d88fd6d5a160a7bc2f1ce28ec716f1328e17",
+      "subject": "docs(api): document Valkey images for Redis databases",
+      "categories": [
+        "api_change"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "813bc72af46507c1f21aef3c3e88caffd9a8d87b",
+      "subject": "fix(ui): shorten database descriptions on the new resource page",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "145569bea6b5278f5525d130a820f4fc2b274359",
+      "subject": "fix(db): bump Supabase and PostGIS default images",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "b7dc2e435b9297000bbaeccbba25e862d8d86405",
+      "subject": "feat(database): default new Redis databases to the Valkey image",
+      "categories": [
+        "frontend",
+        "api_change",
+        "database_schema"
+      ],
+      "security_sensitive": false,
+      "files": 6
+    },
+    {
+      "sha": "033f0c84da203e7870dba833859d64de93b04d19",
+      "subject": "v4.7 (#12478)",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "api_change",
+        "database_schema",
+        "domain_logic",
+        "authentication_authorization",
+        "deployment_engine",
+        "container_integration",
+        "configuration",
+        "external_integrations",
+        "background_jobs",
+        "dependency_upgrade",
+        "build_release",
+        "unclassified"
+      ],
+      "security_sensitive": true,
+      "files": 581
+    },
+    {
+      "sha": "757a0490023219b6518075e47350a3ad5865b590",
+      "subject": "docs(changelog): add breaking changes and security notes to Unreleased",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "54da9740451f4880ab54c16e2d92736b7772b996",
+      "subject": "chore(upstream): bump Sentinel to 1.1.5",
+      "categories": [
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "71d33863af3c6a367624f6a2c04f10826ebdd830",
+      "subject": "docs(changelog): condense Unreleased breaking and security entries",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "97819212178c88184bc8bf4d749b552d3f36d3c8",
+      "subject": "fix(dev): keep QEMU servers that still have resources on seed",
+      "categories": [
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "e614e680c04eda2380edc599119b47df102e36e8",
+      "subject": "docs(agents): document the changelog format",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "b1a20fabd42195d6dd1f3029fb9f97cb7e8cbfee",
+      "subject": "fix(ui): hide tooltips on close and dismiss buttons",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "53e21abe97078a3d405a334a516c675ed754418e",
+      "subject": "fix(services): do not warn about the port when a domain has no port",
+      "categories": [
+        "tests",
+        "frontend",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 8
+    },
+    {
+      "sha": "17a9fa624e37f8bef1c5736b5d0c3a663a10ede2",
+      "subject": "feat(ui): move maintenance mode to its own page with a confirmed toggle",
+      "categories": [
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 8
+    },
+    {
+      "sha": "abea0747edd677941651df3c80505f201f4d6dbe",
+      "subject": "feat(service): add Orbit template",
+      "categories": [
+        "frontend",
+        "service_templates"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "973cd8684a75659081bc25b669bba25265bcf87c",
+      "subject": "feat(ui): show the logo and name on the resource creation screen",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "d640aa15f51890cc8a94e0fbe3f0b6433c3a6d24",
+      "subject": "docs(changelog): add Orbit template, maintenance page, and port fix",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "1652a1d091cc52aee006ee03b39ac1672be985db",
+      "subject": "feat(ui): show the finish time of recent deployments on the dashboard",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "cab5ae990300f4b45f2ae5b2ddc4658dd593b607",
+      "subject": "feat(ui): show server usage on mobile in the dashboard server table",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "c648f4ec6ab12ed672a1375edace7c4f6ddd2e8f",
+      "subject": "feat(ui): star servers and resources for quick access on the dashboard",
+      "categories": [
+        "frontend",
+        "database_schema",
+        "domain_logic"
+      ],
+      "security_sensitive": true,
+      "files": 28
+    },
+    {
+      "sha": "5af4715b8a6b826f1c2d13b092caf5b4717e3928",
+      "subject": "feat(ui): put the star button after the status in the top bar",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "f7ea96214505d577cbe901deeec53717b234baea",
+      "subject": "fix(server): enable disabled self-hosted servers again on validation",
+      "categories": [
+        "tests",
+        "frontend",
+        "domain_logic",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "eb5f238a459bb29686a9a7c31832d7c3c67b3010",
+      "subject": "fix(server): show the disabled server message on the localhost page",
+      "categories": [
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "29aa42b982a3c469c713d3b4a3ebb2092127ec09",
+      "subject": "chore(docker): use the multi-platform Node.js image again (#12483)",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "8011d0d6ab5cf7d8d7e8e0b864f72cce5bd60a87",
+      "subject": "fix(access): check server and credential access for scoped members (#12488)",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "api_change",
+        "domain_logic",
+        "authentication_authorization"
+      ],
+      "security_sensitive": true,
+      "files": 20
+    },
+    {
+      "sha": "3b64cbc3790669181b583a2c74b4628412a32a66",
+      "subject": "fix(access): clearer credential message and backup S3 defaults",
+      "categories": [
+        "tests",
+        "frontend",
+        "api_change",
+        "authentication_authorization"
+      ],
+      "security_sensitive": true,
+      "files": 5
+    },
+    {
+      "sha": "1d21a27812d9326ad8ca13a1db03d87fb8c0c7d3",
+      "subject": "refactor(image-scan): remove the instance switch and the vulnerability DB URL",
+      "categories": [
+        "tests",
+        "frontend",
+        "api_change",
+        "database_schema",
+        "domain_logic",
+        "background_jobs"
+      ],
+      "security_sensitive": true,
+      "files": 62
+    },
+    {
+      "sha": "3c588d482d12349ddf46769707c07396d5ffa6a4",
+      "subject": "fix(access): apply API token limits in more permission checks",
+      "categories": [
+        "documentation",
+        "tests",
+        "domain_logic",
+        "authentication_authorization"
+      ],
+      "security_sensitive": true,
+      "files": 7
+    },
+    {
+      "sha": "c75e7078b7714d1fb5624f00898dff2762b7b66d",
+      "subject": "fix(access): restrict preview changes, rollbacks, and repo URL updates",
+      "categories": [
+        "tests",
+        "frontend",
+        "api_change",
+        "domain_logic",
+        "authentication_authorization",
+        "deployment_engine"
+      ],
+      "security_sensitive": true,
+      "files": 36
+    },
+    {
+      "sha": "61b10664c473296fdaa72628bea6d8db5e9d98c5",
+      "subject": "refactor(security): remove published APP_KEY request blocking middleware",
+      "categories": [
+        "tests",
+        "domain_logic",
+        "authentication_authorization"
+      ],
+      "security_sensitive": true,
+      "files": 3
+    },
+    {
+      "sha": "3f51c251c0ec5a94249464d8ecf88746da200885",
+      "subject": "fix(git): show the full Git error reason on a failed repository read",
+      "categories": [
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "91985acf42c008fcfe044119aaaf6c687b602020",
+      "subject": "build(image): remove the unused MinIO client from the coolify image (#12491)",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "cd975b49aa3aca98dbd8c55a2e3d0eae3d1d3d2c",
+      "subject": "docs(release): merge next into main only on the day of the release",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "b2617e75390744e353a3dfaf8383595de83aeb96",
+      "subject": "feat(release): write the changelog from change files",
+      "categories": [
+        "documentation",
+        "build_release",
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 6
+    },
+    {
+      "sha": "32d41d0353163a1609851006d7b369c7d10ca419",
+      "subject": "docs: describe the changes of v4.7 in change files",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 151
+    },
+    {
+      "sha": "9667e070c5d130dc7033b222fd8bf5dc77ed65ef",
+      "subject": "docs(agents): link only issues in change files",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "6eeea653fe6a4e3ba836af840b5a49ca0b852257",
+      "subject": "docs: remove the pull request links from the change files",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 16
+    },
+    {
+      "sha": "de75bbe004224d7104c09572747c13566a4f3c21",
+      "subject": "fix(upload): return 404 for a database the team cannot open",
+      "categories": [
+        "documentation",
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "a70e8568829f7975e6022fe67bec143b0462d5b3",
+      "subject": "test: remove tests that do not test behavior and strengthen weak ones",
+      "categories": [
+        "tests"
+      ],
+      "security_sensitive": false,
+      "files": 146
+    },
+    {
+      "sha": "acacbf9747b09afcd8b101c0b9655a9b57b83dc8",
+      "subject": "fix(compose): report an empty Compose file as empty, not as not found",
+      "categories": [
+        "documentation",
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "2466ccb8fd76f726f23c528fdade49f1a6ac8414",
+      "subject": "fix(service): check images before stopping a service on restart",
+      "categories": [
+        "documentation",
+        "tests",
+        "container_integration"
+      ],
+      "security_sensitive": true,
+      "files": 4
+    },
+    {
+      "sha": "769bddb3261336d88a02ead379c5614cbdfa5b98",
+      "subject": "fix(api): require write permission to choose a preview commit",
+      "categories": [
+        "documentation",
+        "tests",
+        "api_change",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 6
+    },
+    {
+      "sha": "f4cbf63e765c82be89cd5e40807bcc751912225c",
+      "subject": "fix(api): validate the docker tag of deploy requests",
+      "categories": [
+        "documentation",
+        "tests",
+        "api_change"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "132dd0e34cb908c3eae276c53b78af64311829f9",
+      "subject": "test(api): cover member access to the cloud provider token list",
+      "categories": [
+        "tests"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "5ff94dbd7a65d59f71728354931e3d2b1717aa48",
+      "subject": "fix(api): limit nested server data to team-wide tokens",
+      "categories": [
+        "documentation",
+        "tests",
+        "api_change",
+        "domain_logic",
+        "authentication_authorization"
+      ],
+      "security_sensitive": true,
+      "files": 7
+    },
+    {
+      "sha": "a44193b6e4895a6a4992813cb907763893d10c49",
+      "subject": "fix(mcp): return only service fields from get_service",
+      "categories": [
+        "documentation",
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": true,
+      "files": 3
+    },
+    {
+      "sha": "b31c06a7eb7d62104f9d0ca725da0d2b4dba8f3b",
+      "subject": "fix(team): build invite links from instance URL, not request host",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "09f4aedb43123bb23a9fdba8491411b66905c2e0",
+      "subject": "docs(agents): add security advisory comment workflow via gh api",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "2e63c2e57e46dbbdb4c6cf712db1be06ab44fd9e",
+      "subject": "docs(agents): document editing advisory comments and linking commit SHAs",
+      "categories": [
+        "documentation"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "c589449c3ebf1018d5f95528b71365aa470fac90",
+      "subject": "fix(ui): make banners readable in light mode",
+      "categories": [
+        "documentation",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "bf648b9a37ffbf2a964553d075c2d92cef5c3e22",
+      "subject": "WIP (#12493)",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "database_schema",
+        "domain_logic",
+        "container_integration",
+        "external_integrations",
+        "background_jobs",
+        "unclassified"
+      ],
+      "security_sensitive": true,
+      "files": 60
+    },
+    {
+      "sha": "3c349abde3e671b77c5a428d6461ecfccc3c3988",
+      "subject": "fix(ui): make banners readable in light mode (#12495)",
+      "categories": [
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 0
+    },
+    {
+      "sha": "eaaaf7a71377ca57de0bc703006cc9c25442ff77",
+      "subject": "feat(release): bump coolify version to v4.7.0",
+      "categories": [
+        "documentation",
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 159
+    },
+    {
+      "sha": "b370c7ea6a4e9c9fcd5fb7e8faff0fad20580112",
+      "subject": "fix(image-scan): show the Vulnerabilities page again (#12497)",
+      "categories": [
+        "documentation",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "79dabc1972b79d96a6d8b9757b72b16644e86325",
+      "subject": "chore(marketing): add the release update video kit",
+      "categories": [
+        "documentation",
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 8
+    },
+    {
+      "sha": "ab4964ea8560a5dddb08c963ec52f0deb34037bd",
+      "subject": "fix(ui): keep warning callouts yellow in custom themes",
+      "categories": [
+        "documentation",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "957c01fcc898c3e4d7e13d157f2c4a17dfaff5f7",
+      "subject": "fix(image-scan): ship the scanner templates and show the scan error log",
+      "categories": [
+        "documentation",
+        "frontend",
+        "domain_logic",
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 10
+    },
+    {
+      "sha": "c93b765975705db8db0235a0715143d1f44f6919",
+      "subject": "fix(proxy): route maintenance mode through custom container labels",
+      "categories": [
+        "documentation",
+        "tests",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 5
+    },
+    {
+      "sha": "4f56c81236834fdaff0fdc9d219faf230212a57e",
+      "subject": "feat(release): bump coolify version to v4.7.1",
+      "categories": [
+        "documentation",
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 7
+    },
+    {
+      "sha": "ae1147003b401a7b691a5c9642ca5f65d5e7bece",
+      "subject": "fix(updates): make the nightly update channel easier to find (#12502)",
+      "categories": [
+        "documentation",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "dc7a5946e9fa80762a62b2fa67dd8a0f2c2a7b46",
+      "subject": "fix(image-scan): let a server set the scanner memory limit",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "api_change",
+        "database_schema",
+        "domain_logic"
+      ],
+      "security_sensitive": true,
+      "files": 14
+    },
+    {
+      "sha": "b81cc4116d22291f196c56eac85faeab77efa917",
+      "subject": "fix(breadcrumb): link breadcrumb names to their page",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 5
+    },
+    {
+      "sha": "aa016e685dc47defc43031d43ee762571699b916",
+      "subject": "fix(cache): accept numbers that Redis returns as strings",
+      "categories": [
+        "documentation",
+        "frontend",
+        "api_change",
+        "domain_logic",
+        "background_jobs"
+      ],
+      "security_sensitive": false,
+      "files": 6
+    },
+    {
+      "sha": "c9b9fd073b8443cb2ff30d9c282b8f24e0ddcdfb",
+      "subject": "fix(destination): limit stop and redeploy to the app's own servers",
+      "categories": [
+        "documentation",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "0d0f49b3455ae2de7a38a9eed1824c3d94f45f18",
+      "subject": "fix(release): make an unsigned release commit when git cannot sign",
+      "categories": [
+        "documentation",
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 2
+    },
+    {
+      "sha": "312fcbfd89d6bb54cbaae70f6c2c13baa876d7ec",
+      "subject": "feat(release): bump coolify version to v4.7.2",
+      "categories": [
+        "documentation",
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 8
+    },
+    {
+      "sha": "f41047785e0ee1985ebc4d80726b3865a763d515",
+      "subject": "fix(backups): let root team admins manage and download the instance backup",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "domain_logic",
+        "authentication_authorization",
+        "external_integrations",
+        "background_jobs"
+      ],
+      "security_sensitive": true,
+      "files": 13
+    },
+    {
+      "sha": "75690c923155e89babbc688f045d564f2e4b8996",
+      "subject": "Merge remote-tracking branch 'origin/main'",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 6
+    },
+    {
+      "sha": "4f22b5d1e5ab83f08aa0407cc0f927454b4a7a7c",
+      "subject": "feat(image-scan): per-server scanner time and CPU limits, and export of vulnerability lists (#12504)",
+      "categories": [
+        "documentation",
+        "tests",
+        "frontend",
+        "api_change",
+        "database_schema",
+        "domain_logic",
+        "background_jobs"
+      ],
+      "security_sensitive": true,
+      "files": 42
+    },
+    {
+      "sha": "30335d80866ff3391d899cf4ccb599b696f47b7e",
+      "subject": "feat(release): bump coolify version to v4.7.3",
+      "categories": [
+        "documentation",
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 6
+    },
+    {
+      "sha": "1d70487b3093bbaded7a94d7b9b23618877ccb3c",
+      "subject": "fix: delete failed database backup records and restore Cloud backups with orphan replica rows (#12507)",
+      "categories": [
+        "documentation",
+        "background_jobs",
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "4feb086824e52b4dfef30fbe73bf16e6982717a3",
+      "subject": "fix(scripts): find the IP of the restore VMs and show the wait progress",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "edfa45aae2cc0c8d1bc852b9c49388bd9aa8c929",
+      "subject": "fix(scripts): stop the restore VM script on a full disk or a broken install",
+      "categories": [
+        "build_release"
+      ],
+      "security_sensitive": false,
+      "files": 1
+    },
+    {
+      "sha": "c49d9f623b924b94a081b6e0f53778f96d1df1dc",
+      "subject": "fix(previews): pass production runtime variables without a preview copy",
+      "categories": [
+        "documentation",
+        "tests",
+        "deployment_engine"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "6bdc780af21a583989d9c585553e6b62cc8326f4",
+      "subject": "feat(release): bump coolify version to v4.7.4",
+      "categories": [
+        "documentation",
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    },
+    {
+      "sha": "989c2238f8c4a11a06eb6d62a3a4685c6b5d70ba",
+      "subject": "fix(storages): connect to SFTP hosts on IPv6 and show the network error",
+      "categories": [
+        "documentation",
+        "domain_logic"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "879bd5c42a10b8876335bf18a05c02ea19b5eb12",
+      "subject": "fix(api-tokens): open the tokens page when a token has unreadable scopes",
+      "categories": [
+        "documentation",
+        "frontend"
+      ],
+      "security_sensitive": false,
+      "files": 3
+    },
+    {
+      "sha": "378ce3735c4522ebb6b68e93b909b0511f278763",
+      "subject": "feat(release): bump coolify version to v4.7.5",
+      "categories": [
+        "documentation",
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 4
+    }
+  ],
+  "plan": {
+    "schema_version": 1,
+    "upstream_from": "0becfba9113063336b09860579627fd218cb3fc4",
+    "upstream_to": "378ce3735c4522ebb6b68e93b909b0511f278763",
+    "commits": [
+      "33c0f6e5719aa4f389d7d2c69769148ba5c94d7b",
+      "fa128d86c9d78421bf11170a36d3761b187a67c4",
+      "80574bc164993da36e05d5c3c9b6e5492b24cf84",
+      "db1cf006d531fd6d20b1e49e47fe0ef99adaba90",
+      "67b29ff24af8d54905341f8de8585c3302f67311",
+      "64d0015622080411c8b27fb7903792a3e784a45f",
+      "6d9c027d1c7259489134812c72bc382fb6df416a",
+      "156f998745ef47c962dfb8b06ef0f182d19d3fc3",
+      "82d89589a2b29233d2eb3ec47dc2b2ed4289bc9e",
+      "1da3124e102fd75921500ca3f09a71e45d09eec6",
+      "c3a21eceebe4a9185d45af814afc4dadad2582ef",
+      "b063a41624bcd0650042c3b78630cff56ede7495",
+      "37b4a8b4e71c4f8b3bc55d3e579c49aeeed80423",
+      "daf0e1a70cf1c375bea850afcccd23e47ef2ca09",
+      "cf1e0e70c5d8565fb550dd30626cdfb2f2f5b313",
+      "1a888610ad4ec62ce1ee990e8d3b24cbddd36773",
+      "ef88ea07dac0bad85c83cea7768b77d8bcb6a737",
+      "75f0ad7459a7047d6589ce96466fcd8c50d3bb31",
+      "c42222a8813adf90701b42e556580d2d7bd395ba",
+      "19f82b6e07464f4908f5e58b13f89cf65428cf16",
+      "ed03a31b3ae0d8f5da5198f61e540f6edbc697f6",
+      "6254f44f168c38d9eafc4228322997c4cb959306",
+      "688134a994fa5e771d92030e34a324bc7ccac768",
+      "c94411fb928b8423dd2e2a812b2e015540e747d9",
+      "777362cd976279d9b24aa8edb3c5cb203df9ae6d",
+      "bb6dfd147ec6fdaa4e7c1e75fea7f4c05aededc4",
+      "9c6138fe184de42df2144171ad479f28a2983b1b",
+      "f057aaf2e679816b7f81cc149d050dbbe3a5ada3",
+      "7ec000ab86116b4337ae48237fc9f1bbaf7d3c9d",
+      "b7defddc32000f552ed215e42282e3c516e2ce05",
+      "83a5667387d4ea9edcf3ea371f9541eb929b4940",
+      "ccaa04ce336fc05b3e99e991468ea181b1e51768",
+      "e9028e1338c29baf4024768bfb6bfef73e277d44",
+      "8f7d1be7a9054532ff6a6df64eca0ca643d20767",
+      "dd8ea3dc93d565c0f5a7a513782476d8b8690673",
+      "a487d7c9d3b02265fe64f33e55fd198d63a40b15",
+      "7f521e496dce64ca52c3afb94e082205432194f5",
+      "b7a2c75739830cef62d74e9ee719c1caafe44a28",
+      "d70801aaa17c12246772eb7b2b554399024586c3",
+      "e20e652c00d0927fa84cfe5d2d5b8e921bd46ef8",
+      "f21acdc3e4eb5bb1818a29f113d5acf63c647f77",
+      "d3ef4d1c57e6d99a5052e8e49b5ec8cda47741bb",
+      "71814b4541c8eee43418085ebfa81af542db688c",
+      "52a78cdb0f0d790e5a29349e49c7134adc532cd2",
+      "8c6774e17fa6f1553840500ce1679ddb31bb2b8c",
+      "e13652ee12e5b9917ec4c07e43d0ef86e9a055d5",
+      "d6405d5545b32ea3c6e1c8af02f79fd72ef20fe8",
+      "e29dcf70d94f136d6cfc1447b80a1e6e96451057",
+      "a05fe524f8bef31bd319a5303fba1566adc9f6db",
+      "fc027be2481aa04cc87dec52c208257571e0da2b",
+      "d6acd9a3c5b05bdc863c1d6a6226d3cbf1b2312d",
+      "5431d4954dbf72821dd6e77ebeb810c72a0bea66",
+      "1ff99b0dc870504d82cec8c017bf970e54c7cdc0",
+      "06c41f57d66af2ba37ce7b669515848663e1e5a5",
+      "3f929edfc695bb447bcccb8dc1abcbbeed4a4c6f",
+      "2fbe9d2abe9cb0ca07e3b68b816f0606de41afea",
+      "6497cc73a625cc8b36cf9b9ae7debcc5f45897d0",
+      "fcf92b751f24605c670f41d6ab6df13265254c7c",
+      "3895ca05f3b0f85a64cf32bd6f95557bfc4b2a52",
+      "666ac84efbdd6468628465ecd0425d2f4c018c74",
+      "50af95a70b021f6bd4e17589564444491e0b1031",
+      "b919af5f7eaf417b58e2ecd862597ab2803bc155",
+      "a5b4e1d32e2f6fc5830771294d7c92b8ad3a00d5",
+      "33cb5e3c6a901ceb46a79aeb9defac7123684555",
+      "3dc89cfe05eb0a57deabcf8f01352f1c01e7dc03",
+      "21d1ad4874eee2468935ae0e59333813f76371f7",
+      "ecb14e6cd52e928620a8a29b51d375981268b911",
+      "5c71067481134c7b7222e0894bd99eb16c348f20",
+      "780d67ccbbcf8b8c8c21389b0d1f7be6f04dd895",
+      "3c87879e6b20bc0d998c4b796c37b927db39895c",
+      "f4a1e3e427f8e2d23c328fd033dff3a65b8ff76f",
+      "4b9fe035dc3ece6e4a46f50548779156f39a1733",
+      "e0b94662e9a955455cdd2947be5f5c2cfca66634",
+      "31c3fcf50d7abca3d266b17e2dfc277936f42990",
+      "dec776025e4af36c543bfe2e410869629ea67073",
+      "1b571f45094ccddef74c099cd4d78eb95f58c495",
+      "618d377d8785e6878c360623414deba1a16d09c3",
+      "0b89b857edf33e3e7f743f1cde72366a20740b69",
+      "8126a5c1282288bdfe482d79835c31d28640054f",
+      "960471984c91ec2b7cb8cc761b2eb3c16f2006ac",
+      "c3e5b4ba734129d32ec7ef55ee5c5e6d3a3d14bf",
+      "a7b7aa350ab4bf54b2fcd8db3861273d3f8da193",
+      "0b45d8dd6c3229da931d8f777843a2070dff3c36",
+      "19e3918831fa78618d93a6f8a34d4b9829701b5a",
+      "e0ae59decaa2e1dacf53a556a77800df6f59f258",
+      "b83b97f7e6aada62dcd1885d5329b0264b08ad37",
+      "8d07d178f0c2da133fdde2eed0bb079781706979",
+      "da7779d061843afc74ebd5f08d6e7370c5066498",
+      "232e8b8616414bbf0584750dd96e49e14ea483df",
+      "927e3f0b429bc1c381abb59d1e6cf731d3e50664",
+      "997396b926973c4f840d454d5caead1d0daa8d14",
+      "d09480973ebadc9c242123724f0391a6a9353902",
+      "860e7864815ea75812f363fed37c4e5ede11352d",
+      "ca27224628c0fadfba6892fbd24dfe5f4f154678",
+      "25b4236e356a796af65b778be6f0855cca4ec3ca",
+      "f9bde1cd7a5f5d3c01da78b3ea963a032997f4a8",
+      "455b22f26c334ceaad6efb1e7c23766200c92894",
+      "4d932b30788736776cea649668bd63ab6098033b",
+      "84d21b8bfa8b5662da8da006d41fbba690c68df4",
+      "9e64998d688306568877251e16811fdb628f2708",
+      "59481c7bb6cd71c08c4f0b54ef1789ee304b9b3c",
+      "5eee9933ca0ba0cea8e108f2ca1666160a96755b",
+      "65187349356eb9c69740270f12c0fecac4c14a78",
+      "51a7e9761978354ebe8e7a8f2714e1e0af246504",
+      "4bdf03db692d87340f5a706581e16a24a37e111a",
+      "3bc82eb71d8aa3d7cea60fef185abc32a2146ea1",
+      "32541a32cec22a051f972c56ce8510c566b2e84b",
+      "05e52fc41ddaa5dd79b76e81180251d1afed3b40",
+      "6ab538d0f1e5dbcb57c6306f505b18ffdebe1573",
+      "cc996a1d9fe350c2ba1471cb8afd42fcc3375b37",
+      "30a8e3357a8f15a6da9dcf1cf17662bbc5da88be",
+      "19762a79502972920c47e9330f27c3ddd4f51964",
+      "9a6cc8316e922397b8672eac7667c0516e38bb19",
+      "5c34a1b3d41aca560331229ecf9877ee62230e9a",
+      "e7e952fcadb8e3221ee3b4f1e9b97c84cbdf5fe8",
+      "0e01f2149cf815e267b132a3137770c933e0422d",
+      "13298591d81ecf5083712d98ce79d53e8bdfa3aa",
+      "b7d0e6be2a62ec51eef30ea04fd287c67e5a16ca",
+      "3379fa448ac5b81153d88ea056f2a42f9b60ece2",
+      "70adcc2b0e6782bdcc73e8933012c205c90ccd2e",
+      "7fbc5d779777fb35a88a07a8499f0c5eb1a48132",
+      "3115980c7782e581a2458de7ba7874dbfe04311d",
+      "ba966846e105c76d3ee69a1d0f1581363405021d",
+      "b12c965fbe2c53c5ecb19c0088d3b756b9648d9c",
+      "c8c639e3d6818fa2af3176d0efdf13b78db30908",
+      "bd499de1fb47d45ab0ac64c04f920724787c3685",
+      "693cf0486dd261df5076f6e6f9b6deb830595caf",
+      "00d0b4be1dae60d110c82d17e1e2f111d5b408de",
+      "106a6d7ac037ddfe31419b47e4a9f78e6f3911c4",
+      "91d233be59a6058fd39259e1d957db1e613970b8",
+      "5960814df5798c2d06ccf9162537811b43f8ce8a",
+      "878d77bd668eda80fe2e525e25b5fbc930fc5f23",
+      "41877198b35e26e34a9893720428eae6ded270ea",
+      "52d7d88fd6d5a160a7bc2f1ce28ec716f1328e17",
+      "813bc72af46507c1f21aef3c3e88caffd9a8d87b",
+      "145569bea6b5278f5525d130a820f4fc2b274359",
+      "b7dc2e435b9297000bbaeccbba25e862d8d86405",
+      "033f0c84da203e7870dba833859d64de93b04d19",
+      "757a0490023219b6518075e47350a3ad5865b590",
+      "54da9740451f4880ab54c16e2d92736b7772b996",
+      "71d33863af3c6a367624f6a2c04f10826ebdd830",
+      "97819212178c88184bc8bf4d749b552d3f36d3c8",
+      "e614e680c04eda2380edc599119b47df102e36e8",
+      "b1a20fabd42195d6dd1f3029fb9f97cb7e8cbfee",
+      "53e21abe97078a3d405a334a516c675ed754418e",
+      "17a9fa624e37f8bef1c5736b5d0c3a663a10ede2",
+      "abea0747edd677941651df3c80505f201f4d6dbe",
+      "973cd8684a75659081bc25b669bba25265bcf87c",
+      "d640aa15f51890cc8a94e0fbe3f0b6433c3a6d24",
+      "1652a1d091cc52aee006ee03b39ac1672be985db",
+      "cab5ae990300f4b45f2ae5b2ddc4658dd593b607",
+      "c648f4ec6ab12ed672a1375edace7c4f6ddd2e8f",
+      "5af4715b8a6b826f1c2d13b092caf5b4717e3928",
+      "f7ea96214505d577cbe901deeec53717b234baea",
+      "eb5f238a459bb29686a9a7c31832d7c3c67b3010",
+      "29aa42b982a3c469c713d3b4a3ebb2092127ec09",
+      "8011d0d6ab5cf7d8d7e8e0b864f72cce5bd60a87",
+      "3b64cbc3790669181b583a2c74b4628412a32a66",
+      "1d21a27812d9326ad8ca13a1db03d87fb8c0c7d3",
+      "3c588d482d12349ddf46769707c07396d5ffa6a4",
+      "c75e7078b7714d1fb5624f00898dff2762b7b66d",
+      "61b10664c473296fdaa72628bea6d8db5e9d98c5",
+      "3f51c251c0ec5a94249464d8ecf88746da200885",
+      "91985acf42c008fcfe044119aaaf6c687b602020",
+      "cd975b49aa3aca98dbd8c55a2e3d0eae3d1d3d2c",
+      "b2617e75390744e353a3dfaf8383595de83aeb96",
+      "32d41d0353163a1609851006d7b369c7d10ca419",
+      "9667e070c5d130dc7033b222fd8bf5dc77ed65ef",
+      "6eeea653fe6a4e3ba836af840b5a49ca0b852257",
+      "de75bbe004224d7104c09572747c13566a4f3c21",
+      "a70e8568829f7975e6022fe67bec143b0462d5b3",
+      "acacbf9747b09afcd8b101c0b9655a9b57b83dc8",
+      "2466ccb8fd76f726f23c528fdade49f1a6ac8414",
+      "769bddb3261336d88a02ead379c5614cbdfa5b98",
+      "f4cbf63e765c82be89cd5e40807bcc751912225c",
+      "132dd0e34cb908c3eae276c53b78af64311829f9",
+      "5ff94dbd7a65d59f71728354931e3d2b1717aa48",
+      "a44193b6e4895a6a4992813cb907763893d10c49",
+      "b31c06a7eb7d62104f9d0ca725da0d2b4dba8f3b",
+      "09f4aedb43123bb23a9fdba8491411b66905c2e0",
+      "2e63c2e57e46dbbdb4c6cf712db1be06ab44fd9e",
+      "c589449c3ebf1018d5f95528b71365aa470fac90",
+      "bf648b9a37ffbf2a964553d075c2d92cef5c3e22",
+      "3c349abde3e671b77c5a428d6461ecfccc3c3988",
+      "eaaaf7a71377ca57de0bc703006cc9c25442ff77",
+      "b370c7ea6a4e9c9fcd5fb7e8faff0fad20580112",
+      "79dabc1972b79d96a6d8b9757b72b16644e86325",
+      "ab4964ea8560a5dddb08c963ec52f0deb34037bd",
+      "957c01fcc898c3e4d7e13d157f2c4a17dfaff5f7",
+      "c93b765975705db8db0235a0715143d1f44f6919",
+      "4f56c81236834fdaff0fdc9d219faf230212a57e",
+      "ae1147003b401a7b691a5c9642ca5f65d5e7bece",
+      "dc7a5946e9fa80762a62b2fa67dd8a0f2c2a7b46",
+      "b81cc4116d22291f196c56eac85faeab77efa917",
+      "aa016e685dc47defc43031d43ee762571699b916",
+      "c9b9fd073b8443cb2ff30d9c282b8f24e0ddcdfb",
+      "0d0f49b3455ae2de7a38a9eed1824c3d94f45f18",
+      "312fcbfd89d6bb54cbaae70f6c2c13baa876d7ec",
+      "f41047785e0ee1985ebc4d80726b3865a763d515",
+      "75690c923155e89babbc688f045d564f2e4b8996",
+      "4f22b5d1e5ab83f08aa0407cc0f927454b4a7a7c",
+      "30335d80866ff3391d899cf4ccb599b696f47b7e",
+      "1d70487b3093bbaded7a94d7b9b23618877ccb3c",
+      "4feb086824e52b4dfef30fbe73bf16e6982717a3",
+      "edfa45aae2cc0c8d1bc852b9c49388bd9aa8c929",
+      "c49d9f623b924b94a081b6e0f53778f96d1df1dc",
+      "6bdc780af21a583989d9c585553e6b62cc8326f4",
+      "989c2238f8c4a11a06eb6d62a3a4685c6b5d70ba",
+      "879bd5c42a10b8876335bf18a05c02ea19b5eb12",
+      "378ce3735c4522ebb6b68e93b909b0511f278763"
+    ],
+    "categories": [
+      "documentation",
+      "tests",
+      "frontend",
+      "api_change",
+      "database_schema",
+      "domain_logic",
+      "authentication_authorization",
+      "deployment_engine",
+      "container_integration",
+      "configuration",
+      "external_integrations",
+      "background_jobs",
+      "dependency_upgrade",
+      "build_release",
+      "service_templates",
+      "unclassified"
+    ],
+    "security_sensitive": true,
+    "risk": "high",
+    "risk_reasons": [
+      "security-sensitive (148 signals)",
+      "touches authentication/authorization",
+      "migration 2026_10_29_100000_create_image_scanning_tables changes mapped tables [\"server_settings\", \"teams\"]",
+      "migration 2026_10_30_120000_add_ssh_host_key_to_server_settings_table changes mapped tables [\"server_settings\"]",
+      "migration 2026_11_03_194650_add_notification_sender_to_instance_settings_table changes mapped tables [\"instance_settings\"]",
+      "migration 2026_11_04_080000_add_auto_update_attempt_to_instance_settings_table changes mapped tables [\"instance_settings\"]",
+      "migration 2026_11_06_113843_set_valkey_as_standalone_redis_default_image changes mapped tables [\"standalone_redis\"]",
+      "migration 2026_11_06_194613_add_ssh_host_key_check_enforced_to_server_settings_table changes mapped tables [\"server_settings\"]",
+      "migration 2026_11_08_120000_drop_image_scanning_columns_from_instance_settings changes mapped tables [\"instance_settings\"]",
+      "migration 2026_11_08_120000_drop_image_scanning_columns_from_instance_settings is destructive/raw-SQL/encryption (destructive=true, raw_sql=false, encryption=false)",
+      "migration 2026_11_09_120000_drop_unused_failure_columns_from_scheduled_tasks is destructive/raw-SQL/encryption (destructive=true, raw_sql=false, encryption=false)",
+      "migration 2026_11_09_130000_add_image_scan_memory_mb_to_server_settings_table changes mapped tables [\"server_settings\"]",
+      "migration 2026_11_09_140000_add_image_scanner_time_and_cpu_limits_to_server_settings_table changes mapped tables [\"server_settings\"]",
+      "API routes changed in an implemented component",
+      "category ApiChange",
+      "category DomainLogic",
+      "category DatabaseSchema",
+      "category BackgroundJobs",
+      "category DependencyUpgrade",
+      "category ExternalIntegrations",
+      "category Configuration",
+      "category DeploymentEngine",
+      "category ContainerIntegration",
+      "deployment/container behaviour in an implemented component"
+    ],
+    "affected_components": [
+      {
+        "component": "api.auth-chain",
+        "status": "verified",
+        "reasons": [
+          "path app/Http/Kernel.php",
+          "path app/Http/Middleware/ApiAbility.php",
+          "path app/Http/Middleware/ApiSensitiveData.php",
+          "upstream test tests/Feature/ApiTokenLivewireAuthorizationTest.php",
+          "table instance_settings",
+          "table instance_settings",
+          "table instance_settings"
+        ],
+        "rust_paths": [
+          "crates/coolify-api/src/auth.rs",
+          "crates/coolify-api/src/ip.rs",
+          "crates/coolify-db/src/auth.rs",
+          "crates/coolify-db/src/instance.rs",
+          "crates/coolify-compat/src/sanctum.rs",
+          "crates/coolify-domain/src/access.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-db",
+          "coolify-compat",
+          "coolify-domain"
+        ]
+      },
+      {
+        "component": "api.teams",
+        "status": "verified",
+        "reasons": [
+          "path app/Http/Controllers/Api/TeamController.php",
+          "table teams"
+        ],
+        "rust_paths": [
+          "crates/coolify-api/src/routes/teams.rs",
+          "crates/coolify-db/src/teams.rs",
+          "crates/coolify-db/src/records.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-db"
+        ]
+      },
+      {
+        "component": "api.projects",
+        "status": "verified",
+        "reasons": [
+          "path app/Traits/HasSafeStringAttribute.php",
+          "upstream test tests/Feature/ResourceAccessConsistencyTest.php",
+          "symbol app/Support/ValidationPatterns.php::nameRules()"
+        ],
+        "rust_paths": [
+          "crates/coolify-api/src/routes/projects.rs",
+          "crates/coolify-api/src/validation.rs",
+          "crates/coolify-api/src/serialize.rs",
+          "crates/coolify-api/src/input.rs",
+          "crates/coolify-db/src/projects.rs",
+          "crates/coolify-domain/src/naming.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-db",
+          "coolify-domain"
+        ]
+      },
+      {
+        "component": "api.route-inventory",
+        "status": "verified",
+        "reasons": [
+          "path app/Http/Kernel.php",
+          "path routes/api.php"
+        ],
+        "rust_paths": [
+          "compat/api/upstream-routes.json",
+          "crates/coolify-api/tests/route_inventory.rs",
+          "crates/coolify-port/src/php/routes.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-port"
+        ]
+      },
+      {
+        "component": "db.schema-guard",
+        "status": "implemented",
+        "reasons": [
+          "path database/migrations/2026_10_29_100000_create_image_scanning_tables.php",
+          "path database/migrations/2026_10_30_120000_add_git_ssh_known_hosts_to_applications_table.php",
+          "path database/migrations/2026_10_30_120000_add_ssh_host_key_to_server_settings_table.php",
+          "path database/migrations/2026_10_31_161621_add_type_to_s3_storages_table.php",
+          "path database/migrations/2026_11_01_170003_add_sftp_host_key_to_s3_storages_table.php",
+          "path database/migrations/2026_11_03_072701_add_auto_cancel_superseded_deployments.php",
+          "path database/migrations/2026_11_03_120133_add_is_mcp_to_application_deployment_queues_table.php",
+          "path database/migrations/2026_11_03_171936_add_skip_tls_verification_to_s3_storages_table.php",
+          "path database/migrations/2026_11_03_192547_add_is_removed_from_compose_to_service_parts.php",
+          "path database/migrations/2026_11_03_192735_add_failure_tracking_to_scheduled_tasks_table.php",
+          "path database/migrations/2026_11_03_194650_add_notification_sender_to_instance_settings_table.php",
+          "path database/migrations/2026_11_03_195902_add_github_deployments_columns.php",
+          "path database/migrations/2026_11_03_202635_add_use_shell_to_scheduled_tasks_table.php",
+          "path database/migrations/2026_11_03_225251_add_named_smtp_servers_to_email_settings.php",
+          "path database/migrations/2026_11_04_080000_add_auto_update_attempt_to_instance_settings_table.php",
+          "path database/migrations/2026_11_04_103949_add_resend_sender_to_email_settings.php",
+          "path database/migrations/2026_11_05_163404_add_include_network_hosts_in_build_to_application_settings.php",
+          "path database/migrations/2026_11_05_224732_drop_unused_indexes_from_audit_events_table.php",
+          "path database/migrations/2026_11_06_083240_update_standalone_database_default_images.php",
+          "path database/migrations/2026_11_06_113843_set_valkey_as_standalone_redis_default_image.php",
+          "path database/migrations/2026_11_06_145819_create_server_host_scans_table.php",
+          "path database/migrations/2026_11_06_165709_create_stars_table.php",
+          "path database/migrations/2026_11_06_194613_add_ssh_host_key_check_enforced_to_server_settings_table.php",
+          "path database/migrations/2026_11_08_120000_drop_image_scanning_columns_from_instance_settings.php",
+          "path database/migrations/2026_11_09_120000_drop_unused_failure_columns_from_scheduled_tasks.php",
+          "path database/migrations/2026_11_09_130000_add_image_scan_memory_mb_to_server_settings_table.php",
+          "path database/migrations/2026_11_09_140000_add_image_scanner_time_and_cpu_limits_to_server_settings_table.php"
+        ],
+        "rust_paths": [
+          "compat/baseline/supported-migrations.txt",
+          "crates/coolify-db/src/schema.rs"
+        ],
+        "rust_packages": [
+          "coolify-db"
+        ]
+      },
+      {
+        "component": "api.servers.subroutes",
+        "status": "planned",
+        "reasons": [
+          "path app/Http/Controllers/Api/ServerImageScanningController.php",
+          "path app/Http/Controllers/Api/ServerTransferController.php",
+          "path app/Http/Controllers/Api/ServersController.php",
+          "path app/Policies/ServerPolicy.php"
+        ],
+        "rust_paths": [],
+        "rust_packages": []
+      },
+      {
+        "component": "api.private-keys",
+        "status": "verified",
+        "reasons": [
+          "path app/Http/Controllers/Api/SecurityController.php",
+          "path app/Models/PrivateKey.php",
+          "upstream test tests/Feature/Api/PrivateKeyUpdateApiTest.php",
+          "upstream test tests/Feature/PrivateKeyFingerprintTeamScopeTest.php",
+          "symbol bootstrap/helpers/shared.php::generate_random_name()"
+        ],
+        "rust_paths": [
+          "crates/coolify-api/src/routes/private_keys.rs",
+          "crates/coolify-db/src/private_keys.rs",
+          "crates/coolify-compat/src/sshkey.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-db",
+          "coolify-compat"
+        ]
+      },
+      {
+        "component": "ui.session",
+        "status": "implemented",
+        "reasons": [
+          "path app/Providers/FortifyServiceProvider.php",
+          "table teams"
+        ],
+        "rust_paths": [
+          "crates/coolify-api/src/session.rs",
+          "crates/coolify-db/src/users.rs",
+          "crates/coolify-compat/src/password.rs",
+          "crates/coolify-compat/src/totp.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-db",
+          "coolify-compat"
+        ]
+      },
+      {
+        "component": "api.servers",
+        "status": "verified",
+        "reasons": [
+          "path app/Actions/Server/DeleteServer.php",
+          "path app/Http/Controllers/Api/ServersController.php",
+          "path app/Models/Server.php",
+          "path app/Models/ServerSetting.php",
+          "path app/Models/SharedEnvironmentVariable.php",
+          "table server_settings",
+          "table server_settings",
+          "table server_settings",
+          "table server_settings",
+          "table server_settings"
+        ],
+        "rust_paths": [
+          "crates/coolify-api/src/routes/servers.rs",
+          "crates/coolify-db/src/servers.rs",
+          "crates/coolify-api/src/laravel_url.rs",
+          "crates/coolify-compat/src/cron.rs",
+          "crates/coolify-compat/src/timezones.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-db",
+          "coolify-compat"
+        ]
+      },
+      {
+        "component": "ui.styles",
+        "status": "verified",
+        "reasons": [
+          "path resources/css/app.css",
+          "path resources/views/components/reicon.blade.php"
+        ],
+        "rust_paths": [
+          "frontend/src/upstream/**",
+          "frontend/scripts/gen-reicons.mjs"
+        ],
+        "rust_packages": []
+      },
+      {
+        "component": "ui.frontend",
+        "status": "implemented",
+        "reasons": [
+          "path resources/views/components/backup-s3-storage.blade.php",
+          "path resources/views/components/forms/domain-input.blade.php",
+          "path resources/views/components/forms/inherited-listbox.blade.php",
+          "path resources/views/components/forms/input.blade.php",
+          "path resources/views/components/forms/repository-paths.blade.php",
+          "path resources/views/components/modal-confirmation.blade.php",
+          "path resources/views/components/modal-input.blade.php",
+          "path resources/views/components/navbar.blade.php",
+          "path resources/views/components/server/remove-unused-packages-button.blade.php",
+          "path resources/views/components/server/sidebar.blade.php",
+          "path resources/views/components/server/status-summary.blade.php",
+          "path resources/views/components/theme-controls.blade.php",
+          "path resources/views/components/top-breadcrumb.blade.php",
+          "path resources/views/components/top-user-menu.blade.php",
+          "path resources/views/layouts/app.blade.php",
+          "path resources/views/livewire/dashboard.blade.php",
+          "path resources/views/livewire/partials/smtp-server-picker.blade.php",
+          "path resources/views/livewire/project/application/general.blade.php",
+          "path resources/views/livewire/project/resource/index.blade.php",
+          "path resources/views/livewire/project/service/import-backup.blade.php",
+          "path resources/views/livewire/project/service/volume-backup/index.blade.php",
+          "path resources/views/livewire/project/shared/resource-operations.blade.php",
+          "path resources/views/livewire/security/private-key/index.blade.php",
+          "path resources/views/livewire/security/private-key/partials/key-field.blade.php",
+          "path resources/views/livewire/security/private-key/rotate.blade.php",
+          "path resources/views/livewire/security/private-key/show.blade.php",
+          "path resources/views/livewire/server/delete.blade.php",
+          "path resources/views/livewire/server/index.blade.php",
+          "path resources/views/livewire/server/navbar.blade.php",
+          "path resources/views/livewire/server/new/by-ip.blade.php",
+          "path resources/views/livewire/server/partials/force-disabled-callout.blade.php",
+          "path resources/views/livewire/server/security/host-key.blade.php",
+          "path resources/views/livewire/server/security/patches.blade.php",
+          "path resources/views/livewire/server/sentinel.blade.php",
+          "path resources/views/livewire/server/show.blade.php",
+          "path resources/views/livewire/settings-backup.blade.php",
+          "path resources/views/livewire/star-toggle.blade.php",
+          "path resources/views/livewire/storage/server-endpoint-fields.blade.php",
+          "path resources/views/livewire/storage/sftp-login-fields.blade.php"
+        ],
+        "rust_paths": [
+          "frontend/src/**"
+        ],
+        "rust_packages": []
+      },
+      {
+        "component": "ui.read-models",
+        "status": "verified",
+        "reasons": [
+          "path app/Livewire/Concerns/ManagesServerPackageUpdates.php",
+          "path app/Livewire/Dashboard.php",
+          "path app/Livewire/Project/CloneMe.php",
+          "path app/Livewire/Project/Service/ImportBackup.php",
+          "path app/Livewire/Project/Shared/ResourceOperations.php",
+          "path app/Livewire/Security/PrivateKey/Rotate.php",
+          "path app/Livewire/Security/PrivateKey/Show.php",
+          "path app/Livewire/Server/Delete.php",
+          "path app/Livewire/Server/New/ByIp.php",
+          "path app/Livewire/Server/Security/Patches.php",
+          "path app/Livewire/Server/Show.php",
+          "path app/Livewire/StarToggle.php",
+          "path app/Livewire/Team/Member.php",
+          "symbol app/Models/PrivateKey.php::generateNewKeyPair()",
+          "symbol bootstrap/helpers/shared.php::generateSSHKey()",
+          "table server_settings",
+          "table teams",
+          "table server_settings",
+          "table server_settings",
+          "table server_settings",
+          "table server_settings"
+        ],
+        "rust_paths": [
+          "crates/coolify-api/src/ui.rs",
+          "crates/coolify-db/src/dashboard.rs",
+          "crates/coolify-db/src/teams.rs",
+          "crates/coolify-compat/src/sshkey.rs",
+          "crates/coolify-api/src/ui_private_key.rs",
+          "crates/coolify-api/src/ui_key_rotation.rs",
+          "crates/coolify-api/src/ui_server_patches.rs",
+          "crates/coolify-api/src/ui_shared/operations.rs",
+          "crates/coolify-api/src/ui_stars.rs",
+          "crates/coolify-jobs/src/server_ops/patches.rs"
+        ],
+        "rust_packages": [
+          "coolify-api",
+          "coolify-db",
+          "coolify-compat",
+          "coolify-jobs"
+        ]
+      },
+      {
+        "component": "deployment.engine",
+        "status": "planned",
+        "reasons": [
+          "path app/Http/Controllers/Api/DeployController.php",
+          "path app/Jobs/ApplicationDeploymentJob.php",
+          "path app/Traits/ExecuteRemoteCommand.php",
+          "path bootstrap/helpers/applications.php",
+          "table application_deployment_queues",
+          "table application_settings",
+          "table applications",
+          "table applications",
+          "table application_deployment_queues",
+          "table application_settings",
+          "table application_deployment_queues",
+          "table application_deployment_queues",
+          "table application_settings"
+        ],
+        "rust_paths": [],
+        "rust_packages": []
+      },
+      {
+        "component": "remote.execution",
+        "status": "verified",
+        "reasons": [
+          "path app/Helpers/SshMultiplexingHelper.php",
+          "path app/Traits/SshRetryable.php",
+          "path bootstrap/helpers/remoteProcess.php"
+        ],
+        "rust_paths": [
+          "crates/coolify-remote/src/**",
+          "compat/testing-host/**",
+          "scripts/testing-host-up.sh"
+        ],
+        "rust_packages": [
+          "coolify-remote"
+        ]
+      },
+      {
+        "component": "server.validation",
+        "status": "verified",
+        "reasons": [
+          "path resources/views/components/process-dialog.blade.php",
+          "table server_settings",
+          "table server_settings",
+          "table server_settings",
+          "table server_settings",
+          "table server_settings"
+        ],
+        "rust_paths": [
+          "crates/coolify-jobs/src/**",
+          "crates/coolify-compat/src/redact.rs",
+          "crates/coolify-compat/src/purify.rs",
+          "frontend/src/components/ValidateServer.svelte",
+          "frontend/src/components/ProcessDialog.svelte",
+          "frontend/src/components/CheckpointItem.svelte"
+        ],
+        "rust_packages": [
+          "coolify-jobs",
+          "coolify-compat",
+          "coolify-api"
+        ]
+      },
+      {
+        "component": "databases.standalone",
+        "status": "verified",
+        "reasons": [
+          "path app/Actions/Database/StartClickhouse.php",
+          "path app/Actions/Database/StartDragonfly.php",
+          "path app/Actions/Database/StartKeydb.php",
+          "path app/Actions/Database/StartMariadb.php",
+          "path app/Actions/Database/StartMongodb.php",
+          "path app/Actions/Database/StartMysql.php",
+          "path app/Actions/Database/StartPostgresql.php",
+          "path app/Actions/Database/StartRedis.php",
+          "path app/Actions/Database/StopDatabase.php",
+          "path app/Actions/Docker/GetContainersStatus.php",
+          "path app/Http/Controllers/Api/DatabasesController.php",
+          "path app/Livewire/Project/New/Select.php",
+          "path app/Livewire/Project/Resource/Create.php",
+          "path app/Livewire/Project/Resource/Index.php",
+          "path app/Livewire/Project/Shared/Danger.php",
+          "path app/Models/StandalonePostgresql.php",
+          "path app/Traits/ExecutesDatabaseStartCommands.php",
+          "path app/Traits/HasSecretManager.php",
+          "path resources/views/components/database/configuration-sidebar.blade.php",
+          "path resources/views/livewire/project/database/backup-edit/general.blade.php",
+          "path resources/views/livewire/project/database/backup-edit/retention.blade.php",
+          "path resources/views/livewire/project/database/backup-executions.blade.php",
+          "path resources/views/livewire/project/database/backup/index.blade.php",
+          "path resources/views/livewire/project/database/configuration.blade.php",
+          "path resources/views/livewire/project/database/heading.blade.php",
+          "path resources/views/livewire/project/database/import-form.blade.php",
+          "path resources/views/livewire/project/database/import.blade.php",
+          "path resources/views/livewire/project/database/redis/general.blade.php",
+          "path resources/views/livewire/project/new/select.blade.php",
+          "path resources/views/livewire/project/resource/index.blade.php",
+          "table standalone_redis"
+        ],
+        "rust_paths": [
+          "crates/coolify-db/src/databases.rs",
+          "crates/coolify-jobs/src/databases/",
+          "crates/coolify-db/src/environment_variables.rs",
+          "crates/coolify-api/src/routes/databases.rs",
+          "crates/coolify-api/src/ui_databases.rs",
+          "crates/coolify-compat/src/yaml.rs",
+          "frontend/src/pages/Database.svelte",
+          "frontend/src/pages/ResourceNew.svelte",
+          "frontend/src/pages/Environment.svelte",
+          "frontend/src/components/Database*.svelte"
+        ],
+        "rust_packages": [
+          "coolify-db",
+          "coolify-jobs",
+          "coolify-api",
+          "coolify-compat"
+        ]
+      }
+    ],
+    "unmapped_files": [
+      "app/Actions/Application/CleanupPreviewDeployment.php",
+      "app/Actions/Application/GetRollbackImages.php",
+      "app/Actions/Application/StopApplication.php",
+      "app/Actions/Application/StopApplicationPreview.php",
+      "app/Actions/Database/StartDatabaseImport.php",
+      "app/Actions/Database/StartSqlite.php",
+      "app/Actions/Development/SeedDevelopmentQemuServer.php",
+      "app/Actions/Fortify/CreateNewUser.php",
+      "app/Actions/ImageScan/RefreshCandidates.php",
+      "app/Actions/ImageScan/ScanHostPackages.php",
+      "app/Actions/ImageScan/ScanImage.php",
+      "app/Actions/ImageScan/SetServerImageScanning.php",
+      "app/Actions/ImageScan/UpdateResourceImage.php",
+      "app/Actions/IntegrationToken/UpdateIntegrationToken.php",
+      "app/Actions/Proxy/DeleteTraefikCertificate.php",
+      "app/Actions/Proxy/GetTraefikCertificates.php",
+      "app/Actions/Server/AuthorizedKeys.php",
+      "app/Actions/Server/CheckUpdates.php",
+      "app/Actions/Server/InstallDocker.php",
+      "app/Actions/Server/RemoveUnusedPackages.php",
+      "app/Actions/Server/StartLogDrain.php",
+      "app/Actions/Server/StartSentinel.php",
+      "app/Actions/Server/UpdateCoolify.php",
+      "app/Actions/Server/UpdatePackage.php",
+      "app/Actions/Service/DeployServiceApplication.php",
+      "app/Actions/Service/RestartServiceApplication.php",
+      "app/Actions/Service/StartService.php",
+      "app/Actions/Service/StopService.php",
+      "app/Actions/Service/StopServiceApplication.php",
+      "app/Actions/Service/UpdateServiceApplicationFromApi.php",
+      "app/Actions/Shared/CheckDomainDns.php",
+      "app/Actions/Stripe/SyncStripeSubscriptions.php",
+      "app/Console/Commands/CleanupDatabase.php",
+      "app/Console/Commands/CleanupStuckedResources.php",
+      "app/Console/Commands/CleanupUnreachableServers.php",
+      "app/Console/Commands/Cloud/CleanupUnsubscribedTeams.php",
+      "app/Console/Commands/Cloud/CloudFixSubscription.php",
+      "app/Console/Commands/Cloud/ExportUsers.php",
+      "app/Console/Commands/Cloud/SyncStripeSubscriptions.php",
+      "app/Console/Commands/Emails.php",
+      "app/Console/Commands/Init.php",
+      "app/Console/Kernel.php",
+      "app/Enums/BackupStorageType.php",
+      "app/Enums/CancelPreviousDeployments.php",
+      "app/Enums/ImageScanErrorCode.php",
+      "app/Enums/ImageScanFixState.php",
+      "app/Enums/ImageScanGateMode.php",
+      "app/Enums/ImageScanOnError.php",
+      "app/Enums/ImageScanStatus.php",
+      "app/Enums/SecurityActionType.php",
+      "app/Enums/SecurityStatusType.php",
+      "app/Events/DnsRecordConfigurationFinished.php",
+      "app/Events/ImageScanUpdated.php",
+      "app/Events/ServerPatchCheckFinished.php",
+      "app/Events/ServerValidated.php",
+      "app/Exceptions/DnsRecordConflictException.php",
+      "app/Exceptions/UpgradeAlreadyRunningException.php",
+      "app/Http/Controllers/Api/ApplicationPreviewsController.php",
+      "app/Http/Controllers/Api/ApplicationsController.php",
+      "app/Http/Controllers/Api/CloudProviderTokensController.php",
+      "app/Http/Controllers/Api/GiteaController.php",
+      "app/Http/Controllers/Api/GithubController.php",
+      "app/Http/Controllers/Api/InstanceEmailSettingsController.php",
+      "app/Http/Controllers/Api/NotificationsController.php",
+      "app/Http/Controllers/Api/OpenApi.php",
+      "app/Http/Controllers/Api/S3StoragesController.php",
+      "app/Http/Controllers/Api/ScheduledTasksController.php",
+      "app/Http/Controllers/Api/SentinelController.php",
+      "app/Http/Controllers/Api/ServicesController.php",
+      "app/Http/Controllers/Api/SharedEnvironmentVariablesController.php",
+      "app/Http/Controllers/Api/VolumeBackupsController.php",
+      "app/Http/Controllers/Api/VulnerabilitiesController.php",
+      "app/Http/Controllers/Controller.php",
+      "app/Http/Controllers/ImageScanSbomController.php",
+      "app/Http/Controllers/UploadController.php",
+      "app/Http/Controllers/Webhook/Gitea.php",
+      "app/Http/Controllers/Webhook/Github.php",
+      "app/Http/Middleware/EncryptCookies.php",
+      "app/Http/Middleware/ThrottleFailedApiRequests.php",
+      "app/Http/Middleware/TrimStrings.php",
+      "app/Jobs/ApplicationPullRequestUpdateJob.php",
+      "app/Jobs/CancelSupersededDeploymentJob.php",
+      "app/Jobs/CheckAndStartSentinelJob.php",
+      "app/Jobs/CheckForUpdatesJob.php",
+      "app/Jobs/CheckTraefikVersionForServerJob.php",
+      "app/Jobs/CleanupHelperContainersJob.php",
+      "app/Jobs/CleanupUnusedSshKeys.php",
+      "app/Jobs/ConfigureDnsRecordJob.php",
+      "app/Jobs/DatabaseBackupJob.php",
+      "app/Jobs/DockerCleanupJob.php",
+      "app/Jobs/GithubAppPermissionJob.php",
+      "app/Jobs/ImageRescanJob.php",
+      "app/Jobs/ImageScanAlertCheckJob.php",
+      "app/Jobs/ImageScanDigestJob.php",
+      "app/Jobs/NotifyResourceStoppedJob.php",
+      "app/Jobs/PrepareFileDownloadJob.php",
+      "app/Jobs/PrepareImageScannerJob.php",
+      "app/Jobs/PushServerUpdateJob.php",
+      "app/Jobs/RefreshCandidatesJob.php",
+      "app/Jobs/RefreshImageScanSummariesJob.php",
+      "app/Jobs/RemoveRotatedAuthorizedKeyJob.php",
+      "app/Jobs/RotatePrivateKeyJob.php",
+      "app/Jobs/ScanHostPackagesJob.php",
+      "app/Jobs/ScanResourceImagesJob.php",
+      "app/Jobs/ScheduledTaskJob.php",
+      "app/Jobs/SendMessageToTelegramJob.php",
+      "app/Jobs/ServerConnectionCheckJob.php",
+      "app/Jobs/ServerManagerJob.php",
+      "app/Jobs/StripeProcessJob.php",
+      "app/Jobs/SubscriptionInvoiceFailedJob.php",
+      "app/Jobs/SyncGithubDeploymentJob.php",
+      "app/Jobs/UpdateCoolifyJob.php",
+      "app/Jobs/VerifyStripeSubscriptionStatusJob.php",
+      "app/Jobs/VolumeBackupJob.php",
+      "app/Listeners/FinishServerPackagesUpdate.php",
+      "app/Mcp/Servers/CoolifyServer.php",
+      "app/Mcp/Tools/CancelDeployment.php",
+      "app/Mcp/Tools/Control.php",
+      "app/Mcp/Tools/CoolifyHelp.php",
+      "app/Mcp/Tools/CreateApplication.php",
+      "app/Mcp/Tools/Deploy.php",
+      "app/Mcp/Tools/GetDeployment.php",
+      "app/Mcp/Tools/GetService.php",
+      "app/Mcp/Tools/GetVulnerabilities.php",
+      "app/Mcp/Tools/ListDeployments.php",
+      "app/Mcp/Tools/ListScheduledTasks.php",
+      "app/Mcp/Tools/ManageApplication.php",
+      "app/Mcp/Tools/ManageGitSource.php",
+      "app/Mcp/Tools/ManageImageScanning.php",
+      "app/Mcp/Tools/ManagePreview.php",
+      "app/Mcp/Tools/ManageS3Storage.php",
+      "app/Mcp/Tools/ManageScheduledTask.php",
+      "app/Models/Application.php",
+      "app/Models/ApplicationDeploymentQueue.php",
+      "app/Models/ApplicationSetting.php",
+      "app/Models/AuditEvent.php",
+      "app/Models/DiscordNotificationSettings.php",
+      "app/Models/EmailNotificationSettings.php",
+      "app/Models/EnvironmentVariable.php",
+      "app/Models/GiteaApp.php",
+      "app/Models/GithubApp.php",
+      "app/Models/ImageSbom.php",
+      "app/Models/ImageScan.php",
+      "app/Models/ImageScanIgnore.php",
+      "app/Models/ImageScanNotificationState.php",
+      "app/Models/ImageScanPolicy.php",
+      "app/Models/InstanceSettings.php",
+      "app/Models/IntegrationToken.php",
+      "app/Models/NotificationThrottle.php",
+      "app/Models/PushoverNotificationSettings.php",
+      "app/Models/S3Storage.php",
+      "app/Models/ScheduledDatabaseBackup.php",
+      "app/Models/ScheduledTask.php",
+      "app/Models/ServerHostScan.php",
+      "app/Models/Service.php",
+      "app/Models/ServiceApplication.php",
+      "app/Models/ServiceDatabase.php",
+      "app/Models/SlackNotificationSettings.php",
+      "app/Models/StandaloneClickhouse.php",
+      "app/Models/StandaloneDragonfly.php",
+      "app/Models/StandaloneKeydb.php",
+      "app/Models/StandaloneMariadb.php",
+      "app/Models/StandaloneMongodb.php",
+      "app/Models/StandaloneMysql.php",
+      "app/Models/StandaloneRedis.php",
+      "app/Models/StandaloneSqlite.php",
+      "app/Models/Star.php",
+      "app/Models/Team.php",
+      "app/Models/TelegramNotificationSettings.php",
+      "app/Models/User.php",
+      "app/Models/WebhookNotificationSettings.php",
+      "app/Notifications/ApiTokenFailingNotification.php",
+      "app/Notifications/Application/DeploymentFailed.php",
+      "app/Notifications/Application/StatusChanged.php",
+      "app/Notifications/Channels/EmailChannel.php",
+      "app/Notifications/Channels/TelegramChannel.php",
+      "app/Notifications/Channels/TransactionalEmailChannel.php",
+      "app/Notifications/Database/BackupFailed.php",
+      "app/Notifications/Database/BackupSuccess.php",
+      "app/Notifications/Database/BackupSuccessWithS3Warning.php",
+      "app/Notifications/ImageScan/ExploitedProblemFound.php",
+      "app/Notifications/ImageScan/NotificationText.php",
+      "app/Notifications/ImageScan/VulnerabilityDigest.php",
+      "app/Notifications/ScheduledJobRecovered.php",
+      "app/Notifications/ScheduledTask/TaskFailed.php",
+      "app/Notifications/ScheduledTask/TaskSuccess.php",
+      "app/Notifications/Server/DockerCleanupFailed.php",
+      "app/Notifications/Server/HostKeyChanged.php",
+      "app/Notifications/TransactionalEmails/Test.php",
+      "app/Notifications/VolumeBackup/BackupFailed.php",
+      "app/Notifications/VolumeBackup/BackupSuccess.php",
+      "app/Policies/DatabasePolicy.php",
+      "app/Policies/ResourceCreatePolicy.php",
+      "app/Policies/SharedEnvironmentVariablePolicy.php",
+      "app/Rules/SafeSmtpHost.php",
+      "app/Rules/SafeWebhookUrl.php",
+      "app/Rules/ValidGitRepositoryUrl.php",
+      "app/Services/Access/AccessResolver.php",
+      "app/Services/AutoUpdateNotifier.php",
+      "app/Services/AvatarStorageService.php",
+      "app/Services/ContainerStatusAggregator.php",
+      "app/Services/CoolifyUpgradeStatus.php",
+      "app/Services/DeploymentConfiguration/ApplicationConfigurationSnapshot.php",
+      "app/Services/Dns/CloudflareDnsProvider.php",
+      "app/Services/Dns/DnsRecord.php",
+      "app/Services/Dns/DnsResolver.php",
+      "app/Services/DockerRegistryLogins.php",
+      "app/Services/EnvironmentCanvas.php",
+      "app/Services/FileDownloadStorageService.php",
+      "app/Services/ImageScan/BaseImageCheck.php",
+      "app/Services/ImageScan/CandidateEvaluator.php",
+      "app/Services/ImageScan/ComposeImageVariable.php",
+      "app/Services/ImageScan/DeploymentImageScan.php",
+      "app/Services/ImageScan/DockerfileBaseImage.php",
+      "app/Services/ImageScan/ExportCells.php",
+      "app/Services/ImageScan/Finding.php",
+      "app/Services/ImageScan/FindingsExport.php",
+      "app/Services/ImageScan/FleetExport.php",
+      "app/Services/ImageScan/GrypeReportParser.php",
+      "app/Services/ImageScan/IgnoreMatcher.php",
+      "app/Services/ImageScan/ImageRef.php",
+      "app/Services/ImageScan/ImageScanPolicyResolver.php",
+      "app/Services/ImageScan/ImageScanningRefused.php",
+      "app/Services/ImageScan/ImageStartPin.php",
+      "app/Services/ImageScan/ImageUpdateRefused.php",
+      "app/Services/ImageScan/Package.php",
+      "app/Services/ImageScan/RelevanceRules.php",
+      "app/Services/ImageScan/ResolvedImageScanPolicy.php",
+      "app/Services/ImageScan/ResourceScans.php",
+      "app/Services/ImageScan/ResourceSecurity.php",
+      "app/Services/ImageScan/SbomDocument.php",
+      "app/Services/ImageScan/ScanFailed.php",
+      "app/Services/ImageScan/ScanLockBusy.php",
+      "app/Services/ImageScan/ScanNotifications.php",
+      "app/Services/ImageScan/ScannerCommands.php",
+      "app/Services/ImageScan/ScannerText.php",
+      "app/Services/ImageScan/SecurityAction.php",
+      "app/Services/ImageScan/SecurityActions.php",
+      "app/Services/ImageScan/SecurityCard.php",
+      "app/Services/ImageScan/SecurityGate.php",
+      "app/Services/ImageScan/SecurityRules.php",
+      "app/Services/ImageScan/SecuritySentences.php",
+      "app/Services/ImageScan/SecurityStatus.php",
+      "app/Services/ImageScan/SyftPackageParser.php",
+      "app/Services/ImageScan/TagSelector.php",
+      "app/Services/ImageScan/TeamVulnerabilities.php",
+      "app/Services/ImageScan/VulnerabilityMarkers.php",
+      "app/Services/RcloneTransfer.php",
+      "app/Services/SentinelMetricsClient.php",
+      "app/Services/ServerTransfer/ServerTransferBundle.php",
+      "app/Services/ServerTransfer/ServerTransferClaimer.php",
+      "app/Services/ServerTransfer/ServerTransferCoverage.php",
+      "app/Services/ServerTransfer/ServerTransferExporter.php",
+      "app/Services/ServerTransfer/ServerTransferImporter.php",
+      "app/Services/ServerTransfer/TransferFinishChecklist.php",
+      "app/Services/TerminalSessionService.php",
+      "app/Services/TraefikAcmeService.php",
+      "app/Support/DeletesEmptyDirectories.php",
+      "app/Support/FtpsFilesystemAdapter.php",
+      "app/Support/FtpsRequestFailed.php",
+      "app/Support/PinnedSftpConnectionProvider.php",
+      "app/Support/RootSetupWindow.php",
+      "app/Support/SftpFilesystemAdapter.php",
+      "app/Support/SftpHostKeyChanged.php",
+      "app/Support/SmtpPresets.php",
+      "app/Support/SmtpTransportFactory.php",
+      "app/Support/StreamsDownloads.php",
+      "app/Support/ValidationPatterns.php",
+      "app/Support/WebdavFilesystemAdapter.php",
+      "app/Traits/Auditable.php",
+      "app/Traits/HasImageScans.php",
+      "app/Traits/HasMaintenancePage.php",
+      "app/Traits/HasNotificationSettings.php",
+      "app/Traits/HasRepositoryDetection.php",
+      "app/Traits/HasS3Destinations.php",
+      "app/Traits/HasS3Replicas.php",
+      "app/Traits/HasSmtpServers.php",
+      "app/Traits/HasStars.php",
+      "app/Traits/ListensToTeamChannel.php",
+      "app/Traits/TracksDeliveryFailures.php",
+      "app/View/Components/Forms/Input.php",
+      "bootstrap/helpers/api.php",
+      "bootstrap/helpers/audit.php",
+      "bootstrap/helpers/constants.php",
+      "bootstrap/helpers/databases.php",
+      "bootstrap/helpers/docker.php",
+      "bootstrap/helpers/domains.php",
+      "bootstrap/helpers/gitea.php",
+      "bootstrap/helpers/github.php",
+      "bootstrap/helpers/notifications.php",
+      "bootstrap/helpers/parsers.php",
+      "bootstrap/helpers/services.php",
+      "bootstrap/helpers/shared.php",
+      "composer.json",
+      "composer.lock",
+      "config/api.php",
+      "config/constants.php",
+      "config/horizon.php",
+      "config/reverb.php",
+      "database/factories/ImageSbomFactory.php",
+      "database/factories/ImageScanFactory.php",
+      "database/factories/ImageScanIgnoreFactory.php",
+      "database/factories/ImageScanNotificationStateFactory.php",
+      "database/factories/ImageScanPolicyFactory.php",
+      "database/factories/ServerHostScanFactory.php",
+      "database/seeders/ProductionSeeder.php",
+      "docker-compose.dev-multi.yml",
+      "docker-compose.dev.yml",
+      "docker/coolify-terminal/terminal-server.js",
+      "docker/coolify-terminal/terminal-server.test.js",
+      "docker/coolify-terminal/terminal-timeout.test.js",
+      "docker/coolify-terminal/terminal-utils.js",
+      "docker/coolify-terminal/terminal-utils.test.js",
+      "docker/production/Dockerfile",
+      "marketing/release-video/render.mjs",
+      "marketing/release-video/shoot.mjs",
+      "marketing/release-video/slides.mjs",
+      "marketing/releases/v4.7/contact-sheet.jpg",
+      "marketing/releases/v4.7/video.json",
+      "openapi.json",
+      "openapi.yaml",
+      "release.json",
+      "scripts/change.sh",
+      "scripts/clean-manifests.sh",
+      "scripts/release.sh",
+      "scripts/restore-backup-vm.sh",
+      "scripts/sync-cdn.sh",
+      "scripts/transfer-test/extras-e2e.sh",
+      "scripts/transfer-test/seed-extras.php",
+      "scripts/transfer-test/verify-extras-target.php",
+      "scripts/undo-release.sh",
+      "scripts/upgrade.sh",
+      "upstream.json",
+      "vet.json"
+    ],
+    "route_diff": {
+      "added": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "uri": "api/v1/applications/{uuid}/vulnerabilities",
+          "action": "App\\Http\\Controllers\\Api\\VulnerabilitiesController@application",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:read"
+          ]
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "uri": "api/v1/databases/{uuid}/vulnerabilities",
+          "action": "App\\Http\\Controllers\\Api\\VulnerabilitiesController@database",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:read"
+          ]
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "uri": "api/v1/gitea-apps",
+          "action": "App\\Http\\Controllers\\Api\\GiteaController@list_gitea_apps",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:read"
+          ]
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "uri": "api/v1/servers/{uuid}/image-scanning",
+          "action": "App\\Http\\Controllers\\Api\\ServerImageScanningController@show",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:read"
+          ]
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "uri": "api/v1/services/{uuid}/vulnerabilities",
+          "action": "App\\Http\\Controllers\\Api\\VulnerabilitiesController@service",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:read"
+          ]
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "uri": "api/v1/vulnerabilities",
+          "action": "App\\Http\\Controllers\\Api\\VulnerabilitiesController@index",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:read"
+          ]
+        },
+        {
+          "methods": [
+            "PATCH"
+          ],
+          "uri": "api/v1/servers/{uuid}/image-scanning",
+          "action": "App\\Http\\Controllers\\Api\\ServerImageScanningController@update",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:write"
+          ]
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "uri": "api/v1/applications/private-gitea-app",
+          "action": "App\\Http\\Controllers\\Api\\ApplicationsController@create_private_gitea_app_application",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:write"
+          ]
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "uri": "api/v1/servers/{uuid}/host-key/reset",
+          "action": "App\\Http\\Controllers\\Api\\ServersController@reset_host_key",
+          "middleware": [
+            "api",
+            "App\\Http\\Middleware\\Authenticate:sanctum",
+            "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+            "App\\Http\\Middleware\\ApiAllowed",
+            "App\\Http\\Middleware\\ApiSensitiveData",
+            "App\\Http\\Middleware\\ApiAbility:write"
+          ]
+        }
+      ],
+      "removed": [],
+      "changed": []
+    },
+    "migrations": [
+      {
+        "name": "2026_10_29_100000_create_image_scanning_tables",
+        "summary": {
+          "tables": [
+            {
+              "table": "image_scan_policies",
+              "op": "create",
+              "columns": [
+                {
+                  "method": "id",
+                  "columns": []
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "uuid"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "scope_type"
+                  ]
+                },
+                {
+                  "method": "unsignedBigInteger",
+                  "columns": [
+                    "scope_id"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "gate_mode"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "on_scan_error"
+                  ]
+                },
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "count_medium"
+                  ]
+                },
+                {
+                  "method": "timestamps",
+                  "columns": []
+                }
+              ]
+            },
+            {
+              "table": "image_scan_ignores",
+              "op": "create",
+              "columns": [
+                {
+                  "method": "id",
+                  "columns": []
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "uuid"
+                  ]
+                },
+                {
+                  "method": "foreignId",
+                  "columns": [
+                    "team_id"
+                  ]
+                },
+                {
+                  "method": "nullableMorphs",
+                  "columns": [
+                    "resource"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "vulnerability_id"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "package"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "reason"
+                  ]
+                },
+                {
+                  "method": "timestamp",
+                  "columns": [
+                    "expires_at"
+                  ]
+                },
+                {
+                  "method": "foreignId",
+                  "columns": [
+                    "created_by"
+                  ]
+                },
+                {
+                  "method": "timestamps",
+                  "columns": []
+                }
+              ]
+            },
+            {
+              "table": "image_sboms",
+              "op": "create",
+              "columns": [
+                {
+                  "method": "id",
+                  "columns": []
+                },
+                {
+                  "method": "foreignId",
+                  "columns": [
+                    "server_id"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "image_id"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "platform"
+                  ]
+                },
+                {
+                  "method": "jsonb",
+                  "columns": [
+                    "packages"
+                  ]
+                },
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "packages_truncated"
+                  ]
+                },
+                {
+                  "method": "timestamp",
+                  "columns": [
+                    "last_used_at"
+                  ]
+                }
+              ]
+            },
+            {
+              "table": "image_scans",
+              "op": "create",
+              "columns": [
+                {
+                  "method": "id",
+                  "columns": []
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "uuid"
+                  ]
+                },
+                {
+                  "method": "foreignId",
+                  "columns": [
+                    "server_id"
+                  ]
+                },
+                {
+                  "method": "foreignId",
+                  "columns": [
+                    "image_sbom_id"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "image_id"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "repo_digest"
+                  ]
+                },
+                {
+                  "method": "morphs",
+                  "columns": [
+                    "resource"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "image_ref"
+                  ]
+                },
+                {
+                  "method": "foreignId",
+                  "columns": [
+                    "deployment_queue_id"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "status"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "error_code"
+                  ]
+                },
+                {
+                  "method": "jsonb",
+                  "columns": [
+                    "error_context"
+                  ]
+                },
+                {
+                  "method": "jsonb",
+                  "columns": [
+                    "summary"
+                  ]
+                },
+                {
+                  "method": "jsonb",
+                  "columns": [
+                    "findings"
+                  ]
+                },
+                {
+                  "method": "jsonb",
+                  "columns": [
+                    "candidates"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "base_image_ref"
+                  ]
+                },
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "builds_image"
+                  ]
+                },
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "is_baseline"
+                  ]
+                },
+                {
+                  "method": "timestamp",
+                  "columns": [
+                    "grype_db_built_at"
+                  ]
+                },
+                {
+                  "method": "timestamp",
+                  "columns": [
+                    "scanned_at"
+                  ]
+                },
+                {
+                  "method": "timestamps",
+                  "columns": []
+                }
+              ]
+            },
+            {
+              "table": "image_scan_notification_states",
+              "op": "create",
+              "columns": [
+                {
+                  "method": "id",
+                  "columns": []
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "resource_type"
+                  ]
+                },
+                {
+                  "method": "unsignedBigInteger",
+                  "columns": [
+                    "resource_id"
+                  ]
+                },
+                {
+                  "method": "foreignId",
+                  "columns": [
+                    "team_id"
+                  ]
+                },
+                {
+                  "method": "jsonb",
+                  "columns": [
+                    "notified_ids"
+                  ]
+                },
+                {
+                  "method": "jsonb",
+                  "columns": [
+                    "notified_candidates"
+                  ]
+                },
+                {
+                  "method": "jsonb",
+                  "columns": [
+                    "digest_ids"
+                  ]
+                },
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "is_baseline"
+                  ]
+                },
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "check_reported"
+                  ]
+                },
+                {
+                  "method": "unsignedSmallInteger",
+                  "columns": [
+                    "held_digests"
+                  ]
+                },
+                {
+                  "method": "unsignedBigInteger",
+                  "columns": [
+                    "baseline_deployment_queue_id"
+                  ]
+                },
+                {
+                  "method": "timestamps",
+                  "columns": []
+                }
+              ]
+            },
+            {
+              "table": "server_settings",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "is_image_scan_enabled"
+                  ]
+                },
+                {
+                  "method": "unsignedInteger",
+                  "columns": [
+                    "image_candidate_scans_today"
+                  ]
+                },
+                {
+                  "method": "date",
+                  "columns": [
+                    "image_candidate_scans_date"
+                  ]
+                }
+              ]
+            },
+            {
+              "table": "teams",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "scan_images_on_new_servers"
+                  ]
+                }
+              ]
+            },
+            {
+              "table": "application_settings",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "is_image_scan_enabled"
+                  ]
+                },
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "image_builds_by_team"
+                  ]
+                }
+              ]
+            },
+            {
+              "table": "applications",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "json",
+                  "columns": [
+                    "docker_compose_image_overrides"
+                  ]
+                }
+              ]
+            },
+            {
+              "table": "application_deployment_queues",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "jsonb",
+                  "columns": [
+                    "scan_gate_result"
+                  ]
+                },
+                {
+                  "method": "foreignId",
+                  "columns": [
+                    "scan_gate_bypassed_by"
+                  ]
+                }
+              ]
+            },
+            {
+              "table": "telegram_notification_settings",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "text",
+                  "columns": [
+                    "telegram_notifications_image_vulnerabilities_thread_id"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": true,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": [
+          "server_settings",
+          "teams"
+        ]
+      },
+      {
+        "name": "2026_10_30_120000_add_git_ssh_known_hosts_to_applications_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "applications",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "text",
+                  "columns": [
+                    "git_ssh_known_hosts"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_10_30_120000_add_ssh_host_key_to_server_settings_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "server_settings",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "text",
+                  "columns": [
+                    "ssh_host_key"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "ssh_host_key_source"
+                  ]
+                },
+                {
+                  "method": "timestamp",
+                  "columns": [
+                    "ssh_host_key_trusted_at"
+                  ]
+                },
+                {
+                  "method": "text",
+                  "columns": [
+                    "ssh_host_key_pending"
+                  ]
+                },
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "is_ssh_host_key_check_disabled"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": [
+          "server_settings"
+        ]
+      },
+      {
+        "name": "2026_10_31_161621_add_type_to_s3_storages_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "s3_storages",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "string",
+                  "columns": [
+                    "type"
+                  ]
+                },
+                {
+                  "method": "longText",
+                  "columns": [
+                    "bucket"
+                  ]
+                },
+                {
+                  "method": "foreignId",
+                  "columns": [
+                    "private_key_id"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_01_170003_add_sftp_host_key_to_s3_storages_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "s3_storages",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "text",
+                  "columns": [
+                    "sftp_host_key"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_03_072701_add_auto_cancel_superseded_deployments",
+        "summary": {
+          "tables": [
+            {
+              "table": "application_settings",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "is_auto_cancel_queued_deployments_enabled"
+                  ]
+                },
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "is_auto_cancel_building_deployments_enabled"
+                  ]
+                }
+              ]
+            },
+            {
+              "table": "application_deployment_queues",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "timestamp",
+                  "columns": [
+                    "deploy_started_at"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_03_120133_add_is_mcp_to_application_deployment_queues_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "application_deployment_queues",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "is_mcp"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_03_171936_add_skip_tls_verification_to_s3_storages_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "s3_storages",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "skip_tls_verification"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_03_192547_add_is_removed_from_compose_to_service_parts",
+        "summary": {
+          "tables": [
+            {
+              "table": "service_applications",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "is_removed_from_compose"
+                  ]
+                }
+              ]
+            },
+            {
+              "table": "service_databases",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "is_removed_from_compose"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_03_192735_add_failure_tracking_to_scheduled_tasks_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "scheduled_tasks",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "unsignedInteger",
+                  "columns": [
+                    "consecutive_failures"
+                  ]
+                },
+                {
+                  "method": "timestamp",
+                  "columns": [
+                    "failing_since"
+                  ]
+                },
+                {
+                  "method": "text",
+                  "columns": [
+                    "disabled_reason"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_03_194650_add_notification_sender_to_instance_settings_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "instance_settings",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "text",
+                  "columns": [
+                    "notification_from_address"
+                  ]
+                },
+                {
+                  "method": "text",
+                  "columns": [
+                    "notification_from_name"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": [
+          "instance_settings"
+        ]
+      },
+      {
+        "name": "2026_11_03_195902_add_github_deployments_columns",
+        "summary": {
+          "tables": [
+            {
+              "table": "github_apps",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "string",
+                  "columns": [
+                    "deployments"
+                  ]
+                }
+              ]
+            },
+            {
+              "table": "application_deployment_queues",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "unsignedBigInteger",
+                  "columns": [
+                    "github_deployment_id"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "github_deployment_state"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_03_202635_add_use_shell_to_scheduled_tasks_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "scheduled_tasks",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "use_shell"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_03_225251_add_named_smtp_servers_to_email_settings",
+        "summary": {
+          "tables": [],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_04_080000_add_auto_update_attempt_to_instance_settings_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "instance_settings",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "string",
+                  "columns": [
+                    "auto_update_target_version"
+                  ]
+                },
+                {
+                  "method": "timestamp",
+                  "columns": [
+                    "auto_update_started_at"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": [
+          "instance_settings"
+        ]
+      },
+      {
+        "name": "2026_11_04_103949_add_resend_sender_to_email_settings",
+        "summary": {
+          "tables": [],
+          "has_raw_sql": false,
+          "touches_data": true,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_05_163404_add_include_network_hosts_in_build_to_application_settings",
+        "summary": {
+          "tables": [
+            {
+              "table": "application_settings",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "include_network_hosts_in_build"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_05_224732_drop_unused_indexes_from_audit_events_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "audit_events",
+              "op": "alter",
+              "columns": []
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_06_083240_update_standalone_database_default_images",
+        "summary": {
+          "tables": [],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_06_113843_set_valkey_as_standalone_redis_default_image",
+        "summary": {
+          "tables": [
+            {
+              "table": "standalone_redis",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "string",
+                  "columns": [
+                    "image"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": [
+          "standalone_redis"
+        ]
+      },
+      {
+        "name": "2026_11_06_145819_create_server_host_scans_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "server_host_scans",
+              "op": "create",
+              "columns": [
+                {
+                  "method": "id",
+                  "columns": []
+                },
+                {
+                  "method": "foreignId",
+                  "columns": [
+                    "server_id"
+                  ]
+                },
+                {
+                  "method": "string",
+                  "columns": [
+                    "error_code"
+                  ]
+                },
+                {
+                  "method": "jsonb",
+                  "columns": [
+                    "error_context"
+                  ]
+                },
+                {
+                  "method": "jsonb",
+                  "columns": [
+                    "eol"
+                  ]
+                },
+                {
+                  "method": "jsonb",
+                  "columns": [
+                    "summary"
+                  ]
+                },
+                {
+                  "method": "jsonb",
+                  "columns": [
+                    "findings"
+                  ]
+                },
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "findings_truncated"
+                  ]
+                },
+                {
+                  "method": "timestamp",
+                  "columns": [
+                    "grype_db_built_at"
+                  ]
+                },
+                {
+                  "method": "timestamp",
+                  "columns": [
+                    "scanned_at"
+                  ]
+                },
+                {
+                  "method": "timestamps",
+                  "columns": []
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_06_165709_create_stars_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "stars",
+              "op": "create",
+              "columns": [
+                {
+                  "method": "id",
+                  "columns": []
+                },
+                {
+                  "method": "foreignId",
+                  "columns": [
+                    "user_id"
+                  ]
+                },
+                {
+                  "method": "morphs",
+                  "columns": [
+                    "starrable"
+                  ]
+                },
+                {
+                  "method": "unsignedInteger",
+                  "columns": [
+                    "position"
+                  ]
+                },
+                {
+                  "method": "timestamps",
+                  "columns": []
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_06_194613_add_ssh_host_key_check_enforced_to_server_settings_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "server_settings",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "boolean",
+                  "columns": [
+                    "is_ssh_host_key_check_enforced"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": [
+          "server_settings"
+        ]
+      },
+      {
+        "name": "2026_11_08_120000_drop_image_scanning_columns_from_instance_settings",
+        "summary": {
+          "tables": [
+            {
+              "table": "instance_settings",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "dropColumn",
+                  "columns": []
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": true
+        },
+        "mapped_tables": [
+          "instance_settings"
+        ]
+      },
+      {
+        "name": "2026_11_09_120000_drop_unused_failure_columns_from_scheduled_tasks",
+        "summary": {
+          "tables": [
+            {
+              "table": "scheduled_tasks",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "dropColumn",
+                  "columns": []
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": true
+        },
+        "mapped_tables": []
+      },
+      {
+        "name": "2026_11_09_130000_add_image_scan_memory_mb_to_server_settings_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "server_settings",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "unsignedInteger",
+                  "columns": [
+                    "image_scan_memory_mb"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": [
+          "server_settings"
+        ]
+      },
+      {
+        "name": "2026_11_09_140000_add_image_scanner_time_and_cpu_limits_to_server_settings_table",
+        "summary": {
+          "tables": [
+            {
+              "table": "server_settings",
+              "op": "alter",
+              "columns": [
+                {
+                  "method": "unsignedInteger",
+                  "columns": [
+                    "image_scan_syft_timeout"
+                  ]
+                },
+                {
+                  "method": "unsignedInteger",
+                  "columns": [
+                    "image_scan_grype_timeout"
+                  ]
+                },
+                {
+                  "method": "decimal",
+                  "columns": [
+                    "image_scan_cpus"
+                  ]
+                }
+              ]
+            }
+          ],
+          "has_raw_sql": false,
+          "touches_data": false,
+          "touches_encryption": false,
+          "destructive": false
+        },
+        "mapped_tables": [
+          "server_settings"
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "regenerate_route_inventory",
+        "layer": "a",
+        "description": "regenerate compat/api/upstream-routes.json"
+      },
+      {
+        "id": "regenerate_migration_inventory",
+        "layer": "a",
+        "description": "regenerate compat/baseline/supported-migrations.txt"
+      },
+      {
+        "id": "update_schema_mapping:server_settings",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `server_settings` (Alter: boolean:is_image_scan_enabled, unsignedInteger:image_candidate_scans_today, date:image_candidate_scans_date)"
+      },
+      {
+        "id": "update_schema_mapping:teams",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `teams` (Alter: boolean:scan_images_on_new_servers)"
+      },
+      {
+        "id": "update_schema_mapping:server_settings",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `server_settings` (Alter: text:ssh_host_key, string:ssh_host_key_source, timestamp:ssh_host_key_trusted_at, text:ssh_host_key_pending, boolean:is_ssh_host_key_check_disabled)"
+      },
+      {
+        "id": "update_schema_mapping:instance_settings",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `instance_settings` (Alter: text:notification_from_address, text:notification_from_name)"
+      },
+      {
+        "id": "update_schema_mapping:instance_settings",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `instance_settings` (Alter: string:auto_update_target_version, timestamp:auto_update_started_at)"
+      },
+      {
+        "id": "update_schema_mapping:standalone_redis",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `standalone_redis` (Alter: string:image)"
+      },
+      {
+        "id": "update_schema_mapping:server_settings",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `server_settings` (Alter: boolean:is_ssh_host_key_check_enforced)"
+      },
+      {
+        "id": "update_schema_mapping:instance_settings",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `instance_settings` (Alter: )"
+      },
+      {
+        "id": "update_schema_mapping:server_settings",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `server_settings` (Alter: unsignedInteger:image_scan_memory_mb)"
+      },
+      {
+        "id": "update_schema_mapping:server_settings",
+        "layer": "b",
+        "description": "update the Rust column set / serializers for `server_settings` (Alter: unsignedInteger:image_scan_syft_timeout, unsignedInteger:image_scan_grype_timeout, decimal:image_scan_cpus)"
+      },
+      {
+        "id": "review_component:api.auth-chain",
+        "layer": "d",
+        "description": "port behaviour change into api.auth-chain (path app/Http/Kernel.php; path app/Http/Middleware/ApiAbility.php; path app/Http/Middleware/ApiSensitiveData.php; upstream test tests/Feature/ApiTokenLivewireAuthorizationTest.php; table instance_settings; table instance_settings; table instance_settings)"
+      },
+      {
+        "id": "review_component:api.teams",
+        "layer": "d",
+        "description": "port behaviour change into api.teams (path app/Http/Controllers/Api/TeamController.php; table teams)"
+      },
+      {
+        "id": "review_component:api.projects",
+        "layer": "d",
+        "description": "port behaviour change into api.projects (path app/Traits/HasSafeStringAttribute.php; upstream test tests/Feature/ResourceAccessConsistencyTest.php; symbol app/Support/ValidationPatterns.php::nameRules())"
+      },
+      {
+        "id": "review_component:api.route-inventory",
+        "layer": "d",
+        "description": "port behaviour change into api.route-inventory (path app/Http/Kernel.php; path routes/api.php)"
+      },
+      {
+        "id": "review_component:db.schema-guard",
+        "layer": "d",
+        "description": "port behaviour change into db.schema-guard (path database/migrations/2026_10_29_100000_create_image_scanning_tables.php; path database/migrations/2026_10_30_120000_add_git_ssh_known_hosts_to_applications_table.php; path database/migrations/2026_10_30_120000_add_ssh_host_key_to_server_settings_table.php; path database/migrations/2026_10_31_161621_add_type_to_s3_storages_table.php; path database/migrations/2026_11_01_170003_add_sftp_host_key_to_s3_storages_table.php; path database/migrations/2026_11_03_072701_add_auto_cancel_superseded_deployments.php; path database/migrations/2026_11_03_120133_add_is_mcp_to_application_deployment_queues_table.php; path database/migrations/2026_11_03_171936_add_skip_tls_verification_to_s3_storages_table.php; path database/migrations/2026_11_03_192547_add_is_removed_from_compose_to_service_parts.php; path database/migrations/2026_11_03_192735_add_failure_tracking_to_scheduled_tasks_table.php; path database/migrations/2026_11_03_194650_add_notification_sender_to_instance_settings_table.php; path database/migrations/2026_11_03_195902_add_github_deployments_columns.php; path database/migrations/2026_11_03_202635_add_use_shell_to_scheduled_tasks_table.php; path database/migrations/2026_11_03_225251_add_named_smtp_servers_to_email_settings.php; path database/migrations/2026_11_04_080000_add_auto_update_attempt_to_instance_settings_table.php; path database/migrations/2026_11_04_103949_add_resend_sender_to_email_settings.php; path database/migrations/2026_11_05_163404_add_include_network_hosts_in_build_to_application_settings.php; path database/migrations/2026_11_05_224732_drop_unused_indexes_from_audit_events_table.php; path database/migrations/2026_11_06_083240_update_standalone_database_default_images.php; path database/migrations/2026_11_06_113843_set_valkey_as_standalone_redis_default_image.php; path database/migrations/2026_11_06_145819_create_server_host_scans_table.php; path database/migrations/2026_11_06_165709_create_stars_table.php; path database/migrations/2026_11_06_194613_add_ssh_host_key_check_enforced_to_server_settings_table.php; path database/migrations/2026_11_08_120000_drop_image_scanning_columns_from_instance_settings.php; path database/migrations/2026_11_09_120000_drop_unused_failure_columns_from_scheduled_tasks.php; path database/migrations/2026_11_09_130000_add_image_scan_memory_mb_to_server_settings_table.php; path database/migrations/2026_11_09_140000_add_image_scanner_time_and_cpu_limits_to_server_settings_table.php)"
+      },
+      {
+        "id": "review_component:api.private-keys",
+        "layer": "d",
+        "description": "port behaviour change into api.private-keys (path app/Http/Controllers/Api/SecurityController.php; path app/Models/PrivateKey.php; upstream test tests/Feature/Api/PrivateKeyUpdateApiTest.php; upstream test tests/Feature/PrivateKeyFingerprintTeamScopeTest.php; symbol bootstrap/helpers/shared.php::generate_random_name())"
+      },
+      {
+        "id": "review_component:ui.session",
+        "layer": "d",
+        "description": "port behaviour change into ui.session (path app/Providers/FortifyServiceProvider.php; table teams)"
+      },
+      {
+        "id": "review_component:api.servers",
+        "layer": "d",
+        "description": "port behaviour change into api.servers (path app/Actions/Server/DeleteServer.php; path app/Http/Controllers/Api/ServersController.php; path app/Models/Server.php; path app/Models/ServerSetting.php; path app/Models/SharedEnvironmentVariable.php; table server_settings; table server_settings; table server_settings; table server_settings; table server_settings)"
+      },
+      {
+        "id": "review_component:ui.styles",
+        "layer": "d",
+        "description": "port behaviour change into ui.styles (path resources/css/app.css; path resources/views/components/reicon.blade.php)"
+      },
+      {
+        "id": "review_component:ui.frontend",
+        "layer": "d",
+        "description": "port behaviour change into ui.frontend (path resources/views/components/backup-s3-storage.blade.php; path resources/views/components/forms/domain-input.blade.php; path resources/views/components/forms/inherited-listbox.blade.php; path resources/views/components/forms/input.blade.php; path resources/views/components/forms/repository-paths.blade.php; path resources/views/components/modal-confirmation.blade.php; path resources/views/components/modal-input.blade.php; path resources/views/components/navbar.blade.php; path resources/views/components/server/remove-unused-packages-button.blade.php; path resources/views/components/server/sidebar.blade.php; path resources/views/components/server/status-summary.blade.php; path resources/views/components/theme-controls.blade.php; path resources/views/components/top-breadcrumb.blade.php; path resources/views/components/top-user-menu.blade.php; path resources/views/layouts/app.blade.php; path resources/views/livewire/dashboard.blade.php; path resources/views/livewire/partials/smtp-server-picker.blade.php; path resources/views/livewire/project/application/general.blade.php; path resources/views/livewire/project/resource/index.blade.php; path resources/views/livewire/project/service/import-backup.blade.php; path resources/views/livewire/project/service/volume-backup/index.blade.php; path resources/views/livewire/project/shared/resource-operations.blade.php; path resources/views/livewire/security/private-key/index.blade.php; path resources/views/livewire/security/private-key/partials/key-field.blade.php; path resources/views/livewire/security/private-key/rotate.blade.php; path resources/views/livewire/security/private-key/show.blade.php; path resources/views/livewire/server/delete.blade.php; path resources/views/livewire/server/index.blade.php; path resources/views/livewire/server/navbar.blade.php; path resources/views/livewire/server/new/by-ip.blade.php; path resources/views/livewire/server/partials/force-disabled-callout.blade.php; path resources/views/livewire/server/security/host-key.blade.php; path resources/views/livewire/server/security/patches.blade.php; path resources/views/livewire/server/sentinel.blade.php; path resources/views/livewire/server/show.blade.php; path resources/views/livewire/settings-backup.blade.php; path resources/views/livewire/star-toggle.blade.php; path resources/views/livewire/storage/server-endpoint-fields.blade.php; path resources/views/livewire/storage/sftp-login-fields.blade.php)"
+      },
+      {
+        "id": "review_component:ui.read-models",
+        "layer": "d",
+        "description": "port behaviour change into ui.read-models (path app/Livewire/Concerns/ManagesServerPackageUpdates.php; path app/Livewire/Dashboard.php; path app/Livewire/Project/CloneMe.php; path app/Livewire/Project/Service/ImportBackup.php; path app/Livewire/Project/Shared/ResourceOperations.php; path app/Livewire/Security/PrivateKey/Rotate.php; path app/Livewire/Security/PrivateKey/Show.php; path app/Livewire/Server/Delete.php; path app/Livewire/Server/New/ByIp.php; path app/Livewire/Server/Security/Patches.php; path app/Livewire/Server/Show.php; path app/Livewire/StarToggle.php; path app/Livewire/Team/Member.php; symbol app/Models/PrivateKey.php::generateNewKeyPair(); symbol bootstrap/helpers/shared.php::generateSSHKey(); table server_settings; table teams; table server_settings; table server_settings; table server_settings; table server_settings)"
+      },
+      {
+        "id": "review_component:remote.execution",
+        "layer": "d",
+        "description": "port behaviour change into remote.execution (path app/Helpers/SshMultiplexingHelper.php; path app/Traits/SshRetryable.php; path bootstrap/helpers/remoteProcess.php)"
+      },
+      {
+        "id": "review_component:server.validation",
+        "layer": "d",
+        "description": "port behaviour change into server.validation (path resources/views/components/process-dialog.blade.php; table server_settings; table server_settings; table server_settings; table server_settings; table server_settings)"
+      },
+      {
+        "id": "review_component:databases.standalone",
+        "layer": "d",
+        "description": "port behaviour change into databases.standalone (path app/Actions/Database/StartClickhouse.php; path app/Actions/Database/StartDragonfly.php; path app/Actions/Database/StartKeydb.php; path app/Actions/Database/StartMariadb.php; path app/Actions/Database/StartMongodb.php; path app/Actions/Database/StartMysql.php; path app/Actions/Database/StartPostgresql.php; path app/Actions/Database/StartRedis.php; path app/Actions/Database/StopDatabase.php; path app/Actions/Docker/GetContainersStatus.php; path app/Http/Controllers/Api/DatabasesController.php; path app/Livewire/Project/New/Select.php; path app/Livewire/Project/Resource/Create.php; path app/Livewire/Project/Resource/Index.php; path app/Livewire/Project/Shared/Danger.php; path app/Models/StandalonePostgresql.php; path app/Traits/ExecutesDatabaseStartCommands.php; path app/Traits/HasSecretManager.php; path resources/views/components/database/configuration-sidebar.blade.php; path resources/views/livewire/project/database/backup-edit/general.blade.php; path resources/views/livewire/project/database/backup-edit/retention.blade.php; path resources/views/livewire/project/database/backup-executions.blade.php; path resources/views/livewire/project/database/backup/index.blade.php; path resources/views/livewire/project/database/configuration.blade.php; path resources/views/livewire/project/database/heading.blade.php; path resources/views/livewire/project/database/import-form.blade.php; path resources/views/livewire/project/database/import.blade.php; path resources/views/livewire/project/database/redis/general.blade.php; path resources/views/livewire/project/new/select.blade.php; path resources/views/livewire/project/resource/index.blade.php; table standalone_redis)"
+      }
+    ],
+    "validation": [
+      [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      [
+        "cargo",
+        "test",
+        "-p",
+        "coolify-api"
+      ],
+      [
+        "cargo",
+        "test",
+        "-p",
+        "coolify-compat"
+      ],
+      [
+        "cargo",
+        "test",
+        "-p",
+        "coolify-db"
+      ],
+      [
+        "cargo",
+        "test",
+        "-p",
+        "coolify-domain"
+      ],
+      [
+        "cargo",
+        "test",
+        "-p",
+        "coolify-jobs"
+      ],
+      [
+        "cargo",
+        "test",
+        "-p",
+        "coolify-port"
+      ],
+      [
+        "cargo",
+        "test",
+        "-p",
+        "coolify-remote"
+      ]
+    ],
+    "escalation": {
+      "reasons": [
+        "high risk: requires explicit human approval before integration",
+        "334 behaviour-relevant files are not covered by the mapping registry"
+      ],
+      "decision_required": "approve or reject the generated patch and assign the semantic port of the listed components"
+    },
+    "mapping_coverage": 0.16290726817042606,
+    "unresolved_questions": [
+      "some files matched no classification rule; extend PATH_RULES"
+    ]
+  },
+  "branch": null,
+  "base_commit": null,
+  "worktree": null,
+  "generated_files": [],
+  "patch_file": null,
+  "prompt_pack": null,
+  "attempts": [],
+  "verdict": null,
+  "recommended_action": "analysis only: re-run with generation to produce a patch",
+  "started_at": "2026-11-13T08:07:40Z",
+  "updated_at": "2026-11-13T08:07:49Z"
+}

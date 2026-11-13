@@ -322,10 +322,11 @@ pub async fn clone(
         &input,
         &[
             field("destination_uuid", vec![Rule::Required, Rule::String]),
-            field("name", vec![Rule::String, Rule::Max(255), Rule::Nullable]),
+            // `ValidationPatterns::nameRules(required: false)` (4.7.5).
+            field("name", crate::validation::patterns::optional_name_rules()),
             field("clone_volumes", vec![Rule::Boolean]),
         ],
-        CUSTOM_API_MESSAGES,
+        crate::validation::patterns::API_COMBINED_MESSAGES,
         &allowed,
     )?;
     let source = apps::find_in_team(&state.db, ctx.team_id, &uuid)
@@ -351,6 +352,8 @@ pub async fn clone(
         input.str("destination_uuid").unwrap_or_default(),
     )
     .await?;
+    // `$this->authorize('placeResource', $destination->server)` (4.7.5).
+    crate::place_resource::authorize(&state, &ctx, &server).await?;
     // The copy redeploys the source, which the job may not be able to do yet.
     if clone_volumes && ops::has_persistent_storage(&state.db, source.id).await? {
         deployable(&state, &source).await?;
@@ -585,6 +588,21 @@ pub async fn rollback_images(
     Ok(ok(images).into_response())
 }
 
+/// `GetRollbackImages::allows($application, $tag)` (4.7.5): the tag is the commit of a
+/// successful production deployment, or a listed rollback image. The rule is
+/// `Jobs::rollback_allows`, which the UI calls too; without a job runner (tests) only the first
+/// half can be asked, because the image list needs the server.
+pub(crate) async fn rollback_allowed(
+    state: &AppState,
+    a: &ApplicationRow,
+    tag: &str,
+) -> Result<bool, ApiError> {
+    match state.jobs.as_ref() {
+        Some(jobs) => Ok(jobs.rollback_allows(a, tag).await),
+        None => Ok(coolify_db::deployment_queue::was_deployed(&state.db, a.id, tag).await?),
+    }
+}
+
 /// `POST /applications/{uuid}/rollback` (`rollback_by_uuid`). The row is what upstream queues:
 /// `rollback = true`, `commit` = the requested tag, `force_rebuild = false`, `is_api = true`. An
 /// application the job cannot deploy answers 501, like start and restart, instead of queueing a
@@ -616,6 +634,19 @@ pub async fn rollback(
             errors.insert("commit".into(), json!([m]));
             ApiError::Validation(errors)
         })?;
+    // 4.7.5 (c75e7078b): `GetRollbackImages::allows($application, $commit)`. A rollback builds a
+    // missing image from source, so any other commit (for example of an unmerged pull request)
+    // is rejected.
+    if !rollback_allowed(&state, &a, &commit).await? {
+        let mut errors = Map::new();
+        errors.insert(
+            "commit".into(),
+            json!([
+                "The commit is not a rollback image or a successful deployment of this application."
+            ]),
+        );
+        return Err(ApiError::Validation(errors));
+    }
     deployable(&state, &a).await?;
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let deployment_uuid = coolify_domain::new_public_id();
@@ -755,6 +786,8 @@ pub async fn add_destination(
     .await?
     .ok_or(DESTINATION_NOT_FOUND)?;
     let server = hosting_server(&state, destination.server_id).await?;
+    // `$this->authorize('placeResource', $destination->server)` (4.7.5).
+    crate::place_resource::authorize(&state, &ctx, &server).await?;
     if a.int("destination_id") == Some(destination.id)
         && a.str("destination_type") == Some(STANDALONE_DOCKER_MORPH)
     {

@@ -168,7 +168,10 @@
       if (r.dns) {
         dnsPending = { hosts: r.dns.pending ?? [], message: r.dns.pending_message ?? '' };
         if (r.dns.open_modal) void dnsMenu?.openProviders();
-        if (r.dns.jobs?.length) followDnsJobs('application', uuid, r.dns.jobs, load);
+        if (r.dns.jobs?.length)
+          followDnsJobs('application', uuid, r.dns.jobs, load, (hostname, c) =>
+            dnsMenu?.showConflict(hostname, c.zone_id, { record_id: c.record_id, current: c.current, proposed: c.proposed }),
+          );
       }
     } catch (e) {
       if (e instanceof ApiError && e.errors.domain?.length) setError(e.errors.domain[0]);

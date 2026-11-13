@@ -195,8 +195,64 @@ impl IntoResponse for ApiError {
                 json!({"message": "Server Error"}),
             ),
         };
-        PhpJson(status, body).into_response()
+        let denied = policy_denied_reason(status, &body);
+        let mut res = PhpJson(status, body).into_response();
+        if let Some(reason) = denied {
+            res.extensions_mut().insert(PolicyDenied(reason));
+        }
+        res
     }
 }
 
+/// An `AuthorizationException` that the API exception handler answered (403 with
+/// `"error": "Unauthorized"`): the exception message, which `Handler::render()` writes to the
+/// `api.auth.policy_denied` audit row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyDenied(pub String);
+
+/// `$e->getMessage()` of a policy denial: a policy that answers false throws "This action is
+/// unauthorized.", which the handler shows as its default message.
+fn policy_denied_reason(status: StatusCode, body: &Value) -> Option<String> {
+    if status != StatusCode::FORBIDDEN
+        || body.get("error").and_then(Value::as_str) != Some("Unauthorized")
+    {
+        return None;
+    }
+    Some(match body.get("message").and_then(Value::as_str) {
+        None | Some("You are not authorized to perform this action.") => {
+            "This action is unauthorized.".to_owned()
+        }
+        Some(message) => message.to_owned(),
+    })
+}
+
 pub type ApiResult<T = Response> = Result<T, ApiError>;
+
+#[cfg(test)]
+mod policy_denied_tests {
+    use super::*;
+
+    /// `Handler::render()` audits `AuthorizationException`s only, with their own message.
+    #[test]
+    fn policy_denials_carry_their_reason() {
+        let reason = |e: ApiError| {
+            e.into_response()
+                .extensions()
+                .get::<PolicyDenied>()
+                .cloned()
+        };
+        assert_eq!(
+            reason(ApiError::Unauthorized),
+            Some(PolicyDenied("This action is unauthorized.".into()))
+        );
+        assert_eq!(
+            reason(crate::auth::policy_denied("Only an admin can do this.")),
+            Some(PolicyDenied("Only an admin can do this.".into()))
+        );
+        assert_eq!(reason(ApiError::MissingTeamRole), None);
+        assert_eq!(
+            reason(ApiError::Message(StatusCode::FORBIDDEN, "Forbidden.")),
+            None
+        );
+    }
+}

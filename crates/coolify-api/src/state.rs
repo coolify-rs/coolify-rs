@@ -35,6 +35,8 @@ pub struct Inner {
     pub plugins: Option<coolify_plugins::Host>,
     /// `COOLIFY_RS_ALLOW_UNVERIFIED_PLUGINS`: admins may install plugins that are not from the registry.
     pub allow_unverified_plugins: bool,
+    /// `ThrottleFailedApiRequests`: the failed API requests of each client.
+    pub failed_api_requests: crate::throttle_failed_api::FailedApiRequests,
 }
 
 /// Optional settings; `Default` is suitable for tests.
@@ -47,6 +49,9 @@ pub struct Options {
     pub remote: Option<coolify_remote::Remote>,
     pub plugins: Option<coolify_plugins::Host>,
     pub allow_unverified_plugins: bool,
+    /// `config('api.failed_request_rate_limit')`; `None` reads `API_FAILED_REQUEST_RATE_LIMIT`
+    /// (default 30). 0 turns the throttle of failed API requests off.
+    pub failed_api_request_limit: Option<i64>,
 }
 
 impl Default for Options {
@@ -60,6 +65,7 @@ impl Default for Options {
             remote: None,
             plugins: None,
             allow_unverified_plugins: false,
+            failed_api_request_limit: None,
         }
     }
 }
@@ -98,6 +104,9 @@ impl AppState {
             secure_cookies: o.secure_cookies,
             plugins: o.plugins,
             allow_unverified_plugins: o.allow_unverified_plugins,
+            failed_api_requests: crate::throttle_failed_api::FailedApiRequests::new(
+                o.failed_api_request_limit,
+            ),
         }));
         crate::plugin_bridge::connect(&state);
         state

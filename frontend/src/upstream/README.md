@@ -1,4 +1,4 @@
-Copied unmodified from coollabsio/coolify `v4.6.0` @ 0becfba9113063336b09860579627fd218cb3fc4 (`css/app.css`, `js/deploy-canvas.js`; the rest from `main` @ b5823c777b8d60df856fcf779b70e4b1d237a845)
+Copied unmodified from coollabsio/coolify `v4.7.5` @ 378ce3735
 (`resources/css/*.css`, `resources/fonts/*.woff2`). The CSS is Apache-2.0 (Coolify); Inter and Geist are
 licensed under the SIL Open Font License 1.1. Do not edit by hand: the migration engine maps upstream changes
 to these files (component `ui.styles`). coolify-rs overrides live in `src/styles.css`.

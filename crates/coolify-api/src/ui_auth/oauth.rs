@@ -1412,6 +1412,25 @@ fn nullable_trimmed(data: &Value, key: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// `callbackPathRule($provider)`: the provider sends the browser back to the redirect URI. Only
+/// the callback route can finish the login; any other path falls through to the catch-all route,
+/// which sends the user to the login page without an error.
+fn callback_path_error(provider: &str, redirect_uri: &str) -> Option<String> {
+    // `route('auth.callback', $provider, false)`.
+    let expected = format!("/auth/{provider}/callback");
+    // `rtrim((string) parse_url($value, PHP_URL_PATH), '/')`.
+    let after_scheme = redirect_uri
+        .split_once("://")
+        .map_or(redirect_uri, |(_, rest)| rest);
+    let without_fragment = after_scheme.split('#').next().unwrap_or_default();
+    let without_query = without_fragment.split('?').next().unwrap_or_default();
+    let path = without_query
+        .find('/')
+        .map_or("", |at| &without_query[at..])
+        .trim_end_matches('/');
+    (path != expected).then(|| format!("The redirect URI must end with {expected}."))
+}
+
 /// `validationRules($provider)`.
 fn validation_errors(provider: &str, data: &Value) -> Map<String, Value> {
     let mut errors = Map::new();
@@ -1432,6 +1451,11 @@ fn validation_errors(provider: &str, data: &Value) -> Map<String, Value> {
         let scheme_ok = v.starts_with("http://") || v.starts_with("https://");
         if !scheme_ok || !crate::laravel_url::is_url(v) {
             messages.push(format!("The {} field must be a valid URL.", label(f)));
+        }
+        if f == "redirect_uri"
+            && let Some(message) = callback_path_error(provider, v)
+        {
+            messages.push(message);
         }
         if !messages.is_empty() {
             errors.insert(key(f), json!(messages));
@@ -1810,6 +1834,49 @@ pub(super) async fn submit_all(
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_redirect_uri_must_point_at_the_callback_route() {
+        assert_eq!(
+            callback_path_error("github", "https://coolify.example.com/auth/github/callback"),
+            None
+        );
+        // A trailing slash, a query and a fragment do not change the path.
+        assert_eq!(
+            callback_path_error(
+                "github",
+                "https://coolify.example.com/auth/github/callback/?x=1#top"
+            ),
+            None
+        );
+        let error = Some("The redirect URI must end with /auth/github/callback.".to_owned());
+        assert_eq!(
+            callback_path_error("github", "https://coolify.example.com"),
+            error
+        );
+        assert_eq!(
+            callback_path_error("github", "https://coolify.example.com/login"),
+            error
+        );
+        // The callback of another provider.
+        assert_eq!(
+            callback_path_error("github", "https://coolify.example.com/auth/google/callback"),
+            error
+        );
+        // A prefix before the route is another path.
+        assert_eq!(
+            callback_path_error("github", "https://example.com/coolify/auth/github/callback"),
+            error
+        );
+        let errors = validation_errors(
+            "github",
+            &json!({"redirect_uri": "https://coolify.example.com/login"}),
+        );
+        assert_eq!(
+            errors["oauth_settings_map.github.redirect_uri"],
+            json!(["The redirect URI must end with /auth/github/callback."])
+        );
+    }
+
     fn row(provider: &str) -> OauthRow {
         OauthRow {
             id: 1,
@@ -2036,7 +2103,19 @@ mod tests {
             e["oauth_settings_map.github.redirect_uri"][0],
             "The oauth settings map.github.redirect uri field must be a valid URL."
         );
-        assert!(validation_errors("github", &json!({"redirect_uri": "https://x.co/a"})).is_empty());
+        // v4.7.5 `callbackPathRule()`: only the callback route of the provider.
+        let e = validation_errors("github", &json!({"redirect_uri": "https://x.co/a"}));
+        assert_eq!(
+            e["oauth_settings_map.github.redirect_uri"][0],
+            "The redirect URI must end with /auth/github/callback."
+        );
+        assert!(
+            validation_errors(
+                "github",
+                &json!({"redirect_uri": "https://x.co/auth/github/callback/"})
+            )
+            .is_empty()
+        );
         let e = validation_errors("oidc", &json!({"clock_skew_seconds": "601"}));
         assert_eq!(e.len(), 1);
     }

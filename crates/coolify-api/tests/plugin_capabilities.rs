@@ -106,7 +106,7 @@ async fn team(h: &Harness, token: &str, name: &str) -> Team {
             "POST",
             "/api/v1/security/keys",
             t,
-            Some(json!({"name": "k", "private_key": pem})),
+            Some(json!({"name": "key", "private_key": pem})),
         )
         .await,
     );

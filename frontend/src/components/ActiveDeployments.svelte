@@ -3,7 +3,7 @@
   // (App\Livewire\Dashboard\ActiveDeployments).
   import SectionHeading from './SectionHeading.svelte';
   import StatusBadge from './StatusBadge.svelte';
-  import { diffForHumans } from '../lib/format';
+  import { dayDateTime, diffForHumans, iso8601 } from '../lib/format';
   import { layoutUi, type QueueRow } from '../lib/layoutApi';
   import { link } from '../lib/router.svelte';
 
@@ -23,7 +23,10 @@
     return () => clearInterval(id);
   });
 
-  function meta(status: string): [string, 'success' | 'warning' | 'error' | 'neutral'] {
+  function meta(d: QueueRow): [string, 'success' | 'warning' | 'error' | 'neutral'] {
+    const status = d.status;
+    // `$deployment->isImageScanBlocked()`: the status stays failed, the badge says "Blocked".
+    if (d.image_scan_blocked) return ['Blocked', 'error'];
     const label =
       { finished: 'Success', in_progress: 'In progress', 'cancelled-by-user': 'Cancelled', queued: 'Queued', failed: 'Failed' }[status] ??
       status.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
@@ -37,15 +40,17 @@
   const boxClass = 'overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm dark:border-white/[0.08] dark:bg-white/[0.05]';
 </script>
 
-{#snippet head()}
+{#snippet head(time: string)}
   <div class={headClass}>
-    <span>Application</span><span>Environment</span><span>Server</span><span>Status</span><span>Started</span>
+    <span>Application</span><span>Environment</span><span>Server</span><span>Status</span><span>{time}</span>
   </div>
 {/snippet}
 
-{#snippet row(d: QueueRow)}
-  {@const st = meta(d.status)}
+<!-- Active deployments show when they started, recent ones when they finished. -->
+{#snippet row(d: QueueRow, finished: boolean)}
+  {@const st = meta(d)}
   {@const path = [d.project, d.environment].filter(Boolean).join(' / ')}
+  {@const at = finished ? d.finished_at : d.created_at}
   <a href={d.deployment_url} use:link class={rowClass}>
     <div class="min-w-0">
       <p class="truncate text-[13px] font-semibold text-black dark:text-fg">{d.application_name}</p>
@@ -56,14 +61,19 @@
     <p class="hidden truncate text-[12px] text-neutral-500 @2xl:block dark:text-fg-dim">{path || '-'}</p>
     <p class="hidden truncate text-[12px] text-neutral-500 @2xl:block dark:text-fg-dim">{d.server_name || '-'}</p>
     <span class="hidden @2xl:block"><StatusBadge label={st[0]} type={st[1]} spinning={d.status === 'in_progress'} /></span>
-    <p class="hidden truncate text-[12px] text-neutral-500 @2xl:block dark:text-fg-dim">{diffForHumans(d.created_at) || '-'}</p>
+    <p class="hidden truncate text-[12px] text-neutral-500 @2xl:block dark:text-fg-dim" title={finished ? dayDateTime(at) : undefined}>
+      {diffForHumans(at) || '-'}
+    </p>
     <div class="mt-3 flex min-w-0 items-center gap-3 @2xl:hidden">
       <StatusBadge label={st[0]} type={st[1]} spinning={d.status === 'in_progress'} />
       <p class="min-w-0 truncate text-[11px] text-neutral-500 dark:text-fg-faint">
         {path || '-'}
-        <span class="px-1 text-neutral-300 dark:text-white/15">·</span>
-        {d.server_name || '-'}
       </p>
+      {#if at}
+        <time datetime={iso8601(at)} title={dayDateTime(at)} class="ml-auto shrink-0 whitespace-nowrap text-[11px] text-neutral-500 dark:text-fg-faint">
+          {diffForHumans(at)}
+        </time>
+      {/if}
     </div>
   </a>
 {/snippet}
@@ -79,14 +89,14 @@
               <h3 class="text-[11px]! leading-4! font-medium! text-neutral-500! dark:text-fg-faint!">Active</h3>
               <p class="mt-0.5 text-[11px] text-neutral-500 dark:text-fg-faint">Running or queued right now</p>
             </div>
-            {@render head()}
-            {#each active as d (d.deployment_uuid)}{@render row(d)}{/each}
+            {@render head('Started')}
+            {#each active as d (d.deployment_uuid)}{@render row(d, false)}{/each}
           </div>
         {/if}
         {#if recent.length > 0}
           <div class={boxClass}>
-            {@render head()}
-            {#each recent as d (d.deployment_uuid)}{@render row(d)}{/each}
+            {@render head('Finished')}
+            {#each recent as d (d.deployment_uuid)}{@render row(d, true)}{/each}
           </div>
         {/if}
       </div>

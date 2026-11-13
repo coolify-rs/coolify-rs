@@ -4,10 +4,13 @@
 pub mod compose;
 pub(crate) mod deploy;
 pub use deploy::compose_pack::{inject_build_args, inject_compose_flags};
+pub use deploy::host_keys::GitSshHost;
 pub(crate) use deploy::remote_redaction_values;
 pub mod detect;
 pub mod docker_run;
+pub mod dockerfile_healthcheck;
 pub mod domains;
+pub mod git_ssh;
 pub mod labels;
 mod lifecycle;
 pub mod ops;

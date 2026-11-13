@@ -5,13 +5,11 @@
   // (Project/Database/Backup/Execution) for the backup pages. The `Project/Shared/*`
   // sections render a plain placeholder until the shared components are connected.
   import Empty from '../components/Empty.svelte';
-  import Forbidden from '../components/Forbidden.svelte';
   import DatabaseHeading from '../components/DatabaseHeading.svelte';
   import DatabaseGeneral from '../components/DatabaseGeneral.svelte';
   import DatabaseDanger from '../components/DatabaseDanger.svelte';
   import DatabaseSqliteGeneral from '../components/DatabaseSqliteGeneral.svelte';
   import DatabaseHealth from '../components/DatabaseHealth.svelte';
-  import DatabaseImport from '../components/DatabaseImport.svelte';
   import DatabaseBackups from '../components/DatabaseBackups.svelte';
   import DatabaseBackupEdit from '../components/DatabaseBackupEdit.svelte';
   import DatabaseBackupExecutions from '../components/DatabaseBackupExecutions.svelte';
@@ -28,6 +26,8 @@
   import FileBrowser from '../components/shared/FileBrowser.svelte';
   import ExecuteContainerCommand from '../components/shared/ExecuteContainerCommand.svelte';
   import { dbUi, uiApi, ApiError, type DatabaseRecord, type DatabaseState } from '../lib/api';
+  import ResourceSecurity from '../components/imageScan/ResourceSecurity.svelte';
+  import { securityStatus } from '../lib/imageScanApi';
   import { backupNavContext, databaseNavContext, databaseSection, DATABASE_SECTIONS, teleport } from '../lib/databaseMenu';
   import { backupsUi, type BackupEdit } from '../lib/databaseApi';
   import { router } from '../lib/router.svelte';
@@ -56,6 +56,10 @@
     const r = router.current;
     if (r?.name === 'database-section' && !DATABASE_SECTIONS.includes(r.params.section)) router.go('/', true);
   });
+  // `Route::redirect('/import-backup', '.../database/{database_uuid}/backups')`: the import is on the Backups page.
+  $effect(() => {
+    if (active === 'import-backup') router.go(`${base}/backups`, true);
+  });
   const currentBackupSection = $derived(backupSection === 'executions' || backupSection === 'danger' ? backupSection : 'general');
   const base = $derived(`/project/${uuid}/environment/${env}/database/${db}`);
   const canUpdate = $derived(dbState?.can_update ?? false);
@@ -81,6 +85,8 @@
     page.nameChanged(db, r.name);
   }
 
+  let loadSecurity: () => void = () => {};
+
   async function load() {
     let r: DatabaseRecord;
     try {
@@ -105,6 +111,23 @@
     });
     menu.name = r.name;
     page.navContext = menu;
+    // `SecurityStatus::stored($database)->status->value`: the security dot of the menu.
+    const state = dbState;
+    loadSecurity = () =>
+      securityStatus('database', db).then((security) => {
+        if (backup || !state) return;
+        const next = databaseNavContext(base, active, {
+          canUpdate: state.can_update,
+          canAccessTerminal: session.isAdmin,
+          backups: !['redis', 'keydb', 'dragonfly'].includes(state.kind ?? ''),
+          initScripts: (state.kind ?? 'postgresql') === 'postgresql',
+          sqlite: state.kind === 'sqlite',
+          security,
+        });
+        next.name = r.name;
+        page.navContext = next;
+      });
+    loadSecurity();
     if (backup) {
       // `/backups/{uuid}/s3` and `/retention` redirect to the backup's General page.
       if (backupSection === 's3' || backupSection === 'retention') return router.go(`${base}/backups/${backup}`, true);
@@ -156,9 +179,6 @@
   <div class="application-settings-form w-full">
     <Empty title="Database not found" description="It may have been deleted, or it belongs to another team." iconName="database" size="lg" />
   </div>
-{:else if record && dbState && active === 'import-backup' && !canUpdate}
-  <!-- `->middleware('can.update.resource')` of the import-backup route -->
-  <Forbidden />
 {:else if record && dbState}
   <div>
     <DatabaseHeading {record} {dbState} healthcheckUrl="{base}/healthcheck" {resources} onrefresh={() => refresh().catch(() => {})} />
@@ -187,8 +207,6 @@
             {/if}
           {:else if active === 'backups'}
             <DatabaseBackups {record} {base} {canUpdate} />
-          {:else if active === 'import-backup'}
-            <DatabaseImport {record} {canUpdate} />
           {:else if active === 'healthcheck'}
             <DatabaseHealth {record} {canUpdate} onsaved={() => refresh().catch(() => {})} />
           {:else if active === 'general'}
@@ -218,6 +236,8 @@
             <ResourceLimits kind="database" uuid={db} />
           {:else if active === 'metrics'}
             <Metrics kind="database" uuid={db} />
+          {:else if active === 'vulnerabilities'}
+            <ResourceSecurity kind="database" uuid={db} onchanged={() => loadSecurity()} />
           {:else if active === 'files'}
             <FileBrowser kind="database" uuid={db} />
           {:else if active === 'servers'}

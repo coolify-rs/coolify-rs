@@ -44,12 +44,15 @@ review comes first. The threat model is in SECURITY_MODEL.md section 8; this ADR
 4. **Hardened options.** Upstream's options, plus `BatchMode=yes`, `IdentitiesOnly=yes`, `IdentityAgent=none`,
    `ForwardAgent=no`, `ForwardX11=no`, `ClearAllForwardings=yes`, `PermitLocalCommand=no`, `UpdateHostKeys=no`.
    The Cloudflare tunnel `ProxyCommand=cloudflared access ssh --hostname %h` is kept as upstream has it.
-5. **Host keys: trust on first use, pinned per server.** `StrictHostKeyChecking=accept-new` with
-   `UserKnownHostsFile=<data>/ssh/known_hosts/<server uuid>` and `GlobalKnownHostsFile=/dev/null`. A changed key
-   fails with `Host key verification failed: the server's SSH host key changed ...`, which names the new fingerprint
-   and the way forward instead of OpenSSH's banner (that banner names the pin file, a control-plane path), and is not
-   retried. The pin is dropped when the server's IP or port changes and when the server is deleted; at startup, pins of
-   servers that no longer exist (deleted by upstream on a shared database) are removed. `COOLIFY_RS_SSH_HOST_KEYS=ignore` restores upstream's behaviour.
+5. **Host keys: trust on first use, pinned per server, as upstream v4.7.5 does.** The pinned key is
+   `server_settings.ssh_host_key`. A connection gets `HostKeyAlias=coolify-<server uuid>`,
+   `UserKnownHostsFile=<data>/ssh/known_hosts/known_hosts_<server uuid>_<hash>` (written from the database) and
+   `StrictHostKeyChecking=no` (warn mode: connect and report a changed key) or `yes` (enforce mode: refuse it), always
+   with `GlobalKnownHostsFile=/dev/null`. `SSH_HOST_KEY_CHECKING` sets the mode of the instance (warn, enforce, off);
+   a server can enforce or disable its own check. A refused key fails with upstream's message and is not retried.
+   A pin file of coolify-rs before 4.7.5 (`known_hosts/<server uuid>`) is moved to the database on the next connection.
+   The pin is dropped when the server's IP or port changes and when the server is deleted; at startup, files of
+   servers that no longer exist are removed. `COOLIFY_RS_SSH_HOST_KEYS=ignore` means `SSH_HOST_KEY_CHECKING=off`.
 6. **Keys never persist.** The encrypted `private_keys.private_key` is decrypted right before a run into a
    zeroizing buffer, written to a random-named file created with mode 0600 inside `<data>/ssh/keys` (mode 0700),
    and removed when the run ends. Leftovers from a crash are removed at startup. Key material has no `Debug`.

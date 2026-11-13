@@ -14,7 +14,6 @@ use coolify_db::audit::Actor;
 use coolify_db::instance_settings as settings;
 use coolify_db::records::Record;
 use coolify_db::servers::{self, ColumnValue};
-use coolify_jobs::notifications::Mail;
 use coolify_jobs::server_ops::proxy as proxy_ops;
 use coolify_jobs::server_ops::{Srv, version_compare, versions_data};
 use serde_json::{Map, Value, json};
@@ -32,7 +31,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/ui/settings/updates", get(updates).post(updates_action))
         .route("/ui/settings/upgrade", get(upgrade_state).post(upgrade))
         .route("/ui/settings/upgrade/status", get(upgrade_status))
-        .route("/ui/settings/email", get(email).post(email_action))
+        .route("/ui/settings/email", get(email::show).post(email::action))
         .route("/ui/settings/backup", get(backup).post(backup_action))
         .route("/ui/settings/backup/executions", get(backup_executions))
         .route_layer(from_fn_with_state(state, crate::session::ui_guard))
@@ -112,10 +111,12 @@ fn plain(state: &AppState, row: &Record, k: &str) -> Result<Value, ApiError> {
         && let Some(c) = v.as_str()
     {
         let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-        return enc
-            .decrypt_string(c)
-            .map(Value::String)
-            .map_err(|_| ApiError::Internal);
+        let text = enc.decrypt_string(c).map_err(|_| ApiError::Internal)?;
+        // `HasSmtpServers`: `smtp_servers` is an `encrypted:array` cast.
+        if k == settings::SMTP_SERVERS {
+            return Ok(serde_json::from_str(&text).unwrap_or(Value::Null));
+        }
+        return Ok(Value::String(text));
     }
     Ok(v)
 }
@@ -158,7 +159,14 @@ async fn save(
             json_value = Some(coolify_compat::php_json::encode(new));
             continue;
         }
-        let value = if settings::SECRET_COLUMNS.contains(col) {
+        let value = if *col == settings::SMTP_SERVERS {
+            // The `encrypted:array` cast: `encrypt(json_encode($value))`.
+            let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+            ColumnValue::Text(match new {
+                Value::Null => None,
+                list => Some(enc.encrypt_string(&coolify_compat::php_json::encode(list))),
+            })
+        } else if settings::SECRET_COLUMNS.contains(col) {
             let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
             ColumnValue::Text(new.as_str().map(|s| enc.encrypt_string(s)))
         } else {
@@ -415,10 +423,11 @@ fn general_rules(v: &Map<String, Value>) -> Vec<String> {
 /// `domainConflictKey`: scheme and trailing slash do not matter.
 fn conflict_key(domain: &str) -> String {
     let d = domain.trim().trim_end_matches('/').to_lowercase();
-    d.strip_prefix("https://")
-        .or_else(|| d.strip_prefix("http://"))
-        .unwrap_or(&d)
-        .to_owned()
+    coolify_jobs::applications::domains::conflict_key_without_port(
+        d.strip_prefix("https://")
+            .or_else(|| d.strip_prefix("http://"))
+            .unwrap_or(&d),
+    )
 }
 
 /// `checkDomainUsage(domain: $fqdn)`: applications and service applications of every team.
@@ -530,8 +539,58 @@ async fn dns_target(state: &AppState, row: &Record) -> Result<Option<String>, Ap
     ))
 }
 
+/// `ServerDnsAddresses::forServer($server)->addresses()` of the localhost server: the DNS target,
+/// and the public addresses of the instance for the IP versions the target is not.
+fn instance_server_addresses(target: Option<&str>, row: &Record) -> Vec<String> {
+    use std::net::IpAddr;
+    let ip_of = |v: Option<&str>| v.and_then(|a| a.parse::<IpAddr>().ok());
+    let text = |v: Option<&str>| v.map(str::to_owned);
+    let (mut v4, mut v6): (Option<String>, Option<String>) = (None, None);
+    match ip_of(target) {
+        Some(IpAddr::V4(_)) => v4 = text(target),
+        Some(IpAddr::V6(_)) => v6 = text(target),
+        None => {}
+    }
+    let public_v4 = row.get("public_ipv4").and_then(Value::as_str);
+    if v4.is_none() && matches!(ip_of(public_v4), Some(IpAddr::V4(_))) {
+        v4 = text(public_v4);
+    }
+    let public_v6 = row.get("public_ipv6").and_then(Value::as_str);
+    if v6.is_none() && matches!(ip_of(public_v6), Some(IpAddr::V6(_))) {
+        v6 = text(public_v6);
+    }
+    [v4, v6].into_iter().flatten().collect()
+}
+
+/// `CloudflareDnsProvider::sendsHostnameToAnotherServer($server, $host, $ip)` for the localhost
+/// server: whether the Cloudflare zone of its team sends the proxied host to another server.
+async fn cloudflare_sends_elsewhere(
+    state: &AppState,
+    host: &str,
+    ip: Option<&str>,
+    row: &Record,
+) -> bool {
+    let Some(enc) = state.encrypter.as_ref() else {
+        return false;
+    };
+    let team_id = match servers::find_by_id(&state.db, 0).await {
+        Ok(Some(server)) => Some(server.team_id),
+        _ => return false,
+    };
+    let dns = coolify_jobs::integrations::cloudflare::Dns {
+        db: &state.db,
+        enc,
+        now: state.now(),
+        source: "system",
+    };
+    let mut addresses: Vec<String> = ip.map(str::to_owned).into_iter().collect();
+    addresses.extend(instance_server_addresses(ip, row));
+    dns.sends_hostname_to_another_server(team_id, host, &addresses, Duration::from_secs(5))
+        .await
+}
+
 /// `validateDNSEntry($fqdn, $server)`.
-async fn validate_dns_entry(fqdn: &str, row: &Record, ip: Option<&str>) -> bool {
+async fn validate_dns_entry(state: &AppState, fqdn: &str, row: &Record, ip: Option<&str>) -> bool {
     let host = fqdn
         .split_once("://")
         .map_or(fqdn, |(_, r)| r)
@@ -555,11 +614,11 @@ async fn validate_dns_entry(fqdn: &str, row: &Record, ip: Option<&str>) -> bool 
     for server in servers_list.split(',') {
         let answers = crate::dns::query(server.trim(), host, want_v6).await;
         for a in answers {
-            if crate::ip::is_cloudflare_ip(a) {
-                return true;
-            }
             if ip.and_then(|i| i.parse::<std::net::IpAddr>().ok()) == Some(a) {
                 return true;
+            }
+            if crate::ip::is_cloudflare_ip(a) {
+                return !cloudflare_sends_elsewhere(state, host, ip, row).await;
             }
         }
     }
@@ -713,7 +772,7 @@ async fn general_action(
     let mut dns_error = None;
     if saved.get("is_dns_validation_enabled") == Some(&json!(true)) && !fqdn_text.is_empty() {
         let target = dns_target(&state, &saved).await?;
-        if !validate_dns_entry(&fqdn_text, &saved, target.as_deref()).await {
+        if !validate_dns_entry(&state, &fqdn_text, &saved, target.as_deref()).await {
             dns_error = Some(format!(
                 "Validating DNS failed.<br><br>{}<br><br>Check this <a target='_blank' class='underline dark:text-white' href='https://coolify.io/docs/knowledge-base/dns-configuration'>documentation</a> for further help.",
                 dns_guidance(target.as_deref())
@@ -912,10 +971,22 @@ fn valid_webhook_entry(entry: &str) -> bool {
     valid_hostname(entry)
 }
 
+/// `S3Storage::scopeS3Only()`: storages that serve presigned URLs. File downloads and avatars need
+/// them, so they only use S3 storages. A schema without the `type` column (before
+/// `add_type_to_s3_storages_table`) has only S3 storages.
+fn s3_only_sql(state: &AppState) -> &'static str {
+    if state.db.schema().has_column("s3_storages", "type") {
+        " AND type = 's3'"
+    } else {
+        ""
+    }
+}
+
 async fn storage_options(state: &AppState) -> Result<Vec<Value>, ApiError> {
-    let rows: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, name FROM s3_storages WHERE team_id = 0 AND is_usable = true ORDER BY name",
-    )
+    let rows: Vec<(i64, String)> = sqlx::query_as(&format!(
+        "SELECT id, name FROM s3_storages WHERE team_id = 0 AND is_usable = true{} ORDER BY name",
+        s3_only_sql(state)
+    ))
     .fetch_all(state.db.pool())
     .await
     .map_err(|_| ApiError::Internal)?;
@@ -1020,9 +1091,10 @@ async fn avatar_columns(
         .unwrap_or(choice)
         .parse::<i64>()
         .unwrap_or(0);
-    let found: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM s3_storages WHERE team_id = 0 AND is_usable = true AND id = $1",
-    )
+    let found: Option<i64> = sqlx::query_scalar(&format!(
+        "SELECT id FROM s3_storages WHERE team_id = 0 AND is_usable = true AND id = $1{}",
+        s3_only_sql(state)
+    ))
     .bind(id)
     .fetch_optional(state.db.pool())
     .await
@@ -1353,6 +1425,7 @@ async fn refresh_upgrade_state(state: &AppState) -> Result<Value, ApiError> {
             "latest_version": channel.custom_tag.clone().unwrap_or_default(),
             "current_version": current,
             "custom": true,
+            "update_channel": channel.channel,
         }));
     }
     let latest = latest_version(state, &channel);
@@ -1371,6 +1444,8 @@ async fn refresh_upgrade_state(state: &AppState) -> Result<Value, ApiError> {
         "available": newer && flag,
         "latest_version": latest,
         "current_version": current,
+        // `$updateChannel`: the upgrade modal names the channel.
+        "update_channel": channel.channel,
     }))
 }
 
@@ -1386,7 +1461,9 @@ async fn upgrade(State(state): State<AppState>, Extension(ctx): Extension<AuthCt
     let Some(jobs) = &state.jobs else {
         return Ok(server_error("Remote execution is not configured."));
     };
-    match coolify_jobs::updates::update_coolify(jobs, &state.version, true).await {
+    // An error that stops the upgrade before the script starts is also written to the status
+    // file (`CoolifyUpgradeStatus::writeError`).
+    match coolify_jobs::updates::upgrade_manually(jobs, &state.version).await {
         Ok(_) => Ok(ok(json!({})).into_response()),
         Err(message) => Ok(server_error(&message)),
     }
@@ -1677,392 +1754,7 @@ fn random_auto_update_frequency() -> String {
 
 // ---- SettingsEmail ----
 
-const EMAIL_KEYS: &[(&str, &str)] = &[
-    ("smtpEnabled", "smtp_enabled"),
-    ("smtpHost", "smtp_host"),
-    ("smtpPort", "smtp_port"),
-    ("smtpEncryption", "smtp_encryption"),
-    ("smtpUsername", "smtp_username"),
-    ("smtpPassword", "smtp_password"),
-    ("smtpTimeout", "smtp_timeout"),
-    ("smtpEhloDomain", "smtp_ehlo_domain"),
-    ("smtpFromAddress", "smtp_from_address"),
-    ("smtpFromName", "smtp_from_name"),
-    ("resendEnabled", "resend_enabled"),
-    ("resendApiKey", "resend_api_key"),
-];
-
-fn email_values(state: &AppState, row: &Record) -> Result<Value, ApiError> {
-    let mut out = Map::new();
-    for (prop, col) in EMAIL_KEYS {
-        let v = plain(state, row, col)?;
-        // `?string` properties: integers arrive as strings.
-        let v = match v {
-            Value::Number(n) => json!(n.to_string()),
-            other => other,
-        };
-        out.insert((*prop).to_owned(), v);
-    }
-    Ok(Value::Object(out))
-}
-
-/// `is_transactional_emails_enabled()`.
-fn transactional_enabled(row: &Record) -> bool {
-    row.get("smtp_enabled") == Some(&json!(true)) || row.get("resend_enabled") == Some(&json!(true))
-}
-
-async fn email(State(state): State<AppState>, Extension(ctx): Extension<AuthCtx>) -> ApiResult {
-    if !admin(&state, &ctx).await? {
-        return Ok(to_dashboard());
-    }
-    let row = settings::row(&state.db).await?;
-    let address: Option<String> = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
-        .bind(ctx.user_id)
-        .fetch_optional(state.db.pool())
-        .await
-        .map_err(|_| ApiError::Internal)?;
-    Ok(ok(json!({
-        "settings": email_values(&state, &row)?,
-        "can_send_test": transactional_enabled(&row) && ctx.is_team_admin(),
-        "test_email": address,
-    }))
-    .into_response())
-}
-
-/// The `#[Validate]` attributes of `SettingsEmail`, plus the `ValidHostname` pass of `syncData`.
-fn email_rules(v: &Map<String, Value>) -> Vec<String> {
-    let mut e = Vec::new();
-    if let Some(a) = text(v, "smtpFromAddress").filter(|s| !s.trim().is_empty())
-        && !crate::rules::is_email(a)
-    {
-        e.push("The smtp from address field must be a valid email address.".to_owned());
-    }
-    if let Some(p) = v.get("smtpPort").filter(|p| !blank(Some(p))) {
-        if !numeric(p) {
-            e.push("The smtp port field must be a number.".to_owned());
-        } else if as_f64(p) < 1.0 {
-            e.push("The smtp port field must be at least 1.".to_owned());
-        } else if as_f64(p) > 65535.0 {
-            e.push("The smtp port field must not be greater than 65535.".to_owned());
-        }
-    }
-    if let Some(enc) = text(v, "smtpEncryption").filter(|s| !s.trim().is_empty())
-        && !matches!(enc, "starttls" | "tls" | "none")
-    {
-        e.push("The selected smtp encryption is invalid.".to_owned());
-    }
-    if let Some(t) = v.get("smtpTimeout").filter(|p| !blank(Some(p)))
-        && !numeric(t)
-    {
-        e.push("The smtp timeout field must be a number.".to_owned());
-    }
-    if let Some(a) = text(v, "testEmailAddress").filter(|s| !s.trim().is_empty())
-        && !crate::rules::is_email(a)
-    {
-        e.push("The test email address field must be a valid email address.".to_owned());
-    }
-    e
-}
-
-fn hostname_rule(v: &Map<String, Value>, attr: &str) -> Option<String> {
-    let host = v.get("smtpEhloDomain")?;
-    if blank(Some(host)) {
-        return None;
-    }
-    crate::rules::valid_hostname(host).map(|m| m.replace(":attribute", attr))
-}
-
-/// `validateSmtpSettings`.
-fn smtp_rules(v: &Map<String, Value>) -> Vec<String> {
-    let mut e = Vec::new();
-    match text(v, "smtpFromAddress") {
-        None => e.push("From Address is required.".to_owned()),
-        Some(s) if s.trim().is_empty() => e.push("From Address is required.".to_owned()),
-        Some(a) if !crate::rules::is_email(a) => {
-            e.push("Please enter a valid email address.".to_owned());
-        }
-        _ => {}
-    }
-    if blank(v.get("smtpFromName")) {
-        e.push("From Name is required.".to_owned());
-    }
-    if blank(v.get("smtpHost")) {
-        e.push("SMTP Host is required.".to_owned());
-    }
-    match v.get("smtpPort") {
-        p if blank(p) => e.push("SMTP Port is required.".to_owned()),
-        Some(p) if !numeric(p) => e.push("SMTP Port must be a number.".to_owned()),
-        _ => {}
-    }
-    match text(v, "smtpEncryption") {
-        None | Some("") => e.push("Encryption type is required.".to_owned()),
-        Some(s) if !matches!(s, "starttls" | "tls" | "none") => {
-            e.push("The selected smtp encryption is invalid.".to_owned());
-        }
-        _ => {}
-    }
-    if let Some(t) = v.get("smtpTimeout").filter(|p| !blank(Some(p)))
-        && !numeric(t)
-    {
-        e.push("The smtp timeout field must be a number.".to_owned());
-    }
-    if let Some(m) = hostname_rule(v, "smtp ehlo domain") {
-        e.push(m);
-    }
-    e
-}
-
-/// `validateResendSettings`.
-fn resend_rules(v: &Map<String, Value>) -> Vec<String> {
-    let mut e = Vec::new();
-    if boolean(v, "resendEnabled") && blank(v.get("resendApiKey")) {
-        e.push("Resend API Key is required.".to_owned());
-    }
-    match text(v, "smtpFromAddress") {
-        None => e.push("From Address is required.".to_owned()),
-        Some(s) if s.trim().is_empty() => e.push("From Address is required.".to_owned()),
-        Some(a) if !crate::rules::is_email(a) => {
-            e.push("Please enter a valid email address.".to_owned());
-        }
-        _ => {}
-    }
-    if blank(v.get("smtpFromName")) {
-        e.push("From Name is required.".to_owned());
-    }
-    e
-}
-
-fn email_pair(v: &Map<String, Value>, prop: &str) -> Value {
-    if matches!(prop, "smtpEnabled" | "resendEnabled") {
-        json!(boolean(v, prop))
-    } else {
-        nullable(v, prop)
-    }
-}
-
-/// The columns of `EMAIL_KEYS` the action assigns, with `overrides` on top.
-fn email_pairs(
-    v: &Map<String, Value>,
-    props: &[&str],
-    overrides: &[(&'static str, Value)],
-) -> Vec<(&'static str, Value)> {
-    let mut out: Vec<(&'static str, Value)> = Vec::new();
-    for (prop, col) in EMAIL_KEYS {
-        if props.contains(prop) {
-            out.push((col, email_pair(v, prop)));
-        }
-    }
-    for (col, val) in overrides {
-        out.retain(|(c, _)| c != col);
-        out.push((col, val.clone()));
-    }
-    out
-}
-
-const ALL_EMAIL_PROPS: &[&str] = &[
-    "smtpEnabled",
-    "smtpHost",
-    "smtpPort",
-    "smtpEncryption",
-    "smtpUsername",
-    "smtpPassword",
-    "smtpTimeout",
-    "smtpEhloDomain",
-    "smtpFromAddress",
-    "smtpFromName",
-    "resendEnabled",
-    "resendApiKey",
-];
-const SMTP_PROPS: &[&str] = &[
-    "smtpEnabled",
-    "smtpHost",
-    "smtpPort",
-    "smtpEncryption",
-    "smtpUsername",
-    "smtpPassword",
-    "smtpTimeout",
-    "smtpEhloDomain",
-    "smtpFromAddress",
-    "smtpFromName",
-];
-const RESEND_PROPS: &[&str] = &[
-    "resendEnabled",
-    "resendApiKey",
-    "smtpFromAddress",
-    "smtpFromName",
-];
-
-#[allow(clippy::too_many_lines)]
-async fn email_action(
-    State(state): State<AppState>,
-    Extension(ctx): Extension<AuthCtx>,
-    meta: Meta,
-    Json(body): Json<Action>,
-) -> ApiResult {
-    if !admin(&state, &ctx).await? {
-        return Ok(unauthorized());
-    }
-    let mut v = body.values;
-    // Livewire does not hydrate a typed property from null: it keeps its default, here `'starttls'`.
-    if v.get("smtpEncryption").is_none_or(Value::is_null) {
-        v.insert("smtpEncryption".into(), json!("starttls"));
-    }
-    let saved = settings::row(&state.db).await?;
-    // Sent back on failure: `syncData()` or the property reset of the catch.
-    let reset = |row: &Record, m: String, keys: Vec<(&str, Value)>| -> ApiResult {
-        let mut res = json!({"error": m, "settings": email_values(&state, row)?});
-        for (k, val) in keys {
-            res["overrides"][k] = val;
-        }
-        Ok(ok(res).into_response())
-    };
-    let run_save = |pairs: Vec<(&'static str, Value)>| {
-        let state = state.clone();
-        let ctx = ctx.clone();
-        let meta = meta.clone();
-        async move {
-            let (changed, _) = save(&state, &pairs).await?;
-            // `auditChangedFields` hides nothing here, but the password and key stay out of the
-            // log only by being field names, as upstream.
-            audit_instance(
-                &state,
-                &ctx,
-                &meta,
-                "ui.settings.email.updated",
-                "email",
-                changed,
-            )
-            .await;
-            Ok::<_, ApiError>(())
-        }
-    };
-    #[allow(clippy::needless_late_init)] // the arms return early with their own responses
-    let message: Option<&str>;
-    match body.action.as_str() {
-        "submit" => {
-            let mut e = email_rules(&v);
-            if e.is_empty()
-                && let Some(m) = hostname_rule(&v, "smtp ehlo domain")
-            {
-                e.push(m);
-            }
-            if let Some(m) = summarize(&e) {
-                return Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, m));
-            }
-            run_save(email_pairs(&v, ALL_EMAIL_PROPS, &[])).await?;
-            message = Some("Transactional email settings updated.");
-        }
-        "instantSmtp" => {
-            // `instantSave('SMTP')`: `submitSmtp`, whose own catch keeps the page going, then
-            // Resend off and a second save.
-            let e = smtp_rules(&v);
-            if let Some(m) = summarize(&e) {
-                // `submitSmtp` swallows the error with a toast and turns SMTP off in the page;
-                // the outer save then writes Resend off and the rest of `$settings` unchanged.
-                run_save(vec![("resend_enabled", json!(false))]).await?;
-                let fresh = settings::row(&state.db).await?;
-                return reset(
-                    &fresh,
-                    m,
-                    vec![
-                        ("smtpEnabled", json!(false)),
-                        ("resendEnabled", json!(false)),
-                    ],
-                );
-            }
-            let on = boolean(&v, "smtpEnabled");
-            let mut pairs = email_pairs(&v, SMTP_PROPS, &[]);
-            if on {
-                pairs.push(("resend_enabled", json!(false)));
-            }
-            run_save(pairs).await?;
-            run_save(vec![("resend_enabled", json!(false))]).await?;
-            v.insert("resendEnabled".into(), json!(false));
-            message = Some("SMTP settings updated.");
-        }
-        "instantResend" => {
-            let e = resend_rules(&v);
-            if let Some(m) = summarize(&e) {
-                run_save(vec![("smtp_enabled", json!(false))]).await?;
-                let fresh = settings::row(&state.db).await?;
-                return reset(
-                    &fresh,
-                    m,
-                    vec![
-                        ("resendEnabled", json!(false)),
-                        ("smtpEnabled", json!(false)),
-                    ],
-                );
-            }
-            let on = boolean(&v, "resendEnabled");
-            let mut pairs = email_pairs(&v, RESEND_PROPS, &[]);
-            if on {
-                pairs.push(("smtp_enabled", json!(false)));
-            }
-            run_save(pairs).await?;
-            run_save(vec![("smtp_enabled", json!(false))]).await?;
-            v.insert("smtpEnabled".into(), json!(false));
-            message = Some("Resend settings updated.");
-        }
-        "test" => {
-            // `sendTestEmail`.
-            let mut e = Vec::new();
-            match text(&v, "testEmailAddress") {
-                None => e.push("Test email address is required.".to_owned()),
-                Some(s) if s.trim().is_empty() => {
-                    e.push("Test email address is required.".to_owned());
-                }
-                Some(a) if !crate::rules::is_email(a) => {
-                    e.push("Please enter a valid email address.".to_owned());
-                }
-                _ => {}
-            }
-            match text(&v, "smtpFromAddress") {
-                None => e.push("From Address is required.".to_owned()),
-                Some(s) if s.trim().is_empty() => e.push("From Address is required.".to_owned()),
-                Some(a) if !crate::rules::is_email(a) => {
-                    e.push("Please enter a valid email address.".to_owned());
-                }
-                _ => {}
-            }
-            if blank(v.get("smtpFromName")) {
-                e.push("From Name is required.".to_owned());
-            }
-            if let Some(m) = summarize(&e) {
-                return Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, m));
-            }
-            run_save(email_pairs(&v, &["smtpFromAddress", "smtpFromName"], &[])).await?;
-            // `RateLimiter::attempt('test-email:'.$team->id, 0, ..., 10)`.
-            let key = format!("test-email:{}", ctx.team_id);
-            if crate::rules::throttle(&key, 1, Duration::from_secs(10)).is_some() {
-                return Ok(server_error("Too many messages sent!"));
-            }
-            let to = text(&v, "testEmailAddress").unwrap_or_default().to_owned();
-            if let Err(m) = coolify_jobs::notifications::send_transactional(
-                &state.db,
-                state.encrypter.as_ref(),
-                &to,
-                Mail::Test,
-            )
-            .await
-            {
-                return Ok(server_error(m));
-            }
-            message = Some("Test Email sent.");
-        }
-        _ => return Err(ApiError::Message(StatusCode::NOT_FOUND, "Not found.")),
-    }
-    let _ = saved;
-    let row = settings::row(&state.db).await?;
-    let mut res = json!({
-        "settings": email_values(&state, &row)?,
-        "can_send_test": transactional_enabled(&row) && ctx.is_team_admin(),
-    });
-    if let Some(m) = message {
-        res["message"] = json!(m);
-    }
-    Ok(ok(res).into_response())
-}
+mod email;
 
 // ---- SettingsBackup ----
 
@@ -2368,6 +2060,14 @@ fn backup_rules(v: &Map<String, Value>) -> Vec<String> {
     e
 }
 
+/// `$backup->newS3StorageIds($storageIds)->isNotEmpty()` (v4.7.5 `HasS3Destinations`): a selected
+/// storage is neither a destination of the schedule nor its legacy `s3_storage_id`.
+fn adds_s3_storage(wanted: &[i64], current: &[i64], legacy: Option<i64>) -> bool {
+    wanted
+        .iter()
+        .any(|id| *id != 0 && !current.contains(id) && legacy != Some(*id))
+}
+
 /// `BackupEdit::syncData(true)`, `customValidate`, `syncS3Storages` and the audit event.
 pub(crate) async fn save_backup(
     state: &AppState,
@@ -2423,6 +2123,23 @@ pub(crate) async fn save_backup(
         && let Err(m) = crate::routes::database_backups::validate_databases_input(s)
     {
         return Ok(Err(m));
+    }
+    // v4.7.5 `BackupEdit::submit`: a storage that is not a destination of the schedule yet
+    // (`newS3StorageIds()`) needs write access on the whole team of the schedule, also for the
+    // instance backup (its team comes from the schedule, the instance database has no environment).
+    // The access of `ctx` is that of its current team. The instance backup page is open only to an
+    // owner or admin of the root team, and they have write access on the whole root team.
+    if adds_s3_storage(
+        &wanted,
+        &selected_now,
+        b.get("s3_storage_id").and_then(Value::as_i64),
+    ) && ctx.team_id == team_id
+        && !ctx.can_use_team_credentials()
+    {
+        return Ok(Err(
+            "You need write access on the whole team to add an S3 storage to this backup."
+                .to_owned(),
+        ));
     }
     let mut changed: Vec<String> = Vec::new();
     let mark = |k: &str, new: &Value, changed: &mut Vec<String>| {
@@ -2753,6 +2470,36 @@ async fn backup_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `ServerDnsAddresses::addresses()` of the instance server: the target, then the public
+    /// address of the other IP version.
+    #[test]
+    fn instance_server_addresses_fill_the_other_ip_version() {
+        let row: Record = match json!({"public_ipv4": "203.0.113.9", "public_ipv6": "2001:db8::9"})
+        {
+            Value::Object(m) => m,
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            instance_server_addresses(Some("198.51.100.1"), &row),
+            vec!["198.51.100.1".to_owned(), "2001:db8::9".to_owned()]
+        );
+        assert_eq!(
+            instance_server_addresses(None, &row),
+            vec!["203.0.113.9".to_owned(), "2001:db8::9".to_owned()]
+        );
+        assert!(instance_server_addresses(Some("host.example.com"), &Record::new()).is_empty());
+    }
+
+    // `newS3StorageIds()`: only a storage that is not a destination yet needs team-wide write.
+    #[test]
+    fn a_new_backup_storage_is_one_the_schedule_does_not_use() {
+        assert!(!adds_s3_storage(&[3, 5], &[3, 5], None));
+        assert!(!adds_s3_storage(&[3, 7], &[3], Some(7)));
+        assert!(adds_s3_storage(&[3, 9], &[3], Some(7)));
+        assert!(!adds_s3_storage(&[], &[3], None));
+        assert!(!adds_s3_storage(&[0], &[], None));
+    }
 
     #[test]
     fn allowlist_dedup() {

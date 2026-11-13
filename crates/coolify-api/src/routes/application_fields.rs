@@ -9,7 +9,6 @@ use coolify_compat::Encrypter;
 use coolify_compat::yaml::PhpValue;
 use coolify_db::applications::{self as apps, ApplicationRow};
 use coolify_db::servers::{self, ColumnValue};
-use coolify_domain::naming::strip_tags;
 use coolify_jobs::applications::domains;
 use coolify_jobs::applications::labels::{self, LabelInput};
 use serde_json::{Map, Value, json};
@@ -329,7 +328,9 @@ pub(super) fn fill_columns(
     if input.has("description") {
         columns.push((
             "description",
-            ColumnValue::Text(Some(strip_tags(input.str("description")))),
+            ColumnValue::Text(coolify_domain::naming::strip_tags_nullable(
+                input.str("description"),
+            )),
         ));
     }
     for key in FILL_TEXT {
@@ -442,9 +443,12 @@ const SETTING_FIELDS: &[(&str, bool)] = &[
     ("is_git_submodules_enabled", true),
     ("is_git_lfs_enabled", true),
     ("is_git_shallow_clone_enabled", true),
+    ("is_auto_cancel_queued_deployments_enabled", true),
+    ("is_auto_cancel_building_deployments_enabled", true),
     ("disable_build_cache", true),
     ("inject_build_args_to_dockerfile", true),
     ("include_source_commit_in_build", true),
+    ("include_network_hosts_in_build", true),
     ("is_env_sorting_enabled", true),
     ("redact_all_env_values_in_logs", true),
     ("include_coolify_default_variables", true),
@@ -465,6 +469,7 @@ const SETTING_FIELDS: &[(&str, bool)] = &[
     ("gpu_device_ids", false),
     ("gpu_options", false),
     ("is_consistent_container_name_enabled", true),
+    ("is_image_scan_enabled", true),
     ("custom_internal_name", false),
     ("custom_container_name_prefix", false),
 ];
@@ -790,13 +795,15 @@ pub(super) fn noindex_item_rules(v: &Value) -> Vec<(String, String)> {
 fn conflict_key(domain: &str) -> String {
     let d = domain.strip_suffix('/').unwrap_or(domain);
     let lower = d.to_ascii_lowercase();
-    if lower.starts_with("https://") {
-        d[8..].to_owned()
+    let d = if lower.starts_with("https://") {
+        &d[8..]
     } else if lower.starts_with("http://") {
-        d[7..].to_owned()
+        &d[7..]
     } else {
-        d.to_owned()
-    }
+        d
+    };
+    // The URL port is the container port. The public address does not include it.
+    coolify_jobs::applications::domains::conflict_key_without_port(d)
 }
 
 /// `checkIfDomainIsAlreadyUsedViaAPI($domains, $teamId, $uuid)`: the conflicts, in upstream order.
@@ -1117,84 +1124,40 @@ pub(super) fn proxy_should_run(server: &servers::ServerRow) -> bool {
     proxy_type != "NONE" && !crate::routes::servers::effective_role_is_build(&settings)
 }
 
-/// `parseDockerfileInterval()`.
-fn dockerfile_interval(something: &str) -> i64 {
-    let value: String = something.chars().filter(char::is_ascii_digit).collect();
-    let unit: String = something.chars().filter(|c| !c.is_ascii_digit()).collect();
-    let n: f64 = value.parse().unwrap_or(0.0);
-    (match unit.as_str() {
-        "ns" => n / 1_000_000_000.0,
-        "us" | "µs" => n / 1_000_000.0,
-        "ms" => n / 1000.0,
-        "m" => n * 60.0,
-        "h" => n * 3600.0,
-        _ => n,
-    }) as i64
-}
-
-/// `Application::parseHealthcheckFromDockerfile($dockerfile)`: the columns it saves.
+/// `Application::parseHealthcheckFromDockerfile($dockerfile)`: the columns it saves. Only the
+/// HEALTHCHECK of the stage that is built (`dockerfile_target_build`, else the last stage)
+/// counts, and its options are read like Docker reads them (v4.7).
 pub(crate) fn healthcheck_from_dockerfile(a: &ApplicationRow, dockerfile: Option<&str>) -> Columns {
-    let trim = crate::routes::applications::php_trim;
-    let text = trim(dockerfile.unwrap_or_default());
-    let has = text.contains("HEALTHCHECK");
+    use coolify_jobs::applications::dockerfile_healthcheck as hc;
     let mut columns: Columns = Vec::new();
-    if !has && a.bool("custom_healthcheck_found") {
-        columns.push(("custom_healthcheck_found", ColumnValue::Bool(false)));
-        columns.push(("health_check_interval", ColumnValue::Int(5)));
-        columns.push(("health_check_timeout", ColumnValue::Int(5)));
-        columns.push(("health_check_retries", ColumnValue::Int(10)));
-        columns.push(("health_check_start_period", ColumnValue::Int(5)));
-        return columns;
-    }
-    if !has || a.bool("health_check_enabled") {
-        return columns;
-    }
-    let trim_cont = |s: &str| s.trim_matches(['\\', ' ']).to_owned();
-    let mut command: Option<String> = None;
-    for line in text.split('\n') {
-        let line = trim(line);
-        if line.starts_with("HEALTHCHECK") {
-            command
-                .get_or_insert_with(String::new)
-                .push_str(&trim_cont(&line));
-            continue;
+    let instruction = hc::dockerfile_healthcheck_instruction(
+        dockerfile.unwrap_or_default(),
+        a.str("dockerfile_target_build"),
+    );
+    let Some(instruction) = instruction else {
+        if a.bool("custom_healthcheck_found") {
+            columns.push(("custom_healthcheck_found", ColumnValue::Bool(false)));
+            columns.push(("health_check_interval", ColumnValue::Int(5)));
+            columns.push(("health_check_timeout", ColumnValue::Int(5)));
+            columns.push(("health_check_retries", ColumnValue::Int(10)));
+            columns.push(("health_check_start_period", ColumnValue::Int(5)));
         }
-        if let Some(c) = command.as_mut() {
-            if line.contains('\\') {
-                c.push(' ');
-                c.push_str(&trim_cont(&line));
-            } else if !c.is_empty() {
-                c.push(' ');
-                c.push_str(&line);
-                break;
-            }
-        }
-    }
-    let Some(command) = command.filter(|c| !c.is_empty()) else {
         return columns;
     };
-    let capture = |pattern: &str| {
-        regex::Regex::new(pattern)
-            .ok()
-            .and_then(|r| r.captures(&command).map(|c| c[1].to_owned()))
-    };
-    for (pattern, col) in [
-        (r"--interval=([0-9]+[a-zµ]*)", "health_check_interval"),
-        (r"--timeout=([0-9]+[a-zµ]*)", "health_check_timeout"),
-        (
-            r"--start-period=([0-9]+[a-zµ]*)",
-            "health_check_start_period",
-        ),
+    if a.bool("health_check_enabled") {
+        return columns;
+    }
+    // An option that is missing or not valid keeps the current value.
+    let options = hc::dockerfile_healthcheck_options(&instruction);
+    for (col, value) in [
+        ("health_check_interval", options.interval),
+        ("health_check_timeout", options.timeout),
+        ("health_check_start_period", options.start_period),
+        ("health_check_retries", options.retries),
     ] {
-        if let Some(v) = capture(pattern) {
-            columns.push((col, ColumnValue::Int(dockerfile_interval(&v))));
+        if let Some(v) = value {
+            columns.push((col, ColumnValue::Int(v)));
         }
-    }
-    if let Some(v) = capture(r"--retries=(\d+)") {
-        columns.push((
-            "health_check_retries",
-            ColumnValue::Int(v.parse().unwrap_or(0)),
-        ));
     }
     columns.push(("custom_healthcheck_found", ColumnValue::Bool(true)));
     columns

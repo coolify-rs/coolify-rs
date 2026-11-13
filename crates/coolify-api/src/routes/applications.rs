@@ -17,7 +17,7 @@ use coolify_db::records::{APPLICATION, APPLICATION_DEPLOYMENT_QUEUE, APPLICATION
 use coolify_db::servers::{self, ColumnValue};
 use coolify_domain::naming::strip_tags;
 use coolify_jobs::applications::domains::{self, UrlParts};
-use coolify_jobs::applications::queue::{QueueOptions, Queued};
+use coolify_jobs::applications::queue::{CancelPreviousDeployments, QueueOptions, Queued};
 use serde_json::{Map, Value, json};
 
 use crate::auth::AuthCtx;
@@ -184,8 +184,12 @@ async fn additional_servers(
             continue;
         };
         let expose = !model && ctx.can_read_sensitive;
-        let mut v =
-            super::databases::nested_server_with(state, &server, expose, ctx.can_read_sensitive)?;
+        let mut v = super::databases::nested_server_with(
+            state,
+            &server,
+            expose && ctx.can_read_server_sensitive(),
+            ctx.can_read_server_sensitive(),
+        )?;
         if let Some(map) = v.as_object_mut() {
             map.insert(
                 "pivot".into(),
@@ -323,7 +327,12 @@ pub(crate) async fn present_preloaded(
         let mut dest = dest.clone();
         if let Some(s) = &server {
             let nested = if model {
-                super::databases::nested_server_with(state, s, false, ctx.can_read_sensitive)?
+                super::databases::nested_server_with(
+                    state,
+                    s,
+                    false,
+                    ctx.can_read_server_sensitive(),
+                )?
             } else {
                 nested_server(state, ctx, s)?
             };
@@ -451,6 +460,7 @@ const ALLOWED: &[&str] = &[
     "manual_webhook_secret_gitea",
     "redirect",
     "github_app_uuid",
+    "gitea_app_uuid",
     "instant_deploy",
     "dockerfile",
     "dockerfile_location",
@@ -484,9 +494,12 @@ const ALLOWED: &[&str] = &[
     "is_git_submodules_enabled",
     "is_git_lfs_enabled",
     "is_git_shallow_clone_enabled",
+    "is_auto_cancel_queued_deployments_enabled",
+    "is_auto_cancel_building_deployments_enabled",
     "disable_build_cache",
     "inject_build_args_to_dockerfile",
     "include_source_commit_in_build",
+    "include_network_hosts_in_build",
     "is_env_sorting_enabled",
     "redact_all_env_values_in_logs",
     "include_coolify_default_variables",
@@ -507,6 +520,7 @@ const ALLOWED: &[&str] = &[
     "gpu_device_ids",
     "gpu_options",
     "is_consistent_container_name_enabled",
+    "is_image_scan_enabled",
     "custom_internal_name",
     "custom_container_name_prefix",
 ];
@@ -542,6 +556,25 @@ pub(crate) static DOCKER_IMAGE_TAG: std::sync::LazyLock<regex::Regex> = std::syn
             .unwrap_or_else(|_| unreachable!())
     },
 );
+
+/// `CancelPreviousDeployments::tryFrom($request->string('cancel_previous', 'none')->trim()->lower())`
+/// of `DeployController::deploy` (4.7.5): the canonical value, or `None` for anything else.
+/// A missing, null or blank parameter is `none`.
+pub(crate) fn parse_cancel_previous(raw: Option<&str>) -> Option<&'static str> {
+    let value = raw.map(|v| php_trim(v).to_lowercase());
+    match value.as_deref() {
+        None | Some("") | Some("none") => Some("none"),
+        Some("queued") => Some("queued"),
+        Some("building") => Some("building"),
+        Some(_) => None,
+    }
+}
+
+/// `$changesPreview` of `DeployController::by_uuids` (4.7.5): a docker tag that is not the one
+/// the preview has (or a tag for a preview that does not exist yet).
+pub(crate) fn deploy_changes_preview(docker_tag: Option<&str>, stored_tag: Option<&str>) -> bool {
+    docker_tag.is_some_and(|t| Some(t) != stored_tag)
+}
 
 /// `ValidationPatterns::isValidDockerImageTag($value, $allowVariables)`.
 pub(crate) fn is_valid_docker_image_tag(value: &str, allow_variables: bool) -> bool {
@@ -798,9 +831,12 @@ pub(super) fn shared_rules(overrides: Vec<Field>) -> Vec<Field> {
         "is_git_submodules_enabled",
         "is_git_lfs_enabled",
         "is_git_shallow_clone_enabled",
+        "is_auto_cancel_queued_deployments_enabled",
+        "is_auto_cancel_building_deployments_enabled",
         "disable_build_cache",
         "inject_build_args_to_dockerfile",
         "include_source_commit_in_build",
+        "include_network_hosts_in_build",
         "is_env_sorting_enabled",
         "redact_all_env_values_in_logs",
         "include_coolify_default_variables",
@@ -844,6 +880,7 @@ pub(super) fn shared_rules(overrides: Vec<Field>) -> Vec<Field> {
             ],
         ),
         boolean("is_consistent_container_name_enabled"),
+        boolean("is_image_scan_enabled"),
         field(
             "custom_internal_name",
             vec![
@@ -1094,8 +1131,13 @@ async fn create_prologue(
     let present_keys: Vec<&str> = input.keys().map(String::as_str).collect();
     // Base validation, with the extra-field messages appended.
     let base = [
-        field("name", vec![Rule::String, Rule::Max(255)]),
-        field("description", vec![Rule::String, Rule::Nullable]),
+        // `ValidationPatterns::nameRules(required: false, nullable: false)` and
+        // `descriptionRules()` (4.7.5: names and descriptions validated like the UI).
+        field("name", crate::validation::patterns::present_name_rules()),
+        field(
+            "description",
+            crate::validation::patterns::description_rules(),
+        ),
         field("project_uuid", vec![Rule::String, Rule::Required]),
         field("environment_name", vec![Rule::String, Rule::Nullable]),
         field("environment_uuid", vec![Rule::String, Rule::Nullable]),
@@ -1113,9 +1155,12 @@ async fn create_prologue(
         field("autogenerate_domain", vec![Rule::Boolean]),
         field("tags", vec![Rule::Array, Rule::Nullable]),
     ];
-    if let Err(ApiError::Validation(mut errors)) =
-        validate(&input, &base, CUSTOM_API_MESSAGES, &present_keys)
-    {
+    if let Err(ApiError::Validation(mut errors)) = validate(
+        &input,
+        &base,
+        crate::validation::patterns::API_COMBINED_MESSAGES,
+        &present_keys,
+    ) {
         crate::routes::resource_tags::tag_item_errors(&input, &mut errors);
         extra_field_errors(&input, &mut errors, ALLOWED);
         return Err(ApiError::Validation(errors));
@@ -1170,8 +1215,10 @@ async fn create_prologue(
     let autogenerate = (!input.has("autogenerate_domain")
         || input_bool(&input, "autogenerate_domain"))
         && input.str("build_pack") != Some("dockercompose");
-    let requested_build_pack = if matches!(kind, "public" | "private-gh-app" | "private-deploy-key")
-    {
+    let requested_build_pack = if matches!(
+        kind,
+        "public" | "private-gh-app" | "private-gitea-app" | "private-deploy-key"
+    ) {
         input.str("build_pack")
     } else {
         Some(kind)
@@ -1224,6 +1271,8 @@ async fn create_prologue(
         StatusCode::NOT_FOUND,
         "Server not found.",
     ))?;
+    // `$this->authorize('placeResource', $server)` (4.7.5).
+    crate::place_resource::authorize(state, ctx, &server).await?;
     let server_settings = server.settings.clone().unwrap_or_default();
     if crate::routes::servers::effective_role_is_build(&server_settings) {
         let mut m = Map::new();
@@ -1661,6 +1710,14 @@ async fn finish_create(
         ctx.team_id,
     )
     .await?;
+    // 4.7.5: `ResourceDnsRecords::queueAutomaticRecords($application, [])`.
+    crate::routes::dns_records::queue_automatic_records(
+        state,
+        crate::routes::dns_records::Kind::Application,
+        id,
+        &[],
+    )
+    .await;
     if cx.instant {
         let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
         let result = jobs
@@ -1894,6 +1951,18 @@ pub async fn create_private_github_app(
     create_git(&state, &ctx, (&headers, &uri, &body), GitKind::GithubApp).await
 }
 
+/// `POST /applications/private-gitea-app` (`create_private_gitea_app_application()`,
+/// `create_application($request, 'private-gitea-app')`).
+pub async fn create_private_gitea_app(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> ApiResult {
+    create_git(&state, &ctx, (&headers, &uri, &body), GitKind::GiteaApp).await
+}
+
 /// `POST /applications/private-deploy-key` (`create_application($request, 'private-deploy-key')`).
 pub async fn create_private_deploy_key(
     State(state): State<AppState>,
@@ -1905,11 +1974,12 @@ pub async fn create_private_deploy_key(
     create_git(&state, &ctx, (&headers, &uri, &body), GitKind::DeployKey).await
 }
 
-/// The three git branches of `create_application()`.
+/// The four git branches of `create_application()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GitKind {
     Public,
     GithubApp,
+    GiteaApp,
     DeployKey,
 }
 
@@ -1919,10 +1989,20 @@ impl GitKind {
         match self {
             Self::Public => "public",
             Self::GithubApp => "private-gh-app",
+            Self::GiteaApp => "private-gitea-app",
             Self::DeployKey => "private-deploy-key",
         }
     }
+
+    /// `in_array($type, ['private-gh-app', 'private-gitea-app'], true)`: one branch upstream, with
+    /// `$sourceUuidField` as the only difference in validation.
+    fn is_source_app(self) -> bool {
+        matches!(self, Self::GithubApp | Self::GiteaApp)
+    }
 }
+
+/// `$giteaApp->getMorphClass()`.
+const GITEA_APP_MORPH: &str = r"App\Models\GiteaApp";
 
 /// `gitRepositorySlug()`: `owner/repo` of a GitHub URL, SSH URL or slug.
 fn git_repository_slug(repository: &str) -> String {
@@ -1947,7 +2027,7 @@ async fn create_git(
     } else {
         vec![Rule::String, Rule::Regex(&PORTS_EXPOSES), Rule::Nullable]
     };
-    let repository_rule = if kind == GitKind::GithubApp {
+    let repository_rule = if kind.is_source_app() {
         vec![Rule::String, Rule::Required]
     } else {
         vec![
@@ -1957,7 +2037,7 @@ async fn create_git(
         ]
     };
     // The rule objects throw a TypeError on a non-empty array.
-    if (kind != GitKind::GithubApp && git_urls::rule_throws(cx.input.get("git_repository")))
+    if (!kind.is_source_app() && git_urls::rule_throws(cx.input.get("git_repository")))
         || git_urls::rule_throws(cx.input.get("git_branch"))
     {
         return Err(SERVER_ERROR);
@@ -1980,6 +2060,9 @@ async fn create_git(
         GitKind::Public => {}
         GitKind::GithubApp => {
             overrides.push(field("github_app_uuid", vec![Rule::String, Rule::Required]))
+        }
+        GitKind::GiteaApp => {
+            overrides.push(field("gitea_app_uuid", vec![Rule::String, Rule::Required]))
         }
         GitKind::DeployKey => overrides.push(field(
             "private_key_uuid",
@@ -2030,7 +2113,7 @@ async fn create_git(
     }
     // The public branch checks the domains before it reads the repository URL, the others after
     // they found the GitHub App or the key.
-    let duplicate_suffix = if kind == GitKind::GithubApp { " " } else { "" };
+    let duplicate_suffix = if kind.is_source_app() { " " } else { "" };
     if kind == GitKind::Public
         && let Some(early) =
             fields::check_compose_domain_urls(state, ctx.team_id, &cx.input, duplicate_suffix, None)
@@ -2105,6 +2188,8 @@ async fn create_git(
             }
         }
         GitKind::GithubApp => {
+            // 4.7.5 (8011d0d6a): a Git source is a team credential.
+            ctx.authorize_team_credentials()?;
             let github_app = apps::github_app_for_team(
                 &state.db,
                 ctx.team_id,
@@ -2176,6 +2261,44 @@ async fn create_git(
                     .map_or(ColumnValue::Text(None), ColumnValue::Int),
             ));
         }
+        GitKind::GiteaApp => {
+            // 4.7.5 (8011d0d6a): a Git source is a team credential.
+            ctx.authorize_team_credentials()?;
+            // `giteaAppRepository($this->teamSourceByUuid(GiteaApp::class, $request->gitea_app_uuid, $teamId), $request->git_repository)`.
+            let source = super::gitea_apps::team_source_by_uuid(
+                state,
+                "gitea_apps",
+                cx.input.str("gitea_app_uuid").unwrap_or_default(),
+                ctx.team_id,
+            )
+            .await?;
+            let found =
+                match super::gitea_apps::gitea_app_repository(state, source, &repository).await {
+                    Ok(found) => found,
+                    Err(response) => return Ok(response),
+                };
+            git_repository = found.repository;
+            source_columns.push((
+                "source_type",
+                ColumnValue::Text(Some(GITEA_APP_MORPH.into())),
+            ));
+            source_columns.push((
+                "source_id",
+                ColumnValue::Int(
+                    found
+                        .source
+                        .get("id")
+                        .and_then(Value::as_i64)
+                        .unwrap_or_default(),
+                ),
+            ));
+            source_columns.push((
+                "repository_project_id",
+                found
+                    .repository_project_id
+                    .map_or(ColumnValue::Text(None), ColumnValue::Int),
+            ));
+        }
         GitKind::DeployKey => {
             let key = coolify_db::private_keys::find(
                 &state.db,
@@ -2187,6 +2310,8 @@ async fn create_git(
                 StatusCode::NOT_FOUND,
                 "Private Key not found.",
             ))?;
+            // 4.7.5 (8011d0d6a): a private key is a team credential.
+            ctx.authorize_team_credentials()?;
             source_columns.push(("private_key_id", ColumnValue::Int(key.id)));
         }
     }
@@ -2432,7 +2557,7 @@ async fn deployment_application(
     ctx: &AuthCtx,
     a: &ApplicationRow,
 ) -> Result<Value, ApiError> {
-    model_array(state, a, true, ctx.can_read_sensitive).await
+    model_array(state, a, true, ctx.can_read_server_sensitive()).await
 }
 
 /// `$application->toArray()`: the model with its `$hidden`, accessors and the relations its
@@ -2625,6 +2750,11 @@ pub async fn cancel_deployment(
     if !matches!(prev.as_deref(), Some("queued" | "in_progress")) {
         return Ok(message(prev.as_deref().unwrap_or_default()));
     }
+    // `SyncGithubDeploymentJob::dispatchFor($deployment)`: the status update above fires no
+    // model event.
+    if let Some(jobs) = &state.jobs {
+        jobs.sync_github_deployment(d.id);
+    }
     let entry = |out: &str| apps::LogEntry {
         command: None,
         output: out.to_owned(),
@@ -2668,6 +2798,7 @@ pub(crate) async fn deploy_application(
     meta: &crate::audit::Meta,
     a: &ApplicationRow,
     force: bool,
+    cancel_previous: CancelPreviousDeployments,
 ) -> Result<Deployed, ApiError> {
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     deployable(state, a).await?;
@@ -2679,6 +2810,7 @@ pub(crate) async fn deploy_application(
             QueueOptions {
                 force_rebuild: force,
                 is_api: true,
+                cancel_previous: Some(cancel_previous),
                 ..Default::default()
             },
         )
@@ -2729,6 +2861,7 @@ async fn deploy_by_tags(
     meta: &crate::audit::Meta,
     tags: &str,
     force: bool,
+    cancel_previous: CancelPreviousDeployments,
 ) -> ApiResult {
     use coolify_db::tag_pages;
     let names: Vec<&str> = tags.split(',').filter(|t| !t.is_empty()).collect();
@@ -2764,7 +2897,7 @@ async fn deploy_by_tags(
                 messages.push(json!("Unauthorized to deploy this application."));
                 continue;
             }
-            match deploy_application(state, ctx, meta, &a, force).await? {
+            match deploy_application(state, ctx, meta, &a, force, cancel_previous).await? {
                 Deployed::QueueFull(m) => {
                     let mut resp = PhpJson(StatusCode::TOO_MANY_REQUESTS, json!({"message": m}))
                         .into_response();
@@ -2846,6 +2979,12 @@ pub async fn deploy(
         .map(|v| v.trim().to_owned())
         .filter(|v| !v.is_empty());
     let bad = |m: &'static str| Err(ApiError::Message(StatusCode::BAD_REQUEST, m));
+    // 4.7.5: `CancelPreviousDeployments::tryFrom(...)` of `cancel_previous` (default `none`).
+    let Some(cancel_previous) = parse_cancel_previous(s("cancel_previous").as_deref())
+        .and_then(CancelPreviousDeployments::parse)
+    else {
+        return bad("cancel_previous must be one of: none, queued, building.");
+    };
     if pr > 2_147_483_647 {
         return bad("pull_request_id must be between 1 and 2147483647.");
     }
@@ -2855,6 +2994,15 @@ pub async fn deploy(
     if tag.is_some() && pr != 0 {
         return bad("You can only use tag or pr, not both.");
     }
+    // 4.7.5 (f4cbf63e7): `ValidationPatterns::isValidDockerImageTag($dockerTag, allowVariables: false)`.
+    if docker_tag
+        .as_deref()
+        .is_some_and(|t| !is_valid_docker_image_tag(t, false))
+    {
+        return bad(
+            "docker_tag must be a valid Docker tag: letters, digits, underscores, periods, and dashes, at most 128 characters.",
+        );
+    }
     if docker_tag.is_some() && pr == 0 {
         return bad("docker_tag requires pull_request_id.");
     }
@@ -2862,7 +3010,15 @@ pub async fn deploy(
         return bad("You can only use tag or docker_tag, not both.");
     }
     if let Some(tag) = &tag {
-        return deploy_by_tags(&state, &ctx, &meta, tag, input_bool(&input, "force")).await;
+        return deploy_by_tags(
+            &state,
+            &ctx,
+            &meta,
+            tag,
+            input_bool(&input, "force"),
+            cancel_previous,
+        )
+        .await;
     }
     let Some(uuids) = uuid else {
         return bad("You must provide uuid or tag.");
@@ -2913,6 +3069,29 @@ pub async fn deploy(
         let mut preview_tag = docker_tag.clone();
         let mut git_type = None;
         if pr != 0 {
+            if a.str("build_pack") == Some("dockerimage") {
+                // 4.7.5 (25b4236e3): deploy access is checked before the deploy writes a Docker
+                // Image preview.
+                if !ctx.can_app(AccessLevel::Deploy, &a) {
+                    items.push(json!({"message": "Unauthorized to deploy this application.", "resource_uuid": u}));
+                    continue;
+                }
+                // 4.7.5 (c75e7078b): opening a preview or changing its docker tag changes what
+                // runs, so it needs the write permission and the update policy (`canChangePreview`).
+                let current = coolify_db::application_ops::preview(&state.db, a.id, pr).await?;
+                let stored_tag = current
+                    .as_ref()
+                    .and_then(|p| p.get("docker_registry_image_tag"))
+                    .and_then(Value::as_str);
+                let token_writes = ctx.abilities.can(coolify_domain::Ability::Write)
+                    || ctx.abilities.can(coolify_domain::Ability::Root);
+                if deploy_changes_preview(docker_tag.as_deref(), stored_tag)
+                    && !(token_writes && ctx.can_app(AccessLevel::Write, &a))
+                {
+                    items.push(json!({"message": "Missing required permissions: write. Opening a preview or changing its docker tag needs the write permission.", "resource_uuid": u}));
+                    continue;
+                }
+            }
             let Some(preview) =
                 super::application_previews::deploy_preview(&state, &a, pr, docker_tag.as_deref())
                     .await?
@@ -2953,6 +3132,7 @@ pub async fn deploy(
                     pull_request_id: pr,
                     git_type,
                     docker_registry_image_tag: preview_tag,
+                    cancel_previous: Some(cancel_previous),
                     ..Default::default()
                 },
             )
@@ -2997,6 +3177,42 @@ pub async fn deploy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `DeployController::deploy` (4.7.5): `cancel_previous`.
+    #[test]
+    fn cancel_previous_values() {
+        assert_eq!(parse_cancel_previous(None), Some("none"));
+        assert_eq!(parse_cancel_previous(Some("")), Some("none"));
+        assert_eq!(parse_cancel_previous(Some("none")), Some("none"));
+        assert_eq!(parse_cancel_previous(Some(" Queued ")), Some("queued"));
+        assert_eq!(parse_cancel_previous(Some("BUILDING")), Some("building"));
+        assert_eq!(parse_cancel_previous(Some("all")), None);
+        assert_eq!(parse_cancel_previous(Some("true")), None);
+    }
+
+    /// `DeployController::deploy` (4.7.5, f4cbf63e7): `docker_tag` is a literal Docker tag.
+    #[test]
+    fn deploy_docker_tags_are_literal_tags() {
+        for ok in ["pr-12", "v1.2.3", "a_b.c-d", "latest"] {
+            assert!(is_valid_docker_image_tag(ok, false), "{ok}");
+        }
+        for bad in ["a b", "$(id)", "${TAG}", "tag;rm", "-leading", "a/b", "a:b"] {
+            assert!(!is_valid_docker_image_tag(bad, false), "{bad}");
+        }
+        assert!(!is_valid_docker_image_tag(&"a".repeat(129), false));
+    }
+
+    /// `DeployController::by_uuids` (4.7.5, c75e7078b): which deploys change a preview.
+    #[test]
+    fn deploys_that_change_a_docker_image_preview() {
+        // Redeploying without a tag, or with the stored tag, changes nothing.
+        assert!(!deploy_changes_preview(None, Some("pr-1")));
+        assert!(!deploy_changes_preview(None, None));
+        assert!(!deploy_changes_preview(Some("pr-1"), Some("pr-1")));
+        // A new tag, or a tag that opens the preview.
+        assert!(deploy_changes_preview(Some("pr-2"), Some("pr-1")));
+        assert!(deploy_changes_preview(Some("pr-1"), None));
+    }
 
     #[test]
     fn repository_slugs() {

@@ -357,6 +357,8 @@ struct Maps {
     previews: HashMap<String, Res>,
     services: HashMap<String, Res>,
     service_applications: HashMap<String, Res>,
+    /// `$this->serviceDatabaseMap`: the image scan ignores of service databases need it.
+    service_databases: HashMap<String, Res>,
     databases: HashMap<String, Res>,
     pending_sqlite: Vec<(i64, String, String)>,
     pending_dns: Vec<(i64, String, String)>,
@@ -409,6 +411,16 @@ fn bool_of(v: &Value, key: &str, default: bool) -> Value {
 /// `(int)` with a default.
 fn int_or(v: &Value, key: &str, default: i64) -> Value {
     json!(dg(v, key).map_or(default, as_int))
+}
+
+/// `BackupStorageType::tryFrom((string) data_get($payload, 'type')) ?? BackupStorageType::S3`.
+fn s3_storage_type(value: &str) -> &'static str {
+    match value {
+        "sftp" => "sftp",
+        "ftps" => "ftps",
+        "webdav" => "webdav",
+        _ => "s3",
+    }
 }
 
 async fn exists(conn: &mut PgConnection, table: &str, uuid: &str) -> R<bool> {
@@ -490,11 +502,13 @@ impl Import<'_> {
         if SAFE_STRING_TABLES.contains(&table) {
             for field in ["name", "description"] {
                 if let Some(v) = attrs.get(field) {
+                    // 4.7.5: a null description stays NULL; a null name still becomes "".
                     let stripped = match v {
-                        Value::Null => String::new(),
-                        other => coolify_domain::naming::strip_tags(Some(&text(other))),
+                        Value::Null if field == "description" => Value::Null,
+                        Value::Null => json!(""),
+                        other => json!(coolify_domain::naming::strip_tags(Some(&text(other)))),
                     };
-                    attrs.insert(field.to_owned(), json!(stripped));
+                    attrs.insert(field.to_owned(), stripped);
                 }
             }
         }
@@ -568,8 +582,16 @@ impl Import<'_> {
             }
         }
         let uuid = free_uuid(conn, "private_keys", self.preserved_uuid(payload)).await?;
+        // `$key->allowLegacyKey = true`: any key that can be loaded, also a weak one, because it
+        // works on the source already (`validationError($key, strict: false)`).
         let Some(info) = info else {
-            return Err(TransferError::Message("Invalid private key".into()));
+            let error = coolify_compat::sshkey::validation_error(&material, false).unwrap_or(
+                "The private key is invalid. Paste an unencrypted private key, not a public key or a certificate.",
+            );
+            return Err(TransferError::Validation(vec![(
+                "private_key".into(),
+                vec![error.to_owned()],
+            )]));
         };
         let formatted = coolify_compat::sshkey::format_private_key(&material);
         let attrs = obj(json!({
@@ -719,6 +741,14 @@ impl Import<'_> {
                 "cloudflare_tunnel_integration_token_id".into(),
                 json!(tunnel_token),
             );
+        }
+        // The pinned host key moves with the server, so the target does not trust a new key on
+        // its first connection.
+        let settings_payload = dg(payload, "settings").filter(|s| s.is_object());
+        if let Some(s) = settings_payload {
+            for (column, value) in transferred_host_key(s) {
+                settings.insert(column.to_owned(), value);
+            }
         }
         settings.insert("server_role".into(), json!(role));
         settings.insert("is_build_server".into(), json!(role == "build"));
@@ -1541,6 +1571,8 @@ impl Import<'_> {
                 .await?;
             self.scheduled_backups(conn, list(db, "scheduled_backups"), &sd)
                 .await?;
+            let key = dg(db, "uuid").map_or_else(|| sd.uuid.clone(), text);
+            self.m.service_databases.insert(key, sd);
         }
         Ok(res)
     }
@@ -1613,7 +1645,25 @@ impl Import<'_> {
         resource: &Res,
         is_preview: bool,
     ) -> R<()> {
+        // Older sources can export duplicate keys of one resource; Docker Compose uses the last one.
+        // `keyBy()` keeps the place of the first and the value of the last.
+        let mut unique: Vec<(String, &Value)> = Vec::new();
         for v in variables {
+            let key = format!(
+                "{}{}",
+                if is_preview || truthy(dg(v, "is_preview")) {
+                    "preview:"
+                } else {
+                    "production:"
+                },
+                str_of(v, "key")
+            );
+            match unique.iter_mut().find(|(k, _)| *k == key) {
+                Some(entry) => entry.1 = v,
+                None => unique.push((key, v)),
+            }
+        }
+        for (_, v) in unique {
             let uuid = free_uuid(conn, "environment_variables", uuid_or_new(v)).await?;
             let value = match dg(v, "value") {
                 None | Some(Value::Null) => Value::Null,
@@ -1793,7 +1843,9 @@ impl Import<'_> {
                 "frequency": get_or_null(t, "frequency"),
                 "container": get_or_null(t, "container"),
                 "timeout": get_or_null(t, "timeout"),
+                "use_shell": bool_of(t, "use_shell", true),
                 "enabled": bool_of(t, "enabled", true),
+                "disabled_reason": get_or_null(t, "disabled_reason"),
                 "team_id": self.team_id,
                 column: id,
             }));
@@ -2351,6 +2403,7 @@ impl Import<'_> {
                     "contents",
                     "metadata",
                     "pull_requests",
+                    "deployments",
                     "administration",
                     "organization_self_hosted_runners",
                     "actions",
@@ -2528,6 +2581,13 @@ impl Import<'_> {
 
     /// `importS3Storage`.
     async fn s3_storage(&mut self, conn: &mut PgConnection, p: &Value) -> R<(i64, String)> {
+        let private_key_uuid = str_of(p, "private_key_uuid");
+        let private_key_id = self.m.private_keys.get(&private_key_uuid).copied();
+        if !private_key_uuid.is_empty() && private_key_id.is_none() {
+            return Err(TransferError::Message(
+                "Backup storage private key is missing.".to_owned(),
+            ));
+        }
         let uuid = self.preserved_uuid(p);
         if let Some(id) = self.team_row(conn, "s3_storages", &uuid).await? {
             return Ok((id, uuid));
@@ -2537,16 +2597,32 @@ impl Import<'_> {
                 .filter(|v| crate::serialize::php_truthy(v))
                 .map(|v| text(v).trim().to_owned())
         };
-        let by_identity = sqlx::query(
-            "SELECT id, uuid FROM s3_storages WHERE team_id = $1 AND endpoint IS NOT DISTINCT FROM $2 AND bucket IS NOT DISTINCT FROM $3 LIMIT 1",
-        )
-        .bind(self.team_id)
-        .bind(dg(p, "endpoint").map(text))
-        .bind(dg(p, "bucket").map(text))
-        .fetch_optional(&mut *conn)
-        .await?;
-        if let Some(r) = by_identity {
-            return Ok((r.try_get("id")?, r.try_get("uuid")?));
+        // Bundles of older instances have no type: they only had S3 storages.
+        let kind = s3_storage_type(&str_of(p, "type"));
+        // An S3 storage of the team with the same bucket and access key is the same storage. Other
+        // types match by UUID only: several logins can use one host, and the key column is
+        // encrypted, so it is compared after loading.
+        if kind == "s3" {
+            let has_type = self.columns(conn, "s3_storages").await?.contains("type");
+            let candidates = sqlx::query(&format!(
+                "SELECT id, uuid, key FROM s3_storages WHERE team_id = $1 AND endpoint IS NOT DISTINCT FROM $2 AND bucket IS NOT DISTINCT FROM $3{} ORDER BY id",
+                if has_type { " AND type = 's3'" } else { "" }
+            ))
+            .bind(self.team_id)
+            .bind(dg(p, "endpoint").map(text))
+            .bind(dg(p, "bucket").map(text))
+            .fetch_all(&mut *conn)
+            .await?;
+            let wanted_key = dg(p, "key")
+                .filter(|v| !v.is_null())
+                .map(|v| text(v).trim().to_owned());
+            for r in candidates {
+                let saved: Option<String> = r.try_get("key")?;
+                let plain = saved.and_then(|c| self.enc.decrypt_string(&c).ok());
+                if plain == wanted_key {
+                    return Ok((r.try_get("id")?, r.try_get("uuid")?));
+                }
+            }
         }
         let uuid = free_uuid(conn, "s3_storages", uuid).await?;
         let secret = |key: &str| {
@@ -2563,9 +2639,14 @@ impl Import<'_> {
             "region": trimmed("region"),
             "key": secret("key"),
             "secret": secret("secret"),
+            "type": kind,
             "bucket": trimmed("bucket"),
             "endpoint": trimmed("endpoint"),
+            // After the endpoint: a new endpoint removes the host key.
+            "sftp_host_key": get_or_null(p, "sftp_host_key"),
             "use_path_style_endpoint": bool_of(p, "use_path_style_endpoint", true),
+            "private_key_id": private_key_id,
+            "skip_tls_verification": bool_of(p, "skip_tls_verification", false),
             "is_usable": bool_of(p, "is_usable", true),
         }));
         let id = self.insert(conn, "s3_storages", attrs).await?;
@@ -2703,6 +2784,149 @@ impl Import<'_> {
         Ok(total)
     }
 
+    /// `importImageScanPolicies`: the scan rules of the server and of its applications. A rule
+    /// that fails the validation of the UI, or whose scope is not in the bundle, is dropped.
+    async fn image_scan_policies(
+        &mut self,
+        conn: &mut PgConnection,
+        policies: Vec<&Value>,
+        server: &Res,
+    ) -> R<i64> {
+        let mut total = 0;
+        for payload in policies {
+            let scope = match dg(payload, "scope_kind").and_then(Value::as_str) {
+                Some("server") => Some(server.clone()),
+                Some("application") => self
+                    .m
+                    .applications
+                    .get(&str_of(payload, "scope_uuid"))
+                    .cloned(),
+                _ => None,
+            };
+            let Some(scope) = scope else {
+                self.m.warnings.push("Vulnerability scan rules were not imported, because their server or application is not in the bundle. Set the scan rules again.".to_owned());
+                continue;
+            };
+            let fields = match scan_policy_fields(payload) {
+                Ok(fields) => fields,
+                Err(error) => {
+                    let of = if scope.morph == SERVER_MORPH {
+                        "the server".to_owned()
+                    } else {
+                        format!("application {}", scope.name)
+                    };
+                    self.m.warnings.push(format!(
+                        "The vulnerability scan rules of {of} were not imported, because they are not valid: {error} Set the scan rules again."
+                    ));
+                    continue;
+                }
+            };
+            // `ImageScanPolicy::updateOrCreate(['scope_type' => ..., 'scope_id' => ...], $validated)`.
+            let updated = sqlx::query(
+                "UPDATE image_scan_policies SET gate_mode = $3, on_scan_error = $4, count_medium = $5, updated_at = $6 \
+                 WHERE scope_type = $1 AND scope_id = $2",
+            )
+            .bind(scope.morph)
+            .bind(scope.id)
+            .bind(fields.gate_mode.as_deref())
+            .bind(fields.on_scan_error.as_deref())
+            .bind(fields.count_medium)
+            .bind(self.now)
+            .execute(&mut *conn)
+            .await?;
+            if updated.rows_affected() == 0 {
+                sqlx::query(
+                    "INSERT INTO image_scan_policies (uuid, scope_type, scope_id, gate_mode, on_scan_error, count_medium, created_at, updated_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $7)",
+                )
+                .bind(new_public_id())
+                .bind(scope.morph)
+                .bind(scope.id)
+                .bind(fields.gate_mode.as_deref())
+                .bind(fields.on_scan_error.as_deref())
+                .bind(fields.count_medium)
+                .bind(self.now)
+                .execute(&mut *conn)
+                .await?;
+            }
+            total += 1;
+        }
+        Ok(total)
+    }
+
+    /// `importImageScanIgnores`: the ignores of the transferred resources, owned by the target
+    /// team. A row that fails the validation of the UI is dropped.
+    async fn image_scan_ignores(
+        &mut self,
+        conn: &mut PgConnection,
+        ignores: Vec<&Value>,
+    ) -> R<i64> {
+        let mut total = 0;
+        for payload in ignores {
+            let uuid = str_of(payload, "resource_uuid");
+            let resource = match dg(payload, "resource_kind").and_then(Value::as_str) {
+                Some("application") => self.m.applications.get(&uuid),
+                Some("database") => self.m.databases.get(&uuid),
+                Some("service_application") => self.m.service_applications.get(&uuid),
+                Some("service_database") => self.m.service_databases.get(&uuid),
+                _ => None,
+            }
+            .cloned();
+            let validated = scan_ignore_fields(payload);
+            let (Some(resource), Ok(fields)) = (resource.as_ref(), validated.as_ref()) else {
+                let vulnerability = dg(payload, "vulnerability_id").filter(|v| !blank(Some(*v)));
+                let package = dg(payload, "package").filter(|v| !blank(Some(*v)));
+                let label = match (vulnerability, package) {
+                    (Some(v), _) => text(v),
+                    (None, Some(p)) => format!("package {}", text(p)),
+                    (None, None) => "an unknown entry".to_owned(),
+                };
+                let why = match (&resource, &validated) {
+                    (None, _) => "its resource is not in the bundle".to_owned(),
+                    (Some(_), Err(error)) => format!("it is not valid: {error}"),
+                    (Some(_), Ok(_)) => unreachable!("handled by the let-else above"),
+                };
+                self.m.warnings.push(format!(
+                    "The vulnerability ignore for {label} was not imported, because {why}."
+                ));
+                continue;
+            };
+            // `firstOrCreate()`: a retried import (adopt mode) finds the ignore it created before.
+            let existing: Option<i64> = sqlx::query_scalar(
+                "SELECT id FROM image_scan_ignores WHERE team_id = $1 AND resource_type = $2 AND resource_id = $3 \
+                 AND vulnerability_id IS NOT DISTINCT FROM $4 AND package IS NOT DISTINCT FROM $5 LIMIT 1",
+            )
+            .bind(self.team_id)
+            .bind(resource.morph)
+            .bind(resource.id)
+            .bind(fields.vulnerability_id.as_deref())
+            .bind(fields.package.as_deref())
+            .fetch_optional(&mut *conn)
+            .await?;
+            if existing.is_some() {
+                continue;
+            }
+            sqlx::query(
+                "INSERT INTO image_scan_ignores (uuid, team_id, resource_type, resource_id, vulnerability_id, package, \
+                 reason, expires_at, created_by, created_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $9)",
+            )
+            .bind(new_public_id())
+            .bind(self.team_id)
+            .bind(resource.morph)
+            .bind(resource.id)
+            .bind(fields.vulnerability_id.as_deref())
+            .bind(fields.package.as_deref())
+            .bind(&fields.reason)
+            .bind(fields.expires_at)
+            .bind(self.now)
+            .execute(&mut *conn)
+            .await?;
+            total += 1;
+        }
+        Ok(total)
+    }
+
     /// `importSslCertificates`.
     async fn ssl_certificates(
         &mut self,
@@ -2799,6 +3023,185 @@ impl Import<'_> {
         }
         Ok(total)
     }
+}
+
+/// The host key columns `importServer()` force-fills from the settings of the bundle.
+fn transferred_host_key(settings: &Value) -> Vec<(&'static str, Value)> {
+    let key = coolify_remote::host_key::normalize_ssh_host_keys(
+        dg(settings, "ssh_host_key").and_then(Value::as_str),
+    );
+    let filled = key.is_some();
+    vec![
+        (
+            "ssh_host_key_trusted_at",
+            if filled {
+                get_or_null(settings, "ssh_host_key_trusted_at")
+            } else {
+                Value::Null
+            },
+        ),
+        (
+            "ssh_host_key_source",
+            if filled {
+                json!("transfer")
+            } else {
+                Value::Null
+            },
+        ),
+        ("ssh_host_key", json!(key)),
+        (
+            "is_ssh_host_key_check_disabled",
+            json!(truthy(dg(settings, "is_ssh_host_key_check_disabled"))),
+        ),
+        (
+            "is_ssh_host_key_check_enforced",
+            json!(truthy(dg(settings, "is_ssh_host_key_check_enforced"))),
+        ),
+    ]
+}
+
+/// The validated fields of an `image_scan_policies` entry (`ImageScanPolicy::validationRules()`).
+#[derive(Debug, Clone, PartialEq)]
+struct ScanPolicyFields {
+    gate_mode: Option<String>,
+    on_scan_error: Option<String>,
+    count_medium: Option<bool>,
+}
+
+/// `gate_mode` (or `gate_enabled` of an older bundle), `on_scan_error` and `count_medium`,
+/// validated like the UI. `Err` is `$validator->errors()->first()`.
+fn scan_policy_fields(payload: &Value) -> Result<ScanPolicyFields, String> {
+    let gate_mode = match payload.get("gate_mode") {
+        Some(v) => v.clone(),
+        None => match dg(payload, "gate_enabled") {
+            Some(Value::Bool(true)) => json!("strict"),
+            Some(Value::Bool(false)) => json!("off"),
+            other => other.cloned().unwrap_or(Value::Null),
+        },
+    };
+    let enum_value = |v: &Value, attribute: &str, cases: &[&str]| match v {
+        Value::Null => Ok(None),
+        Value::String(s) if cases.contains(&s.as_str()) => Ok(Some(s.clone())),
+        _ => Err(format!("The selected {attribute} is invalid.")),
+    };
+    let gate_mode = enum_value(&gate_mode, "gate mode", &["off", "on", "strict"])?;
+    let on_scan_error = enum_value(
+        dg(payload, "on_scan_error").unwrap_or(&Value::Null),
+        "on scan error",
+        &["deploy", "block"],
+    )?;
+    // `boolean`: true, false, 0, 1, "0", "1".
+    let count_medium = match dg(payload, "count_medium").unwrap_or(&Value::Null) {
+        Value::Null => None,
+        Value::Bool(b) => Some(*b),
+        Value::Number(n) if n.as_i64() == Some(0) => Some(false),
+        Value::Number(n) if n.as_i64() == Some(1) => Some(true),
+        Value::String(s) if s == "0" => Some(false),
+        Value::String(s) if s == "1" => Some(true),
+        _ => return Err("The count medium field must be true or false.".to_owned()),
+    };
+    Ok(ScanPolicyFields {
+        gate_mode,
+        on_scan_error,
+        count_medium,
+    })
+}
+
+/// The validated fields of an `image_scan_ignores` entry (`ImageScanIgnore::validationRules()`).
+#[derive(Debug, Clone, PartialEq)]
+struct ScanIgnoreFields {
+    vulnerability_id: Option<String>,
+    package: Option<String>,
+    reason: String,
+    expires_at: Option<NaiveDateTime>,
+}
+
+/// `vulnerability_id`, `package`, `reason` and `expires_at`, validated like the UI. `Err` is
+/// `$validator->errors()->first()`.
+fn scan_ignore_fields(payload: &Value) -> Result<ScanIgnoreFields, String> {
+    static VULNERABILITY_ID: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}\n?\z").unwrap_or_else(|_| unreachable!())
+    });
+    let field = |key: &str| dg(payload, key).cloned().unwrap_or(Value::Null);
+    let (vulnerability, package, reason, expires) = (
+        field("vulnerability_id"),
+        field("package"),
+        field("reason"),
+        field("expires_at"),
+    );
+    // `required` / `required_without`: null, a blank string, or an empty array is missing.
+    let missing = |v: &Value| blank(Some(v));
+    let scalar = |v: &Value| match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    };
+    // vulnerability_id: nullable, regex, required_without:package.
+    if !vulnerability.is_null()
+        && !scalar(&vulnerability).is_some_and(|v| VULNERABILITY_ID.is_match(&v))
+    {
+        return Err("The vulnerability id field format is invalid.".to_owned());
+    }
+    if missing(&vulnerability) && missing(&package) {
+        return Err(
+            "The vulnerability id field is required when package is not present.".to_owned(),
+        );
+    }
+    // package: nullable, string, max:214, required_without:vulnerability_id.
+    if !package.is_null() {
+        match &package {
+            Value::String(s) if s.chars().count() > 214 => {
+                return Err("The package field must not be greater than 214 characters.".to_owned());
+            }
+            Value::String(_) => {}
+            _ => return Err("The package field must be a string.".to_owned()),
+        }
+    }
+    // reason: required, string, max:500.
+    if missing(&reason) {
+        return Err("The reason field is required.".to_owned());
+    }
+    let Value::String(reason) = reason else {
+        return Err("The reason field must be a string.".to_owned());
+    };
+    if reason.chars().count() > 500 {
+        return Err("The reason field must not be greater than 500 characters.".to_owned());
+    }
+    // expires_at: nullable, date (stored in UTC by the `datetime` cast).
+    let expires_at = match &expires {
+        Value::Null => None,
+        Value::String(s) => {
+            Some(parse_transfer_date(s).ok_or("The expires at field must be a valid date.")?)
+        }
+        _ => return Err("The expires at field must be a valid date.".to_owned()),
+    };
+    let filled_text = |v: &Value| (!missing(v)).then(|| scalar(v)).flatten();
+    Ok(ScanIgnoreFields {
+        vulnerability_id: filled_text(&vulnerability),
+        package: filled_text(&package),
+        reason,
+        expires_at,
+    })
+}
+
+/// A date of a bundle: ISO 8601 with an offset (`toIso8601String()`), or a plain date and time.
+fn parse_transfer_date(value: &str) -> Option<NaiveDateTime> {
+    let value = value.trim();
+    if let Ok(t) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Some(t.naive_utc());
+    }
+    for format in [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%d %H:%M",
+    ] {
+        if let Ok(t) = NaiveDateTime::parse_from_str(value, format) {
+            return Some(t);
+        }
+    }
+    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .ok()
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
 }
 
 fn obj(v: Value) -> Map<String, Value> {
@@ -2937,7 +3340,7 @@ fn int_problem(payload: &Value, key: &str, label: &str, min: i64, max: i64) -> O
 /// `assertValidServerPayload`.
 fn assert_valid_server_payload(server: &Value) -> R<()> {
     static USER: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9._-]+$").expect("regex"));
+        LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9_.][a-zA-Z0-9._-]*$").expect("regex"));
     let mut errors: Vec<(String, Vec<String>)> = Vec::new();
     if let Some(n) = dg(server, "name").filter(|v| !v.is_null()) {
         match n.as_str() {
@@ -3016,13 +3419,15 @@ fn assert_valid_server_payload(server: &Value) -> R<()> {
     }
 }
 
-/// The checks of `importChecks`, as `{field, label, ok, message}`.
+/// The checks of `importChecks`, as `{field, label, ok, message}`. A server is its IP and its SSH
+/// port (4.7.5), so servers behind one NAT address with different forwarded ports can coexist.
 pub async fn import_checks(
     state: &AppState,
     server_uuid: &str,
     server_ip: &str,
     team_id: i64,
     preserve: bool,
+    server_port: i64,
 ) -> Result<Vec<Value>, TransferError> {
     let pool = state.db.pool();
     let team_exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM teams WHERE id = $1)")
@@ -3053,9 +3458,11 @@ pub async fn import_checks(
             }
         });
     }
-    let ip_exists = coolify_db::servers::ip_in_use(
+    // `Server::sshEndpointInUse($serverIp, $serverPort, $archive?->id)`.
+    let ip_exists = coolify_db::servers::ssh_endpoint_in_use(
         &state.db,
         &crate::routes::servers::normalize_ip(server_ip),
+        server_port,
         archive,
     )
     .await
@@ -3075,9 +3482,9 @@ pub async fn import_checks(
         }),
         json!({
             "field": "server.ip",
-            "label": "no server with the same IP exists",
+            "label": "no server with the same IP and SSH port exists",
             "ok": !ip_exists,
-            "message": ip_exists.then(|| format!("A server with IP/domain {server_ip} already exists on this instance. Remove it first.")),
+            "message": ip_exists.then(|| format!("A server with IP/domain {server_ip} and SSH port {server_port} already exists on this instance. Remove it first.")),
         }),
     ])
 }
@@ -3162,22 +3569,34 @@ pub async fn import(
 
     let server_uuid = str_of(&bundle, "server.uuid");
     let server_ip = str_of(&bundle, "server.ip");
+    // `(int) data_get($bundle, 'server.port', 22)`.
+    let server_port = dg(&bundle, "server.port").map_or(22, as_int);
     let archive = if preserve {
         replaceable_archive(state, &server_uuid, team_id).await?
     } else {
         None
     };
     let uuid_conflict = archive.is_none() && preserve && exists_any(state, &server_uuid).await?;
-    let ip_conflict = coolify_db::servers::ip_in_use(
+    let ip_conflict = coolify_db::servers::ssh_endpoint_in_use(
         &state.db,
         &crate::routes::servers::normalize_ip(&server_ip),
+        server_port,
         archive,
     )
     .await
     .map_err(|e| TransferError::Message(e.to_string()))?;
 
     if !dry_run {
-        for check in import_checks(state, &server_uuid, &server_ip, team_id, preserve).await? {
+        for check in import_checks(
+            state,
+            &server_uuid,
+            &server_ip,
+            team_id,
+            preserve,
+            server_port,
+        )
+        .await?
+        {
             if check["ok"] != json!(true) {
                 return Err(TransferError::Validation(vec![(
                     text(&check["field"]),
@@ -3193,7 +3612,7 @@ pub async fn import(
     }
     if ip_conflict {
         warnings.push(format!(
-            "A server with IP/domain {server_ip} already exists on this instance."
+            "A server with IP/domain {server_ip} and SSH port {server_port} already exists on this instance."
         ));
     }
 
@@ -3201,7 +3620,8 @@ pub async fn import(
         "projects": 0, "environments": 0, "applications": 0, "databases": 0, "services": 0,
         "destinations": 0, "private_keys": 0, "github_apps": 0, "gitlab_apps": 0, "gitea_apps": 0,
         "s3_storages": 0, "cloud_provider_tokens": 0, "integration_tokens": 0,
-        "managed_dns_records": 0, "ssl_certificates": 0, "volume_backups": 0, "previews": 0,
+        "managed_dns_records": 0, "ssl_certificates": 0, "image_scan_policies": 0, "image_scan_ignores": 0,
+        "volume_backups": 0, "previews": 0,
     }));
     let target_url = instance_url(&state.db).await;
 
@@ -3228,6 +3648,8 @@ pub async fn import(
             "integration_tokens",
             "managed_dns_records",
             "ssl_certificates",
+            "image_scan_policies",
+            "image_scan_ignores",
             "volume_backups",
         ] {
             created.insert(key.to_owned(), json!(count(&bundle, key)));
@@ -3382,6 +3804,14 @@ pub async fn import(
         .ssl_certificates(conn, list(&bundle, "ssl_certificates"), server.id)
         .await?;
     created.insert("ssl_certificates".into(), json!(ssl));
+    let policies = import
+        .image_scan_policies(conn, list(&bundle, "image_scan_policies"), &server)
+        .await?;
+    created.insert("image_scan_policies".into(), json!(policies));
+    let ignores = import
+        .image_scan_ignores(conn, list(&bundle, "image_scan_ignores"))
+        .await?;
+    created.insert("image_scan_ignores".into(), json!(ignores));
     let backups = import
         .volume_backups(conn, list(&bundle, "volume_backups"))
         .await?;
@@ -3608,4 +4038,109 @@ async fn delete_resource_rows(conn: &mut PgConnection, table: &str, id: i64, mor
         .execute(&mut *conn)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ED25519: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
+
+    /// `importServer()`: the pinned key moves with the server as a `transfer` key.
+    #[test]
+    fn the_pinned_host_key_moves_with_the_server() {
+        let settings = json!({
+            "ssh_host_key": format!("{ED25519} root@host"),
+            "ssh_host_key_trusted_at": "2026-01-02T03:04:05.000000Z",
+            "is_ssh_host_key_check_enforced": true,
+        });
+        let columns: Map<String, Value> = transferred_host_key(&settings)
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v))
+            .collect();
+        assert_eq!(columns["ssh_host_key"], json!(ED25519));
+        assert_eq!(columns["ssh_host_key_source"], json!("transfer"));
+        assert_eq!(
+            columns["ssh_host_key_trusted_at"],
+            json!("2026-01-02T03:04:05.000000Z")
+        );
+        assert_eq!(columns["is_ssh_host_key_check_disabled"], json!(false));
+        assert_eq!(columns["is_ssh_host_key_check_enforced"], json!(true));
+        // Without a key the next connection pins one again.
+        let columns: Map<String, Value> =
+            transferred_host_key(&json!({"ssh_host_key": "nonsense"}))
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v))
+                .collect();
+        assert_eq!(columns["ssh_host_key"], Value::Null);
+        assert_eq!(columns["ssh_host_key_source"], Value::Null);
+        assert_eq!(columns["ssh_host_key_trusted_at"], Value::Null);
+    }
+
+    #[test]
+    fn scan_policies_are_validated_like_the_ui() {
+        assert_eq!(
+            scan_policy_fields(
+                &json!({"gate_mode": "strict", "on_scan_error": "block", "count_medium": 1})
+            ),
+            Ok(ScanPolicyFields {
+                gate_mode: Some("strict".into()),
+                on_scan_error: Some("block".into()),
+                count_medium: Some(true),
+            })
+        );
+        // An older bundle has `gate_enabled`.
+        assert_eq!(
+            scan_policy_fields(&json!({"gate_enabled": false})).map(|f| f.gate_mode),
+            Ok(Some("off".into()))
+        );
+        assert_eq!(
+            scan_policy_fields(&json!({"gate_mode": "loud"})),
+            Err("The selected gate mode is invalid.".into())
+        );
+        assert_eq!(
+            scan_policy_fields(&json!({"count_medium": "yes"})),
+            Err("The count medium field must be true or false.".into())
+        );
+    }
+
+    #[test]
+    fn scan_ignores_are_validated_like_the_ui() {
+        let ok = scan_ignore_fields(&json!({
+            "vulnerability_id": "CVE-2024-1234",
+            "package": "",
+            "reason": "not reachable",
+            "expires_at": "2026-05-01T10:00:00+02:00",
+        }));
+        assert_eq!(
+            ok,
+            Ok(ScanIgnoreFields {
+                vulnerability_id: Some("CVE-2024-1234".into()),
+                package: None,
+                reason: "not reachable".into(),
+                expires_at: NaiveDateTime::parse_from_str(
+                    "2026-05-01 08:00:00",
+                    "%Y-%m-%d %H:%M:%S"
+                )
+                .ok(),
+            })
+        );
+        assert_eq!(
+            scan_ignore_fields(&json!({"reason": "x"})),
+            Err("The vulnerability id field is required when package is not present.".into())
+        );
+        assert_eq!(
+            scan_ignore_fields(&json!({"vulnerability_id": "-bad", "reason": "x"})),
+            Err("The vulnerability id field format is invalid.".into())
+        );
+        assert_eq!(
+            scan_ignore_fields(&json!({"package": "openssl"})),
+            Err("The reason field is required.".into())
+        );
+        assert_eq!(
+            scan_ignore_fields(&json!({"package": "openssl", "reason": "x", "expires_at": "soon"})),
+            Err("The expires at field must be a valid date.".into())
+        );
+    }
 }
