@@ -103,6 +103,21 @@ pub async fn env_insert(
     now: NaiveDateTime,
 ) -> DbResult<i64> {
     db.ensure_writable()?;
+    // `EnvironmentVariable::performInsert()` (v4.7): inserts of one key wait for each other, and
+    // a second row is refused, so `firstOrCreate()` returns the existing row.
+    let mut tx = db.pool().begin().await?;
+    if let Some(existing) = crate::environment_variables::lock_key_for_insert(
+        &mut tx,
+        resource_type,
+        resource_id,
+        v.is_preview,
+        &v.key,
+    )
+    .await?
+    {
+        tx.commit().await?;
+        return Ok(existing);
+    }
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO environment_variables (key, value, is_preview, is_required, is_multiline, is_literal, is_shown_once, \
          is_runtime, is_buildtime, is_shared, comment, resourceable_type, resourceable_id, uuid, version, created_at, updated_at) \
@@ -122,8 +137,9 @@ pub async fn env_insert(
     .bind(new_public_id())
     .bind(version)
     .bind(now)
-    .fetch_one(db.pool())
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(id)
 }
 

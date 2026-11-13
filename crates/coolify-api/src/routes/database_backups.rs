@@ -172,6 +172,18 @@ async fn validate_backup_input(
 }
 
 /// `requestedBackupS3Storages`: the destinations, primary first; `None` when the request selects none.
+/// `HasS3Destinations::newS3StorageIds($storageIds)`: the selected storages that are neither a
+/// destination nor the primary storage of the backup yet (`->filter()->unique()->diff($current)`).
+pub(crate) fn new_s3_storage_ids(selected: &[i64], current: &[i64]) -> Vec<i64> {
+    let mut out: Vec<i64> = Vec::new();
+    for id in selected {
+        if *id != 0 && !current.contains(id) && !out.contains(id) {
+            out.push(*id);
+        }
+    }
+    out
+}
+
 async fn requested_storages(
     state: &AppState,
     ctx: &AuthCtx,
@@ -513,6 +525,15 @@ pub async fn create(
     if !values.iter().any(|(k, _)| *k == "enabled") {
         values.push(("enabled", ColumnValue::Bool(true)));
     }
+    // 4.7.5: `$backupData['save_s3'] ??= false`.
+    if !values.iter().any(|(k, _)| *k == "save_s3") {
+        values.push(("save_s3", ColumnValue::Bool(false)));
+    }
+    // 4.7.5 (8011d0d6a): an S3 storage is a team credential
+    // (`$this->authorize('useTeamCredentials', $database)`).
+    if storages.as_ref().is_some_and(|rows| !rows.is_empty()) {
+        ctx.authorize_team_credentials()?;
+    }
     let now = state.now();
     let (id, backup_uuid) = parts::create_backup(
         &state.db,
@@ -651,6 +672,19 @@ pub async fn update(
         }
         if ids.first().is_some_and(|f| current.contains(f)) {
             storage_ids = Some(current);
+        }
+    }
+    // 4.7.5 (8011d0d6a): `$backupConfig->newS3StorageIds($storageIds)->isNotEmpty()` needs
+    // `useTeamCredentials`: a destination the backup does not use yet is a team credential.
+    if let Some(ids) = &storage_ids {
+        let mut current: Vec<i64> = parts::backup_destinations(&state.db, id)
+            .await?
+            .iter()
+            .map(parts::id_of)
+            .collect();
+        current.extend(current_primary);
+        if !new_s3_storage_ids(ids, &current).is_empty() {
+            ctx.authorize_team_credentials()?;
         }
     }
     parts::update_backup(&state.db, id, &values, &numeric, now).await?;
@@ -973,7 +1007,16 @@ pub async fn delete_execution(
 
 #[cfg(test)]
 mod tests {
-    use super::valid_cron;
+    use super::{new_s3_storage_ids, valid_cron};
+
+    /// `HasS3Destinations::newS3StorageIds` (4.7.5).
+    #[test]
+    fn new_s3_storages_are_the_ones_the_backup_does_not_use_yet() {
+        assert_eq!(new_s3_storage_ids(&[3, 4], &[3, 4]), Vec::<i64>::new());
+        assert_eq!(new_s3_storage_ids(&[3, 5, 5, 0], &[3, 4]), vec![5]);
+        assert_eq!(new_s3_storage_ids(&[7], &[]), vec![7]);
+        assert_eq!(new_s3_storage_ids(&[], &[3]), Vec::<i64>::new());
+    }
 
     #[test]
     fn cron_expressions() {

@@ -1,5 +1,7 @@
 <script lang="ts">
   // Port of upstream livewire/project/shared/scheduled-task/show.blade.php (Project\Shared\ScheduledTask\Show).
+  import Callout from '../Callout.svelte';
+  import Checkbox from '../Checkbox.svelte';
   import ConfirmModal from '../ConfirmModal.svelte';
   import DangerZone from '../DangerZone.svelte';
   import FormInput from '../FormInput.svelte';
@@ -38,6 +40,7 @@
     timeout: String(task.timeout),
     container: task.container ?? '',
     command: task.command,
+    use_shell: task.use_shell ?? true,
   });
 
   const sections = $derived([
@@ -106,6 +109,12 @@
     {/each}
   </nav>
 
+  {#if !enabled && task.disabled_reason}
+    <Callout type="danger" title="Disabled because it keeps failing">
+      {task.disabled_reason} Fix the task, then click Enable.
+    </Callout>
+  {/if}
+
   <form
     class="application-settings-form flex flex-col"
     class:hidden={active !== 'general'}
@@ -152,6 +161,15 @@
       </div>
       <div class="mt-4">
         <FormInput disabled={!canUpdate} placeholder="php artisan schedule:run" id="command" label="Command" required bind:value={form.command} />
+      </div>
+      <div class="mt-2 md:w-1/2">
+        <Checkbox
+          disabled={!canUpdate}
+          id="useShell"
+          label="Run in a shell"
+          helper="Run the command with <span class='font-mono'>sh -c</span>, so you can use variables, pipes, and redirects. Turn it off for containers without a shell (distroless or scratch images): Coolify then splits the command into arguments and runs it directly."
+          bind:checked={form.use_shell}
+        />
       </div>
     </SettingsSection>
   </form>

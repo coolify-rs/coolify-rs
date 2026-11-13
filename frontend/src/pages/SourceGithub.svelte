@@ -63,6 +63,8 @@
   let endpoint = $state('');
   let customEndpoint = $state('');
   let previewPermissions = $state(router.query('previews') !== '0');
+  // `$deployment_status_permissions`.
+  let deploymentStatusPermissions = $state(true);
   let githubRunners = $state(false);
   let endpointError = $state('');
 
@@ -192,7 +194,8 @@
 
   /** `createGithubApp()`: posts the App manifest to GitHub. */
   function register() {
-    if (!data) return;
+    // The script is rendered only for users who can update the App.
+    if (!data || !data.can_update) return;
     const selected = endpoint.trim();
     const custom = customEndpoint.trim();
     if (useCustom && !custom) {
@@ -213,6 +216,9 @@
     if (previewPermissions) {
       default_permissions.pull_requests = 'write';
       default_events.push('pull_request');
+    }
+    if (deploymentStatusPermissions) {
+      default_permissions.deployments = 'write';
     }
     if (githubRunners && organization) {
       default_permissions.organization_self_hosted_runners = 'write';
@@ -291,10 +297,12 @@
                       Repository access has not been installed yet. Complete this step before attaching the source to an application.
                     </p>
                   </div>
-                  <a class="button shrink-0 button-highlighted" href={data.installation_path}>
-                    Install repositories
-                    {@render externalLink()}
-                  </a>
+                  {#if data.can_update}
+                    <a class="button shrink-0 button-highlighted" href={data.installation_path}>
+                      Install repositories
+                      {@render externalLink()}
+                    </a>
+                  {/if}
                 </div>
               </SettingsSection>
             </div>
@@ -310,7 +318,7 @@
               <SettingsSection title="General" description="Connection and authentication settings for this private GitHub source.">
                 {#snippet actions()}
                   {#if data?.is_connected}
-                    <button type="button" class="button" onclick={testConnection}>Test connection</button>
+                    <button type="button" class="button" disabled={inputsDisabled} onclick={testConnection}>Test connection</button>
                   {/if}
                   <button type="button" class="button" disabled={inputsDisabled} onclick={syncName}>
                     <Reicon name="refresh" class="size-3.5" />
@@ -404,10 +412,12 @@
             <div class="application-settings-form flex flex-col gap-6">
               <SettingsSection title="Permissions" description="GitHub permissions currently granted to this App.">
                 {#snippet actions()}
-                  <button type="button" class="button" onclick={checkPermissions}>
-                    <Reicon name="refresh" class="size-3.5" />
-                    Refetch
-                  </button>
+                  {#if data?.can_update}
+                    <button type="button" class="button" onclick={checkPermissions}>
+                      <Reicon name="refresh" class="size-3.5" />
+                      Refetch
+                    </button>
+                  {/if}
                   <a href={data?.permissions_path} class="button">
                     Update on GitHub
                     {@render externalLink()}
@@ -418,6 +428,30 @@
                   <FormInput id="metadata" helper="Read access is mandatory." label="Metadata" readonly placeholder="N/A" value={data.metadata ?? ''} />
                   <FormInput id="pullRequests" helper="Write access is needed for preview deployment status updates." label="Pull requests" readonly placeholder="N/A" value={data.pull_requests ?? ''} />
                 </div>
+              </SettingsSection>
+              <SettingsSection
+                title="GitHub deployments"
+                description="coolify-rs creates a GitHub deployment for each deployment and updates its status, so branches and pull requests show what is deployed."
+              >
+                <div class="grid gap-4 lg:grid-cols-3">
+                  <FormInput id="deployments" label="Deployments" readonly placeholder="N/A" value={data.deployments ?? ''} helper="Repository permission. Write access is needed to create deployments and their statuses." />
+                </div>
+                {#if data.missing_deployment_requirements.length > 0}
+                  <Callout type="info" title="Not ready for GitHub deployments" class="mt-4">
+                    Update the App on GitHub, then click Refetch. Missing:
+                    <ul class="mt-1 list-disc pl-4">
+                      {#each data.missing_deployment_requirements as requirement (requirement)}
+                        <li>{requirement}</li>
+                      {/each}
+                    </ul>
+                    <div class="mt-2">
+                      <a href={data.permissions_path} class="button" target="_blank" rel="noopener noreferrer">
+                        Update on GitHub
+                        {@render externalLink()}
+                      </a>
+                    </div>
+                  </Callout>
+                {/if}
               </SettingsSection>
               <SettingsSection
                 title="GitHub Actions runners"
@@ -500,6 +534,16 @@
                 options={[
                   { value: false, label: 'Do not update pull requests' },
                   { value: true, label: 'Read and update pull requests' },
+                ]}
+              />
+              <Listbox
+                id="deployment_status_permissions"
+                label="GitHub deployments"
+                helper="Deployments (write) access lets coolify-rs show each deployment and its status on GitHub, so pull requests show the preview as deployed."
+                bind:value={deploymentStatusPermissions}
+                options={[
+                  { value: false, label: 'Do not create GitHub deployments' },
+                  { value: true, label: 'Create GitHub deployments' },
                 ]}
               />
               <Listbox

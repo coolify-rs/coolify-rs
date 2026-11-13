@@ -20,7 +20,11 @@
   let { provider, uuid }: { provider: 'gitlab' | 'gitea'; uuid: string } = $props();
 
   const gitlab = $derived(provider === 'gitlab');
-  const name_ = $derived(gitlab ? 'GitLab' : 'Gitea');
+  // A Gitea source can also be Forgejo or Codeberg: "{app_} App" names the source, `product_`
+  // the product in running text.
+  const app_ = $derived(gitlab ? 'GitLab' : 'Gitea / Forgejo');
+  const product_ = $derived(gitlab ? 'GitLab' : 'Gitea or Forgejo');
+  const urlLabel = $derived(gitlab ? 'GitLab URL' : 'Instance URL');
   const redirectPath = $derived(`/webhooks/source/${provider}/redirect`);
 
   type Form = {
@@ -110,7 +114,7 @@
         customEndpoint = savedBase;
       }
     }
-    document.title = `${d.name || `${name_} App`} | Sources | coolify-rs`;
+    document.title = `${d.name || `${app_} App`} | Sources | coolify-rs`;
     setSourceCrumbs(provider, d.uuid, d.is_connected);
   }
 
@@ -204,11 +208,11 @@
     <header class="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-2">
-          <h1 class="truncate text-[24px]! leading-7! font-semibold! tracking-tight!">{form.name || `${name_} App`}</h1>
+          <h1 class="truncate text-[24px]! leading-7! font-semibold! tracking-tight!">{form.name || `${app_} App`}</h1>
           <StatusBadge label="Connected" type="success" />
         </div>
         <p class="mt-1 text-[13px] text-neutral-500 dark:text-fg-dim">
-          {saved.organization ? `${name_} App for ${saved.organization}` : `Private ${name_} source`}
+          {saved.organization ? `${app_} App for ${saved.organization}` : `Private ${app_} source`}
         </p>
       </div>
       <div class="flex shrink-0 flex-wrap items-center gap-2 sm:ml-auto">
@@ -232,13 +236,13 @@
           <FormInput {disabled} id="name" label="Name" bind:value={form.name} error={err('name')} />
           {#if data.can_make_system_wide || !gitlab}
             <div class="lg:col-span-2 max-w-xs">
-              <Checkbox id="isSystemWide" {disabled} label="System wide" helper="If checked, this {name_} App will be available for everyone in this coolify-rs instance." bind:checked={form.isSystemWide} />
+              <Checkbox id="isSystemWide" {disabled} label="System wide" helper="If checked, this {app_} App will be available for everyone in this coolify-rs instance." bind:checked={form.isSystemWide} />
             </div>
           {/if}
           {#if form.isSystemWide}
             <div class="lg:col-span-2">
               <Callout type="warning" title="Shared with every team">
-                System-wide {name_} Apps are shared across all teams on this coolify-rs instance. Prefer team-specific apps when you need repository isolation.
+                System-wide {app_} Apps are shared across all teams on this coolify-rs instance. Prefer team-specific apps when you need repository isolation.
               </Callout>
             </div>
           {/if}
@@ -247,7 +251,7 @@
           title="Webhook"
           helper={gitlab
             ? 'Configure this webhook URL in your GitLab project settings (Settings → Webhooks). On self-managed GitLab, an admin can instead add the same URL and token once as a system hook (Admin Area → System hooks) with Push events and Merge request events enabled.'
-            : 'Configure this webhook URL in Gitea (user, organization, or repository settings → Webhooks → Add webhook → Gitea).'}
+            : 'Configure this webhook URL in Gitea or Forgejo (user, organization, or repository settings → Webhooks → Add webhook → Gitea or Forgejo).'}
         >
           <div class="grid gap-4 lg:grid-cols-2">
             <div class="lg:col-span-2">
@@ -261,7 +265,7 @@
                 id="webhookSecret"
                 label="Webhook secret"
                 type="password"
-                helper="Set this as the Secret in a Gitea webhook (user, organization, or repository settings → Webhooks → Add webhook → Gitea), content type application/json, trigger on Push and Pull Request events. Stored encrypted."
+                helper="Set this as the Secret in a Gitea webhook (user, organization, or repository settings → Webhooks → Add webhook → Gitea or Forgejo), content type application/json, trigger on Push and Pull Request events. Stored encrypted."
                 bind:value={form.webhookSecret}
               />
             {/if}
@@ -270,7 +274,7 @@
       </SettingsSection>
 
       <SettingsSection id="connection-section" title="Connection" description="OAuth credentials and the endpoints coolify-rs uses to reach this source.">
-        <SettingsSubsection first title="OAuth credentials" helper={gitlab ? 'Application credentials from your GitLab OAuth application.' : 'Client credentials from your Gitea OAuth2 application.'}>
+        <SettingsSubsection first title="OAuth credentials" helper={gitlab ? 'Application credentials from your GitLab OAuth application.' : 'Client credentials from your Gitea or Forgejo OAuth2 application.'}>
           <div class="grid gap-4 lg:grid-cols-2">
             <FormInput {disabled} id="clientId" label={gitlab ? 'Application ID' : 'Client ID'} bind:value={form.clientId} />
             <FormInput {disabled} id="clientSecretInput" label={gitlab ? 'Application secret' : 'Client secret'} type="password" helper="Stored encrypted. Leave empty to keep the existing secret." bind:value={form.clientSecret} />
@@ -281,9 +285,9 @@
             {/if}
           </div>
         </SettingsSubsection>
-        <SettingsSubsection title="Self-hosted / advanced" helper="Override endpoints and SSH settings for self-hosted {name_}.">
+        <SettingsSubsection title="Self-hosted / advanced" helper="Override endpoints and SSH settings for self-hosted {product_}.">
           <div class="grid gap-4 lg:grid-cols-2">
-            <FormInput {disabled} id="htmlUrl" label="{name_} URL" bind:value={form.htmlUrl} onchange={deriveApi} error={err('htmlUrl')} />
+            <FormInput {disabled} id="htmlUrl" label={urlLabel} bind:value={form.htmlUrl} onchange={deriveApi} error={err('htmlUrl')} />
             <FormInput {disabled} id="apiUrl" label="API URL" bind:value={form.apiUrl} error={err('apiUrl')} />
             <FormInput {disabled} id="customUser" label="SSH user" bind:value={form.customUser} error={err('customUser')} />
             <FormInput {disabled} type="number" id="customPort" label="SSH port" bind:value={form.customPort} error={err('customPort')} />
@@ -296,13 +300,13 @@
     </form>
 
     <div class="application-settings-form mt-6">
-      <SourceResources provider={name_} applications={data.applications} repositoryColumn />
+      <SourceResources provider={app_} applications={data.applications} repositoryColumn />
     </div>
   {:else}
     <header class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div class="min-w-0">
-        <h1 class="truncate text-[24px]! leading-7! font-semibold! tracking-tight!">{form.name || `${name_} App`}</h1>
-        <p class="mt-1 text-[13px] text-neutral-500 dark:text-fg-dim">Finish connecting this {name_} App before using it as a source</p>
+        <h1 class="truncate text-[24px]! leading-7! font-semibold! tracking-tight!">{form.name || `${app_} App`}</h1>
+        <p class="mt-1 text-[13px] text-neutral-500 dark:text-fg-dim">Finish connecting this {app_} App before using it as a source</p>
       </div>
       {#if data.can_delete}
         <div class="shrink-0 sm:ml-auto">{@render deleteButton()}</div>
@@ -314,7 +318,7 @@
         title="Step 1 · Create an OAuth application"
         description={gitlab
           ? 'Register a new OAuth application in your GitLab instance with the redirect URI below.'
-          : 'In Gitea, open Manage OAuth2 Applications and create a new application with the redirect URI below.'}
+          : 'In Gitea or Forgejo, open Settings → Applications → Manage OAuth2 Applications and create a new application with the redirect URI below.'}
       >
         <div class="flex flex-col gap-3 text-[12px] leading-5 text-neutral-600 dark:text-fg-dim">
           <a href={createUrl} target="_blank" class="inline-flex w-fit items-center gap-1 font-medium text-black underline-offset-2 hover:underline dark:text-fg">
@@ -347,19 +351,19 @@
           submit();
         }}
       >
-        <SettingsSection title="Step 2 · Enter credentials" description={gitlab ? 'Paste the Application ID and secret from GitLab, then save.' : 'Paste the Client ID and Client secret from Gitea, then save.'}>
+        <SettingsSection title="Step 2 · Enter credentials" description={gitlab ? 'Paste the Application ID and secret from GitLab, then save.' : 'Paste the Client ID and Client secret from Gitea or Forgejo, then save.'}>
           {#snippet actions()}
             <button type="submit" class="button">Save</button>
           {/snippet}
           <div class="grid gap-4 lg:grid-cols-2">
             <FormInput id="name" label="Name" bind:value={form.name} error={err('name')} />
-            <FormInput id="clientId" label={gitlab ? 'Application ID' : 'Client ID'} required helper={gitlab ? 'The Application ID from your GitLab OAuth Application.' : 'The Client ID from your Gitea OAuth2 application.'} bind:value={form.clientId} />
+            <FormInput id="clientId" label={gitlab ? 'Application ID' : 'Client ID'} required helper={gitlab ? 'The Application ID from your GitLab OAuth Application.' : 'The Client ID from your Gitea or Forgejo OAuth2 application.'} bind:value={form.clientId} />
             <FormInput
               id="clientSecretInput"
               label={gitlab ? 'Application secret' : 'Client secret'}
               type="password"
               required={!form.clientSecret && !data.has_client_secret}
-              helper={gitlab ? 'The Secret from your GitLab OAuth Application. Saved encrypted.' : 'The Client secret from your Gitea OAuth2 application. Saved encrypted.'}
+              helper={gitlab ? 'The Secret from your GitLab OAuth Application. Saved encrypted.' : 'The Client secret from your Gitea or Forgejo OAuth2 application. Saved encrypted.'}
               bind:value={form.clientSecret}
             />
             {#if gitlab}
@@ -373,7 +377,7 @@
             <div class="lg:col-span-2 text-[12px] text-neutral-500 dark:text-fg-dim">
               {gitlab
                 ? 'GitLab will redirect back to this coolify-rs URL. It must match the Callback URL on your GitLab OAuth Application exactly.'
-                : 'Gitea will redirect back to this coolify-rs URL. It must match the Redirect URI on your Gitea OAuth2 application exactly.'}
+                : 'Gitea or Forgejo will redirect back to this coolify-rs URL. It must match the Redirect URI on your Gitea or Forgejo OAuth2 application exactly.'}
             </div>
             <div class="lg:col-span-2 max-w-md">
               <Listbox
@@ -390,11 +394,11 @@
             </div>
             {#if !useCustom}
               <div class="lg:col-span-2">
-                <Listbox id="webhook_endpoint" label="Selected endpoint" helper="{name_} will use this endpoint unless custom mode is enabled." bind:value={endpoint} onchange={persistRedirect} options={known.map((v) => ({ value: v, label: `Use ${v}` }))} />
+                <Listbox id="webhook_endpoint" label="Selected endpoint" helper="{product_} will use this endpoint unless custom mode is enabled." bind:value={endpoint} onchange={persistRedirect} options={known.map((v) => ({ value: v, label: `Use ${v}` }))} />
               </div>
             {:else}
               <div class="lg:col-span-2">
-                <FormInput id="custom_webhook_endpoint" type="url" label="Custom endpoint" placeholder="https://coolify.example.com" helper="{name_} will use this custom public URL. Do not include /webhooks." bind:value={customEndpoint} onchange={persistRedirect} />
+                <FormInput id="custom_webhook_endpoint" type="url" label="Custom endpoint" placeholder="https://coolify.example.com" helper="{product_} will use this custom public URL. Do not include /webhooks." bind:value={customEndpoint} onchange={persistRedirect} />
               </div>
             {/if}
           </div>
@@ -412,13 +416,13 @@
             </button>
             {#if advancedOpen || err('htmlUrl') || err('apiUrl')}
               <div class="mt-3 grid gap-4 rounded-lg border border-neutral-200 p-3 lg:grid-cols-2 dark:border-white/[0.08]">
-                <FormInput id="htmlUrl" label="{name_} URL" helper="Only change this for self-hosted {name_} (e.g. https://{provider}.example.com)." bind:value={form.htmlUrl} onchange={deriveApi} error={err('htmlUrl')} />
-                <FormInput id="apiUrl" label="API URL" helper="Usually your {name_} URL with {gitlab ? '/api/v4' : '/api/v1'} appended." bind:value={form.apiUrl} error={err('apiUrl')} />
+                <FormInput id="htmlUrl" label={urlLabel} helper={gitlab ? 'Only change this for self-hosted GitLab (e.g. https://gitlab.example.com).' : 'Only change this for self-hosted Gitea or Forgejo (e.g. https://git.example.com).'} bind:value={form.htmlUrl} onchange={deriveApi} error={err('htmlUrl')} />
+                <FormInput id="apiUrl" label="API URL" helper={gitlab ? 'Usually your GitLab URL with /api/v4 appended.' : 'Usually your instance URL with /api/v1 appended.'} bind:value={form.apiUrl} error={err('apiUrl')} />
                 <FormInput id="customUser" label="SSH user" bind:value={form.customUser} />
                 <FormInput type="number" id="customPort" label="SSH port" bind:value={form.customPort} />
                 {#if data.can_make_system_wide || !gitlab}
                   <div class="max-w-xs lg:col-span-2">
-                    <Checkbox id="isSystemWide" label="System wide" helper="If checked, this {name_} App will be available for everyone in this coolify-rs instance." bind:checked={form.isSystemWide} />
+                    <Checkbox id="isSystemWide" label="System wide" helper="If checked, this {app_} App will be available for everyone in this coolify-rs instance." bind:checked={form.isSystemWide} />
                   </div>
                 {/if}
               </div>
@@ -428,11 +432,11 @@
       </form>
 
       {#if saved.clientId}
-        <SettingsSection title="Step 3 · Authorize with {name_}" description={gitlab
+        <SettingsSection title="Step 3 · Authorize with {product_}" description={gitlab
             ? 'Authorize coolify-rs with your GitLab instance. The redirect URI must match the Callback URL configured in GitLab.'
-            : 'Authorize coolify-rs with your Gitea instance. The redirect URI must match the one configured in Gitea.'}>
+            : 'Authorize coolify-rs with your Gitea or Forgejo instance. The redirect URI must match the one configured there.'}>
           <a href={oauthUrl} class="button button-highlighted">
-            Connect to {name_}
+            Connect to {app_}
             {@render externalLink()}
           </a>
         </SettingsSection>
@@ -443,11 +447,11 @@
 
 {#if confirmDelete && data}
   <ConfirmModal
-    title="Confirm {name_} App Deletion?"
-    actions={[`The selected ${name_} App will be permanently deleted.`]}
+    title="Confirm {app_} App Deletion?"
+    actions={[`The selected ${app_} App will be permanently deleted.`]}
     confirmationText={data.name}
-    confirmationLabel="Please confirm by entering the {name_} App Name below"
-    shortConfirmationLabel="{name_} App Name"
+    confirmationLabel="Please confirm by entering the {app_} App Name below"
+    shortConfirmationLabel="{app_} App Name"
     confirmWithPassword={false}
     step2ButtonText="Permanently Delete"
     onconfirm={remove}

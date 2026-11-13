@@ -338,6 +338,9 @@ async fn options(State(state): State<AppState>, Extension(ctx): Extension<AuthCt
         "levels": levels(),
         "presets": presets(),
         "supported": acc::has_member_access_column(&state.db),
+        // 4.7.5 (`team/member/access` view): `$team->id === 0` shows the warning about write
+        // access on the Coolify host.
+        "is_root_team": ctx.team_id == coolify_domain::ROOT_TEAM_ID,
     }))
     .into_response())
 }
@@ -504,7 +507,6 @@ async fn save_member_access(
             "team_id": ctx.team_id,
             "member_id": m.id,
             "member_name": m.name,
-            "member_email": m.email,
             "access": grants.iter().map(Grant::to_value).collect::<Vec<_>>(),
         }),
         "info",

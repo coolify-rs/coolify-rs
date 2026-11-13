@@ -20,7 +20,7 @@ pub const ACME: i64 = 1;
 pub const APP_KEY: &str = "base64:hPAFGDXpvHW0ZnwoP/YKkC1WJ+9Bv2jZCwc1hGGaI3s=";
 /// Password of every fixture user (bcrypt cost 4 hash in SEED).
 pub const PASSWORD: &str = "secret-password";
-pub const VERSION: &str = "4.6.0";
+pub const VERSION: &str = "4.7.5";
 pub const OTHER: i64 = 2;
 
 /// Fixture mirroring compat/reference/seed-fixtures.php.
@@ -192,6 +192,9 @@ impl Harness {
                 remote,
                 allow_unverified_plugins: plugins.as_ref().is_some_and(|(_, a)| *a),
                 plugins: plugins.map(|(h, _)| h),
+                // The suites send many requests that must fail; `ThrottleFailedApiRequests`
+                // has its own tests.
+                failed_api_request_limit: Some(0),
                 ..Options::default()
             },
         );

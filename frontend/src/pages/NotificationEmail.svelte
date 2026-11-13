@@ -1,5 +1,7 @@
 <script lang="ts">
-  // Port of upstream livewire/notifications/email.blade.php.
+  // Port of upstream livewire/notifications/email.blade.php (App\Livewire\Notifications\Email with
+  // App\Livewire\Concerns\ManagesSmtpServers).
+  import Callout from '../components/Callout.svelte';
   import FormInput from '../components/FormInput.svelte';
   import Listbox from '../components/Listbox.svelte';
   import Checkbox from '../components/Checkbox.svelte';
@@ -7,10 +9,12 @@
   import Reicon from '../components/Reicon.svelte';
   import UnsavedBar from '../components/UnsavedBar.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
+  import SmtpServerPicker from '../components/SmtpServerPicker.svelte';
   import NotificationLayout from '../components/NotificationLayout.svelte';
   import EventMultiselect from '../components/EventMultiselect.svelte';
   import { ApiError } from '../lib/api';
   import { notificationsUi, type ChannelData, type Values } from '../lib/notificationsApi';
+  import { emailProviderLabels, emailProviderOptions, type EmailProvider, type SmtpFieldKeys } from '../lib/smtpServers';
   import { notify } from '../lib/toast.svelte';
 
   document.title = 'Notifications | coolify-rs';
@@ -21,34 +25,67 @@
   let saving = $state(false);
   let testOpen = $state(false);
   let testAddress = $state('');
-  let instanceAdmin = $state(false);
+  /** `$isNewSmtpServer`: the fields hold a server that is not saved yet. */
+  let isNew = $state(false);
 
+  const smtpKeys: SmtpFieldKeys = {
+    name: 'smtp_server_name',
+    fromName: 'smtp_from_name',
+    fromAddress: 'smtp_from_address',
+    host: 'smtp_host',
+    port: 'smtp_port',
+    encryption: 'smtp_encryption',
+    username: 'smtp_username',
+    password: 'smtp_password',
+    timeout: 'smtp_timeout',
+    ehlo: 'smtp_ehlo_domain',
+  };
+
+  /** `syncData()`: the form of the saved settings, with `emailProvider` as the provider in use. */
   function apply(d: ChannelData) {
     data = d;
-    saved = { ...d.settings };
-    form = { ...d.settings };
+    const settings = { ...d.settings, email_provider: d.active_provider ?? 'none' };
+    saved = { ...settings };
+    form = { ...settings };
+    isNew = false;
   }
   notificationsUi.get('email').then((d) => {
-    instanceAdmin = !!d.instance_admin;
     testAddress = d.email ?? '';
     apply(d);
   });
 
-  const dirty = $derived(JSON.stringify(form) !== JSON.stringify(saved));
+  // The provider list saves on change, so it is not an unsaved field.
+  const comparable = (v: Values) => JSON.stringify({ ...v, email_provider: null });
+  const dirty = $derived(isNew || comparable(form) !== comparable(saved));
   const canUpdate = $derived(!!data?.can_update);
-  const onOff = [
-    { value: true, label: 'Enabled' },
-    { value: false, label: 'Disabled' },
-  ];
+  const activeProvider = $derived<EmailProvider>(data?.active_provider ?? 'none');
+  const provider = $derived<EmailProvider>(form.email_provider ?? 'none');
+  const sendTestReason = $derived(!canUpdate ? 'Only admins can send a test email.' : !data?.enabled ? 'Save an email provider first.' : null);
 
   const ev = (column: string, label: string) => ({ column, label, enabled: !!saved[column] });
 
-  async function run(action: string, onfail?: () => void) {
+  async function run(action: string, onfail?: () => void, extra: Values = {}) {
     saving = true;
     try {
-      const d = await notificationsUi.action('email', action, $state.snapshot(form));
-      apply(d);
-      notify.success(d.message ?? '');
+      const d = await notificationsUi.action('email', action, { ...$state.snapshot(form), is_new_smtp_server: isNew }, extra);
+      if (d.pending) {
+        // Not complete yet: the fields of the provider and the "Not active yet" notice show.
+        return;
+      }
+      if (d.new_server) {
+        // `addSmtpServer`: a new server only changes the fields; Save stores it.
+        Object.assign(form, d.new_server);
+        isNew = true;
+        return;
+      }
+      if (action === 'renameServer') {
+        // Only the name is saved; other unsaved changes on the page stay unsaved.
+        data = d;
+        form.smtp_server_name = saved.smtp_server_name = d.settings.smtp_server_name;
+      } else {
+        apply(d);
+      }
+      if (d.message) notify.success(d.message);
     } catch (e) {
       onfail?.();
       notify.failure(e instanceof ApiError ? e.message : String(e));
@@ -61,6 +98,13 @@
   function toggleEvent(column: string) {
     form[column] = !form[column];
     run('save', () => (form[column] = !form[column]));
+  }
+
+  /** `cancelNewSmtpServer`: back to the saved server, with the provider that was selected. */
+  function cancelNewServer() {
+    const selected = form.email_provider;
+    form = { ...saved, email_provider: selected };
+    isNew = false;
   }
 
   async function sendTest(e: SubmitEvent) {
@@ -83,28 +127,29 @@
           class="application-settings-form"
           onsubmit={(e) => {
             e.preventDefault();
-            run('save');
+            run('submit');
           }}
         >
-          <UnsavedBar {dirty} {saving} onsave={() => run('save')} onreset={() => (form = { ...saved })} />
+          <UnsavedBar {dirty} {saving} onsave={() => run('submit')} onreset={cancelNewServer} />
           <SettingsSection title="Email delivery">
             {#snippet actions()}
-              {#if canUpdate}
-                {#if data?.enabled}
-                  <button type="button" class="button" onclick={() => (testOpen = true)}>
-                    <Reicon name="notifications" class="size-3.5" />
-                    Send test
-                  </button>
-                {:else}
-                  <button type="button" class="button" disabled>Send test</button>
-                {/if}
+              {#if sendTestReason === null}
+                <button type="button" class="button" onclick={() => (testOpen = true)}>
+                  <Reicon name="notifications" class="size-3.5" />
+                  Send test
+                </button>
+              {:else}
+                <button type="button" class="button" disabled title={sendTestReason}>
+                  <Reicon name="notifications" class="size-3.5" />
+                  Send test
+                </button>
               {/if}
             {/snippet}
             <div class="grid gap-4 lg:grid-cols-2">
               <div class="lg:col-span-2">
                 <div class="w-full sm:w-72">
                   <Listbox
-                    id="use_instance_email_settings"
+                    id="useInstanceEmailSettings"
                     label="Email service"
                     disabled={!canUpdate}
                     bind:value={form.use_instance_email_settings}
@@ -116,91 +161,71 @@
                   />
                 </div>
               </div>
-              {#if !form.use_instance_email_settings}
-                <FormInput id="smtp_from_name" required disabled={!canUpdate} helper="Name used in emails." label="From name" bind:value={form.smtp_from_name} />
-                <FormInput
-                  id="smtp_from_address"
-                  required
-                  disabled={!canUpdate}
-                  helper="Email address used in emails."
-                  label="From address"
-                  bind:value={form.smtp_from_address}
-                />
-                {#if instanceAdmin}
-                  <div class="lg:col-span-2">
-                    <button type="button" class="button" onclick={() => run('copy')}>Copy from instance settings</button>
-                  </div>
-                {/if}
-              {/if}
             </div>
           </SettingsSection>
         </form>
 
         {#if !form.use_instance_email_settings}
           <div class="application-settings-form">
-            <SettingsSection title="SMTP server" description="Deliver messages through your own SMTP server.">
-              <div class="grid gap-4 lg:grid-cols-3">
-                <div class="lg:col-span-3">
-                  <div class="w-full sm:w-72">
-                    <Listbox
-                      id="smtp_enabled"
-                      label="SMTP delivery"
-                      disabled={!canUpdate}
-                      bind:value={form.smtp_enabled}
-                      onchange={() => run('smtp', () => (form.smtp_enabled = false))}
-                      options={onOff}
-                    />
-                  </div>
+            <SettingsSection title="Email provider" description="Only one provider sends email. Select a provider to see its settings.">
+              {#snippet badges()}
+                <div class="w-40">
+                  <Listbox id="emailProvider" disabled={!canUpdate} bind:value={form.email_provider} onchange={() => run('provider')} options={emailProviderOptions} />
                 </div>
-                <FormInput id="smtp_host" required disabled={!canUpdate} placeholder="smtp.mailgun.org" label="Host" bind:value={form.smtp_host} />
-                <FormInput id="smtp_port" required disabled={!canUpdate} type="number" placeholder="587" label="Port" bind:value={form.smtp_port} />
-                <Listbox
-                  id="smtp_encryption"
-                  label="Encryption"
-                  required
-                  disabled={!canUpdate}
-                  bind:value={form.smtp_encryption}
-                  options={[
-                    { value: 'starttls', label: 'StartTLS' },
-                    { value: 'tls', label: 'TLS / SSL' },
-                    { value: 'none', label: 'None' },
-                  ]}
-                />
-                <FormInput id="smtp_username" disabled={!canUpdate} label="SMTP username" bind:value={form.smtp_username} />
-                {#if canUpdate}
-                  <FormInput id="smtp_password" type="password" label="SMTP password" bind:value={form.smtp_password} />
-                {:else}
-                  <FormInput id="smtp_password" disabled label="SMTP password" value="Hidden (only admins can view)" />
+              {/snippet}
+              <div class="grid gap-4 lg:grid-cols-3">
+                {#if provider === 'none'}
+                  <p class="text-sm text-neutral-500 lg:col-span-3 dark:text-neutral-400">
+                    The team does not get email notifications. Select a provider next to the title to set it up.
+                  </p>
                 {/if}
-                <FormInput id="smtp_timeout" type="number" disabled={!canUpdate} helper="Timeout value for sending emails." label="Timeout" bind:value={form.smtp_timeout} />
-                <FormInput
-                  id="smtp_ehlo_domain"
-                  disabled={!canUpdate}
-                  placeholder="coolify.example.com"
-                  helper="Fully qualified domain sent in the SMTP EHLO command. Uses the system default when empty."
-                  label="EHLO domain"
-                  bind:value={form.smtp_ehlo_domain}
-                />
-              </div>
-            </SettingsSection>
-          </div>
 
-          <div class="application-settings-form">
-            <SettingsSection title="Resend">
-              <div class="grid gap-4 lg:grid-cols-2">
-                <Listbox id="resend_enabled" label="Resend delivery" disabled={!canUpdate} bind:value={form.resend_enabled} onchange={() => run('resend')} options={onOff} />
-                {#if canUpdate}
-                  <FormInput
-                    id="resend_api_key"
-                    type="password"
-                    required={!!form.resend_enabled}
-                    placeholder="API key"
-                    label="API key"
-                    autocomplete="new-password"
-                    bind:value={form.resend_api_key}
+                {#if provider !== activeProvider}
+                  <div class="lg:col-span-3">
+                    <Callout type="warning" title="Not active yet">
+                      Enter the {emailProviderLabels[provider]} settings and save.
+                      {#if activeProvider === 'none'}
+                        Until then, the team does not get email notifications.
+                      {:else}
+                        Until then, Coolify sends email with
+                        {emailProviderLabels[activeProvider]}.
+                      {/if}
+                    </Callout>
+                  </div>
+                {/if}
+
+                {#if provider === 'smtp'}
+                  <SmtpServerPicker
+                    bind:form
+                    keys={smtpKeys}
+                    {canUpdate}
+                    {isNew}
+                    activeName={data.smtp_server_name ?? 'Default'}
+                    options={data.smtp_server_options ?? []}
+                    presets={data.smtp_presets ?? []}
+                    onswitch={(id) => run('switchServer', undefined, { id })}
+                    onrename={(name) => run('renameServer', undefined, { name })}
+                    ondelete={() => run('deleteServer')}
+                    onadd={(name, template) => run('addServer', undefined, { name, template })}
+                    oncancel={cancelNewServer}
                   />
-                {:else}
-                  <FormInput id="resend_api_key" disabled label="API key" value="Hidden (only admins can view)" />
+                {:else if provider === 'resend'}
+                  <div>
+                    {#if canUpdate}
+                      <FormInput required type="password" id="resendApiKey" placeholder="API key" label="Resend API key" autocomplete="new-password" bind:value={form.resend_api_key} />
+                    {:else}
+                      <FormInput id="resendApiKey" disabled label="Resend API key" value="Hidden (only admins can view)" />
+                    {/if}
+                  </div>
+                  <FormInput disabled={!canUpdate} required id="resendFromName" helper="Name shown in email from Resend." label="From name" bind:value={form.resend_from_name} />
+                  <FormInput
+                    disabled={!canUpdate}
+                    required
+                    id="resendFromAddress"
+                    helper="Address used in email from Resend. It must be on a domain verified in Resend."
+                    label="From address"
+                    bind:value={form.resend_from_address}
+                  />
                 {/if}
               </div>
             </SettingsSection>
@@ -222,7 +247,11 @@
                 label="Resources"
                 disabled={!canUpdate}
                 ontoggle={toggleEvent}
-                events={[ev('status_change_email_notifications', 'Resource status changes'), ev('restart_limit_reached_email_notifications', 'Restart limit reached')]}
+                events={[
+                  ev('status_change_email_notifications', 'Resource status changes'),
+                  ev('restart_limit_reached_email_notifications', 'Restart limit reached'),
+                  ev('image_vulnerabilities_email_notifications', 'Image vulnerabilities'),
+                ]}
               />
               <EventMultiselect
                 id="backup-email-events"
@@ -256,7 +285,7 @@
             </div>
             <div class="mt-4">
               <Checkbox
-                id="deployment_commit_details_email_notifications"
+                id="deploymentCommitDetailsEmailNotifications"
                 label="Include commit details in deployment emails"
                 helper="Adds the commit SHA, branch, and commit message to deployment success and failure emails."
                 disabled={!canUpdate}

@@ -184,6 +184,20 @@ async fn create(
             ColumnValue::Text(d.str(column).map(str::to_owned)),
         ));
     }
+    // Odoo keeps its data in databases that the user creates in Odoo, so the database that the
+    // container env names (POSTGRES_DB=postgres) stays empty.
+    if d.is_service() {
+        let service_type: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT s.service_type FROM services s JOIN service_databases sd ON sd.service_id = s.id WHERE sd.id = $1",
+        )
+        .bind(d.id)
+        .fetch_optional(state.db.pool())
+        .await
+        .map_err(|_| ApiError::Internal)?;
+        if service_type.flatten().as_deref() == Some("odoo") {
+            fields.push(("dump_all", ColumnValue::Bool(true)));
+        }
+    }
     let (_, backup_uuid) = parts::create_backup(
         &state.db,
         &NewBackup {
@@ -370,6 +384,32 @@ async fn action(
                 let keep = !on && flag("disable_local_backup");
                 form.insert("save_s3".into(), json!(!on));
                 form.insert("disable_local_backup".into(), json!(keep));
+            }
+            // `BackupEdit::submit`: a storage that is not a destination of the schedule yet
+            // (`newS3StorageIds()`) needs write access on the whole team of the schedule.
+            let mut current = crate::ui_settings::selected_storages(&state, id).await?;
+            current.extend(b.get("s3_storage_id").and_then(Value::as_i64));
+            let adds_storage = form
+                .get("save_s3")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                && form
+                    .get("s3_storage_ids")
+                    .and_then(Value::as_array)
+                    .is_some_and(|ids| {
+                        ids.iter().any(|x| {
+                            x.as_i64()
+                                .or_else(|| x.as_str().and_then(|s| s.parse().ok()))
+                                .is_some_and(|n| n != 0 && !current.contains(&n))
+                        })
+                    });
+            if adds_storage && !ctx.can_use_team_credentials() {
+                let mut res = toasts(&[(
+                    "error",
+                    "You need write access on the whole team to add an S3 storage to this backup.",
+                )]);
+                res["backup"] = edit_payload(&state, &d, &b).await?;
+                return Ok(ok(res).into_response());
             }
             match crate::ui_settings::save_backup(
                 &state,
@@ -563,6 +603,8 @@ async fn executions(
         "total": total,
         "server_timezone": server_of(&state, &d).await?.and_then(|s| s.settings.get("server_timezone").and_then(Value::as_str).map(str::to_owned)),
         "s3_downloads": s3_downloads_enabled(&state).await,
+        // `$backup->dump_all`: the name of an execution without a database name.
+        "dump_all": parts::bool_of(&b, "dump_all"),
     }))
     .into_response())
 }
@@ -813,23 +855,83 @@ fn file_response(
         .into_response()
 }
 
-/// `s3DownloadUrl`: a temporary link to the first live copy, the primary storage first.
-fn s3_link(
+/// `HasS3Replicas::s3Download()`: a download of the first live copy in a usable storage, the
+/// primary storage first: a redirect to a short-lived presigned URL for S3, else a stream through
+/// coolify-rs. `None` when no such copy exists.
+async fn s3_download(
     state: &AppState,
     storages: &mut [Record],
     primary: Option<i64>,
     filename: &str,
 ) -> Result<Option<Response>, ApiError> {
     storages.sort_by_key(|s| i32::from(Some(parts::id_of(s)) != primary));
-    let (Some(storage), Some(enc)) = (storages.first(), state.encrypter.as_ref()) else {
+    let Some(enc) = state.encrypter.as_ref() else {
         return Ok(None);
     };
-    let target = S3Target::from_row(enc, storage).map_err(|_| ApiError::Internal)?;
-    // `FileDownloadStorageService::LINK_TTL_MINUTES`.
-    let url = target
-        .presigned_get(filename.trim_start_matches('/'), 15 * 60)
-        .map_err(|_| ApiError::Internal)?;
-    Ok(Some(Redirect::to(&url).into_response()))
+    for storage in storages.iter() {
+        if !coolify_jobs::databases::storage_type::is_s3(storage) {
+            if let Some(download) = streamed_download(state, storage, filename).await {
+                return Ok(Some(download));
+            }
+            continue;
+        }
+        // The upload copies the file to "<bucket><backup directory>/", so the object key is the local file path.
+        let target = S3Target::from_row(enc, storage).map_err(|_| ApiError::Internal)?;
+        // `FileDownloadStorageService::LINK_TTL_MINUTES`.
+        let url = target
+            .presigned_get(filename.trim_start_matches('/'), 15 * 60)
+            .map_err(|_| ApiError::Internal)?;
+        return Ok(Some(Redirect::to(&url).into_response()));
+    }
+    Ok(None)
+}
+
+/// `HasS3Replicas::streamedDownload()`: a download through coolify-rs from an SFTP, FTPS or
+/// WebDAV storage, or `None` when the storage is unreachable or has no such file. The response
+/// sends only the size that the storage reported, so the browser sees a cut-off download as failed.
+async fn streamed_download(state: &AppState, storage: &Record, filename: &str) -> Option<Response> {
+    let jobs = state.jobs.as_ref()?;
+    let path = filename.trim_matches('/').to_owned();
+    let mut disk = jobs.file_storage(storage).await.ok()?.disk().ok()?;
+    let size = match disk.entry(jobs, &path).await {
+        Ok(Some(entry)) if !entry.is_dir => entry.size?,
+        _ => return None,
+    };
+    let download = disk.download(jobs, &path).await.ok()?;
+    let base = path.rsplit('/').next().unwrap_or(&path).to_owned();
+    let stream = stream::unfold((download, size), |(mut download, left)| async move {
+        if left == 0 {
+            return None;
+        }
+        match download.chunk().await {
+            Ok(Some(mut chunk)) => {
+                // Never more than the size that the storage reported.
+                chunk.truncate(usize::try_from(left).unwrap_or(usize::MAX).min(chunk.len()));
+                let sent = chunk.len() as u64;
+                Some((
+                    Ok::<_, std::io::Error>(Bytes::from(chunk)),
+                    (download, left - sent),
+                ))
+            }
+            Ok(None) => None,
+            Err(e) => Some((Err(std::io::Error::other(e)), (download, 0))),
+        }
+    });
+    Some(
+        (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/octet-stream".to_owned()),
+                (header::CONTENT_LENGTH, size.to_string()),
+                (
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{base}\""),
+                ),
+            ],
+            Body::from_stream(stream),
+        )
+            .into_response(),
+    )
 }
 
 /// `Route::get('/download/volume-backup/{executionId}')`.
@@ -901,12 +1003,14 @@ async fn download_volume_inner(
         }
     }
     let mut storages = vb::live_storages(&state.db, id, team).await?;
-    if let Some(link) = s3_link(
+    if let Some(link) = s3_download(
         state,
         &mut storages,
         row.get("s3_storage_id").and_then(Value::as_i64),
         &filename,
-    )? {
+    )
+    .await?
+    {
         return Ok(link);
     }
     if !local_deleted && server.is_none() {
@@ -981,7 +1085,7 @@ async fn download_inner(
         let primary = backup.get("s3_storage_id").and_then(Value::as_i64);
         let mut storages =
             pages::live_replica_storages(&state.db, parts::id_of(&row), team).await?;
-        if let Some(link) = s3_link(state, &mut storages, primary, &filename)? {
+        if let Some(link) = s3_download(state, &mut storages, primary, &filename).await? {
             return Ok(link);
         }
     }

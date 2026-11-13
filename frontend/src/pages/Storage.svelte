@@ -13,6 +13,8 @@
   import DangerZone from '../components/DangerZone.svelte';
   import Callout from '../components/Callout.svelte';
   import EndpointInput from '../components/EndpointInput.svelte';
+  import StorageServerFields from '../components/StorageServerFields.svelte';
+  import StorageSftpLogin from '../components/StorageSftpLogin.svelte';
   import { ApiError } from '../lib/api';
   import { storagesUi, splitEndpoint, composeEndpoint, detectPathStyleEndpoint, type EndpointParts, type StorageDetails, type StorageForm, type StorageResources } from '../lib/storagesApi';
   import { router, link } from '../lib/router.svelte';
@@ -36,7 +38,21 @@
   }
 
   function applyForm(d: StorageDetails) {
-    form = { name: d.name, description: d.description ?? '', endpoint: d.endpoint, bucket: d.bucket, region: d.region, key: d.key, secret: d.secret, use_path_style_endpoint: d.use_path_style_endpoint };
+    form = {
+      name: d.name,
+      description: d.description ?? '',
+      endpoint: d.endpoint,
+      server_parts: { ...d.server_parts },
+      bucket: d.bucket ?? '',
+      region: d.region,
+      key: d.key,
+      // A new secret key or password. The saved one never comes to the browser; empty keeps it.
+      secret: '',
+      use_path_style_endpoint: d.use_path_style_endpoint,
+      skip_tls_verification: d.skip_tls_verification,
+      sftp_auth: d.sftp_auth,
+      private_key_id: d.private_key_id,
+    };
     parts = splitEndpoint(d.endpoint);
     usePathStyleEndpointChanged = d.use_path_style_endpoint_changed;
     saved = snapshot();
@@ -44,7 +60,7 @@
 
   function setCrumbs(d: StorageDetails, usable: boolean) {
     page.resourceSwitcher = {
-      title: 'S3 Storage',
+      title: 'Storage',
       label: d.name,
       uuid: d.uuid,
       usable,
@@ -64,11 +80,11 @@
       throw e;
     }
     data = d;
-    document.title = `${d.name.length > 20 ? `${d.name.slice(0, 20)}...` : d.name} | S3 Storage | coolify-rs`;
+    document.title = `${d.name.length > 20 ? `${d.name.slice(0, 20)}...` : d.name} | Storage | coolify-rs`;
     applyForm(d);
     setCrumbs(d, d.is_usable);
     page.navContext = {
-      label: 'S3 Storage',
+      label: 'Storage',
       backTitle: 'Back to Integrations',
       ariaLabel: 'S3 storage settings',
       name: d.name,
@@ -123,6 +139,7 @@
       notify.ok(r.message, r.details);
       if (data) {
         data.is_usable = true;
+        data.sftp_host_key_fingerprint = r.sftp_host_key_fingerprint;
         setCrumbs(data, true);
       }
     } catch (e) {
@@ -132,6 +149,21 @@
         data.is_usable = false;
         setCrumbs(data, false);
       }
+    }
+  }
+
+  /** `resetHostKey`: the next validation saves the key that the server presents then. */
+  async function resetHostKey() {
+    try {
+      const r = await storagesUi.resetHostKey(uuid);
+      notify.ok(r.message, r.details);
+      if (data) {
+        data.is_usable = false;
+        data.sftp_host_key_fingerprint = null;
+        setCrumbs(data, false);
+      }
+    } catch (e) {
+      notify.failure(e instanceof ApiError ? e.message : String(e));
     }
   }
 
@@ -240,7 +272,7 @@
             }}
           >
             <UnsavedBar {dirty} {saving} onsave={submit} onreset={() => data && applyForm(data)} />
-            <SettingsSection title="General" description="S3-compatible destination used by database and volume backups.">
+            <SettingsSection title="General" description="{data.type === 's3' ? 'S3-compatible destination' : `${data.type_label} destination`} used by database and volume backups.">
               {#snippet actions()}
                 {#if canUpdate}
                   <button type="button" class="button" onclick={testConnection}>
@@ -252,26 +284,69 @@
               <div class="grid gap-4 lg:grid-cols-2">
                 <FormInput disabled={!canUpdate} label="Name" id="name" bind:value={form.name} />
                 <FormInput disabled={!canUpdate} label="Description" id="description" bind:value={form.description} />
-                <div class="lg:col-span-2">
+                <FormInput id="type" label="Type" value={data.type_label} disabled helper="The type cannot change after creation. Create a new storage for another type." />
+                <div></div>
+                {#if data.type === 's3'}
+                  <div class="lg:col-span-2">
+                    {#if canUpdate}
+                      <!-- Sends the endpoint right away, so the URL style below follows the provider. -->
+                      <div onchange={endpointChanged}>
+                        <EndpointInput bind:parts />
+                      </div>
+                    {:else}
+                      <FormInput id="endpoint" label="Endpoint" value={data.endpoint} disabled />
+                    {/if}
+                  </div>
+                  <FormInput disabled={!canUpdate} required label="Bucket" id="bucket" bind:value={form.bucket} />
+                  <FormInput disabled={!canUpdate} required label="Region" id="region" bind:value={form.region} />
                   {#if canUpdate}
-                    <!-- Sends the endpoint right away, so the URL style below follows the provider. -->
-                    <div onchange={endpointChanged}>
-                      <EndpointInput bind:parts />
+                    <FormInput required type="password" label="Access key" id="key" bind:value={form.key} />
+                    <FormInput type="password" label="Secret key" id="secret" required={!data.has_saved_secret} placeholder={data.has_saved_secret ? 'Saved. Leave empty to keep it.' : ''} bind:value={form.secret} />
+                  {:else}
+                    <FormInput id="key" label="Access key" disabled value="Hidden (only admins can view)" />
+                    <FormInput id="secret" label="Secret key" disabled value="Hidden (only admins can view)" />
+                  {/if}
+                  <Checkbox id="usePathStyleEndpoint" label="Use path-style URLs" helper="Turn this off for providers that only accept virtual-hosted-style URLs (bucket.endpoint). coolify-rs turns it off for Alibaba Cloud OSS, Tencent Cloud COS, and Volcengine TOS, and when the provider rejects path-style URLs." disabled={!canUpdate} bind:checked={form.use_path_style_endpoint} onchange={() => (usePathStyleEndpointChanged = true)} />
+                  <Checkbox id="skipTlsVerification" label="Skip TLS certificate verification" helper="Turn this on only for an endpoint with a self-signed or private CA certificate. coolify-rs and the backup helper then accept any certificate, so an attacker on the network path can read or change your backups. Browsers that download files from this storage must still trust the certificate." disabled={!canUpdate} bind:checked={form.skip_tls_verification} />
+                {:else}
+                  <div class="lg:col-span-2">
+                    {#if data.type === 'webdav'}
+                      {#if canUpdate}
+                        <EndpointInput bind:parts hostPlaceholder="cloud.example.com" portPlaceholder="443" pathPlaceholder="/remote.php/dav/files/USER/backups" pathHelper="The path of the backup directory on the WebDAV server, for example /remote.php/dav/files/USER/backups for Nextcloud." />
+                      {:else}
+                        <FormInput id="endpoint" label="URL" value={data.endpoint} disabled />
+                      {/if}
+                    {:else}
+                      <StorageServerFields bind:parts={form.server_parts} defaultPort={data.default_port} disabled={!canUpdate} />
+                    {/if}
+                  </div>
+                  {#if !canUpdate}
+                    <FormInput id="key" label="Username" disabled value="Hidden (only admins can view)" />
+                    <FormInput id="secret" label="Password" disabled value="Hidden (only admins can view)" />
+                  {:else if data.type === 'sftp'}
+                    <FormInput required label="Username" id="key" autocomplete="off" bind:value={form.key} />
+                    <div class="lg:col-span-2">
+                      <StorageSftpLogin bind:auth={form.sftp_auth} bind:privateKeyId={form.private_key_id} bind:secret={form.secret} privateKeys={data.private_keys} hasSavedSecret={data.has_saved_secret} />
                     </div>
                   {:else}
-                    <FormInput id="endpoint" label="Endpoint" value={data.endpoint} disabled />
+                    <FormInput required label="Username" id="key" autocomplete="off" bind:value={form.key} />
+                    <FormInput type="password" label="Password" id="secret" required={!data.has_saved_secret} placeholder={data.has_saved_secret ? 'Saved. Leave empty to keep it.' : ''} bind:value={form.secret} />
                   {/if}
-                </div>
-                <FormInput disabled={!canUpdate} required label="Bucket" id="bucket" bind:value={form.bucket} />
-                <FormInput disabled={!canUpdate} required label="Region" id="region" bind:value={form.region} />
-                {#if canUpdate}
-                  <FormInput required type="password" label="Access key" id="key" bind:value={form.key} />
-                  <FormInput required type="password" label="Secret key" id="secret" bind:value={form.secret} />
-                {:else}
-                  <FormInput id="key" label="Access key" disabled value="Hidden (only admins can view)" />
-                  <FormInput id="secret" label="Secret key" disabled value="Hidden (only admins can view)" />
+                  {#if data.type === 'sftp'}
+                    <div class="flex items-end gap-2 lg:col-span-2">
+                      <FormInput
+                        id="sftpHostKeyFingerprint"
+                        label="Host key fingerprint"
+                        disabled
+                        value={data.sftp_host_key_fingerprint ?? 'Not saved yet. Validate the connection to save it.'}
+                        helper="coolify-rs saves the host key of the server when you validate the connection, and refuses the server when the key changes. Backups do not save a new key. Reset it only when you know why the key changed."
+                      />
+                      {#if canUpdate && data.sftp_host_key_fingerprint}
+                        <button type="button" class="button" onclick={resetHostKey}>Reset host key</button>
+                      {/if}
+                    </div>
+                  {/if}
                 {/if}
-                <Checkbox id="usePathStyleEndpoint" label="Use path-style URLs" helper="Turn this off for providers that only accept virtual-hosted-style URLs (bucket.endpoint). coolify-rs turns it off for Alibaba Cloud OSS, Tencent Cloud COS, and Volcengine TOS, and when the provider rejects path-style URLs." disabled={!canUpdate} bind:checked={form.use_path_style_endpoint} onchange={() => (usePathStyleEndpointChanged = true)} />
               </div>
             </SettingsSection>
           </form>

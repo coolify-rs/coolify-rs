@@ -510,6 +510,7 @@
               bind:base={baseDirectory}
               bind:file={dockerComposeLocation}
               showFile
+              compose
               fileLabel="Compose file"
               defaultFile="/docker-compose.yaml"
             />

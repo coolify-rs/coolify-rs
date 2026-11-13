@@ -56,7 +56,13 @@ pub async fn api(
 ) -> Result<(Value, i64), String> {
     let token = access_token(db, enc, source).await?;
     let base = api_url_base(source);
-    let http = git_http::client(Some(db), &base, Duration::from_secs(20)).await?;
+    let http = git_http::client(
+        Some(db),
+        git_http::may_use_private_networks(source),
+        &base,
+        Duration::from_secs(20),
+    )
+    .await?;
     let url = format!("{base}/{}", endpoint.trim_start_matches('/'));
     let response = git_http::retry(|| {
         let r = http
@@ -80,7 +86,7 @@ pub async fn api(
     if !status.is_success() {
         return Err(format!(
             "GitLab API call failed: {}",
-            git_http::error_text(&body, "message")
+            git_http::error_text(status.as_u16(), &body, "message")
         ));
     }
     Ok((serde_json::from_str(&body).unwrap_or(Value::Null), total))
@@ -95,7 +101,13 @@ pub async fn load_repositories(
 ) -> Result<Value, String> {
     let token = access_token(db, enc, source).await?;
     let base = api_url_base(source);
-    let http = git_http::client(Some(db), &base, Duration::from_secs(20)).await?;
+    let http = git_http::client(
+        Some(db),
+        git_http::may_use_private_networks(source),
+        &base,
+        Duration::from_secs(20),
+    )
+    .await?;
     let url = format!("{base}/projects");
     let page_text = page.to_string();
     let response = git_http::retry(|| {
@@ -166,7 +178,13 @@ pub async fn load_branches(
 ) -> Result<Value, String> {
     let token = access_token(db, enc, source).await?;
     let base = api_url_base(source);
-    let http = git_http::client(Some(db), &base, Duration::from_secs(20)).await?;
+    let http = git_http::client(
+        Some(db),
+        git_http::may_use_private_networks(source),
+        &base,
+        Duration::from_secs(20),
+    )
+    .await?;
     let url = format!("{base}/projects/{project_id}/repository/branches");
     let page_text = page.to_string();
     let response = git_http::retry(|| {

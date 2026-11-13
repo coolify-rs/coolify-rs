@@ -83,6 +83,8 @@ pub static SERVICE_APPLICATION: ModelSpec = ModelSpec {
         "is_permanent_redirect_enabled",
         "domain_dns_statuses",
         "domain_port_overrides",
+        // v4.7.5 (`markServicePartsRemovedFromCompose()`).
+        "is_removed_from_compose",
     ],
     hidden: &["domain_dns_statuses", "domain_port_overrides"],
     timestamps: &[
@@ -122,6 +124,8 @@ pub static SERVICE_DATABASE: ModelSpec = ModelSpec {
         "is_migrated",
         "custom_type",
         "public_port_timeout",
+        // v4.7.5 (`markServicePartsRemovedFromCompose()`).
+        "is_removed_from_compose",
     ],
     hidden: &[],
     timestamps: &["created_at", "updated_at", "deleted_at", "last_online_at"],
@@ -379,6 +383,8 @@ pub async fn soft_delete(db: &Db, id: i64, now: NaiveDateTime) -> DbResult<()> {
         .bind(now)
         .execute(db.pool())
         .await?;
+    // `HasStars::bootHasStars()`.
+    crate::stars::delete_for(db, MORPH, id).await?;
     Ok(())
 }
 
@@ -1272,6 +1278,22 @@ pub async fn replicate_children(
         .bind(now)
         .execute(db.pool())
         .await?;
+    }
+    // Each copy goes through `EnvironmentVariable::performInsert()` (v4.7): the second row of a key
+    // fails the clone like upstream's unique check. The new service has no variables yet, so only
+    // a duplicate in the source can collide.
+    let duplicate: Option<String> = sqlx::query_scalar(
+        "SELECT key FROM (SELECT id, key, row_number() OVER (PARTITION BY key, is_preview ORDER BY id) AS n \
+         FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2) x WHERE n = 2 ORDER BY id LIMIT 1",
+    )
+    .bind(MORPH)
+    .bind(source_id)
+    .fetch_optional(db.pool())
+    .await?;
+    if let Some(key) = duplicate {
+        return Err(DbError::Schema(
+            crate::environment_variables::duplicate_key_message(&key),
+        ));
     }
     sqlx::query(
         "INSERT INTO environment_variables (key, value, is_preview, is_required, is_multiline, is_literal, is_shown_once, is_runtime, \

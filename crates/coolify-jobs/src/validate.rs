@@ -10,6 +10,7 @@ use coolify_remote::{RunOptions, Target};
 
 use crate::checks::{self, Wording};
 use crate::server::ServerInfo as Server;
+use crate::server_ops::host_key;
 use crate::{Jobs, Progress};
 
 /// `Server::setValidationLogsAttribute`: redacted, then purified.
@@ -34,7 +35,16 @@ pub(crate) async fn run(
     }
     let s = Server::from_row(&row);
     let transferred = s.transferred;
-    let v = Validation { jobs, s, wording };
+    // v4.7.5 `validateConnection()`: a validation enables a disabled self-hosted server again,
+    // but only when the connection works.
+    let re_enabling = s.can_be_re_enabled() && !s.has_placeholder_ip();
+    let s = if re_enabling { s.force_enabled() } else { s };
+    let v = Validation {
+        jobs,
+        s,
+        wording,
+        re_enabling,
+    };
 
     if transferred {
         v.server_columns(&[
@@ -60,6 +70,8 @@ struct Validation<'a> {
     jobs: &'a Jobs,
     s: Server,
     wording: Wording,
+    /// The server was disabled when the validation started (`$isReEnabling`).
+    re_enabling: bool,
 }
 
 impl Validation<'_> {
@@ -108,9 +120,15 @@ impl Validation<'_> {
 
         // validateConnection(): one attempt, so a host that is not the user's
         // does not see repeated failed logins.
+        if self.re_enabling {
+            // `forceEnableServer()`.
+            self.settings(&[("force_disabled", ColumnValue::Bool(false))])
+                .await?;
+        }
         let (uptime, error, target) = if self.s.skipped() {
             (false, "Server skipped.".to_owned(), None)
         } else {
+            host_key::before_validation(self.jobs, &self.s).await;
             match self.target().await {
                 Err(e) => (false, e, None),
                 Ok(t) => match remote
@@ -121,11 +139,23 @@ impl Validation<'_> {
                     )
                     .await
                 {
-                    Ok(_) => (true, String::new(), Some(t)),
-                    Err(e) => (false, e.message, None),
+                    Ok(_) => {
+                        host_key::learn_now(self.jobs, &self.s).await;
+                        (true, String::new(), Some(t))
+                    }
+                    Err(e) => (
+                        false,
+                        host_key::validation_error(self.jobs, &self.s, e.message).await,
+                        None,
+                    ),
                 },
             }
         };
+        if self.re_enabling && !uptime {
+            // `forceDisableServer()`.
+            self.settings(&[("force_disabled", ColumnValue::Bool(true))])
+                .await?;
+        }
         // A skipped server keeps its flag; any other outcome records it.
         if !self.s.skipped() && self.s.setting_bool("is_reachable") != Some(uptime) {
             // ServerReachabilityChanged only drives notifications, which are not ported.

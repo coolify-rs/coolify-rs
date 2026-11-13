@@ -134,13 +134,14 @@ pub async fn update(
     validate(
         &input,
         &[
+            // `nameRules(required: false, nullable: false)`, `descriptionRules()` (4.7.5).
             Field {
                 name: "name",
-                rules: vec![Rule::String, Rule::Max(255)],
+                rules: crate::validation::patterns::present_name_rules(),
             },
             Field {
                 name: "description",
-                rules: vec![Rule::String, Rule::Nullable],
+                rules: crate::validation::patterns::description_rules(),
             },
             Field {
                 name: "image",
@@ -203,7 +204,7 @@ pub async fn update(
                 rules: vec![Rule::Boolean],
             },
         ],
-        CUSTOM_API_MESSAGES,
+        crate::validation::patterns::API_COMBINED_MESSAGES,
         &present,
     )?;
     let instant = crate::routes::databases::input_bool(&input, "instant_deploy");
@@ -227,6 +228,7 @@ pub async fn update(
         "domains",
         "instant_deploy",
         "github_app_uuid",
+        "gitea_app_uuid",
         "private_key_uuid",
         "use_build_server",
         "use_build_secrets",
@@ -241,9 +243,12 @@ pub async fn update(
         "is_container_label_escape_enabled",
         "is_preserve_repository_enabled",
         "include_source_commit_in_build",
+        "include_network_hosts_in_build",
         "is_git_submodules_enabled",
         "is_git_lfs_enabled",
         "is_git_shallow_clone_enabled",
+        "is_auto_cancel_queued_deployments_enabled",
+        "is_auto_cancel_building_deployments_enabled",
         "disable_build_cache",
         "inject_build_args_to_dockerfile",
         "is_env_sorting_enabled",
@@ -820,16 +825,17 @@ pub async fn clone_database(
                 name: "destination_uuid",
                 rules: vec![Rule::Required, Rule::String],
             },
+            // `nameRules(required: false)` (4.7.5).
             Field {
                 name: "name",
-                rules: vec![Rule::String, Rule::Max(255), Rule::Nullable],
+                rules: crate::validation::patterns::optional_name_rules(),
             },
             Field {
                 name: "clone_volumes",
                 rules: vec![Rule::Boolean],
             },
         ],
-        CUSTOM_API_MESSAGES,
+        crate::validation::patterns::API_COMBINED_MESSAGES,
         &["destination_uuid", "name", "clone_volumes"],
     )?;
     let d = find(&state, &ctx, &uuid).await?;
@@ -867,6 +873,8 @@ pub async fn clone_database(
     {
         return Err(not_found);
     }
+    // `$this->authorize('placeResource', $destination->server)` (4.7.5).
+    crate::place_resource::authorize(&state, &ctx, &server).await?;
     let new_uuid = new_public_id();
     let name = match input.str("name").filter(|n| !n.trim().is_empty()) {
         Some(n) => n.to_owned(),
@@ -971,6 +979,8 @@ pub(crate) async fn upload_database_import(
     let base = import_data_dir(&state).join("upload-tmp");
     let _ = std::fs::create_dir_all(&base);
     let temp = base.join(new_public_id());
+    // The request's file is removed however the request ends (a dropped connection included).
+    let _temp_guard = RemoveOnDrop(temp.clone());
     let mut original: Option<String> = None;
     let mut fields: Map<String, Value> = Map::new();
     let mut size: u64 = 0;
@@ -978,11 +988,22 @@ pub(crate) async fn upload_database_import(
         let name = field.name().unwrap_or_default().to_owned();
         if name == "file" {
             original = field.file_name().map(str::to_owned);
+            // Room left for this file: the whole limit, less what an earlier chunk of the same
+            // upload already holds when the chunk fields came first.
+            let limit = import::MAX_BYTES
+                .saturating_sub(chunk_part_path(&base, &fields).map_or(0, |part| file_len(&part)));
             let mut f = std::fs::File::create(&temp).map_err(|_| ApiError::Internal)?;
             while let Ok(Some(chunk)) = field.chunk().await {
                 use std::io::Write as _;
-                f.write_all(&chunk).map_err(|_| ApiError::Internal)?;
                 size += chunk.len() as u64;
+                if size > limit {
+                    drop(f);
+                    if let Some(part) = chunk_part_path(&base, &fields) {
+                        let _ = std::fs::remove_file(part);
+                    }
+                    return Err(too_large());
+                }
+                f.write_all(&chunk).map_err(|_| ApiError::Internal)?;
             }
         } else if let Ok(text) = field.text().await {
             fields.insert(name, Value::String(text));
@@ -1033,12 +1054,7 @@ pub(crate) async fn upload_database_import(
         .unwrap_or(0);
     if total > import::MAX_BYTES {
         cleanup();
-        let mut m = Map::new();
-        m.insert(
-            "file".into(),
-            json!(["The backup exceeds the 10 GiB limit."]),
-        );
-        return Err(ApiError::Validation(m));
+        return Err(too_large());
     }
     // Chunks are appended until the last one (`pion/laravel-chunk-upload`).
     let chunk_index: Option<u64> = fields
@@ -1051,15 +1067,27 @@ pub(crate) async fn upload_database_import(
         .and_then(|s| s.parse().ok());
     let assembled = base.join(format!("{upload_id}.part"));
     let finished_path = if let (Some(index), Some(count)) = (chunk_index, chunk_total) {
-        use std::io::Write as _;
+        // The upload so far plus this chunk stays within the limit, checked before appending
+        // and again after (two chunks of one upload may arrive at once).
+        if file_len(&assembled).saturating_add(file_len(&temp)) > import::MAX_BYTES {
+            cleanup();
+            let _ = std::fs::remove_file(&assembled);
+            return Err(too_large());
+        }
         let mut out = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&assembled)
             .map_err(|_| ApiError::Internal)?;
-        let data = std::fs::read(&temp).map_err(|_| ApiError::Internal)?;
-        out.write_all(&data).map_err(|_| ApiError::Internal)?;
+        let mut chunk = std::fs::File::open(&temp).map_err(|_| ApiError::Internal)?;
+        std::io::copy(&mut chunk, &mut out).map_err(|_| ApiError::Internal)?;
+        drop(chunk);
         cleanup();
+        if out.metadata().map_or(0, |m| m.len()) > import::MAX_BYTES {
+            drop(out);
+            let _ = std::fs::remove_file(&assembled);
+            return Err(too_large());
+        }
         if index + 1 < count {
             let done = ((index + 1) * 100 / count.max(1)) as i64;
             return Ok(
@@ -1088,6 +1116,41 @@ pub(crate) async fn upload_database_import(
         "size": final_size,
     }))
     .into_response())
+}
+
+/// Removes a file when dropped.
+struct RemoveOnDrop(std::path::PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn file_len(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path).map_or(0, |m| m.len())
+}
+
+/// `<upload_id>.part` of a chunked upload, once its `upload_id` and chunk index are known.
+fn chunk_part_path(
+    base: &std::path::Path,
+    fields: &Map<String, Value>,
+) -> Option<std::path::PathBuf> {
+    let upload_id = fields
+        .get("upload_id")
+        .and_then(Value::as_str)
+        .filter(|u| UUID.is_match(u))?;
+    fields.get("dzchunkindex")?;
+    Some(base.join(format!("{upload_id}.part")))
+}
+
+fn too_large() -> ApiError {
+    let mut m = Map::new();
+    m.insert(
+        "file".into(),
+        json!(["The backup exceeds the 10 GiB limit."]),
+    );
+    ApiError::Validation(m)
 }
 
 /// `$file->getMimeType()` for the formats a backup can have.

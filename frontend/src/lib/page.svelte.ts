@@ -14,6 +14,8 @@ export interface Switcher {
   heading: string;
   /** Button title, e.g. "Switch project". */
   title: string;
+  /** Title of the name, which links to the current item's page, e.g. "Go to project". */
+  goTitle?: string;
   label: string;
   uuid?: string;
   items: SwitcherItem[];
@@ -39,6 +41,8 @@ export interface NavContextItem {
   warning?: boolean;
   /** The red dot of a menu entry (`hasWarning`). */
   warningDot?: boolean;
+  /** `<x-image-scan.security-dot>`: a SecurityStatusType value; update_now and update_available get a dot. */
+  security?: string | null;
   /** Wrapped in its own `<div>` with its sections (components/application/configuration-sidebar.blade.php), so no grid gap above them. */
   grouped?: boolean;
 }
@@ -106,29 +110,35 @@ class PageState {
 
 export const page = new PageState();
 
+/** Upstream `[$dashboardContext, $dashboardContextRoute]`: the section name shown after the team and the page it links to. */
+export function dashboardContextLink(path: string): { label: string; href: string } | null {
+  const p = path.replace(/\/+$/, '') || '/';
+  const rules: [RegExp, string, string][] = [
+    [/^\/$/, 'Dashboard', '/'],
+    [/^\/projects(\/canvas)?$/, 'Projects', '/projects'],
+    [/^\/terminal/, 'Terminal', '/terminal'],
+    [/^\/servers?(\/|$)/, 'Servers', '/servers'],
+    [/^\/sources?(\/|$)/, 'Sources', '/sources'],
+    [/^\/destinations?(\/|$)/, 'Destinations', '/destinations'],
+    [/^\/registries/, 'Registries', '/registries'],
+    [/^\/storages?(\/|$)/, 'Storage', '/storages'],
+    [/^\/shared-variables/, 'Shared Variables', '/shared-variables'],
+    [/^\/team/, 'Team', '/team'],
+    [/^\/notifications/, 'Notifications', '/notifications/email'],
+    [/^\/security/, 'Keys & Tokens', '/security/private-key'],
+    [/^\/tags/, 'Tags', '/tags'],
+    [/^\/canvas\/tags$/, 'Tags', '/tags'],
+    [/^\/settings/, 'Settings', '/settings'],
+    [/^\/profile/, 'Profile', '/profile'],
+    [/^\/admin/, 'Admin', '/admin'],
+  ];
+  const rule = rules.find(([re]) => re.test(p));
+  return rule ? { label: rule[1], href: rule[2] } : null;
+}
+
 /** Upstream `$dashboardContext`: the section name shown after the team. */
 export function dashboardContext(path: string): string | null {
-  const p = path.replace(/\/+$/, '') || '/';
-  const rules: [RegExp, string][] = [
-    [/^\/$/, 'Dashboard'],
-    [/^\/projects(\/canvas)?$/, 'Projects'],
-    [/^\/terminal/, 'Terminal'],
-    [/^\/servers?(\/|$)/, 'Servers'],
-    [/^\/sources?(\/|$)/, 'Sources'],
-    [/^\/destinations?(\/|$)/, 'Destinations'],
-    [/^\/registries/, 'Registries'],
-    [/^\/storages?(\/|$)/, 'S3 Storage'],
-    [/^\/shared-variables/, 'Shared Variables'],
-    [/^\/team/, 'Team'],
-    [/^\/notifications/, 'Notifications'],
-    [/^\/security/, 'Keys & Tokens'],
-    [/^\/tags/, 'Tags'],
-    [/^\/canvas\/tags$/, 'Tags'],
-    [/^\/settings/, 'Settings'],
-    [/^\/profile/, 'Profile'],
-    [/^\/admin/, 'Admin'],
-  ];
-  return rules.find(([re]) => re.test(p))?.[1] ?? null;
+  return dashboardContextLink(path)?.label ?? null;
 }
 
 /** The resource menu to keep while the next page loads. Upstream renders each page with its menu, so moving

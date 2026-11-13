@@ -43,7 +43,7 @@ async fn team(h: &Harness) -> Team {
             "POST",
             "/api/v1/security/keys",
             W,
-            Some(json!({"name": "k", "private_key": pem})),
+            Some(json!({"name": "key", "private_key": pem})),
         )
         .await,
     );
@@ -52,7 +52,7 @@ async fn team(h: &Harness) -> Team {
             "POST",
             "/api/v1/servers",
             W,
-            Some(json!({"name": "s", "ip": "203.0.113.60", "private_key_uuid": key})),
+            Some(json!({"name": "srv", "ip": "203.0.113.60", "private_key_uuid": key})),
         )
         .await,
     );

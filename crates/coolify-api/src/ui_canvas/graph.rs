@@ -412,7 +412,7 @@ fn database_logo(engine: &str, base: &str) -> Value {
 const fn database_name(engine: &str) -> &str {
     match engine.as_bytes() {
         b"postgresql" => "PostgreSQL",
-        b"redis" => "Redis",
+        b"redis" => "Redis / Valkey",
         b"mongodb" => "MongoDB",
         b"mysql" => "MySQL",
         b"mariadb" => "MariaDB",
@@ -500,6 +500,10 @@ pub async fn graph(
         .await?
         .into_iter()
         .collect();
+
+    // `VulnerabilityMarkers::for($resources)`: the security marker of each card.
+    let keys: Vec<(&str, i64)> = l.resources.iter().map(|r| (r.morph, r.id())).collect();
+    let markers = crate::ui_image_scan::markers_by_key(state, &keys).await;
 
     // `$servers->put($server->id, $server)`: first seen first.
     let mut servers: Vec<&Record> = Vec::new();
@@ -629,6 +633,14 @@ pub async fn graph(
                 .map(|e| filter_positions(e.get("canvas_positions"), &only))
                 .and_then(|mut p| p.remove(r.uuid()));
             m.insert("saved".into(), saved.unwrap_or(Value::Null));
+            // The security marker of the card: "Update now" or "No fix yet".
+            m.insert(
+                "security".into(),
+                markers
+                    .get(&format!("{}:{}", r.morph, r.id()))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            );
         }
         if let Value::Object(m) = node {
             nodes.push(m);

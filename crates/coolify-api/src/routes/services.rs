@@ -151,7 +151,7 @@ pub(crate) async fn model_array(
     if let Some(server) = &server {
         r.insert(
             "server".into(),
-            nested_server_with(state, server, false, ctx.can_read_sensitive)?,
+            nested_server_with(state, server, false, ctx.can_read_server_sensitive())?,
         );
     }
     let apps = svc::subs(&state.db, SubKind::Application, s.id).await?;
@@ -273,7 +273,7 @@ async fn present_service_as(
         // `exposeNestedServerSecrets()` only touches `destination.server`: this is another instance.
         r.insert(
             "server".into(),
-            nested_server_with(state, server, false, ctx.can_read_sensitive)?,
+            nested_server_with(state, server, false, ctx.can_read_server_sensitive())?,
         );
     }
     r.insert(
@@ -304,7 +304,8 @@ async fn present_service_as(
     if model {
         return Ok(Value::Object(r));
     }
-    if ctx.can_read_sensitive
+    // 4.7.5: `destination.server.settings` is loaded for `canReadServerSecretsFromApi()`.
+    if ctx.can_read_server_sensitive()
         && let Some(mut dest) = svc::destination_record(&state.db, s).await?
     {
         if let Some(server) = &server {
@@ -351,7 +352,13 @@ fn add_error(errors: &mut Map<String, Value>, key: &str, msg: String) {
 fn field_errors(input: &Input, fields: &[Field]) -> Result<Map<String, Value>, ApiError> {
     let keys: Vec<String> = input.keys().cloned().collect();
     let allowed: Vec<&str> = keys.iter().map(String::as_str).collect();
-    match validate(input, fields, &[], &allowed) {
+    // `$validationMessages`: `ValidationPatterns::combinedMessages()` (4.7.5) and the `urls` one.
+    match validate(
+        input,
+        fields,
+        crate::validation::patterns::COMBINED_MESSAGES,
+        &allowed,
+    ) {
         Ok(()) => Ok(Map::new()),
         Err(ApiError::Validation(m)) => Ok(m),
         Err(e) => Err(e),
@@ -495,8 +502,12 @@ const CREATE_ALLOWED: &[&str] = &[
 
 fn common_fields() -> Vec<Field> {
     vec![
-        field("name", vec![Rule::String, Rule::Max(255)]),
-        field("description", vec![Rule::String, Rule::Nullable]),
+        // `nameRules(required: false, nullable: false)`, `descriptionRules()` (4.7.5).
+        field("name", crate::validation::patterns::present_name_rules()),
+        field(
+            "description",
+            crate::validation::patterns::description_rules(),
+        ),
         field("instant_deploy", vec![Rule::Boolean]),
         field("connect_to_docker_network", vec![Rule::Boolean]),
         field("urls", vec![Rule::Array, Rule::Nullable]),
@@ -550,13 +561,15 @@ async fn domains_of(state: &AppState, id: i64) -> Result<Value, ApiError> {
 fn conflict_key(domain: &str) -> String {
     let d = domain.strip_suffix('/').unwrap_or(domain);
     let lower = d.to_ascii_lowercase();
-    if lower.starts_with("https://") {
-        d[8..].to_owned()
+    let d = if lower.starts_with("https://") {
+        &d[8..]
     } else if lower.starts_with("http://") {
-        d[7..].to_owned()
+        &d[7..]
     } else {
-        d.to_owned()
-    }
+        d
+    };
+    // The URL port is the container port. The public address does not include it.
+    coolify_jobs::applications::domains::conflict_key_without_port(d)
 }
 
 /// `checkIfDomainIsAlreadyUsedViaAPI($domains, $teamId, $uuid)`.
@@ -898,6 +911,8 @@ pub async fn create(
         StatusCode::NOT_FOUND,
         "Server not found.",
     ))?;
+    // `$this->authorize('placeResource', $server)` (4.7.5).
+    crate::place_resource::authorize(&state, &ctx, &server).await?;
     let is_build = server
         .settings
         .as_ref()
@@ -989,7 +1004,9 @@ pub async fn create(
             ("name", ColumnValue::Text(Some(name))),
             (
                 "description",
-                ColumnValue::Text(Some(strip_tags(input.str("description")))),
+                ColumnValue::Text(coolify_domain::naming::strip_tags_nullable(
+                    input.str("description"),
+                )),
             ),
         ];
         if let Some(v) = flag("is_container_label_escape_enabled") {
@@ -1004,11 +1021,29 @@ pub async fn create(
                 .split_once('=')
                 .unwrap_or((line.as_str(), line.as_str()));
             let generated = template_env_value(value);
+            let value_encrypted = generated.as_deref().map(|v| {
+                enc.encrypt_serialized(coolify_jobs::databases::env::without_edge_whitespace(v))
+            });
+            // 4.7.5: `$service->environment_variables()->updateOrCreate(['key' => $key], [...])`,
+            // so a key that the template lists twice is one variable with the last value.
+            if let Some(existing) =
+                coolify_db::compose::env_first(&state.db, svc::MORPH, id, key, false).await?
+            {
+                coolify_db::compose::env_update(
+                    &state.db,
+                    existing.id,
+                    &coolify_db::compose::EnvUpdate {
+                        value_encrypted: Some(value_encrypted),
+                        ..Default::default()
+                    },
+                    now,
+                )
+                .await?;
+                continue;
+            }
             let new = coolify_db::compose::NewEnv {
                 key: key.to_owned(),
-                value_encrypted: generated
-                    .as_deref()
-                    .map(|v| enc.encrypt_serialized(v.trim())),
+                value_encrypted,
                 is_preview: false,
                 is_required: false,
                 is_multiline: false,
@@ -1053,7 +1088,7 @@ pub async fn create(
             &NewService {
                 uuid: None,
                 name,
-                description: Some(strip_tags(input.str("description"))),
+                description: coolify_domain::naming::strip_tags_nullable(input.str("description")),
                 docker_compose_raw: compose,
                 environment_id,
                 service_type: None,
@@ -1103,6 +1138,14 @@ pub async fn create(
             svc::attach_tag(&state.db, ctx.team_id, service_id, &name, state.now()).await?;
         }
     }
+    // 4.7.5: `ResourceDnsRecords::queueAutomaticRecords($service, [])`.
+    crate::routes::dns_records::queue_automatic_records(
+        &state,
+        crate::routes::dns_records::Kind::Service,
+        service_id,
+        &[],
+    )
+    .await;
     if input_bool(&input, "instant_deploy") {
         jobs_of(&state)?.spawn_service_start(service_id, false, false);
     }
@@ -1130,6 +1173,8 @@ pub(crate) async fn apply_prerequisites(
             "is_stripprefix_enabled",
             &["appwrite", "appwrite-console", "appwrite-realtime"],
         ),
+        // `NEEDS_TO_DISABLE_STRIPPREFIX['rybbit']` (v4.7.5).
+        "rybbit" => ("is_stripprefix_enabled", &["rybbit_backend"]),
         _ => return Ok(()),
     };
     for name in names {
@@ -1220,7 +1265,9 @@ pub async fn update(
     if input.has("description") {
         values.push((
             "description",
-            ColumnValue::Text(Some(strip_tags(input.str("description")))),
+            ColumnValue::Text(coolify_domain::naming::strip_tags_nullable(
+                input.str("description"),
+            )),
         ));
     }
     for key in [
@@ -1503,10 +1550,10 @@ fn env_value(enc: &coolify_compat::Encrypter, r: &Record) -> Option<String> {
     if raw.is_empty() || raw == "0" {
         return None;
     }
-    enc.decrypt_maybe_serialized(raw).ok().map(|v| {
-        v.trim_matches([' ', '\t', '\n', '\r', '\0', '\x0B'])
-            .to_owned()
-    })
+    // The `value` getter: `withoutEdgeWhitespace()` (4.7).
+    enc.decrypt_maybe_serialized(raw)
+        .ok()
+        .map(|v| coolify_jobs::databases::env::without_edge_whitespace(&v).to_owned())
 }
 
 const BUILDPACK_ALLOWED: &[&str] = &[
@@ -1668,7 +1715,10 @@ async fn env_upsert(
 ) -> Result<Record, ApiError> {
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let now = state.now();
-    let plain = input.str("value").map(|v| v.trim().to_owned());
+    // The `value` setter: `withoutEdgeWhitespace()` (`TrimStrings` leaves `value` alone).
+    let plain = input
+        .str("value")
+        .map(|v| coolify_jobs::databases::env::without_edge_whitespace(v).to_owned());
     let flag = |k: &str| input.has(k).then(|| input_bool(input, k));
     let environment_id = s.raw.get("environment_id").and_then(Value::as_i64);
     if let Some(row) = svc::env_row_by_key(&state.db, s.id, key).await? {
@@ -1983,13 +2033,14 @@ pub async fn clone_service(
     let input = validated_json(&headers, &uri, &body)?;
     let fields = [
         field("destination_uuid", vec![Rule::Required, Rule::String]),
-        field("name", vec![Rule::String, Rule::Max(255), Rule::Nullable]),
+        // `nameRules(required: false)` (4.7.5).
+        field("name", crate::validation::patterns::optional_name_rules()),
         field("clone_volumes", vec![Rule::Boolean]),
     ];
     validate(
         &input,
         &fields,
-        CUSTOM_API_MESSAGES,
+        crate::validation::patterns::API_COMBINED_MESSAGES,
         &["destination_uuid", "name", "clone_volumes"],
     )?;
     let s = find(&state, &ctx, &uuid).await?;
@@ -2027,6 +2078,10 @@ pub async fn clone_service(
     });
     if !hosts {
         return Err(not_found);
+    }
+    // `$this->authorize('placeResource', $destination->server)` (4.7.5).
+    if let Some(server) = &server {
+        crate::place_resource::authorize(&state, &ctx, server).await?;
     }
     let new_uuid = coolify_domain::new_public_id();
     let name = match input.str("name").filter(|n| !n.is_empty()) {
@@ -2614,7 +2669,7 @@ async fn nested_part(
     if let Some(server) = &server {
         service.insert(
             "server".into(),
-            nested_server_with(state, server, false, ctx.can_read_sensitive)?,
+            nested_server_with(state, server, false, ctx.can_read_server_sensitive())?,
         );
     }
     let apps = svc::subs(&state.db, SubKind::Application, s.id).await?;

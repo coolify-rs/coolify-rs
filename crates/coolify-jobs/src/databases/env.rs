@@ -56,6 +56,15 @@ fn is_json_container(v: &str, trim_left: bool) -> bool {
     (start.starts_with('{') || start.starts_with('[')) && serde_json::from_str::<Value>(v).is_ok()
 }
 
+/// The rule of `legacyEnvFileLineIsUnreadable()` for a resolved value. `quoted` is whether the
+/// variable is literal or multiline, which the old escaping puts in single quotes.
+pub fn legacy_line_is_unreadable(value: &str, quoted: bool) -> bool {
+    if is_json_container(value, false) {
+        return value.contains('\n');
+    }
+    quoted && value.contains('\'')
+}
+
 /// `escapeEnvVariables`.
 pub fn escape_env_variables(v: &str) -> String {
     v.replace('\\', "\\\\")
@@ -100,15 +109,14 @@ impl Var {
         !self.uses_legacy_escaping
     }
 
-    /// `legacyEnvFileLineIsUnreadable()`: the old escaping puts literal and multiline values in
-    /// single quotes without escaping, and Docker Compose ends the value at the next quote.
+    /// `legacyEnvFileLineIsUnreadable()`: the old escaping writes JSON objects and arrays without
+    /// quotes, so a JSON value with a line break breaks the whole env file. It puts other literal
+    /// and multiline values in single quotes without escaping, and Docker Compose ends the value
+    /// at the next quote.
     pub fn legacy_env_file_line_is_unreadable(&self) -> bool {
-        if !self.is_literal && !self.is_multiline {
-            return false;
-        }
-        self.resolved
-            .as_deref()
-            .is_some_and(|value| value.contains('\'') && !is_json_container(value, false))
+        self.resolved.as_deref().is_some_and(|value| {
+            legacy_line_is_unreadable(value, self.is_literal || self.is_multiline)
+        })
     }
 
     /// `environmentVariableAllowsInterpolation`.
@@ -196,6 +204,18 @@ impl<'a> Owner<'a> {
     }
 }
 
+/// `EnvironmentVariable::withoutEdgeWhitespace($value)` (v4.7): single-line values lose their
+/// edge whitespace. Multiline content (a private key, a certificate, a config file) is kept as
+/// it is, because tools such as OpenSSH reject a key without its trailing newline.
+pub fn without_edge_whitespace(value: &str) -> &str {
+    let trimmed = value.trim_matches([' ', '\n', '\r', '\t', '\x0B', '\0']);
+    if trimmed.contains('\n') {
+        value
+    } else {
+        trimmed
+    }
+}
+
 /// `get_real_environment_variables_internal`.
 pub async fn resolve_references(
     db: &Db,
@@ -204,7 +224,7 @@ pub async fn resolve_references(
     server_id: Option<i64>,
     value: &str,
 ) -> Result<String, String> {
-    let mut out = value.trim().to_owned();
+    let mut out = without_edge_whitespace(value).to_owned();
     let found: Vec<String> = REFERENCE
         .captures_iter(&out.clone())
         .filter_map(|c| c.get(1).map(|m| m.as_str().to_owned()))
@@ -255,7 +275,7 @@ pub async fn load_stored_for(db: &Db, enc: &Encrypter, o: &Owner<'_>) -> Result<
                 let plain = enc
                     .decrypt_maybe_serialized(c)
                     .map_err(|_| "The MAC is invalid.".to_owned())?;
-                Some(plain.trim().to_owned())
+                Some(without_edge_whitespace(&plain).to_owned())
             }
             _ => None,
         };
@@ -485,6 +505,32 @@ pub fn config_hash_values(variables: &[Var]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `withoutEdgeWhitespace()`: a private key keeps its trailing newline.
+    #[test]
+    fn multiline_values_keep_their_edge_whitespace() {
+        assert_eq!(without_edge_whitespace("  value \n"), "value");
+        assert_eq!(without_edge_whitespace("\n"), "");
+        let key = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n";
+        assert_eq!(without_edge_whitespace(key), key);
+        assert_eq!(without_edge_whitespace(" a\nb "), " a\nb ");
+    }
+
+    #[test]
+    fn old_lines_that_docker_compose_cannot_read() {
+        // A JSON object or array is written without quotes: a line break breaks the file.
+        assert!(legacy_line_is_unreadable("{\"a\":\n1}", false));
+        assert!(legacy_line_is_unreadable("[1,\n2]", true));
+        assert!(!legacy_line_is_unreadable("{\"a\":\"it's\"}", true));
+        assert!(!legacy_line_is_unreadable("{\"a\":1}", false));
+        // Other literal and multiline values are put in single quotes without escaping.
+        assert!(legacy_line_is_unreadable("it's", true));
+        assert!(!legacy_line_is_unreadable("it's", false));
+        assert!(!legacy_line_is_unreadable("plain\nlines", true));
+        // Not valid JSON: the quote rule applies.
+        assert!(legacy_line_is_unreadable("{it's\n", true));
+        assert!(!legacy_line_is_unreadable("{broken\n", false));
+    }
 
     fn var(literal: bool, legacy: bool) -> Var {
         Var {

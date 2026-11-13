@@ -106,6 +106,28 @@ fn format_preview(r: &Record) -> Value {
 }
 
 /// `'errors' => [$field => [$message]]`.
+/// `ApplicationPreviewsController::store` (4.7.5): the 403 of a token without `write`.
+pub(crate) const PREVIEW_CHANGE_NEEDS_WRITE: &str = "Missing required permissions: write. Opening a preview, changing its pull request URL, git type, or docker tag, or choosing a commit needs the write permission. The deploy permission only redeploys an existing preview.";
+
+/// `$changesPreview` of `ApplicationPreviewsController::store` (4.7.5): the request opens a
+/// preview, changes its pull request URL, git type or docker tag, or chooses a commit.
+pub(crate) fn changes_preview(
+    existing: Option<&Record>,
+    html_url: Option<&str>,
+    git_type: Option<&str>,
+    docker_tag: Option<&str>,
+    commit_filled: bool,
+) -> bool {
+    let Some(preview) = existing else {
+        return true;
+    };
+    let stored = |k: &str| preview.get(k).and_then(Value::as_str);
+    html_url.is_some_and(|u| Some(u) != stored("pull_request_html_url"))
+        || git_type.is_some_and(|t| Some(t) != stored("git_type"))
+        || docker_tag.is_some_and(|t| Some(t) != stored("docker_registry_image_tag"))
+        || commit_filled
+}
+
 fn listed_error(field: &str, message: &str) -> ApiError {
     let mut errors = Map::new();
     errors.insert(field.to_owned(), json!([message]));
@@ -416,8 +438,29 @@ pub async fn store(
             "The docker tag field is required for a new Docker Image preview.",
         ));
     }
-    let now = state.now();
     let html_url = input.str("pull_request_html_url");
+    // 4.7.5 (c75e7078b, 769bddb32): opening a preview, changing what it runs, or choosing a commit
+    // needs the write permission and the update policy. The deploy permission only redeploys.
+    if changes_preview(
+        existing.as_ref(),
+        html_url,
+        input.str("git_type"),
+        docker_tag.as_deref(),
+        input.filled("commit"),
+    ) {
+        use coolify_domain::Ability;
+        if !(ctx.abilities.can(Ability::Write) || ctx.abilities.can(Ability::Root)) {
+            return Err(ApiError::Message(
+                StatusCode::FORBIDDEN,
+                PREVIEW_CHANGE_NEEDS_WRITE,
+            ));
+        }
+        // `$this->authorize('update', $application)`.
+        if !ctx.can_app(AccessLevel::Write, &a) {
+            return Err(ApiError::Unauthorized);
+        }
+    }
+    let now = state.now();
     let is_created = existing.is_none();
     let preview_id = if let Some(preview) = &existing {
         // fill(array_filter([...]))
@@ -858,4 +901,65 @@ pub async fn delete(
     );
     tracing::info!(target: "audit", event = "api.application.preview_deleted", team_id = ctx.team_id, application_uuid = %a.uuid, pull_request_id = id, "preview deleted");
     Ok(ok(json!({"message": "Preview deletion request queued."})).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn preview(url: &str, git_type: Option<&str>, tag: Option<&str>) -> Record {
+        let mut r = Record::new();
+        r.insert("pull_request_html_url".into(), json!(url));
+        r.insert("git_type".into(), json!(git_type));
+        r.insert("docker_registry_image_tag".into(), json!(tag));
+        r
+    }
+
+    /// 4.7.5: the deploy permission only redeploys an existing preview.
+    #[test]
+    fn redeploying_an_existing_preview_changes_nothing() {
+        let p = preview("https://example.test/pr/1", Some("github"), None);
+        assert!(!changes_preview(Some(&p), None, None, None, false));
+        // The same values as stored are not a change.
+        assert!(!changes_preview(
+            Some(&p),
+            Some("https://example.test/pr/1"),
+            Some("github"),
+            None,
+            false
+        ));
+        let image = preview("", None, Some("pr-1"));
+        assert!(!changes_preview(
+            Some(&image),
+            Some(""),
+            None,
+            Some("pr-1"),
+            false
+        ));
+    }
+
+    #[test]
+    fn opening_or_changing_a_preview_or_choosing_a_commit_is_a_change() {
+        assert!(changes_preview(None, None, None, None, false));
+        let p = preview("https://example.test/pr/1", Some("github"), Some("pr-1"));
+        assert!(changes_preview(
+            Some(&p),
+            Some("https://example.test/pr/2"),
+            None,
+            None,
+            false
+        ));
+        assert!(changes_preview(Some(&p), None, Some("gitlab"), None, false));
+        assert!(changes_preview(Some(&p), None, None, Some("pr-2"), false));
+        assert!(changes_preview(Some(&p), None, None, None, true));
+        // A git type sent for a preview that has none stored.
+        let image = preview("", None, Some("pr-1"));
+        assert!(changes_preview(
+            Some(&image),
+            None,
+            Some("github"),
+            None,
+            false
+        ));
+    }
 }

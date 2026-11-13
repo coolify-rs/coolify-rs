@@ -2,6 +2,7 @@
 //! `deploymentType()`, `generateGitImportCommands()` + `setGitImportSettings()`,
 //! `gitSshCommand()` and the escaping helpers the build steps use.
 
+use crate::applications::git_ssh;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -243,18 +244,15 @@ pub(super) fn url_host(url: &str) -> Option<String> {
     (!host.is_empty()).then_some(host)
 }
 
-/// `gitSshCommand($port, $identityFile, $identitiesOnly)`.
-pub(super) fn git_ssh_command(port: &str, identity: Option<&str>, identities_only: bool) -> String {
-    let mut command = format!(
-        "ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -p {port} -o Port={port} -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-    );
-    if let Some(file) = identity {
-        command.push_str(&format!(" -i {file}"));
-        if identities_only {
-            command.push_str(" -o IdentitiesOnly=yes");
-        }
-    }
-    command
+/// `gitSshCommand($uuid, $port, $identityFile, $identitiesOnly)` with a port. The helper container
+/// (or the server) must have run `gitSshSetupCommand()` with the same uuid first.
+pub(super) fn git_ssh_command(
+    dep: &str,
+    port: &str,
+    identity: Option<&str>,
+    identities_only: bool,
+) -> String {
+    git_ssh::git_ssh_command(dep, Some(port), identity, identities_only)
 }
 
 /// The settings `setGitImportSettings()` reads.
@@ -287,7 +285,9 @@ pub(crate) fn git_lfs_skip_smudge_prefix(lfs: bool, only_checkout: bool) -> &'st
 }
 
 /// `Application::setGitImportSettings(...)`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn set_git_import_settings(
+    dep: &str,
     clone: &str,
     s: ImportSettings,
     public: bool,
@@ -297,6 +297,7 @@ pub(super) fn set_git_import_settings(
     base_dir: &str,
 ) -> String {
     set_git_import_settings_with(
+        dep,
         clone,
         s,
         public,
@@ -311,6 +312,7 @@ pub(super) fn set_git_import_settings(
 /// `Application::setGitImportSettings(..., onlyCheckout: $onlyCheckout)`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn set_git_import_settings_with(
+    dep: &str,
     clone: &str,
     s: ImportSettings,
     public: bool,
@@ -328,10 +330,11 @@ pub(crate) fn set_git_import_settings_with(
     let ssh = match git_ssh_command {
         Some(c) if c.starts_with("GIT_SSH_COMMAND=") => c.to_owned(),
         Some(c) => format!("GIT_SSH_COMMAND=\"{c}\""),
-        None => {
-            "GIT_SSH_COMMAND=\"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null\""
-                .to_owned()
-        }
+        // `gitSshCommand($deployment_uuid)`.
+        None => format!(
+            "GIT_SSH_COMMAND=\"{}\"",
+            git_ssh::git_ssh_command(dep, None, None, true)
+        ),
     };
     let mut cmd = format!(
         "{}{clone}",
@@ -434,13 +437,12 @@ fn ssh_key_setup(dep: &str, private_key_b64: &str) -> Vec<Cmd> {
 fn git_checkout_command(
     target: &str,
     settings: ImportSettings,
-    ssh: Option<&str>,
+    ssh: &str,
     git_config: Option<&str>,
 ) -> String {
     let git = git_config.map_or_else(|| "git".to_owned(), |o| format!("git {o}"));
     let mut command = format!("{git} checkout {}", quote(target));
     if settings.submodules {
-        let ssh = ssh.unwrap_or("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null");
         command.push_str(&format!(
             " && GIT_SSH_COMMAND=\"{ssh}\" {git} submodule update --init --recursive"
         ));
@@ -462,7 +464,12 @@ fn github_pull_request_fetch(
     let pr_branch = format!("pr-{}-coolify", i.pull_request_id);
     let branch = format!("pull/{}/head:{pr_branch}", i.pull_request_id);
     let dir = quote(&format!("/artifacts/{}", i.dep));
-    let checkout = git_checkout_command(&pr_branch, i.settings, None, git_config);
+    let checkout = git_checkout_command(
+        &pr_branch,
+        i.settings,
+        &git_ssh::git_ssh_command(i.dep, None, None, true),
+        git_config,
+    );
     let second = in_docker(
         i.dep,
         &format!(
@@ -494,7 +501,7 @@ fn pull_request_clone(
     let fetch = |branch: &str| {
         format!(
             "{clone} && cd {dir} && {ssh_prefix} {git} fetch origin {branch} && {}",
-            git_checkout_command(&pr_branch, i.settings, Some(ssh), git_config)
+            git_checkout_command(&pr_branch, i.settings, ssh, git_config)
         )
     };
     match i.git_type {
@@ -513,7 +520,7 @@ fn pull_request_clone(
             (
                 format!(
                     "{clone} && cd {dir} && {ssh_prefix} {}",
-                    git_checkout_command(i.commit, i.settings, Some(ssh), git_config)
+                    git_checkout_command(i.commit, i.settings, ssh, git_config)
                 ),
                 i.branch.to_owned(),
             )
@@ -548,7 +555,8 @@ pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImp
             submodules.push_str(" --shallow-submodules");
         }
     }
-    let mut clone = format!("git clone{depth}{submodules} -b {}", quote(i.branch));
+    // `--` ends the options, so a repository value that starts with `-` is not read as a git option.
+    let mut clone = format!("git clone{depth}{submodules} -b {} --", quote(i.branch));
     match i.kind {
         DeploymentType::Source => {
             let source = i.source.ok_or("The application has no git source.")?;
@@ -559,7 +567,7 @@ pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImp
                 let full = format!("{}/{}", source.html_url(), i.repository);
                 clone = format!("{clone} {} {dir}", quote(&full));
                 clone = set_git_import_settings(
-                    &clone, i.settings, true, i.commit, None, None, &base_dir,
+                    i.dep, &clone, i.settings, true, i.commit, None, None, &base_dir,
                 );
                 let (commands, branch) = github_pull_request_fetch(i, clone, None);
                 return Ok(GitImport {
@@ -586,6 +594,7 @@ pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImp
             );
             clone = format!("{clone} {} {dir}", quote(&repo_url));
             clone = set_git_import_settings(
+                i.dep,
                 &clone,
                 i.settings,
                 false,
@@ -606,12 +615,13 @@ pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImp
                 "Private key not found. Please add a private key to the application and try again.",
             )?;
             let key_b64 = base64::engine::general_purpose::STANDARD.encode(key);
-            let ssh = git_ssh_command(i.port, Some(&key_location), true);
+            let ssh = git_ssh_command(i.dep, i.port, Some(&key_location), true);
             let base = format!(
                 "GIT_SSH_COMMAND=\"{ssh}\" {clone} {} {dir}",
                 quote(i.repository)
             );
             let command = set_git_import_settings(
+                i.dep,
                 &base,
                 i.settings,
                 false,
@@ -637,6 +647,7 @@ pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImp
             }
             clone = format!("{clone} {} {dir}", quote(i.repository));
             clone = set_git_import_settings(
+                i.dep,
                 &clone,
                 i.settings,
                 true,
@@ -645,7 +656,7 @@ pub(super) fn generate_git_import_commands(i: &ImportInput<'_>) -> Result<GitImp
                 i.https_option,
                 &base_dir,
             );
-            let ssh = git_ssh_command(i.port, Some("/root/.ssh/id_rsa"), false);
+            let ssh = git_ssh_command(i.dep, i.port, Some("/root/.ssh/id_rsa"), false);
             let prefix = format!("GIT_SSH_COMMAND=\"{ssh}\"");
             let mut commands = Vec::new();
             let (clone, branch) =
@@ -692,6 +703,7 @@ fn oauth_import(
         );
         let base = format!("{clone} {} {dir}", quote(&repo_url));
         let command = set_git_import_settings(
+            i.dep,
             &base,
             i.settings,
             false,
@@ -715,12 +727,13 @@ fn oauth_import(
             .and_then(Value::as_i64)
             .unwrap_or(22)
             .to_string();
-        let ssh = git_ssh_command(&port, Some(&key_location), true);
+        let ssh = git_ssh_command(i.dep, &port, Some(&key_location), true);
         let base = format!(
             "GIT_SSH_COMMAND=\"{ssh}\" {clone} {} {dir}",
             quote(i.repository)
         );
         let command = set_git_import_settings(
+            i.dep,
             &base,
             i.settings,
             false,
@@ -738,7 +751,9 @@ fn oauth_import(
         });
     }
     let clone = format!("{clone} {} {dir}", quote(i.repository));
-    let clone = set_git_import_settings(&clone, i.settings, true, i.commit, None, None, base_dir);
+    let clone = set_git_import_settings(
+        i.dep, &clone, i.settings, true, i.commit, None, None, base_dir,
+    );
     Ok(GitImport {
         commands: vec![hidden(in_docker(i.dep, &clone))],
         branch: i.branch.to_owned(),
@@ -837,24 +852,9 @@ pub(super) fn default_nginx_configuration(spa: bool) -> &'static str {
     }
 }
 
-/// `parseDockerfileInterval()`.
-pub(super) fn parse_dockerfile_interval(s: &str) -> i64 {
-    let digits: String = s.chars().filter(char::is_ascii_digit).collect();
-    let unit: String = s.chars().filter(|c| !c.is_ascii_digit()).collect();
-    let value: i64 = digits.parse().unwrap_or(0);
-    match if unit.is_empty() { "s" } else { unit.as_str() } {
-        "ns" => value / 1_000_000_000,
-        "us" | "µs" => value / 1_000_000,
-        "ms" => value / 1000,
-        "m" => value * 60,
-        "h" => value * 3600,
-        _ => value,
-    }
-}
-
 /// What `parseHealthcheckFromDockerfile()` changes on the application.
 #[derive(Debug, Default, PartialEq, Eq)]
-pub(super) struct HealthcheckUpdate {
+pub(crate) struct HealthcheckUpdate {
     pub reset: bool,
     pub interval: Option<i64>,
     pub timeout: Option<i64>,
@@ -863,66 +863,37 @@ pub(super) struct HealthcheckUpdate {
     pub found: bool,
 }
 
-/// `Application::parseHealthcheckFromDockerfile($dockerfile)`.
-pub(super) fn parse_healthcheck(
+/// `Application::parseHealthcheckFromDockerfile($dockerfile, $isInit)`. `target` is
+/// `dockerfile_target_build`: only the HEALTHCHECK of the stage that is built counts.
+/// `health_check_disabled` is `isHealthcheckDisabled() || $isInit`.
+pub(crate) fn parse_healthcheck(
     dockerfile: &str,
+    target: Option<&str>,
     health_check_disabled: bool,
     custom_found: bool,
 ) -> HealthcheckUpdate {
-    let content = dockerfile.trim();
-    let has = content.contains("HEALTHCHECK");
-    if !has && custom_found {
+    use crate::applications::dockerfile_healthcheck as hc;
+    let instruction = hc::dockerfile_healthcheck_instruction(dockerfile, target);
+    // Always check if healthcheck was removed, regardless of health_check_enabled setting
+    let Some(instruction) = instruction else {
         return HealthcheckUpdate {
-            reset: true,
+            reset: custom_found,
             ..Default::default()
         };
-    }
-    let mut out = HealthcheckUpdate::default();
-    if !has || !health_check_disabled {
-        return out;
-    }
-    let trim_bs = |s: &str| s.trim_matches(|c| c == '\\' || c == ' ').to_owned();
-    let mut command: Option<String> = None;
-    for line in content.split('\n') {
-        let t = line.trim();
-        if t.starts_with("HEALTHCHECK") {
-            command
-                .get_or_insert_with(String::new)
-                .push_str(&trim_bs(t));
-            continue;
-        }
-        if let Some(c) = command.as_mut()
-            && t.contains('\\')
-        {
-            c.push(' ');
-            c.push_str(&trim_bs(t));
-        }
-        if let Some(c) = command.as_mut()
-            && !t.contains('\\')
-            && !c.is_empty()
-        {
-            c.push(' ');
-            c.push_str(t);
-            break;
-        }
-    }
-    let Some(command) = command.filter(|c| !c.is_empty()) else {
-        return out;
     };
-    let grab = |re: &str| {
-        Regex::new(re)
-            .ok()
-            .and_then(|r| r.captures(&command))
-            .map(|c| c[1].to_owned())
-    };
-    out.interval = grab(r"--interval=([0-9]+[a-zµ]*)").map(|v| parse_dockerfile_interval(&v));
-    out.timeout = grab(r"--timeout=([0-9]+[a-zµ]*)").map(|v| parse_dockerfile_interval(&v));
-    out.start_period =
-        grab(r"--start-period=([0-9]+[a-zµ]*)").map(|v| parse_dockerfile_interval(&v));
-    out.retries = grab(r"--retries=(\d+)").and_then(|v| v.parse().ok());
-    // Stringable results are always truthy, so any HEALTHCHECK line counts.
-    out.found = true;
-    out
+    if !health_check_disabled {
+        return HealthcheckUpdate::default();
+    }
+    // An option that is missing or not valid keeps the current value.
+    let options = hc::dockerfile_healthcheck_options(&instruction);
+    HealthcheckUpdate {
+        reset: false,
+        interval: options.interval,
+        timeout: options.timeout,
+        start_period: options.start_period,
+        retries: options.retries,
+        found: true,
+    }
 }
 
 /// `dockerfileInstructions()`: `(keyword, start, end)` per instruction.
@@ -1063,7 +1034,7 @@ mod tests {
         let g = generate_git_import_commands(&input(0, None)).unwrap();
         let c = &g.commands[0].command;
         assert!(
-            c.contains(r#"git -c '\''http.https://h.test/.extraHeader=Authorization: Basic dTpw'\'' clone --recurse-submodules -b '\''main'\'' '\''https://h.test/r.git'\''"#),
+            c.contains(r#"git -c '\''http.https://h.test/.extraHeader=Authorization: Basic dTpw'\'' clone --recurse-submodules -b '\''main'\'' -- '\''https://h.test/r.git'\''"#),
             "{c}"
         );
         assert!(
@@ -1122,19 +1093,53 @@ mod tests {
     #[test]
     fn healthcheck() {
         let df = "FROM node\nHEALTHCHECK --interval=30s --timeout=3s \\\n  CMD curl -f http://localhost/ || exit 1\nCMD [\"node\"]";
-        let u = parse_healthcheck(df, true, false);
+        let u = parse_healthcheck(df, None, true, false);
         assert_eq!(u.interval, Some(30));
         assert_eq!(u.timeout, Some(3));
+        assert_eq!(u.start_period, None);
         assert!(u.found);
+        // Health checks are enabled: the options of the Dockerfile are not imported.
         assert_eq!(
-            parse_healthcheck("FROM x", true, true),
+            parse_healthcheck(df, None, false, false),
+            HealthcheckUpdate::default()
+        );
+        assert_eq!(
+            parse_healthcheck("FROM x", None, true, true),
             HealthcheckUpdate {
                 reset: true,
                 ..Default::default()
             }
         );
-        assert_eq!(parse_dockerfile_interval("2m"), 120);
-        assert_eq!(parse_dockerfile_interval("500ms"), 0);
+        // "ignores a HEALTHCHECK of another stage than the build target" and "resets a custom
+        // healthcheck found earlier when the build target has no HEALTHCHECK".
+        let multi = "FROM node AS builder\nRUN npm ci\nFROM node AS api\nHEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \\\n    CMD node probe.js\nFROM node AS worker\nCMD [\"node\", \"worker.js\"]";
+        assert_eq!(
+            parse_healthcheck(multi, Some("worker"), true, false),
+            HealthcheckUpdate::default()
+        );
+        assert!(parse_healthcheck(multi, Some("worker"), true, true).reset);
+        // "reads the HEALTHCHECK of the build target stage".
+        let api = parse_healthcheck(multi, Some("API"), true, false);
+        assert_eq!(
+            (api.interval, api.timeout, api.start_period, api.retries),
+            (Some(30), Some(5), Some(15), Some(3))
+        );
+        // "keeps the current value when a HEALTHCHECK duration is not valid".
+        let invalid = parse_healthcheck(
+            "FROM scratch\nHEALTHCHECK --interval=1x --timeout=3000000h --retries=2 CMD [\"/probe\"]",
+            None,
+            true,
+            false,
+        );
+        assert_eq!(
+            (
+                invalid.interval,
+                invalid.timeout,
+                invalid.retries,
+                invalid.found
+            ),
+            (None, None, Some(2), true)
+        );
     }
 
     #[test]
@@ -1210,16 +1215,26 @@ mod tests {
             lfs: false,
         };
         assert_eq!(
-            set_git_import_settings("git clone x '/a'", s, true, "abc1234", None, None, "/a"),
-            r#"export GIT_LFS_SKIP_SMUDGE=1 && git clone x '/a' && cd '/a' && echo 'Fetching the commit.' && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git fetch --depth=1 origin '+refs/heads/*:refs/remotes/origin/*' && (git -c advice.detachedHead=false checkout 'abc1234' >/dev/null 2>&1 || (echo 'The commit is not a branch tip. Fetching the full history.' && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git fetch --unshallow origin '+refs/heads/*:refs/remotes/origin/*' && git -c advice.detachedHead=false checkout 'abc1234' >/dev/null 2>&1))"#
+            set_git_import_settings(
+                "abc",
+                "git clone x '/a'",
+                s,
+                true,
+                "abc1234",
+                None,
+                None,
+                "/a"
+            ),
+            r#"export GIT_LFS_SKIP_SMUDGE=1 && git clone x '/a' && cd '/a' && echo 'Fetching the commit.' && GIT_SSH_COMMAND="ssh -F /root/.ssh/coolify_git_abc.config -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o LogLevel=ERROR" git fetch --depth=1 origin '+refs/heads/*:refs/remotes/origin/*' && (git -c advice.detachedHead=false checkout 'abc1234' >/dev/null 2>&1 || (echo 'The commit is not a branch tip. Fetching the full history.' && GIT_SSH_COMMAND="ssh -F /root/.ssh/coolify_git_abc.config -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o LogLevel=ERROR" git fetch --unshallow origin '+refs/heads/*:refs/remotes/origin/*' && git -c advice.detachedHead=false checkout 'abc1234' >/dev/null 2>&1))"#
         );
         // A full SHA and a branch name are fetched by name; HEAD needs no checkout.
         assert!(
-            set_git_import_settings("c", s, true, "v1.2", None, None, "/a")
+            set_git_import_settings("abc", "c", s, true, "v1.2", None, None, "/a")
                 .contains("fetch --depth=1 origin 'v1.2' && git -c")
         );
         assert_eq!(
             set_git_import_settings(
+                "abc",
                 "c",
                 ImportSettings { lfs: true, ..s },
                 true,
@@ -1228,11 +1243,12 @@ mod tests {
                 None,
                 "/a"
             ),
-            "c && cd '/a' && if git lfs ls-files -n | grep -q .; then echo 'Downloading Git LFS objects.' && GIT_SSH_COMMAND=\"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null\" git lfs pull; fi"
+            "c && cd '/a' && if git lfs ls-files -n | grep -q .; then echo 'Downloading Git LFS objects.' && GIT_SSH_COMMAND=\"ssh -F /root/.ssh/coolify_git_abc.config -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o LogLevel=ERROR\" git lfs pull; fi"
         );
         // A checkout that only reads files skips LFS, submodules and the LFS pull.
         assert_eq!(
             set_git_import_settings_with(
+                "abc",
                 "c",
                 ImportSettings {
                     lfs: true,
@@ -1283,7 +1299,7 @@ mod tests {
         assert_eq!(g.full_repo_url, "https://github.com/o/r");
         assert_eq!(
             g.commands[0].command,
-            r#"docker exec abc bash -c 'git clone --depth=1 --recurse-submodules --shallow-submodules -b '\''main'\'' '\''https://github.com/o/r'\'' '\''/artifacts/abc'\'' && cd '\''/artifacts/abc'\'' && echo '\''Fetching the commit.'\'' && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git fetch --depth=1 origin '\''0123456789abcdef0123456789abcdef01234567'\'' && git -c advice.detachedHead=false checkout '\''0123456789abcdef0123456789abcdef01234567'\'' >/dev/null 2>&1 && cd '\''/artifacts/abc'\'' && if [ -f .gitmodules ]; then sed -i "s#[A-Za-z0-9._-]*@\(.*\):#https://\1/#g" '\''/artifacts/abc'\''/.gitmodules || true && echo '\''Updating submodules.'\'' && git submodule sync && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git submodule update --init --recursive --depth=1; fi && cd '\''/artifacts/abc'\'' && if git lfs ls-files -n | grep -q .; then echo '\''Downloading Git LFS objects.'\'' && GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git lfs pull; fi'"#
+            r#"docker exec abc bash -c 'git clone --depth=1 --recurse-submodules --shallow-submodules -b '\''main'\'' -- '\''https://github.com/o/r'\'' '\''/artifacts/abc'\'' && cd '\''/artifacts/abc'\'' && echo '\''Fetching the commit.'\'' && GIT_SSH_COMMAND="ssh -F /root/.ssh/coolify_git_abc.config -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o LogLevel=ERROR" git fetch --depth=1 origin '\''0123456789abcdef0123456789abcdef01234567'\'' && git -c advice.detachedHead=false checkout '\''0123456789abcdef0123456789abcdef01234567'\'' >/dev/null 2>&1 && cd '\''/artifacts/abc'\'' && if [ -f .gitmodules ]; then sed -i "s#[A-Za-z0-9._-]*@\(.*\):#https://\1/#g" '\''/artifacts/abc'\''/.gitmodules || true && echo '\''Updating submodules.'\'' && git submodule sync && GIT_SSH_COMMAND="ssh -F /root/.ssh/coolify_git_abc.config -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o LogLevel=ERROR" git submodule update --init --recursive --depth=1; fi && cd '\''/artifacts/abc'\'' && if git lfs ls-files -n | grep -q .; then echo '\''Downloading Git LFS objects.'\'' && GIT_SSH_COMMAND="ssh -F /root/.ssh/coolify_git_abc.config -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o LogLevel=ERROR" git lfs pull; fi'"#
         );
     }
 

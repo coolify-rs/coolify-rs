@@ -50,6 +50,8 @@ const MAX_ITEMS: &[(&str, usize)] = &[
     ("dns_zones", 1000),
     ("managed_dns_records", 10000),
     ("ssl_certificates", 10000),
+    ("image_scan_policies", 10000),
+    ("image_scan_ignores", 20000),
     ("warnings", 1000),
     ("post_transfer_checklist", 1000),
 ];
@@ -395,6 +397,13 @@ fn check_tasks(errors: &mut Vec<String>, at: &str, resource: &Value) {
             errors,
             &format!("{p}.frequency"),
             Some(task.get("frequency").unwrap_or(&empty)),
+        );
+        check_string(
+            errors,
+            &format!("{p}.disabled_reason"),
+            task.get("disabled_reason"),
+            Some(1000),
+            None,
         );
     }
 }

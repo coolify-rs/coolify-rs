@@ -71,10 +71,12 @@ impl AuthCtx {
     }
 
     /// `canAccess` on a standalone database (`DatabasePolicy::allows`: the instance database,
-    /// id 0 of the root team, needs an owner or admin of the root team).
+    /// id 0 of the root team, needs an owner or admin of the root team). It has no environment,
+    /// so since 4.7.5 the check also uses the root team grants and the API token limits
+    /// (`AccessResolver::allowsTeamWide`): a token limited to some projects cannot touch it.
     pub fn can_db(&self, level: AccessLevel, d: &coolify_db::databases::DatabaseRow) -> bool {
         if d.id == 0 && d.team_id == coolify_domain::ROOT_TEAM_ID {
-            return self.team_id == coolify_domain::ROOT_TEAM_ID && self.is_team_admin();
+            return self.can_instance_database(level);
         }
         self.can_resource(
             level,
@@ -85,9 +87,25 @@ impl AuthCtx {
         )
     }
 
+    /// `DatabasePolicy::allows` for the instance database (coolify-db):
+    /// `isAdminOfTeam(0) && allowsTeamWide($user, $level, 0)`.
+    pub fn can_instance_database(&self, level: AccessLevel) -> bool {
+        self.team_id == coolify_domain::ROOT_TEAM_ID
+            && self.is_team_admin()
+            && self.allows_team_wide(level)
+    }
+
     /// `AccessResolver::coversWholeTeam`.
     pub fn covers_whole_team(&self) -> bool {
         self.access.covers_whole_team()
+    }
+
+    /// `canReadServerSecretsFromApi()` (`ApiSensitiveData`, `can_read_server_sensitive`): server
+    /// secrets (Sentinel token, log drain keys, proxy configuration) are team-level, so a token
+    /// limited to some projects, environments or resources can read the secrets of those
+    /// resources, but not of the servers they run on.
+    pub fn can_read_server_sensitive(&self) -> bool {
+        self.can_read_sensitive && self.covers_whole_team()
     }
 
     /// `AccessResolver::allowsTeamWide`.
@@ -107,7 +125,34 @@ impl AuthCtx {
     pub fn can_use_team_credentials(&self) -> bool {
         self.allows_team_wide(AccessLevel::Write)
     }
+
+    /// `$this->authorize('useTeamCredentials')`: since 4.7.5 the policy answers with its own
+    /// message instead of the generic "This action is unauthorized.".
+    pub fn authorize_team_credentials(&self) -> Result<(), ApiError> {
+        if self.can_use_team_credentials() {
+            Ok(())
+        } else {
+            Err(policy_denied(USE_TEAM_CREDENTIALS_DENIED_MESSAGE))
+        }
+    }
 }
+
+/// `Handler::render` for an `AuthorizationException` whose policy answered
+/// `Response::deny($message)`: 403 `{"message": $message, "error": "Unauthorized"}`.
+pub fn policy_denied(message: &str) -> ApiError {
+    ApiError::Status(
+        axum::http::StatusCode::FORBIDDEN,
+        serde_json::json!({"message": message, "error": "Unauthorized"}),
+    )
+}
+
+/// `ResourceCreatePolicy::useTeamCredentials` deny message.
+pub const USE_TEAM_CREDENTIALS_DENIED_MESSAGE: &str = "You need write access on the whole team to use team credentials, such as private keys, git sources, and S3 storages.";
+
+/// `ServerPolicy::placeResource` deny messages.
+pub const PLACE_ON_COOLIFY_HOST_DENIED_MESSAGE: &str =
+    "Only an admin can place resources on the server that runs Coolify.";
+pub const PLACE_ON_SERVER_DENIED_MESSAGE: &str = "You need write access on the whole team, or on a resource that already runs on this server, to place resources on it.";
 
 /// `EnsureTokenBelongsToCurrentTeamMember::EXCEEDS_ACCESS_MESSAGE`.
 pub const EXCEEDS_ACCESS_MESSAGE: &str =
@@ -124,6 +169,7 @@ pub const SCOPED_ACCESS_ROUTES: &[&str] = &[
     "deployments",
     "resources",
     "version",
+    "vulnerabilities",
 ];
 
 pub const SCOPED_ACCESS_DENIED_MESSAGE: &str = "This API token is limited to selected projects, environments, or resources, so it cannot use this endpoint.";
@@ -169,7 +215,7 @@ pub(crate) fn client_ip(state: &AppState, req: &Request) -> IpAddr {
 }
 
 /// Laravel `Request::bearerToken`.
-fn bearer(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn bearer(headers: &HeaderMap) -> Option<String> {
     let v = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let pos = v.to_ascii_lowercase().find("bearer ")?;
     let token = v[pos + 7..].trim();
@@ -291,10 +337,32 @@ pub async fn main_guard(State(state): State<AppState>, mut req: Request, next: N
         Ok(ctx) => {
             tracing::Span::current().record("team_id", ctx.team_id);
             let access = ctx.access.clone();
+            let audit_ctx = ctx.clone();
             req.extensions_mut().insert(ctx);
-            req.extensions_mut().insert(state);
+            req.extensions_mut().insert(state.clone());
             req.extensions_mut().insert(ClientAddr(client));
-            coolify_db::access::scope(access, next.run(req)).await
+            // `$request->route()?->getName() ?? $request->path()`: API routes have no names.
+            let route = req.uri().path().trim_start_matches('/').to_owned();
+            let meta = request_meta(&req);
+            let response = coolify_db::access::scope(access, next.run(req)).await;
+            // `Handler::render()`: `auditLog('api.auth.policy_denied', ...)` for an
+            // `AuthorizationException` of an API route.
+            if let Some(crate::response::PolicyDenied(reason)) = response
+                .extensions()
+                .get::<crate::response::PolicyDenied>()
+                .cloned()
+            {
+                crate::audit::log(
+                    &state,
+                    &audit_ctx,
+                    &meta,
+                    "api.auth.policy_denied",
+                    serde_json::json!({"reason": reason, "route": route}),
+                    "warning",
+                )
+                .await;
+            }
+            response
         }
         Err(ApiError::TokenExceedsAccess(ctx)) => {
             audit_token_exceeds_access(&state, &ctx, client, &headers).await;
@@ -403,7 +471,15 @@ pub async fn require_abilities(
     if let Some(rest) = req.uri().path().strip_prefix("/api/v1/") {
         let segment = rest.split('/').next().unwrap_or_default();
         if !SCOPED_ACCESS_ROUTES.contains(&segment) && !ctx.covers_whole_team() {
-            if let Some(state) = req.extensions().get::<AppState>() {
+            if let Some(state) = req.extensions().get::<AppState>()
+                && crate::audit::first_denial_in_window(
+                    state,
+                    "api.auth.scope_denied",
+                    ctx.token_id,
+                    None,
+                    &[],
+                )
+            {
                 let meta = request_meta(&req);
                 crate::audit::log(
                     state,
@@ -427,7 +503,16 @@ pub async fn require_abilities(
     }
     for any_of in all_of {
         if let AbilityCheck::Missing(missing) = check_any(&ctx.abilities, any_of) {
-            if let Some(state) = req.extensions().get::<AppState>() {
+            let required: Vec<&str> = missing.iter().map(|a| a.as_str()).collect();
+            if let Some(state) = req.extensions().get::<AppState>()
+                && crate::audit::first_denial_in_window(
+                    state,
+                    "api.auth.ability_denied",
+                    ctx.token_id,
+                    Some("Invalid ability provided."),
+                    &required,
+                )
+            {
                 let meta = crate::audit::Meta {
                     ip: req
                         .extensions()
@@ -460,4 +545,127 @@ pub async fn require_abilities(
         }
     }
     next.run(req).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use coolify_domain::grants::{AccessGrants, expand};
+
+    fn ctx(team_id: TeamId, role: Role, layers: Vec<AccessGrants>, sensitive: bool) -> AuthCtx {
+        AuthCtx {
+            token_id: 1,
+            user_id: 1,
+            team_id,
+            team_id_raw: team_id.to_string(),
+            role,
+            abilities: Abilities::default(),
+            can_read_sensitive: sensitive,
+            access: Arc::new(Access {
+                layers,
+                environment_projects: [(70, 7)].into_iter().collect(),
+            }),
+        }
+    }
+
+    fn project_layer(levels: &[AccessLevel]) -> AccessGrants {
+        let mut layer = AccessGrants::default();
+        layer.project_levels.insert(7, expand(levels));
+        layer.project_environment_ids = vec![70];
+        layer
+    }
+
+    fn team_layer(levels: &[AccessLevel]) -> AccessGrants {
+        AccessGrants {
+            team_levels: expand(levels),
+            ..Default::default()
+        }
+    }
+
+    /// `ApiSensitiveData` (4.7.5): `can_read_server_sensitive` needs a token that covers the team.
+    #[test]
+    fn server_secrets_need_a_team_wide_token() {
+        let team_wide = ctx(1, Role::Owner, vec![], true);
+        assert!(team_wide.can_read_server_sensitive());
+        let scoped = ctx(
+            1,
+            Role::Owner,
+            vec![project_layer(&[AccessLevel::Root])],
+            true,
+        );
+        assert!(scoped.can_read_sensitive);
+        assert!(!scoped.can_read_server_sensitive());
+        let no_sensitive = ctx(1, Role::Owner, vec![], false);
+        assert!(!no_sensitive.can_read_server_sensitive());
+    }
+
+    /// `DatabasePolicy::allows` (4.7.5) for the instance database.
+    #[test]
+    fn the_instance_database_needs_a_root_team_admin_and_a_team_wide_level() {
+        let owner = ctx(0, Role::Owner, vec![], false);
+        assert!(owner.can_instance_database(AccessLevel::Write));
+        // A token limited to a project of the root team.
+        let scoped = ctx(
+            0,
+            Role::Owner,
+            vec![project_layer(&[AccessLevel::Root])],
+            false,
+        );
+        assert!(!scoped.can_instance_database(AccessLevel::Read));
+        // A team-wide read token reads, but does not write.
+        let read = ctx(
+            0,
+            Role::Owner,
+            vec![team_layer(&[AccessLevel::Read])],
+            false,
+        );
+        assert!(read.can_instance_database(AccessLevel::Read));
+        assert!(!read.can_instance_database(AccessLevel::Write));
+        // Members of the root team and admins of other teams never.
+        let member = ctx(
+            0,
+            Role::Member,
+            vec![team_layer(&[AccessLevel::Root])],
+            false,
+        );
+        assert!(!member.can_instance_database(AccessLevel::Read));
+        let other = ctx(1, Role::Owner, vec![], false);
+        assert!(!other.can_instance_database(AccessLevel::Read));
+    }
+
+    #[test]
+    fn team_credentials_denial_carries_the_policy_message() {
+        let scoped = ctx(
+            1,
+            Role::Owner,
+            vec![project_layer(&[AccessLevel::Root])],
+            false,
+        );
+        let Err(ApiError::Status(status, body)) = scoped.authorize_team_credentials() else {
+            panic!("expected a denial");
+        };
+        assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "message": "You need write access on the whole team to use team credentials, such as private keys, git sources, and S3 storages.",
+                "error": "Unauthorized",
+            })
+        );
+        assert!(
+            ctx(
+                1,
+                Role::Member,
+                vec![team_layer(&[AccessLevel::Write])],
+                false
+            )
+            .authorize_team_credentials()
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn vulnerabilities_are_open_to_scoped_tokens() {
+        assert!(SCOPED_ACCESS_ROUTES.contains(&"vulnerabilities"));
+    }
 }

@@ -460,7 +460,15 @@ async fn instance_cleanups_remove_only_what_upstream_removes() {
     sqlx::raw_sql(
         "INSERT INTO application_deployment_queues (id, deployment_uuid, application_id, created_at) VALUES \
            (1, 'a', '1', now() - interval '61 days'), (2, 'b', '1', now()); \
-         INSERT INTO sessions (id, last_activity, payload) VALUES ('old', 1, ''), ('new', 2147483647, '');",
+         INSERT INTO sessions (id, last_activity, payload) VALUES ('old', 1, ''), ('new', 2147483647, ''), \
+           ('past-lifetime', extract(epoch FROM now() - interval '8 days')::int, ''), \
+           ('within-lifetime', extract(epoch FROM now() - interval '6 days')::int, ''); \
+         INSERT INTO scheduled_database_backups (id, uuid, team_id, frequency, enabled, database_id, database_type) \
+           VALUES (90, 'b90', 1, '0 0 * * *', true, 1, 'App\\Models\\StandalonePostgresql'); \
+         INSERT INTO scheduled_database_backup_executions (id, uuid, status, scheduled_database_backup_id, created_at) VALUES \
+           (1, 'old-failed', 'failed', 90, now() - interval '61 days'), \
+           (2, 'old-success', 'success', 90, now() - interval '61 days'), \
+           (3, 'new-failed', 'failed', 90, now());",
     )
     .execute(db.pool())
     .await
@@ -472,13 +480,42 @@ async fn instance_cleanups_remove_only_what_upstream_removes() {
         count(db, "SELECT count(*) FROM application_deployment_queues").await,
         1
     );
-    assert_eq!(count(db, "SELECT count(*) FROM sessions").await, 1);
+    // A session goes once it is older than the session lifetime (seven days), not the 60 days.
+    assert_eq!(
+        count(
+            db,
+            "SELECT count(*) FROM sessions WHERE id IN ('new', 'within-lifetime')"
+        )
+        .await,
+        2
+    );
+    assert_eq!(count(db, "SELECT count(*) FROM sessions").await, 2);
+    // Only the record of an old failed backup run goes; retention handles successful runs.
+    assert_eq!(
+        count(
+            db,
+            "SELECT count(*) FROM scheduled_database_backup_executions WHERE uuid IN ('old-success', 'new-failed')"
+        )
+        .await,
+        2
+    );
+    assert_eq!(
+        count(
+            db,
+            "SELECT count(*) FROM scheduled_database_backup_executions"
+        )
+        .await,
+        2
+    );
 
-    // `cleanup:unreachable-servers`.
+    // `cleanup:unreachable-servers`. The localhost server (id 0) is the host itself: never touched.
     sqlx::raw_sql(
-        "UPDATE servers SET unreachable_count = 3, updated_at = now() - interval '8 days' WHERE id = 1; \
+        "INSERT INTO servers (id, uuid, name, ip, team_id, private_key_id) VALUES (0, 'localhost', 'localhost', 'host.docker.internal', 0, 1); \
+         INSERT INTO server_settings (server_id) VALUES (0); \
+         UPDATE servers SET unreachable_count = 3, updated_at = now() - interval '8 days' WHERE id IN (0, 1); \
          INSERT INTO notification_throttles (notifiable_type, notifiable_id, notification, sent_at) \
-           VALUES ('App\\Models\\Server', 1, 'App\\Notifications\\Server\\Unreachable', now());",
+           VALUES ('App\\Models\\Server', 1, 'App\\Notifications\\Server\\Unreachable', now()), \
+                  ('App\\Models\\Server', 0, 'App\\Notifications\\Server\\Unreachable', now());",
     )
     .execute(db.pool())
     .await
@@ -493,6 +530,14 @@ async fn instance_cleanups_remove_only_what_upstream_removes() {
         )
         .await,
         1
+    );
+    assert_eq!(
+        count(
+            db,
+            "SELECT count(*) FROM server_settings WHERE server_id = 0 AND force_disabled"
+        )
+        .await,
+        0
     );
 }
 

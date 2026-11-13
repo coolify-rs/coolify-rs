@@ -186,6 +186,7 @@
     if (d.is_webhook) return 'Webhook';
     if (pr > 0) return `Pull request #${pr}`;
     if (d.rollback) return 'Rollback';
+    if (d.is_mcp) return 'MCP';
     if (d.is_api) return 'API';
     return 'Manual';
   }
@@ -194,6 +195,7 @@
     if ((d.pull_request_id ?? 0) > 0) return 'pull-request';
     if (d.is_webhook) return 'webhook';
     if (d.rollback) return 'rollback';
+    if (d.is_mcp) return 'mcp';
     if (d.is_api) return 'api';
     return 'manual';
   }
@@ -402,8 +404,8 @@
 
           {#each data.deployments as d (d.deployment_uuid)}
             {@const url = `${listUrl}/${d.deployment_uuid}`}
-            {@const type = statusType(d.status)}
-            {@const label = statusLabel(d.status)}
+            {@const type = d.image_scan_blocked ? 'error' : statusType(d.status)}
+            {@const label = d.image_scan_blocked ? 'Blocked' : statusLabel(d.status)}
             {@const server = d.server_name || serverName || '-'}
             {@const commitMessage = d.commit_message ? d.commit_message.split('\n')[0] : null}
             <div

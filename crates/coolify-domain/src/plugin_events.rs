@@ -32,6 +32,8 @@ pub const SERVER_HETZNER_DELETION_FAILED: &str = "server.hetzner_deletion_failed
 pub const PROXY_TRAEFIK_OUTDATED: &str = "proxy.traefik_outdated";
 pub const SSL_CERTIFICATES_EXPIRING: &str = "ssl.certificates_expiring";
 pub const API_TOKEN_EXPIRING: &str = "api_token.expiring";
+pub const API_TOKEN_FAILING: &str = "api_token.failing";
+pub const SCHEDULED_JOB_RECOVERED: &str = "scheduled_job.recovered";
 pub const GENERAL: &str = "general";
 
 /// Every kind, for validating manifests.
@@ -63,5 +65,7 @@ pub const KINDS: &[&str] = &[
     PROXY_TRAEFIK_OUTDATED,
     SSL_CERTIFICATES_EXPIRING,
     API_TOKEN_EXPIRING,
+    API_TOKEN_FAILING,
+    SCHEDULED_JOB_RECOVERED,
     GENERAL,
 ];

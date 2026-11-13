@@ -12,6 +12,7 @@
     fileLabel,
     defaultFile = '',
     showFile = false,
+    compose = false,
     disabled = false,
     class: cls = '',
     baseError,
@@ -23,6 +24,8 @@
     fileLabel?: string;
     defaultFile?: string;
     showFile?: boolean;
+    /** The file is a Docker Compose file: warn when it is in a subdirectory of the base directory. */
+    compose?: boolean;
     disabled?: boolean;
     class?: string;
     baseError?: string;
@@ -40,6 +43,14 @@
   const repeatsBase = $derived(directory !== '' && location.startsWith(directory + '/'));
   const suggestion = $derived(location.slice(directory.length));
   const fileValue = $derived(file ?? '');
+  const fileDirectory = $derived(location.slice(0, location.lastIndexOf('/')));
+  const composeInSubdirectory = $derived(fileDirectory !== '' && !repeatsBase);
+  function useFileDirectoryAsBase() {
+    const moved = fileDirectory;
+    const target = directory + moved;
+    file = location.slice(moved.length);
+    base = target;
+  }
 </script>
 
 <div class="grid gap-4 {cls}">
@@ -74,6 +85,17 @@
         <code class="rounded bg-black/10 px-1 dark:bg-white/10">{directory}</code> again.
         {#if !disabled}
           <button type="button" class="font-medium underline" onclick={() => (file = suggestion)}>Use <span>{suggestion}</span></button>
+        {/if}
+      </Callout>
+    {/if}
+    {#if compose && composeInSubdirectory}
+      <Callout class="col-span-full" title="Relative paths resolve from the base directory">
+        Docker Compose runs in the base directory
+        <code class="rounded bg-black/10 px-1 dark:bg-white/10">{directory || '/'}</code>, not in the directory of the Compose file. Relative paths in the file, such as a build context of
+        <code class="rounded bg-black/10 px-1 dark:bg-white/10">..</code>, resolve from the base directory. If these paths are relative to the Compose file, set the base directory to
+        <code class="rounded bg-black/10 px-1 dark:bg-white/10">{directory + fileDirectory}</code>.
+        {#if !disabled}
+          <button type="button" class="font-medium underline" onclick={useFileDirectoryAsBase}>Use <span>{directory + fileDirectory}</span> as base directory</button>
         {/if}
       </Callout>
     {/if}

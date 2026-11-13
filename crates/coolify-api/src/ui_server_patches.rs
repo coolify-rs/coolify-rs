@@ -32,6 +32,8 @@ pub fn routes() -> Router<AppState> {
         .route(&p("/check"), post(check))
         .route(&p("/update"), post(update))
         .route(&p("/update-all"), post(update_all))
+        .route(&p("/update-selected"), post(update_selected))
+        .route(&p("/remove-unused"), post(remove_unused))
         .route(&p("/reboot"), post(reboot))
         .route(&p("/auto-updates"), post(toggle_auto))
         .route(&format!("{SERVER_PAGE}/activity/{{id}}"), get(activity))
@@ -313,6 +315,102 @@ async fn update(
     run_update(&state, s, false, Some(package)).await
 }
 
+/// `savedPackages()`: the packages of the last check.
+fn saved_packages(s: &ServerRow) -> Vec<String> {
+    saved_result(s)
+        .get("updates")
+        .and_then(Value::as_array)
+        .map(|updates| {
+            updates
+                .iter()
+                .filter_map(|u| u.get("package").and_then(Value::as_str))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `array_values(array_intersect($this->savedPackages(), $this->selectedPackages))`.
+fn selected_saved_packages(saved: &[String], selected: &[String]) -> Vec<String> {
+    saved
+        .iter()
+        .filter(|p| selected.contains(p))
+        .cloned()
+        .collect()
+}
+
+/// `Patches::updateSelectedPackages` (v4.7.5).
+async fn update_selected(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+    Json(body): Json<Map<String, Value>>,
+) -> ApiResult {
+    let s = find_server(&state, &ctx, &uuid).await?;
+    if !ctx.is_team_admin() {
+        return toast_error(UNAUTHORIZED);
+    }
+    let selected: Vec<String> = body
+        .get("packages")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let packages = selected_saved_packages(&saved_packages(&s), &selected);
+    if packages.is_empty() {
+        return toast_error("Select the packages to update.");
+    }
+    // `runUpdate(packages: $packages)`.
+    if ServerInfo::from_row(&s).transferred {
+        return toast_error(MANAGED_ELSEWHERE);
+    }
+    let manager = result_str(&s, "package_manager");
+    if manager.is_none() || result_str(&s, "osId").is_none() {
+        return toast_error("Run \"Check for updates\" first.");
+    }
+    let srv = Srv::from_row(jobs(&state)?, s.clone());
+    match patches::update_packages(&srv, &packages, manager.as_deref(), false).await {
+        Ok(activity) => {
+            audit(
+                &s,
+                "ui.server.packages_update_requested",
+                &packages.join(","),
+            );
+            Ok(ok(json!({"activity_id": activity})).into_response())
+        }
+        Err(e) => toast_error(e),
+    }
+}
+
+/// `ManagesServerPackageUpdates::removeUnusedPackages` (v4.7.5): removes packages that nothing
+/// needs anymore and old kernels (apt autoremove or the equivalent).
+async fn remove_unused(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    let s = find_server(&state, &ctx, &uuid).await?;
+    if !ctx.is_team_admin() {
+        return toast_error(UNAUTHORIZED);
+    }
+    if ServerInfo::from_row(&s).transferred {
+        return toast_error(MANAGED_ELSEWHERE);
+    }
+    let manager = result_str(&s, "package_manager");
+    let srv = Srv::from_row(jobs(&state)?, s.clone());
+    match patches::remove_unused_packages(&srv, manager.as_deref()).await {
+        Ok(activity) => {
+            audit(&s, "ui.server.packages_update_requested", "unused");
+            Ok(ok(json!({"activity_id": activity})).into_response())
+        }
+        Err(e) => toast_error(e),
+    }
+}
+
 /// `Patches::rebootServer`.
 async fn reboot(
     State(state): State<AppState>,
@@ -347,4 +445,25 @@ async fn activity(
             json!({"id": id, "status": props.get("status").cloned().unwrap_or(Value::Null), "entries": entries})
         });
     Ok(ok(json!({"activity": activity})).into_response())
+}
+
+#[cfg(test)]
+mod v475_tests {
+    use super::selected_saved_packages;
+
+    // `updateSelectedPackages()`: only packages of the last check, in the order of the check.
+    #[test]
+    fn only_saved_packages_can_be_selected() {
+        let saved = vec!["openssl".to_owned(), "libc6".to_owned(), "curl".to_owned()];
+        let selected = vec![
+            "curl".to_owned(),
+            "evil; rm -rf /".to_owned(),
+            "openssl".to_owned(),
+        ];
+        assert_eq!(
+            selected_saved_packages(&saved, &selected),
+            ["openssl", "curl"]
+        );
+        assert!(selected_saved_packages(&saved, &[]).is_empty());
+    }
 }

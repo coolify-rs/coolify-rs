@@ -58,12 +58,62 @@ impl Detection {
 /// `Application::serverCheckoutCommand($uuid, $checkoutDir)` for a public repository: the
 /// clone without a checkout (`--quiet` added like upstream's `str_replace`), its progress on
 /// stderr and without Git LFS downloads (the detection application has Git LFS off).
-pub fn checkout_command(clone_url: &str, branch: &str, checkout_dir: &str) -> String {
+/// A repository URL that is not http(s) reaches git over SSH (`gitUsesSsh()`), so the clone gets
+/// the SSH setup of the server first (`serverGitSshSetupPrefix()`).
+pub fn checkout_command(uuid: &str, clone_url: &str, branch: &str, checkout_dir: &str) -> String {
+    let prefix = if uses_ssh_url(clone_url) {
+        server_git_ssh_setup_prefix(uuid)
+    } else {
+        String::new()
+    };
     format!(
-        "exec >&2 && export GIT_LFS_SKIP_SMUDGE=1 && git clone --quiet --depth=1 --no-checkout -b {} {} {}",
+        "exec >&2 && {prefix}export GIT_LFS_SKIP_SMUDGE=1 && git clone --quiet --depth=1 --no-checkout -b {} -- {} {}",
         quote(branch),
         quote(clone_url),
         quote(checkout_dir)
+    )
+}
+
+/// The deploy key clone of `generateGitImportCommands(only_checkout: true, exec_in_docker: false)`:
+/// `gitSshKeySetupCommands()` (the key file, removed with the SSH files when the script exits),
+/// then the clone with `gitSshCommand($uuid, $port, $keyFile)`. `checkout_dir` is quoted.
+fn deploy_key_checkout(
+    uuid: &str,
+    pem: &str,
+    port: &str,
+    repository: &str,
+    clone: &str,
+    lfs: &str,
+    checkout_dir: &str,
+) -> String {
+    use super::git_ssh;
+    use base64::Engine as _;
+    let location = format!("/root/.ssh/id_rsa_coolify_{uuid}");
+    let key_b64 = base64::engine::general_purpose::STANDARD.encode(pem.as_bytes());
+    let ssh = git_ssh::git_ssh_command(uuid, Some(port), Some(&location), true);
+    format!(
+        "trap 'rm -f {location} {} {}' EXIT && mkdir -p /root/.ssh && echo '{key_b64}' | base64 -d | tee {location} > /dev/null && chmod 600 {location} && {lfs}GIT_SSH_COMMAND=\"{ssh}\" {clone} {} {checkout_dir}",
+        git_ssh::git_ssh_config_file(uuid),
+        git_ssh::git_known_hosts_file(uuid),
+        quote(repository)
+    )
+}
+
+/// `gitUsesSsh()` of an application without a deploy key or a source: its URL is not http(s).
+fn uses_ssh_url(url: &str) -> bool {
+    let lower = url.trim_start().to_ascii_lowercase();
+    !(lower.starts_with("http://") || lower.starts_with("https://"))
+}
+
+/// `serverGitSshSetupPrefix($uuid)` of an unsaved application (no saved host keys): writes the
+/// SSH config and known_hosts file that git uses on the server, removed when the script exits.
+fn server_git_ssh_setup_prefix(uuid: &str) -> String {
+    use super::git_ssh;
+    format!(
+        "trap 'rm -f {} {}' EXIT && {} && ",
+        git_ssh::git_ssh_config_file(uuid),
+        git_ssh::git_known_hosts_file(uuid),
+        git_ssh::git_ssh_setup_command(uuid, None, true)
     )
 }
 
@@ -123,7 +173,7 @@ fn scan_commands_with(
         summary = quote(SUMMARY),
     );
     let checkout = checkout_override.map_or_else(
-        || checkout_command(clone_url, branch, &checkout_dir),
+        || checkout_command(uuid, clone_url, branch, &checkout_dir),
         str::to_owned,
     );
     Ok(vec![
@@ -273,7 +323,6 @@ impl Jobs {
         branch: &str,
         uuid: &str,
     ) -> Result<String, String> {
-        use base64::Engine as _;
         if crate::applications::deploy::git::is_option_like(repository) {
             return Err(crate::applications::deploy::git::INVALID_REPOSITORY.into());
         }
@@ -286,7 +335,9 @@ impl Jobs {
         let checkout_dir = quote(&format!("/tmp/{uuid}/checkout"));
         // `setGitImportSettings(onlyCheckout: true)` puts `gitLfsSkipSmudgePrefix()` before the clone.
         let lfs = "export GIT_LFS_SKIP_SMUDGE=1 && ";
-        let clone = format!("git clone --depth=1 --no-checkout -b {}", quote(branch));
+        // `--` ends the options, so a repository value that starts with `-` is not a git option.
+        let clone = format!("git clone --depth=1 --no-checkout -b {} --", quote(branch));
+        let mut prefix = String::new();
         let command = match c {
             CheckoutCredentials::Github(source) => {
                 let token = crate::github::installation_token(db, Some(enc), Some(source)).await?;
@@ -337,20 +388,15 @@ impl Jobs {
                 )
             }
             CheckoutCredentials::DeployKey { pem, port } => {
-                let location = format!("/root/.ssh/id_rsa_coolify_{uuid}");
-                let key_b64 = base64::engine::general_purpose::STANDARD.encode(pem.as_bytes());
-                let ssh = format!(
-                    "ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -p {port} -o Port={port} -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i {location} -o IdentitiesOnly=yes"
-                );
-                format!(
-                    "mkdir -p /root/.ssh && echo '{key_b64}' | base64 -d | tee {location} > /dev/null && chmod 600 {location} && {lfs}GIT_SSH_COMMAND=\"{ssh}\" {clone} {} {checkout_dir}",
-                    quote(repository)
-                )
+                // The host keys of the server setup (`serverGitSshSetupPrefix()`): new hosts are
+                // accepted, a changed key of a known host is refused.
+                prefix = server_git_ssh_setup_prefix(uuid);
+                deploy_key_checkout(uuid, pem, port, repository, &clone, lfs, &checkout_dir)
             }
         };
         // Callers read data from stdout after the checkout, so its progress goes to stderr.
         Ok(format!(
-            "exec >&2 && {}",
+            "exec >&2 && {prefix}{}",
             command.replace(" clone ", " clone --quiet ")
         ))
     }
@@ -573,9 +619,54 @@ mod tests {
         let c = scan_commands("u", "https://github.com/a/b", "main", "/static").unwrap_or_default();
         assert_eq!(
             c[3],
-            "sh -c 'exec >&2 && export GIT_LFS_SKIP_SMUDGE=1 && git clone --quiet --depth=1 --no-checkout -b '\\''main'\\'' '\\''https://github.com/a/b'\\'' '\\''/tmp/u/checkout'\\'''"
+            "sh -c 'exec >&2 && export GIT_LFS_SKIP_SMUDGE=1 && git clone --quiet --depth=1 --no-checkout -b '\\''main'\\'' -- '\\''https://github.com/a/b'\\'' '\\''/tmp/u/checkout'\\'''"
         );
         assert!(c[5].contains("'\\''HEAD:static'\\''"));
         assert_eq!(urlencode("feat/a b"), "feat%2Fa+b");
+    }
+
+    /// `serverGitSshSetupPrefix()`: a repository over SSH gets the SSH config and known_hosts of
+    /// the clone first, and they are removed when the script exits; https gets nothing.
+    #[test]
+    fn an_ssh_repository_gets_the_host_key_setup_before_the_clone() {
+        let https = checkout_command("u", "https://github.com/a/b", "main", "/tmp/u/checkout");
+        assert!(!https.contains("trap "));
+        let ssh = checkout_command(
+            "u",
+            "git@git.example.com:a/b.git",
+            "main",
+            "/tmp/u/checkout",
+        );
+        assert!(ssh.starts_with(
+            "exec >&2 && trap 'rm -f /root/.ssh/coolify_git_u.config /root/.ssh/coolify_git_u.known_hosts' EXIT && "
+        ));
+        assert!(ssh.contains(" clone --quiet --depth=1 --no-checkout -b 'main' -- "));
+        assert!(!ssh.contains("StrictHostKeyChecking=no"));
+    }
+
+    #[test]
+    fn a_deploy_key_clone_checks_the_host_keys() {
+        let command = deploy_key_checkout(
+            "u",
+            "KEY",
+            "2222",
+            "git@git.example.com:a/b.git",
+            "git clone --depth=1 --no-checkout -b 'main' --",
+            "export GIT_LFS_SKIP_SMUDGE=1 && ",
+            "'/tmp/u/checkout'",
+        );
+        assert!(command.contains(
+            "trap 'rm -f /root/.ssh/id_rsa_coolify_u /root/.ssh/coolify_git_u.config /root/.ssh/coolify_git_u.known_hosts' EXIT"
+        ));
+        assert!(command.contains(
+            "GIT_SSH_COMMAND=\"ssh -F /root/.ssh/coolify_git_u.config -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -p 2222 -o Port=2222 -o LogLevel=ERROR -i /root/.ssh/id_rsa_coolify_u -o IdentitiesOnly=yes\""
+        ));
+        assert!(command.contains(
+            " clone --depth=1 --no-checkout -b 'main' -- 'git@git.example.com:a/b.git' '/tmp/u/checkout'"
+        ));
+        assert!(!command.contains("StrictHostKeyChecking=no"));
+        assert!(server_git_ssh_setup_prefix("u").starts_with(
+            "trap 'rm -f /root/.ssh/coolify_git_u.config /root/.ssh/coolify_git_u.known_hosts' EXIT && mkdir -p /root/.ssh && "
+        ));
     }
 }

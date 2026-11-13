@@ -16,7 +16,7 @@ use axum::routing::{get, post};
 use coolify_db::database_parts as parts;
 use coolify_db::databases::{self as dbs, DatabaseRow, Kind};
 use coolify_jobs::databases::import::{self, ImportSource};
-use coolify_jobs::databases::s3::{S3Target, valid_bucket_name};
+use coolify_jobs::databases::s3::valid_bucket_name;
 use regex::Regex;
 use serde_json::{Value, json};
 
@@ -245,7 +245,7 @@ async fn check_s3(
     }
     let input: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     let Some(storage_id) = input.get("s3_storage_id").and_then(Value::as_i64) else {
-        return Ok(toast("error", "Please select an S3 storage."));
+        return Ok(toast("error", "Please select a storage."));
     };
     let path = input
         .get("path")
@@ -253,13 +253,13 @@ async fn check_s3(
         .unwrap_or_default()
         .trim();
     if path.is_empty() {
-        return Ok(toast("error", "Please provide an S3 path."));
+        return Ok(toast("error", "Please provide a file path."));
     }
     let clean = path.trim_start_matches('/');
     if !valid_s3_path(clean) {
         return Ok(toast(
             "error",
-            "Invalid S3 path. Path must contain only safe characters (alphanumerics, dots, dashes, underscores, slashes).",
+            "Invalid file path. Path must contain only safe characters (alphanumerics, dots, dashes, underscores, slashes).",
         ));
     }
     // `StartDatabaseImport::allowsSourcePath`.
@@ -272,25 +272,23 @@ async fn check_s3(
     else {
         return Ok(toast("error", "S3 storage not found."));
     };
-    if !valid_bucket_name(parts::str_of(&row, "bucket").unwrap_or_default()) {
+    if coolify_jobs::databases::storage_type::is_s3(&row)
+        && !valid_bucket_name(parts::str_of(&row, "bucket").unwrap_or_default())
+    {
         return Ok(toast(
             "error",
             "Invalid S3 bucket name. Bucket name must contain only letters, numbers, dots, and dashes, and must start and end with a letter or number.",
         ));
     }
-    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-    let target = match S3Target::from_row(enc, &row) {
-        Ok(t) => t,
-        Err(e) => return Ok(toast("error", &e)),
-    };
-    // `$s3Storage->testConnection()`.
+    // `$s3Storage->filesystem()` before `testConnection()`: an SFTP storage needs its saved host
+    // key, and a background test never accepts a new one.
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     if let Err(e) = jobs.check_s3_connection(&row).await {
         return Ok(toast("error", &e));
     }
-    match target.object_size(clean).await {
+    match jobs.storage_file_size(&row, clean).await {
         Ok(Some(size)) => {
-            let message = format!("File found in S3. Size: {}", format_bytes(size));
+            let message = format!("File found in the storage. Size: {}", format_bytes(size));
             let mut res = toasts(&[("success", &message)]);
             res["size"] = json!(size);
             res["size_text"] = json!(format_bytes(size));
@@ -299,7 +297,7 @@ async fn check_s3(
         }
         Ok(None) => Ok(toast(
             "error",
-            "File not found in S3. Please check the path.",
+            "File not found in the storage. Please check the path.",
         )),
         Err(e) => Ok(toast("error", &e)),
     }
@@ -380,7 +378,7 @@ async fn run_import(
     let mut res = if kind == "s3" {
         toasts(&[(
             "info",
-            "Restoring database from S3. Progress will be shown in the activity monitor...",
+            "Restoring database from the storage. Progress will be shown in the activity monitor...",
         )])
     } else {
         json!({"toasts": []})

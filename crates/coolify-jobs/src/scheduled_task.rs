@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use crate::Jobs;
 use crate::applications::status::aggregate;
-use crate::notifications::{Notification, Task, lookup, notify};
+use crate::notifications::{Ctx, FailureEvent, Notification, Task, lookup, notify};
 use crate::schedule_sources::notify_missed_occurrence;
 use crate::scheduler::{
     BoxFuture, Due, Occurrence, Overlap, ScheduleSource, allowed, server_timezone,
@@ -37,11 +37,103 @@ fn bounded_task_command(command: &str) -> String {
     )
 }
 
+/// `ScheduledTask::splitCommandArguments()`: the words of a command as a POSIX shell splits them,
+/// but nothing is expanded.
+fn split_command_arguments(command: &str) -> Result<Vec<String>, String> {
+    let chars: Vec<char> = command.chars().collect();
+    let mut arguments = Vec::new();
+    let mut word: Option<String> = None;
+    let mut quote_char: Option<char> = None;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        i += 1;
+        match quote_char {
+            Some('\'') => {
+                if c == '\'' {
+                    quote_char = None;
+                } else {
+                    word.get_or_insert_with(String::new).push(c);
+                }
+                continue;
+            }
+            Some(_) => {
+                if c == '"' {
+                    quote_char = None;
+                } else if c == '\\' && matches!(next, Some('"' | '\\' | '$' | '`')) {
+                    word.get_or_insert_with(String::new)
+                        .push(next.unwrap_or_default());
+                    i += 1;
+                } else {
+                    word.get_or_insert_with(String::new).push(c);
+                }
+                continue;
+            }
+            None => {}
+        }
+        // A backslash before a new line continues the line.
+        if c == '\\' && next == Some('\n') {
+            i += 1;
+            continue;
+        }
+        // `ctype_space()`.
+        if matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c') {
+            if let Some(done) = word.take() {
+                arguments.push(done);
+            }
+            continue;
+        }
+        let current = word.get_or_insert_with(String::new);
+        if c == '\'' || c == '"' {
+            quote_char = Some(c);
+        } else if c == '\\' && next.is_some() {
+            current.push(next.unwrap_or_default());
+            i += 1;
+        } else {
+            current.push(c);
+        }
+    }
+    if quote_char.is_some() {
+        return Err("The command has a quote that is not closed.".to_owned());
+    }
+    if let Some(done) = word {
+        arguments.push(done);
+    }
+    Ok(arguments)
+}
+
+/// `ScheduledTask::containerCommand()`: the part of `docker exec <container> ...` that runs the
+/// command, quoted for the host shell. Without a shell, the command is split into words, so it
+/// also runs in containers that have no `sh` (distroless or scratch images).
+fn container_command(command: &str, use_shell: bool) -> Result<String, String> {
+    if use_shell {
+        return Ok(format!("sh -c {}", quote(command)));
+    }
+    let arguments = split_command_arguments(command)?;
+    if arguments.is_empty() {
+        return Err("The command is empty.".to_owned());
+    }
+    Ok(arguments
+        .iter()
+        .map(|a| quote(a))
+        .collect::<Vec<_>>()
+        .join(" "))
+}
+
 /// The command `handle()` runs for one container.
-fn exec_command(command: &str, container: &str, non_root: bool) -> String {
-    let cmd = format!("sh -c '{}'", command.replace('\'', "'\\''"));
+fn exec_command(
+    command: &str,
+    use_shell: bool,
+    container: &str,
+    non_root: bool,
+) -> Result<String, String> {
+    let cmd = container_command(command, use_shell)?;
     let docker = if non_root { "sudo docker" } else { "docker" };
-    bounded_task_command(&format!("{docker} exec {} {cmd}", quote(container)))
+    Ok(bounded_task_command(&format!(
+        "{docker} exec {} {cmd}",
+        quote(container)
+    )))
 }
 
 /// The container of `handle()`'s loop: the only one, the named one, or the one the service
@@ -67,7 +159,7 @@ async fn task_notification(jobs: &Jobs, task: &TaskContext, output: &str) -> Tas
         (None, Some(uuid)) => (Some(uuid.as_str()), task.service_environment_id, false),
         (None, None) => (None, None, false),
     };
-    lookup::scheduled_task(
+    let mut t = lookup::scheduled_task(
         db,
         &task.name,
         &task.uuid,
@@ -76,24 +168,75 @@ async fn task_notification(jobs: &Jobs, task: &TaskContext, output: &str) -> Tas
         environment,
         is_application,
     )
-    .await
+    .await;
+    // The failure streak of the row, for `TaskFailed`.
+    t.id = task.id;
+    t.consecutive_failures = i64::from(task.consecutive_failures);
+    t.failing_since = task
+        .failing_since
+        .map(|at| at.format("%Y-%m-%d %H:%M:%S").to_string());
+    t.disabled_reason.clone_from(&task.disabled_reason);
+    t
 }
 
+/// `TaskSuccess`, then `ScheduledJobRecovered` once when `recordSuccess()` says that the team
+/// was notified about the failure.
 async fn notify_task_success(jobs: &Jobs, task: &TaskContext, output: &str) {
+    let db = &jobs.0.db;
     let t = task_notification(jobs, task, output).await;
+    let url = t.url(&Ctx::load(db).await);
     notify(
-        &jobs.0.db,
+        db,
         jobs.0.encrypter.as_ref(),
         task.team_id,
         Notification::TaskSuccess(t),
     )
     .await;
+    let recovered = match tasks::record_success(db, task.id, Jobs::now()).await {
+        Ok(recovered) => recovered,
+        Err(e) => {
+            tracing::warn!(target: "scheduled-errors", task_id = %task.uuid, error = %e, "Could not record the scheduled task success");
+            false
+        }
+    };
+    if recovered {
+        notify(
+            db,
+            jobs.0.encrypter.as_ref(),
+            task.team_id,
+            Notification::ScheduledJobRecovered {
+                failure_event: FailureEvent::ScheduledTaskFailure,
+                title: format!("Scheduled task ({}) works again.", task.name),
+                webhook_event: "task_recovered".to_owned(),
+                url,
+                webhook_data: json!({"task_name": task.name, "task_uuid": task.uuid}),
+            },
+        )
+        .await;
+    }
 }
 
+/// `failed()`: `recordFailure()`, then `TaskFailed` with `disabled` when this failure disabled
+/// the task.
 async fn notify_task_failed(jobs: &Jobs, task: &TaskContext, message: &str) {
-    let t = task_notification(jobs, task, message).await;
+    let db = &jobs.0.db;
+    let mut t = task_notification(jobs, task, message).await;
+    match tasks::record_failure(db, task.id, Jobs::now()).await {
+        Ok(Some(streak)) => {
+            t.disabled = streak.disabled;
+            t.consecutive_failures = i64::from(streak.consecutive_failures);
+            t.failing_since = streak
+                .failing_since
+                .map(|at| at.format("%Y-%m-%d %H:%M:%S").to_string());
+            t.disabled_reason = streak.disabled_reason;
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::warn!(target: "scheduled-errors", task_id = %task.uuid, error = %e, "Could not record the scheduled task failure");
+        }
+    }
     notify(
-        &jobs.0.db,
+        db,
         jobs.0.encrypter.as_ref(),
         task.team_id,
         Notification::TaskFailed(t),
@@ -233,7 +376,18 @@ impl Jobs {
             .task_command_output(task, &server, &resource_uuid)
             .await
         {
-            Ok(output) => {
+            // A stopped resource is not a task failure: it sends no notification and does not
+            // count toward auto-disable.
+            Ok(None) => tasks::set_execution_result(
+                db,
+                execution_id,
+                "skipped",
+                "Skipped: the resource has no running container.",
+                Self::now(),
+            )
+            .await
+            .map_err(|e| (None, e.to_string())),
+            Ok(Some(output)) => {
                 let output = redact(&output);
                 match tasks::set_execution_result(db, execution_id, "success", &output, Self::now())
                     .await
@@ -273,13 +427,14 @@ impl Jobs {
         result
     }
 
-    /// The `try` of `handle()` up to the command's output.
+    /// The `try` of `handle()` up to the command's output. `None` when the resource has no
+    /// running container: the run is skipped.
     async fn task_command_output(
         &self,
         task: &TaskContext,
         server: &ServerInfo,
         resource_uuid: &str,
-    ) -> Result<String, String> {
+    ) -> Result<Option<String>, String> {
         let target = server.target(self).await?;
         let containers = if task.service_id.is_some() {
             self.running_service_containers(task, resource_uuid).await?
@@ -294,7 +449,7 @@ impl Jobs {
                 .collect()
         };
         if containers.is_empty() {
-            return Err("ScheduledTaskJob failed: No containers running.".to_owned());
+            return Ok(None);
         }
         let wanted = task.container.as_deref().filter(|c| !is_php_empty(c));
         if containers.len() > 1 && wanted.is_none() {
@@ -311,7 +466,12 @@ impl Jobs {
                     .to_owned(),
             );
         };
-        let exec = exec_command(&task.command, container, server.is_non_root());
+        let exec = exec_command(
+            &task.command,
+            task.use_shell,
+            container,
+            server.is_non_root(),
+        )?;
         let timeout = Duration::from_secs(u64::try_from(task.timeout).unwrap_or(300));
         // upstream disables SSH multiplexing here; coolify-remote does not multiplex at all.
         let output = self
@@ -325,7 +485,7 @@ impl Jobs {
             )
             .await
             .map_err(|e| e.message)?;
-        Ok(output.unwrap_or_default())
+        Ok(Some(output.unwrap_or_default()))
     }
 
     /// The service branch of `handle()`: `{name}-{uuid}` of applications and databases that run.
@@ -573,12 +733,67 @@ mod tests {
 
     #[test]
     fn the_command_matches_upstream() {
-        let exec = exec_command("echo 'it works'", "app-1", false);
+        let exec = exec_command("echo 'it works'", true, "app-1", false).unwrap();
         assert_eq!(
             exec,
             "output_file=$(mktemp); trap 'rm -f \"$output_file\"' EXIT; set +e; set -o pipefail; docker exec 'app-1' sh -c 'echo '\\''it works'\\''' 2>&1 | { head -c 5242881 > \"$output_file\"; cat > /dev/null; }; exit_code=${PIPESTATUS[0]}; if [ \"$(wc -c < \"$output_file\")\" -gt 5242880 ]; then truncate -s 5242880 \"$output_file\"; printf '\n\n[... Output truncated at 5MB limit ...]' >> \"$output_file\"; fi; if [ \"$exit_code\" -eq 0 ]; then cat \"$output_file\"; else cat \"$output_file\" >&2; fi; exit $exit_code"
         );
-        assert!(exec_command("x", "a", true).contains("sudo docker exec 'a'"));
+        assert!(
+            exec_command("x", true, "a", true)
+                .unwrap()
+                .contains("sudo docker exec 'a'")
+        );
+    }
+
+    #[test]
+    fn a_command_without_a_shell_is_split_into_arguments() {
+        assert_eq!(
+            container_command("/app/bin/task --name 'my task' \"a b\"", false).as_deref(),
+            Ok("'/app/bin/task' '--name' 'my task' 'a b'")
+        );
+        // Nothing is expanded, and shell operators are plain arguments.
+        assert_eq!(
+            container_command("echo $HOME | cat > /tmp/x", false).as_deref(),
+            Ok("'echo' '$HOME' '|' 'cat' '>' '/tmp/x'")
+        );
+        assert!(
+            exec_command("/bin/tool run", false, "app-1", false)
+                .unwrap()
+                .contains("docker exec 'app-1' '/bin/tool' 'run' 2>&1")
+        );
+    }
+
+    #[test]
+    fn arguments_follow_posix_quoting() {
+        let split = |c: &str| split_command_arguments(c).unwrap();
+        assert_eq!(split("a  b\tc\nd"), ["a", "b", "c", "d"]);
+        assert_eq!(split("say 'it''s' \"\""), ["say", "its", ""]);
+        // In double quotes a backslash only escapes `"`, `\\`, `$` and a backtick.
+        assert_eq!(
+            split(r#"x "a\"b" "c\\d" "e\$f" "g\nh""#),
+            ["x", "a\"b", "c\\d", "e$f", "g\\nh"]
+        );
+        // Outside quotes a backslash keeps the next character, and joins lines.
+        assert_eq!(split("a\\ b c\\\nd"), ["a b", "cd"]);
+        assert_eq!(split("  "), Vec::<String>::new());
+        assert_eq!(split("it'\"'s"), ["it\"s"]);
+    }
+
+    #[test]
+    fn a_command_that_cannot_be_split_fails() {
+        assert_eq!(
+            container_command("echo 'open", false).unwrap_err(),
+            "The command has a quote that is not closed."
+        );
+        assert_eq!(
+            container_command("  ", false).unwrap_err(),
+            "The command is empty."
+        );
+        // With a shell the command is passed as it is.
+        assert_eq!(
+            container_command("echo 'open", true).as_deref(),
+            Ok("sh -c 'echo '\\''open'")
+        );
     }
 
     #[test]

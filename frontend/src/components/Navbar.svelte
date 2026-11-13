@@ -9,6 +9,7 @@
   import { layout } from '../lib/layout.svelte';
   import { page, type NavContextItem } from '../lib/page.svelte';
   import BetaBadge from './BetaBadge.svelte';
+  import SecurityDot from './imageScan/SecurityDot.svelte';
   import { pluginNav } from '../lib/plugins.svelte';
   import { untrack } from 'svelte';
 
@@ -103,6 +104,7 @@
                         <Reicon name={item.icon} class="menu-item-icon" />
                         <span class="menu-item-label">{item.label}</span>
                         {#if item.warningDot}<span class="ml-auto size-2 shrink-0 rounded-full bg-error" title="Required environment variables missing"></span>{:else if item.warning}<Reicon name="alert-triangle" class="ml-auto size-3.5 shrink-0 text-orange-500 dark:text-warning" />{:else if item.beta}<BetaBadge class="ml-auto shrink-0" />{/if}
+                        <SecurityDot status={item.security} />
                         {#if item.errorBadge}
                           <span class="shrink-0"><span title={item.errorBadge}><svg class="w-4 h-4 text-error" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="M240.26 186.1L152.81 34.23a28.74 28.74 0 0 0-49.62 0L15.74 186.1a27.45 27.45 0 0 0 0 27.71A28.31 28.31 0 0 0 40.55 228h174.9a28.31 28.31 0 0 0 24.79-14.19a27.45 27.45 0 0 0 .02-27.71m-20.8 15.7a4.46 4.46 0 0 1-4 2.2H40.55a4.46 4.46 0 0 1-4-2.2a3.56 3.56 0 0 1 0-3.73L124 46.2a4.77 4.77 0 0 1 8 0l87.44 151.87a3.56 3.56 0 0 1 .02 3.73M116 136v-32a12 12 0 0 1 24 0v32a12 12 0 0 1-24 0m28 40a16 16 0 1 1-16-16a16 16 0 0 1 16 16" /></svg></span></span>
                         {/if}

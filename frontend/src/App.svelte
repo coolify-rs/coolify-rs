@@ -1,6 +1,7 @@
 <script lang="ts">
   import Shell from './components/Shell.svelte';
   import Toasts from './components/Toasts.svelte';
+  import IconTooltip from './components/IconTooltip.svelte';
   import Login from './pages/Login.svelte';
   import Analytics from './pages/Analytics.svelte';
   import FleetMetrics from './pages/FleetMetrics.svelte';
@@ -75,6 +76,9 @@
   import SettingsBackup from './pages/SettingsBackup.svelte';
   import Onboarding from './pages/Onboarding.svelte';
   import Terminal from './pages/Terminal.svelte';
+  import Vulnerabilities from './pages/Vulnerabilities.svelte';
+  import TeamImageScanning from './pages/TeamImageScanning.svelte';
+  import SettingsImageScanning from './pages/SettingsImageScanning.svelte';
   import { router } from './lib/router.svelte';
   import { session } from './lib/session.svelte';
   import { page, carryNavContext } from './lib/page.svelte';
@@ -221,7 +225,7 @@
     'settings-general', 'settings-advanced', 'settings-updates', 'settings-email', 'settings-backup', 'settings-oauth',
     'analytics', 'metrics', 'subscription', 'subscription-new',
     'canvas-deploy', 'canvas-tags', 'canvas-dashboard', 'canvas-servers', 'canvas-server', 'canvas-team-variables', 'canvas-server-variables',
-    'keys', 'key', 'team', 'members', 'team-danger', 'team-audit', 'team-admin',
+    'keys', 'key', 'team', 'members', 'team-danger', 'team-audit', 'team-admin', 'team-image-scanning', 'settings-image-scanning',
     'registries', 'destinations', 'destination', 'sources', 'source-github', 'source-gitlab', 'source-gitea',
     'notification-email', 'notification-channel', 'terminal', 'tags',
     'shared-overview', 'shared-team', 'shared-servers', 'shared-server', 'storages', 'storage',
@@ -299,6 +303,8 @@
       <Analytics />
     {:else if router.current.name === 'metrics'}
       <FleetMetrics />
+    {:else if router.current.name === 'vulnerabilities'}
+      <Vulnerabilities />
     {:else if router.current.name === 'projects'}
       <Projects />
     {:else if router.current.name === 'project'}
@@ -337,6 +343,8 @@
       <TeamAdmin />
     {:else if router.current.name === 'team-plugins'}
       <TeamPlugins />
+    {:else if router.current.name === 'team-image-scanning'}
+      <TeamImageScanning />
     {:else if router.current.name === 'appearance'}
       <Appearance />
     {:else if router.current.name === 'registries'}
@@ -399,6 +407,8 @@
       <SettingsBackup />
     {:else if router.current.name === 'settings-plugins'}
       <SettingsPlugins />
+    {:else if router.current.name === 'settings-image-scanning'}
+      <SettingsImageScanning />
     {:else if router.current.name === 'settings-oauth'}
       {#key router.path}<SettingsOauth provider={params.provider} />{/key}
     {:else if router.current.name === 'servers'}
@@ -416,3 +426,4 @@
 {/if}
 
 <Toasts />
+<IconTooltip />

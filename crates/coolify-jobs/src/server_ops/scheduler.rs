@@ -137,6 +137,8 @@ pub async fn server_manager_tick(jobs: &Jobs, at: DateTime<Utc>) -> Result<(), S
             connection_checks_due,
         );
     }
+    // `dispatchImageScanDigests()` (image scanning, v4.7.0).
+    crate::image_scan::schedule::spawn_digests(jobs, &instance_tz, at);
     Ok(())
 }
 
@@ -256,6 +258,8 @@ fn server_manager_batch(
                 patches::server_patch_check(&j, i, false).await
             });
         }
+        // Daily image rescan, staggered per server (image scanning, v4.7.0).
+        crate::image_scan::schedule::spawn_server_rescan(jobs, id, &timezone, at);
     }
 }
 

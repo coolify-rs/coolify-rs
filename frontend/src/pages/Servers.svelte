@@ -149,16 +149,14 @@
                   <span>{s.resources}</span>
                 </span>
               </div>
-              <div class="flex items-center gap-2 text-[11px] font-medium text-neutral-600 dark:text-fg-dim">
-                {#if s.status_type !== 'success'}
-                  <span
-                    class="hidden size-2 shrink-0 rounded-full md:inline-block {s.status_type === 'warning'
-                      ? 'bg-orange-500 dark:bg-warning'
-                      : 'bg-red-500 dark:bg-red-400'}"
-                  ></span>
-                {:else}
-                  <span class="hidden size-2 shrink-0 rounded-full bg-green-500 md:inline-block dark:bg-green-400"></span>
-                {/if}
+              <div class="flex items-center gap-1.5 text-[13px] text-neutral-700 dark:text-fg">
+                <span
+                  class="hidden size-1.5 shrink-0 rounded-full md:inline-block {s.status_type === 'success'
+                    ? 'bg-emerald-500'
+                    : s.status_type === 'warning'
+                      ? 'bg-warning'
+                      : 'bg-red-500'}"
+                ></span>
                 <span>{s.status}</span>
               </div>
             </a>

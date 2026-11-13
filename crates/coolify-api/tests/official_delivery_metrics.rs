@@ -126,7 +126,7 @@ async fn team(h: &Harness, token: &str, name: &str) -> Team {
             "POST",
             "/api/v1/security/keys",
             t,
-            Some(json!({"name": "k", "private_key": pem})),
+            Some(json!({"name": "key", "private_key": pem})),
         )
         .await,
     );
@@ -346,6 +346,8 @@ async fn metrics_and_exports_for_the_calling_team() {
         fqdn: None,
         preview: None,
         commit: None,
+        blocked_title: None,
+        blocked_chat_title: None,
     };
     host.dispatch(
         1,

@@ -291,6 +291,62 @@ pub async fn user_holds(
     Ok(true)
 }
 
+/// `AccessResolver::allowsOnServer` (4.7.5): true when the actor has the level on at least one
+/// resource that runs on the server, as its main destination or as an additional server of an
+/// application. An actor without layers (owner or admin with a team-wide token) is allowed.
+/// The caller has already checked that the server belongs to `team_id`.
+pub async fn allows_on_server(
+    db: &Db,
+    access: &Access,
+    team_id: TeamId,
+    level: AccessLevel,
+    server_id: i64,
+) -> DbResult<bool> {
+    if access.layers.is_empty() {
+        return Ok(true);
+    }
+    let environment_projects = team_environment_projects(db, team_id).await?;
+    if environment_projects.is_empty() {
+        return Ok(false);
+    }
+    let env_ids: Vec<i64> = environment_projects.keys().copied().collect();
+    for table in RESOURCE_TABLES {
+        // `orWhereHas('additional_servers', ...)`: only applications have additional servers.
+        let additional = if table == "applications" {
+            " OR EXISTS (SELECT 1 FROM additional_destinations ad \
+               WHERE ad.application_id = r.id AND ad.server_id = $2)"
+        } else {
+            ""
+        };
+        let rows: Vec<(String, i64)> = sqlx::query_as(&format!(
+            "SELECT r.uuid, r.environment_id FROM {table} r WHERE r.deleted_at IS NULL \
+             AND r.environment_id = ANY($1) AND (\
+               (r.destination_type = 'App\\Models\\StandaloneDocker' AND EXISTS (\
+                 SELECT 1 FROM standalone_dockers d WHERE d.id = r.destination_id AND d.server_id = $2)) \
+               OR (r.destination_type = 'App\\Models\\SwarmDocker' AND EXISTS (\
+                 SELECT 1 FROM swarm_dockers d WHERE d.id = r.destination_id AND d.server_id = $2))\
+               {additional})"
+        ))
+        .bind(&env_ids)
+        .bind(server_id)
+        .fetch_all(db.pool())
+        .await?;
+        for (uuid, environment_id) in rows {
+            let Some(project_id) = environment_projects.get(&environment_id).copied() else {
+                continue;
+            };
+            if access
+                .layers
+                .iter()
+                .all(|l| l.allows(level, Some(project_id), Some(environment_id), Some(&uuid)))
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 type ScopeLocation = (Option<i64>, Option<i64>, Option<String>);
 
 /// `locateScope`.

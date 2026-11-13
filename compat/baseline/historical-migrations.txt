@@ -1,9 +1,9 @@
-# Upstream migration names that existed on the Coolify v4 line but are not in the v4.6.0 tree
+# Upstream migration names that existed on the Coolify v4 line but are not in the v4.7.5 tree
 # (renamed or deleted later). Long-lived installations still list some of them in their
 # `migrations` table; the schema guard treats them as known, neither unknown nor required.
-# Generated from upstream 0becfba9113063336b09860579627fd218cb3fc4 (v4.6.0). Do not edit by hand:
-#   git log v4.6.0 --no-renames --name-only --format= -- database/migrations | sort -u
-#   minus `git ls-tree --name-only v4.6.0 database/migrations/`, without directory and `.php`.
+# Generated from upstream 378ce3735c4522ebb6b68e93b909b0511f278763 (v4.7.5). Do not edit by hand:
+#   git log v4.7.5 --no-renames --name-only --format= -- database/migrations | sort -u
+#   minus `git ls-tree --name-only v4.7.5 database/migrations/`, without directory and `.php`.
 2018_08_08_100000_create_telescope_entries_table
 2019_08_19_000000_create_failed_jobs_table
 2023_03_20_112810_create_jobs_table
@@ -67,4 +67,5 @@
 2026_09_28_093936_remove_stored_commands_from_finished_activities
 2026_09_28_194652_add_next_run_at_to_scheduled_jobs
 2026_10_12_164603_add_is_passkey_enabled_to_instance_settings_table
+2026_11_05_120000_add_auto_disable_columns_to_scheduled_tasks
 new_services

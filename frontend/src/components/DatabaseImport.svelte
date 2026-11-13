@@ -1,6 +1,7 @@
 <script lang="ts">
   // Port of upstream livewire/project/database/import.blade.php (Project/Database/Import) and
-  // import-form.blade.php (Project/Database/ImportForm). Files go up in Dropzone's chunk format.
+  // import-form.blade.php (Project/Database/ImportForm, v4.7.5: the form inside the "Import backup"
+  // dialog). Files go up in Dropzone's chunk format.
   import { untrack } from 'svelte';
   import Callout from './Callout.svelte';
   import Checkbox from './Checkbox.svelte';
@@ -12,7 +13,6 @@
   import Listbox from './Listbox.svelte';
   import ProcessDialog from './ProcessDialog.svelte';
   import Reicon from './Reicon.svelte';
-  import SettingsSection from './SettingsSection.svelte';
   import { ApiError, type DatabaseRecord } from '../lib/api';
   import { importUi, type ImportFormState } from '../lib/databaseApi';
   import { notify } from '../lib/toast.svelte';
@@ -27,6 +27,7 @@
   let sqliteDatabase = $state('');
   let restoreCommand = $state('');
   let restoreType = $state<'file' | 's3' | null>(null);
+  let showCommand = $state(false);
 
   let customLocation = $state('');
   let fileSource = $state<'upload' | 'server' | null>(null);
@@ -191,40 +192,31 @@
   const idle = 'border-neutral-200 bg-white hover:border-neutral-300 dark:border-white/[0.08] dark:bg-white/[0.05] dark:hover:border-white/[0.14]';
 </script>
 
-<div class="application-settings-form">
+<!-- v4.7.5: import.blade.php is a plain wrapper; import-form.blade.php uses flat sections inside the dialog. -->
+<div>
   {#if data}
     {#if data.unsupported}
-      <SettingsSection title="Restore database" description="Import a backup into this database.">
-        <Empty title="Restore is not supported" description="This database type does not currently support backup imports." iconName="database" size="sm" />
-      </SettingsSection>
+      <Empty title="Restore is not supported" description="This database type does not currently support backup imports." iconName="database" size="sm" />
     {:else if !data.status.startsWith('running')}
-      <SettingsSection title="Restore database" description="Import a backup into this database.">
-        <Empty title="Start the database first" description="The database must be running before coolify-rs can restore a backup." iconName="database" size="sm" />
-      </SettingsSection>
+      <Empty title="Start the database first" description="The database must be running before coolify-rs can restore a backup." iconName="database" size="sm" />
     {:else}
-      <div class="application-settings-workspace flex flex-col gap-6">
+      <div class="flex flex-col gap-6">
         <Callout type="danger" title="Restoring a backup changes database data">
           Review the source and import command before continuing. Existing objects can cause the import to fail unless replacement is enabled.
         </Callout>
 
-        <SettingsSection title="Restore configuration" description="Configure how the selected backup is applied to this database.">
-          <div class="space-y-4">
+        <section>
+          <h3 class="text-sm font-semibold text-black dark:text-fg">Restore configuration</h3>
+          <p class="mt-0.5 text-xs text-neutral-500 dark:text-fg-dim">Configure how the selected backup is applied to this database.</p>
+          <div class="mt-4 space-y-4">
             {#if type === 'standalone-postgresql' && dumpAll}
               <Callout type="warning" title="Full restore runs as a superuser">
                 Restoring all databases needs a PostgreSQL superuser (it recreates databases and roles), so coolify-rs cannot restrict it. Only use a backup you trust.
                 <span class="mt-1 block">
-                  The backup also replaces PostgreSQL administrator role passwords, including the destination administrator password. If the administrator password in the backup differs from the one in coolify-rs, later backups and connections can fail until you synchronize them.
+                  The backup also replaces PostgreSQL administrator role passwords, including the destination administrator password. If the administrator password changes, update it in coolify-rs's database configuration after the restore.
                 </span>
               </Callout>
             {/if}
-            <FormTextarea
-              id="restoreCommandText"
-              rows={10}
-              readonly
-              label="Import command"
-              helper="coolify-rs detects the backup format (SQL, archive, gzip, bz2, xz, zip, or tar) before it changes the database."
-              value={restoreCommand}
-            />
             {#if type !== 'standalone-sqlite'}
               <div class="max-w-sm">
                 <Listbox
@@ -239,12 +231,12 @@
                 />
               </div>
             {/if}
-            {#if type === 'standalone-postgresql' && !dumpAll}
+            {#if (type === 'standalone-postgresql' || type === 'postgresql') && !dumpAll}
               <div class="max-w-sm">
                 <Checkbox
                   id="replaceExisting"
                   label="Replace objects that already exist"
-                  helper="Archive backups: drops matching tables, functions, types, and other PostgreSQL objects before restoring them. SQL backups: recreates the database before restoring it, so all existing data in it is removed."
+                  helper="Archive backups: drops matching tables, functions, types, and other PostgreSQL objects before restoring them. SQL backups: recreates the database before the restore."
                   disabled={!canUpdate}
                   bind:checked={replaceExisting}
                   onchange={refreshCommand}
@@ -254,19 +246,19 @@
                 <Checkbox
                   id="keepOwners"
                   label="Keep owners and privileges"
-                  helper="Archive backups: restores object owners and GRANTs from the backup. Leave this off for backups from another server (for example Amazon RDS): its roles do not exist here, and the restore would fail."
+                  helper="Archive backups: restores object owners and GRANTs from the backup. Leave this off for backups from another server (for example Amazon RDS): its roles usually do not exist here, and the whole restore would be rolled back."
                   disabled={!canUpdate}
                   bind:checked={keepOwners}
                   onchange={refreshCommand}
                 />
               </div>
             {/if}
-            {#if (type === 'standalone-mysql' || type === 'standalone-mariadb') && dumpAll}
+            {#if ['standalone-mysql', 'standalone-mariadb', 'mysql', 'mariadb'].includes(type) && dumpAll}
               <div class="max-w-sm">
                 <Checkbox
                   id="restoreMysqlUsers"
                   label="Restore users and privileges (mysql system database)"
-                  helper="Off: the system databases (mysql, sys) of the backup are skipped, so this database keeps its own users and passwords. On: the users, passwords, and privileges of the backup replace those of this database."
+                  helper="Off: the system databases (mysql, sys) of the backup are skipped, so this database keeps its own users and passwords. On: the users, passwords, and privileges of the backup replace the current ones."
                   disabled={!canUpdate}
                   bind:checked={restoreMysqlUsers}
                   onchange={refreshCommand}
@@ -274,7 +266,7 @@
               </div>
               {#if restoreMysqlUsers}
                 <Callout type="warning" title="Restoring users changes passwords">
-                  The backup replaces all users, passwords, and privileges, including the root password. After the next restart of the database, the passwords from the backup apply.
+                  The backup replaces all users, passwords, and privileges, including the root password. After the next restart of the database, the passwords from the backup apply, so the credentials coolify-rs stores for this database, and its health check, may stop working.
                   <span class="mt-1 block">Update the passwords in coolify-rs's database configuration after the restore.</span>
                 </Callout>
               {/if}
@@ -304,11 +296,37 @@
                 />
               </div>
             {/if}
+            <div>
+              <button
+                type="button"
+                onclick={() => (showCommand = !showCommand)}
+                aria-expanded={showCommand}
+                class="inline-flex cursor-pointer items-center gap-1.5 text-xs font-medium text-neutral-500 hover:text-black dark:text-fg-dim dark:hover:text-fg"
+              >
+                <Reicon name="chevron-down" class="size-3.5 transition-transform {showCommand ? '' : '-rotate-90'}" />
+                <span>{showCommand ? 'Hide import command' : 'Show import command'}</span>
+              </button>
+              {#if showCommand}
+                <div class="mt-3">
+                  <FormTextarea
+                    id="restoreCommandText"
+                    rows={10}
+                    readonly
+                    label="Import command"
+                    helper="coolify-rs detects the backup format (SQL, archive, gzip, bz2, xz, zip, or tar) before it changes the database."
+                    disabled={!canUpdate}
+                    value={restoreCommand}
+                  />
+                </div>
+              {/if}
+            </div>
           </div>
-        </SettingsSection>
+        </section>
 
-        <SettingsSection title="Backup source" description="Choose a local file or an object stored in S3.">
-          <div class="grid gap-3 sm:grid-cols-2">
+        <section class="border-t border-neutral-200 pt-6 dark:border-white/[0.06]">
+          <h3 class="text-sm font-semibold text-black dark:text-fg">Backup source</h3>
+          <p class="mt-0.5 text-xs text-neutral-500 dark:text-fg-dim">Choose a local file or a file in a backup storage.</p>
+          <div class="mt-4 grid gap-3 sm:grid-cols-2">
             <button type="button" onclick={() => (restoreType = 'file')} class="flex min-h-20 items-center gap-3 rounded-[10px] border p-3 text-left transition-colors {restoreType === 'file' ? chosen : idle}">
               <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-neutral-100 dark:bg-white/[0.06]">
                 <Reicon name="file" class="size-4" />
@@ -324,15 +342,15 @@
                   <Reicon name="storages" class="size-4" />
                 </span>
                 <span>
-                  <span class="block text-[13px] font-semibold">S3 storage</span>
-                  <span class="mt-0.5 block text-[11px] text-neutral-500 dark:text-fg-faint">Download a backup from an S3 bucket.</span>
+                  <span class="block text-[13px] font-semibold">Storage</span>
+                  <span class="mt-0.5 block text-[11px] text-neutral-500 dark:text-fg-faint">Download a backup from a backup storage.</span>
                 </span>
               </button>
             {/if}
           </div>
 
           {#if canUpdate && restoreType === 'file'}
-            <div class="mt-4 rounded-[10px] border border-neutral-200 bg-neutral-50 p-4 dark:border-white/[0.08] dark:bg-white/[0.05]">
+            <div class="mt-4">
               <form
                 class="flex flex-col gap-3 sm:flex-row sm:items-end"
                 onsubmit={(e) => {
@@ -354,7 +372,6 @@
 
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div
-                id="my-dropzone"
                 class="dropzone dz-clickable rounded-lg! border! border-dashed! border-neutral-300! bg-white! dark:border-white/[0.12]! dark:bg-white/[0.05]! {dragging ? 'dz-drag-hover' : ''}"
                 ondragover={(e) => {
                   e.preventDefault();
@@ -403,11 +420,11 @@
           {/if}
 
           {#if canUpdate && data.storages.length && restoreType === 's3'}
-            <div class="mt-4 rounded-[10px] border border-neutral-200 bg-neutral-50 p-4 dark:border-white/[0.08] dark:bg-white/[0.05]">
+            <div class="mt-4">
               <div class="grid gap-4 sm:grid-cols-2">
                 <Listbox
                   id="s3StorageId"
-                  label="S3 storage"
+                  label="Storage"
                   placeholder="Select storage"
                   bind:value={s3StorageId}
                   onchange={() => (s3FileSize = null)}
@@ -416,7 +433,7 @@
                 <FormInput
                   id="s3Path"
                   label="File path"
-                  helper="Path to the backup file in your S3 bucket, e.g., /backups/database-2025-01-15.gz"
+                  helper="Path to the backup file in the storage, e.g., /backups/database-2025-01-15.gz"
                   placeholder="/backups/database-backup.gz"
                   bind:value={s3Path}
                   oninput={() => (s3FileSize = null)}
@@ -438,13 +455,13 @@
                     <p class="mt-0.5 text-[11px] text-neutral-500 dark:text-fg-faint">{s3SizeText}</p>
                   </div>
                   <div class="shrink-0">
-                    <button type="button" class="button button-error" onclick={() => (confirm = 's3')}>Restore from S3</button>
+                    <button type="button" class="button button-error" onclick={() => (confirm = 's3')}>Restore from storage</button>
                   </div>
                 </div>
               {/if}
             </div>
           {/if}
-        </SettingsSection>
+        </section>
       </div>
     {/if}
   {/if}
@@ -459,7 +476,7 @@
   />
 {:else if confirm === 's3'}
   <ConfirmModal
-    title="Restore Database from S3?"
+    title="Restore Database from Storage?"
     confirmWithPassword
     onconfirm={(password) => run(password, 's3')}
     onclose={() => (confirm = null)}

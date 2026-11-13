@@ -118,10 +118,16 @@ pub async fn load_input(
         if v.record.get("is_preview") != Some(&Value::Bool(false)) {
             continue;
         }
-        // `get_environment_variables()`: `! $value` is null, otherwise `trim(decrypt($value))`.
+        // `get_environment_variables()`: `! $value` is null, otherwise the decrypted value
+        // without edge whitespace (multiline content is kept as it is).
         let value = match v.value_encrypted.as_deref() {
             None | Some("" | "0") => None,
-            Some(c) => Some(php_trim(&enc.decrypt_maybe_serialized(c).map_err(mac)?).to_owned()),
+            Some(c) => Some(
+                crate::databases::env::without_edge_whitespace(
+                    &enc.decrypt_maybe_serialized(c).map_err(mac)?,
+                )
+                .to_owned(),
+            ),
         };
         let raw = |k: &str| v.record.get(k).cloned().unwrap_or(Value::Null);
         environment_variables.push(EnvVar {
@@ -355,6 +361,10 @@ impl Builder<'_> {
             (
                 "include_source_commit_in_build",
                 "Include source commit in build",
+            ),
+            (
+                "include_network_hosts_in_build",
+                "Include network hosts in build",
             ),
             ("disable_build_cache", "Disable build cache"),
             ("is_build_server_enabled", "Build server"),

@@ -3,7 +3,6 @@
   // (Project\Database\BackupExecutions).
   import { untrack } from 'svelte';
   import ConfirmModal from './ConfirmModal.svelte';
-  import CopyInput from './CopyInput.svelte';
   import Empty from './Empty.svelte';
   import Reicon from './Reicon.svelte';
   import StatusBadge from './StatusBadge.svelte';
@@ -21,6 +20,8 @@
   let skip = $state(0);
   let timezone = $state<string | null>(null);
   let s3Downloads = $state(false);
+  let dumpAll = $state(false);
+  let copied = $state<number | null>(null);
   let loaded = $state(false);
   let deleting = $state<BackupExecution | null>(null);
   let cleaning = $state(false);
@@ -31,6 +32,7 @@
     total = r.total;
     timezone = r.server_timezone;
     s3Downloads = r.s3_downloads;
+    dumpAll = r.dump_all;
     loaded = true;
   }
   $effect(() => {
@@ -89,6 +91,17 @@
   }
 
   const finishedAt = (e: BackupExecution) => e.finished_at ?? e.updated_at;
+  const basename = (path: string) => path.replace(/\/+$/, '').split('/').pop() ?? path;
+
+  /** `x-copy-button`: copies the archive path. */
+  function copyPath(e: BackupExecution) {
+    if (!e.filename) return;
+    navigator.clipboard?.writeText(e.filename).catch(() => {});
+    copied = e.id;
+    setTimeout(() => {
+      if (copied === e.id) copied = null;
+    }, 1000);
+  }
   const hasLiveS3 = (e: BackupExecution) =>
     e.replicas.length ? e.replicas.some((r) => r.s3_uploaded === true && !r.s3_storage_deleted) : e.s3_uploaded === true && !e.s3_storage_deleted;
   const replicaStatus = (e: BackupExecution, r: BackupExecution['replicas'][number]) =>
@@ -154,11 +167,22 @@
           </div>
           {#each executions as e (e.id)}
             {@const st = statusOf(e)}
-            <div class="backup-execution-row">
-              <div class="data-table-row backup-executions-table-grid min-h-14 border-b border-neutral-200 px-4 py-2.5 dark:border-white/[0.06]">
+            <div class="backup-execution-row border-b border-neutral-200 dark:border-white/[0.06]">
+              <div class="data-table-row backup-executions-table-grid min-h-14 px-4 py-2.5">
                 <div class="flex items-center gap-2"><StatusBadge label={st[0]} type={st[1]} /></div>
-                <div class="truncate text-[12px] font-medium text-black dark:text-fg">{e.database_name ?? 'N/A'}</div>
-                <div class="min-w-0"><CopyInput text={e.filename ?? 'No archive name'} /></div>
+                <div class="truncate text-[12px] font-medium text-black dark:text-fg">{e.database_name || (dumpAll ? 'All databases' : '-')}</div>
+                <div class="flex min-w-0 items-center gap-1">
+                  {#if e.filename}
+                    <span class="truncate font-mono text-[12px] text-black dark:text-fg" title={e.filename}>{basename(e.filename)}</span>
+                    <button type="button" title="Copy archive path" aria-label="Copy archive path" class="icon-button group shrink-0" onclick={() => copyPath(e)}>
+                      <span class="inline-flex transition-transform duration-150 ease-out group-active:scale-75">
+                        {#if copied === e.id}<Reicon name="check" class="size-3.5 text-success" />{:else}<Reicon name="copy" class="size-3.5" />{/if}
+                      </span>
+                    </button>
+                  {:else}
+                    <span class="text-neutral-500 dark:text-fg-faint">-</span>
+                  {/if}
+                </div>
                 <div
                   class="text-[11px] text-neutral-500 dark:text-fg-faint"
                   title="Started: {serverDate(e.created_at)}{e.status !== 'running' ? `\nEnded: ${serverDate(finishedAt(e))}` : ''}"
@@ -212,8 +236,8 @@
                 </div>
               </div>
               {#if e.message}
-                <div class="border-t border-neutral-200 bg-neutral-50 px-4 py-3 dark:border-white/[0.06] dark:bg-white/[0.02]">
-                  <pre class="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-neutral-100 p-3 font-mono text-xs leading-5 text-neutral-700 dark:bg-black/20 dark:text-fg-dim">{e.message}</pre>
+                <div class="px-4 pb-3">
+                  <pre class="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 {e.status === 'failed' ? 'text-red-600 dark:text-red-400' : 'text-neutral-500 dark:text-fg-faint'}">{e.message}</pre>
                 </div>
               {/if}
             </div>

@@ -288,6 +288,23 @@ pub fn validate_compose_content_volume_source(volume: &PhpValue) -> Result<(), S
     }
 }
 
+/// `validateComposeServiceName($serviceName)`: Coolify names each container
+/// "<service name>-<suffix>". Docker allows only container names that match
+/// `[a-zA-Z0-9][a-zA-Z0-9_.-]+`, and Docker Compose allows only service names that match
+/// `[a-zA-Z0-9._-]+`. Compose accepts a service name that starts with ".", "-", or "_", but
+/// Docker then refuses to create its container.
+pub fn validate_compose_service_name(service_name: &str) -> Result<(), String> {
+    let mut chars = service_name.chars();
+    let valid = chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
+    if valid {
+        return Ok(());
+    }
+    Err(format!(
+        "Service name \"{service_name}\" must start with a letter or a digit and contain only letters, digits, \".\", \"-\", and \"_\". Docker uses the same rule for container names, and Coolify uses the service name at the start of the container name."
+    ))
+}
+
 /// `validateComposeServiceScale($serviceName, $service)`.
 pub fn validate_compose_service_scale(
     service_name: &str,
@@ -477,6 +494,7 @@ pub fn validate_docker_compose_for_injection(compose: &str) -> Result<(), String
         validate_shell_safe_path(&service_name, "service name").map_err(|e| {
             format!("Invalid Docker Compose service name: {e} Service names must not contain shell metacharacters.")
         })?;
+        validate_compose_service_name(&service_name)?;
         if let Some(PhpValue::Array(volumes)) = get(config, "volumes") {
             for (_, volume) in volumes {
                 match volume {
@@ -538,6 +556,38 @@ pub fn validate_docker_compose_for_injection(compose: &str) -> Result<(), String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `validateComposeServiceName()`: Docker refuses a container name that starts with ".",
+    /// "-" or "_", and Coolify puts the service name at the start of the container name.
+    #[test]
+    fn service_names_must_work_as_the_start_of_a_container_name() {
+        for name in ["web", "Web1", "my.app", "my-app_2", "0db", "api.v1"] {
+            assert!(validate_compose_service_name(name).is_ok(), "{name}");
+        }
+        for name in ["", ".hidden", "-web", "_web", "we b", "web/app", "w\u{e9}b"] {
+            assert!(validate_compose_service_name(name).is_err(), "{name}");
+        }
+        assert_eq!(
+            validate_compose_service_name("_web").unwrap_err(),
+            "Service name \"_web\" must start with a letter or a digit and contain only letters, digits, \".\", \"-\", and \"_\". Docker uses the same rule for container names, and Coolify uses the service name at the start of the container name."
+        );
+    }
+
+    /// The injection check of a pasted compose file reports such a name too; a dotted name is fine.
+    #[test]
+    fn the_injection_check_validates_service_names() {
+        let error = validate_docker_compose_for_injection("services:\n  _web:\n    image: nginx\n")
+            .err()
+            .unwrap_or_default();
+        assert!(
+            error.starts_with("Service name \"_web\" must start with"),
+            "{error}"
+        );
+        assert!(
+            validate_docker_compose_for_injection("services:\n  web.api:\n    image: nginx\n")
+                .is_ok()
+        );
+    }
 
     #[test]
     fn volume_strings() {

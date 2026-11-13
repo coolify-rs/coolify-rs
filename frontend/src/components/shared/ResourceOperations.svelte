@@ -178,7 +178,7 @@
           />
         </div>
 
-        <div class="mt-4">
+        <div class="mt-4 flex">
           <Checkbox
             id="cloneVolumeData"
             label="Clone volume data"

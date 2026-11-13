@@ -84,6 +84,11 @@ pub fn aggregate_for_compose(statuses: &[(String, String)], raw: Option<&str>) -
 
 /// `Service::containerStatus()` from the stored statuses of its applications and databases.
 pub fn container_status_of(subs: &[SubRow]) -> Option<String> {
+    // A part that is not in the compose file has no container, so it does not count.
+    let subs: Vec<&SubRow> = subs
+        .iter()
+        .filter(|s| !s.bool("is_removed_from_compose"))
+        .collect();
     let status_of = |s: &SubRow| s.str("status").unwrap_or_default().to_owned();
     let is_excluded =
         |s: &SubRow| s.bool("exclude_from_status") || status_of(s).contains(":excluded");
@@ -95,9 +100,17 @@ pub fn container_status_of(subs: &[SubRow]) -> Option<String> {
             parts.next().map(str::to_owned),
         )
     };
-    let normal: Vec<String> = subs.iter().filter(|s| !is_excluded(s)).map(strip).collect();
+    let normal: Vec<String> = subs
+        .iter()
+        .filter(|s| !is_excluded(s))
+        .map(|s| strip(s))
+        .collect();
     if normal.is_empty() {
-        let excluded: Vec<String> = subs.iter().filter(|s| is_excluded(s)).map(strip).collect();
+        let excluded: Vec<String> = subs
+            .iter()
+            .filter(|s| is_excluded(s))
+            .map(|s| strip(s))
+            .collect();
         if excluded.is_empty() {
             return Some("unknown:unknown:excluded".into());
         }
@@ -289,6 +302,30 @@ impl Jobs {
 
     /// The service part of `GetContainersStatus` and `PushServerUpdateJob`.
     pub async fn apply_service_containers(&self, services: &[ServiceRow], containers: &[Value]) {
+        use crate::notifications::resource_stopped;
+        // `NotifyResourceStoppedJob::upResourceIds()` of the applications and databases of the
+        // services before the statuses change, `dispatchForStopped()` after.
+        let mut parts: Vec<SubRow> = Vec::new();
+        for s in services {
+            for kind in [SubKind::Application, SubKind::Database] {
+                parts.extend(svc::subs(&self.0.db, kind, s.id).await.unwrap_or_default());
+            }
+        }
+        let up = resource_stopped::up_resources(
+            parts
+                .iter()
+                .map(|p| (p.kind.morph(), p.id, p.str("status"))),
+        );
+        self.apply_service_container_statuses(services, containers)
+            .await;
+        resource_stopped::dispatch_for_stopped(self, &up).await;
+    }
+
+    async fn apply_service_container_statuses(
+        &self,
+        services: &[ServiceRow],
+        containers: &[Value],
+    ) {
         let db = &self.0.db;
         let now = Jobs::now();
         for s in services {

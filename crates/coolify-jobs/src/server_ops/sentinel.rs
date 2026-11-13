@@ -268,11 +268,9 @@ async fn start_inner(
         ),
     ];
     environments.extend(traffic_environment(&srv));
-    let docker_env = environments
-        .iter()
-        .map(|(k, v)| format!("-e {}", shell_arg(&format!("{k}={v}"))))
-        .collect::<Vec<_>>()
-        .join(" ");
+    // v4.7.5: the settings go through an env file, so the token is in no command line.
+    let env_file = format!("{BASE_CONFIG_DIR}/sentinel.env");
+    let env_file_content = env_file_content(&environments)?;
     let traffic_dir = traffic_log_directory(&srv);
     let collects = traffic_analytics_enabled(&srv) && has_traffic_proxy(&srv);
     let traffic_mount = if collects {
@@ -289,7 +287,7 @@ async fn start_inner(
         ""
     };
     let docker_command = format!(
-        "docker run -d{network} {docker_env} --name coolify-sentinel --restart unless-stopped -v /var/run/docker.sock:/var/run/docker.sock -v {mount_dir}:/app/db {traffic_mount}--userns host --pid host --health-cmd \"curl --fail http://127.0.0.1:8888/api/health || exit 1\" --health-start-period 120s --health-interval 10s --health-retries 3 --add-host=host.docker.internal:host-gateway --label coolify.managed=true {image}"
+        "docker run -d{network} --env-file {env_file} --name coolify-sentinel --restart unless-stopped -v /var/run/docker.sock:/var/run/docker.sock -v {mount_dir}:/app/db {traffic_mount}--userns host --pid host --health-cmd \"curl --fail http://127.0.0.1:8888/api/health || exit 1\" --health-start-period 120s --health-interval 10s --health-retries 3 --add-host=host.docker.internal:host-gateway --label coolify.managed=true {image}"
     );
     srv.sentinel_heartbeat(true).await?;
     ops::save_sentinel_waiting(srv.db(), server_id, Some(Jobs::now()), Jobs::now())
@@ -311,7 +309,11 @@ async fn start_inner(
             shell_arg(&format!("{traffic_dir}/access.log"))
         ));
     }
-    commands.push(docker_command);
+    commands.push(env_file_run_command(
+        &env_file,
+        &env_file_content,
+        &docker_command,
+    ));
     commands.push(format!("chown -R 9999:root {mount_dir}"));
     commands.push(format!("chmod -R 700 {mount_dir}"));
     srv.run(&commands, "sentinel.start").await?;
@@ -412,7 +414,7 @@ pub async fn check_and_start_sentinel(jobs: &Jobs, server_id: i64) -> Result<(),
     }
     let output = srv
         .run_quiet(
-            &["docker exec coolify-sentinel sh -c 'curl -s http://127.0.0.1:8888/api/version; echo; curl -sf -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8888/api/push-status'".to_string()],
+            &["docker exec coolify-sentinel sh -c 'curl -s http://127.0.0.1:8888/api/version; echo; printf \"Authorization: Bearer %s\\n\" \"$TOKEN\" | curl -sf -H @- http://127.0.0.1:8888/api/push-status'".to_string()],
             "sentinel.version",
         )
         .await
@@ -469,5 +471,79 @@ impl Jobs {
         self.spawn_server_job("check-sentinel", server_id, |jobs, id| async move {
             check_and_start_sentinel(&jobs, id).await
         });
+    }
+}
+
+/// `StartSentinel::envFileContent()`: Docker reads an env file line by line, so a line break in a
+/// value would add a variable.
+pub fn env_file_content(environments: &[(String, String)]) -> Result<String, String> {
+    let mut lines = Vec::with_capacity(environments.len());
+    for (key, value) in environments {
+        if value.contains(['\r', '\n']) {
+            return Err(format!(
+                "The Sentinel setting {key} must not contain a line break."
+            ));
+        }
+        lines.push(format!("{key}={value}"));
+    }
+    Ok(format!("{}\n", lines.join("\n")))
+}
+
+/// The `sh -ec` command of `StartSentinel::handle()` that writes the env file with mode 600,
+/// starts the container and removes the file again. Docker keeps the environment in the container
+/// configuration, so restarts do not read the file again.
+pub fn env_file_run_command(env_file: &str, content: &str, docker_command: &str) -> String {
+    use base64::Engine as _;
+    let script = [
+        format!("trap {} EXIT", shell_arg(&format!("rm -f {env_file}"))),
+        // The mode is set before the token is written, so it does not depend on the umask of the server.
+        format!("rm -f {env_file}"),
+        format!("touch {env_file}"),
+        format!("chmod 600 {env_file}"),
+        format!(
+            "echo '{}' | base64 -d | tee {env_file} > /dev/null",
+            base64::engine::general_purpose::STANDARD.encode(content)
+        ),
+        docker_command.to_owned(),
+        format!("rm -f {env_file}"),
+        "trap - EXIT".to_owned(),
+    ]
+    .join("\n");
+    format!("sh -ec {}", shell_arg(&script))
+}
+
+#[cfg(test)]
+mod env_file_tests {
+    use super::{env_file_content, env_file_run_command};
+
+    // `StartSentinel::envFileContent()`.
+    #[test]
+    fn env_file_has_one_line_per_setting() {
+        let env = vec![
+            ("TOKEN".to_owned(), "abc=".to_owned()),
+            ("DEBUG".to_owned(), "false".to_owned()),
+        ];
+        assert_eq!(
+            env_file_content(&env),
+            Ok("TOKEN=abc=\nDEBUG=false\n".to_owned())
+        );
+        let bad = vec![("PUSH_ENDPOINT".to_owned(), "https://a\nEVIL=1".to_owned())];
+        assert_eq!(
+            env_file_content(&bad),
+            Err("The Sentinel setting PUSH_ENDPOINT must not contain a line break.".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_token_is_written_to_a_private_file_and_removed() {
+        let command = env_file_run_command(
+            "/data/coolify/sentinel.env",
+            "TOKEN=x\n",
+            "docker run -d img",
+        );
+        assert_eq!(
+            command,
+            "sh -ec 'trap '\\''rm -f /data/coolify/sentinel.env'\\'' EXIT\nrm -f /data/coolify/sentinel.env\ntouch /data/coolify/sentinel.env\nchmod 600 /data/coolify/sentinel.env\necho '\\''VE9LRU49eAo='\\'' | base64 -d | tee /data/coolify/sentinel.env > /dev/null\ndocker run -d img\nrm -f /data/coolify/sentinel.env\ntrap - EXIT'"
+        );
     }
 }

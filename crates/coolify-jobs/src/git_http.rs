@@ -4,14 +4,29 @@
 use std::time::Duration;
 
 use coolify_db::Db;
+use coolify_db::records::Record;
 pub use reqwest::Method;
 use reqwest::{Client, RequestBuilder, Response};
 use serde_json::Value;
 
 use crate::databases::s3::UrlPolicy;
 
+/// Whether requests for `source` may reach private networks (`gitSourcesMayUsePrivateNetworks()`):
+/// on a self-hosted instance upstream allows them for every source. Here only the sources of the
+/// root team do; a source of another team reaches a private or internal address only when it is
+/// one of the instance's allowed internal targets (Settings, Advanced).
+pub fn may_use_private_networks(source: &Record) -> bool {
+    source.get("team_id").and_then(Value::as_i64) == Some(0)
+}
+
 /// The client of `Http::GitSource($url)`. `db` is `None` only in tests: no target check.
-pub async fn client(db: Option<&Db>, url: &str, timeout: Duration) -> Result<Client, String> {
+/// `allow_private` is [`may_use_private_networks`] of the source the request is for.
+pub async fn client(
+    db: Option<&Db>,
+    allow_private: bool,
+    url: &str,
+    timeout: Duration,
+) -> Result<Client, String> {
     let same_origin = reqwest::redirect::Policy::custom(|attempt| {
         let same = attempt.previous().last().is_some_and(|prev| {
             prev.scheme() == attempt.url().scheme()
@@ -42,7 +57,7 @@ pub async fn client(db: Option<&Db>, url: &str, timeout: Duration) -> Result<Cli
         .user_agent("coolify-rs");
     if let Some(db) = db {
         let mut policy = UrlPolicy::load(db).await;
-        policy.allow_private = true;
+        policy.allow_private = allow_private;
         let (host, port, ips) = policy.request_target(url).await?;
         if !ips.is_empty() {
             let addrs: Vec<std::net::SocketAddr> = ips
@@ -70,13 +85,28 @@ pub async fn retry(build: impl Fn() -> RequestBuilder) -> Result<Response, Strin
     }
 }
 
-/// `data_get($response->json(), $key, $response->body())`: the JSON field or the body.
-pub fn error_text(body: &str, key: &str) -> String {
-    serde_json::from_str::<Value>(body)
+/// Longest provider error message shown to the user.
+const MAX_ERROR_TEXT: usize = 500;
+
+/// `data_get($response->json(), $key, ...)`: the provider's error message when the body is JSON
+/// with a string at `key`, else the HTTP status. Other bodies are logged, not shown.
+pub fn error_text(status: u16, body: &str, key: &str) -> String {
+    let message = serde_json::from_str::<Value>(body)
         .ok()
-        .and_then(|v| v.get(key).cloned())
-        .and_then(|v| v.as_str().map(str::to_owned).or(Some(v.to_string())))
-        .unwrap_or_else(|| body.to_owned())
+        .and_then(|v| v.get(key).and_then(Value::as_str).map(str::to_owned))
+        .filter(|m| !m.trim().is_empty());
+    match message {
+        Some(m) => m.chars().take(MAX_ERROR_TEXT).collect(),
+        None => unexpected_response(status, body),
+    }
+}
+
+/// The message for an answer a git provider would not give: the status only. The start of the
+/// body goes to the log.
+pub fn unexpected_response(status: u16, body: &str) -> String {
+    let start: String = body.chars().take(2000).collect();
+    tracing::warn!(status, body = %start, "unexpected answer from a git source");
+    format!("unexpected response (HTTP {status})")
 }
 
 /// `data_get($item, 'a.b')` on a JSON value, as a string.
@@ -157,6 +187,44 @@ mod tests {
         let listener =
             std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|_| unreachable!());
         listener.local_addr().map(|a| a.port()).unwrap_or_default()
+    }
+
+    #[test]
+    fn failed_answers_show_the_provider_message_or_the_status_only() {
+        assert_eq!(
+            error_text(401, r#"{"message":"401 Unauthorized"}"#, "message"),
+            "401 Unauthorized"
+        );
+        // Anything else is not shown: an HTML page, other JSON, a non-string field.
+        for body in [
+            "<html>internal admin page</html>",
+            r#"{"secret":"internal"}"#,
+            r#"{"message":{"internal":"data"}}"#,
+        ] {
+            let text = error_text(404, body, "message");
+            assert_eq!(text, "unexpected response (HTTP 404)");
+        }
+        assert_eq!(
+            error_text(
+                500,
+                &format!(r#"{{"message":"{}"}}"#, "x".repeat(5000)),
+                "message"
+            )
+            .len(),
+            MAX_ERROR_TEXT
+        );
+    }
+
+    #[test]
+    fn only_root_team_sources_use_private_networks() {
+        let source = |team: Value| {
+            let mut r = Record::new();
+            r.insert("team_id".into(), team);
+            r
+        };
+        assert!(may_use_private_networks(&source(serde_json::json!(0))));
+        assert!(!may_use_private_networks(&source(serde_json::json!(1))));
+        assert!(!may_use_private_networks(&Record::new()));
     }
 
     #[tokio::test]

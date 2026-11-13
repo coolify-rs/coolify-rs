@@ -188,6 +188,8 @@ async fn resolve_ip(configured: Option<&str>) -> Option<String> {
 struct Facts {
     configured: Option<String>,
     server_ip: Option<String>,
+    /// `$server->team_id`.
+    server_team_id: Option<i64>,
     has_server: bool,
     ipv4: Option<String>,
     ipv6: Option<String>,
@@ -252,6 +254,9 @@ async fn facts(state: &AppState, res: &Res) -> Result<Facts, ApiError> {
     Ok(Facts {
         configured: resolved.or(configured),
         server_ip,
+        server_team_id: server
+            .as_ref()
+            .and_then(|s| s.record.get("team_id").and_then(Value::as_i64)),
         has_server: server.is_some(),
         ipv4,
         ipv6,
@@ -387,12 +392,32 @@ async fn queue_checks(
             skip_multiple_servers: multi,
         };
         let (st, row, exp, id) = (state.clone(), (*r).clone(), expected.clone(), check_id);
+        // `ServerDnsAddresses::forServer($server)->addresses()` and the team whose Cloudflare
+        // zones tell where a proxied hostname goes.
+        let server_addresses: Vec<String> = [f.ipv4.clone(), f.ipv6.clone()]
+            .into_iter()
+            .flatten()
+            .collect();
+        let server_team_id = f.server_team_id;
         tokio::spawn(async move {
-            let out = dns_check::check(
+            let now = st.now();
+            let dns = st.encrypter.as_ref().map(|enc| Dns {
+                db: &st.db,
+                enc,
+                now,
+                source: "system",
+            });
+            let origin = dns.as_ref().map(|dns| dns_check::OriginCheck {
+                dns,
+                team_id: server_team_id,
+                addresses: server_addresses,
+            });
+            let out = dns_check::check_with_origin(
                 &row.url,
                 &ctx_check,
                 exp.as_deref(),
                 crate::ip::is_cloudflare_ip,
+                origin.as_ref(),
             )
             .await;
             let stored: Option<String> = sqlx::query_scalar(&format!(
@@ -457,6 +482,44 @@ pub async fn after_domain_add(
         "Domain added. DNS check started."
     };
     Ok(ok(json!({"message": message, "warnings": warnings})).into_response())
+}
+
+/// The URLs of a domain edit whose hostname the resource did not have before the edit.
+fn urls_added_by_edit(urls: &[String], previous_hostnames: &[String]) -> Vec<String> {
+    let mut added: Vec<String> = Vec::new();
+    for url in urls {
+        let Some(host) = host_of(url) else {
+            continue;
+        };
+        if !previous_hostnames.iter().any(|p| p.to_lowercase() == host) && !added.contains(url) {
+            added.push(url.clone());
+        }
+    }
+    added
+}
+
+/// `configureDnsAfterDomainEdit($urls, $previousHostnames)`: configures DNS for the hostnames that
+/// a domain edit added, like `configureDnsAfterDomainAdd()` does for a new domain. Answers with
+/// what the page does next (`dns` of the answer), or `None` when nothing was added or no DNS
+/// provider can create the records.
+pub async fn after_domain_edit(
+    state: &AppState,
+    ctx: &AuthCtx,
+    kind: &str,
+    uuid: &str,
+    urls: &[String],
+    previous_hostnames: &[String],
+    warnings: &mut Vec<String>,
+) -> Result<Option<Value>, ApiError> {
+    let added = urls_added_by_edit(urls, previous_hostnames);
+    if added.is_empty() {
+        return Ok(None);
+    }
+    let res = find(state, ctx, kind, uuid).await?;
+    let rows = domain_rows(state, &res).await?;
+    let f = facts(state, &res).await?;
+    let added: Vec<&str> = added.iter().map(String::as_str).collect();
+    configure_after_add(state, &res, &rows, &f, &added, warnings).await
 }
 
 /// `configureDnsAfterDomainAdd`: `None` when it returns false.
@@ -603,7 +666,28 @@ fn spawn_configure_record(
             for r in &rows {
                 let _ = set_status(&state, r, &status).await;
             }
+        } else {
+            // `markDnsStatus($hostname, 'failed', $message)`.
+            let status = json!({
+                "status": "failed",
+                "message": done.message,
+                "expected_ip": expected,
+                "checked_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string(),
+                "check_id": Value::Null,
+            });
+            for r in &rows {
+                let _ = set_status(&state, r, &status).await;
+            }
         }
+        // `$conflict`: the record that blocked the create, which the page offers to replace.
+        let conflict = done.conflict.as_ref().map(|c| {
+            json!({
+                "zone_id": c.zone_id,
+                "record_id": c.record_id,
+                "current": c.current,
+                "proposed": c.proposed,
+            })
+        });
         if let Ok(mut map) = FINISHED.lock() {
             if map.len() > 500 {
                 map.clear();
@@ -612,7 +696,7 @@ fn spawn_configure_record(
                 job,
                 (
                     team_id,
-                    json!({"successful": done.successful, "message": done.message, "hostname": hostname}),
+                    json!({"successful": done.successful, "message": done.message, "hostname": hostname, "conflict": conflict}),
                 ),
             );
         }
@@ -779,6 +863,7 @@ async fn create_record(
             record_id,
             current,
             proposed,
+            ..
         }) => Ok(ok(json!({
             "conflict": {"record_id": record_id, "current": current, "proposed": proposed},
         }))
@@ -1008,6 +1093,28 @@ pub fn release_warning(result: Option<Deletion>, change: &str) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_edit_configures_dns_only_for_hostnames_it_added() {
+        let urls = vec![
+            "https://app.example.com".to_owned(),
+            "https://New.example.com:8443/path".to_owned(),
+            "https://new.example.com:8443/path".to_owned(),
+            "https://New.example.com:8443/path".to_owned(),
+        ];
+        let previous = vec!["app.example.com".to_owned()];
+        // Only the path or port of app.example.com changed: no new record.
+        assert_eq!(
+            urls_added_by_edit(&urls, &previous),
+            vec![
+                "https://New.example.com:8443/path".to_owned(),
+                "https://new.example.com:8443/path".to_owned()
+            ]
+        );
+        assert!(urls_added_by_edit(&urls[..1], &previous).is_empty());
+        assert!(urls_added_by_edit(&[], &previous).is_empty());
+        assert_eq!(urls_added_by_edit(&urls[..1], &[]), vec![urls[0].clone()]);
+    }
 
     #[test]
     fn hosts_are_lowercase_without_port() {

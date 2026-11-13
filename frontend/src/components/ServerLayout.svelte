@@ -6,6 +6,7 @@
   import { page } from '../lib/page.svelte';
   import ServerProxyActions from './ServerProxyActions.svelte';
   import ServerTopbar from './ServerTopbar.svelte';
+  import { showProxyActions } from '../lib/serverPage.svelte';
 
   let { name, children }: { name: string; children: Snippet } = $props();
 </script>
@@ -27,7 +28,7 @@
           </div>
         </div>
         <div class="ml-auto shrink-0">
-          {#if page.server?.proxySet}
+          {#if page.server?.proxySet && showProxyActions(page.server.uuid)}
             <ServerProxyActions server={page.server} mobile />
           {/if}
         </div>

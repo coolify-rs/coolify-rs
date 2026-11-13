@@ -16,11 +16,11 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 - **Update channels.** The Preview and Nightly channels of the update settings take a version only from a version
   file that lists channels (`{"stable": …, "preview": …, "nightly": …}`); with a stable-only file every channel
   gets the stable release. A custom image tag installs `ghcr.io/coolify-rs/coolify-rs:<tag>`.
-- **Existing Coolify databases.** Each release takes over exactly one Coolify release (4.6.0 for `4.6.0-rs.5`; see
+- **Existing Coolify databases.** Each release takes over exactly one Coolify release (4.7.5 for `4.7.5-rs.1`; see
   [MIGRATING.md](MIGRATING.md)). `coolify-rs boot` runs the upstream migrations from Coolify 4.5.3 to that release (the
-  ones that bring its own earlier installs up), whoever created the database: a Coolify 4.5.3 database is upgraded to
-  the 4.6.0 schema on the first start, and from then on only Coolify 4.6.0 can take it back. A database from a Coolify
-  release older than 4.5.3 is served read-only until Coolify itself is upgraded. A database with migrations newer than
+  ones that bring its own earlier installs up), whoever created the database: a Coolify 4.5.3 or 4.6.0 database is
+  upgraded to the 4.7.5 schema on the first start, and from then on only Coolify 4.7.5 can take it back. A database
+  from a Coolify release older than 4.5.3 is served read-only until Coolify itself is upgraded. A database with migrations newer than
   the build is read-only too (writes answer `503`) unless `COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA=true`. Migration names that
   upstream later renamed or deleted (`compat/baseline/historical-migrations.txt`) are accepted.
 - **Install layout.** No SSH key files or multiplexing sockets on disk, ports 6001 and 6002 are not published, and
@@ -182,6 +182,10 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 - **URL safety checks** for webhooks, S3 endpoints and other outbound URLs resolve hostnames with the system resolver,
   not the instance's custom DNS servers.
 - **OIDC** reads the discovery document and the JWKS on every sign-in; upstream caches them for one and six hours.
+- **SFTP, FTPS and WebDAV backup storages** (4.7.0). Upstream reads them with phpseclib, the curl extension and Guzzle
+  inside PHP. coolify-rs uses the system `ssh` (the `sftp` subsystem, with the saved host key as the only known host),
+  the system `curl` for FTPS and reqwest for WebDAV, so error texts of a failed connection differ, FTPS has no separate
+  timeout for a server that stops answering during a transfer, and nothing of it was run against a real server yet.
 - **Error texts from other libraries.** A failing SMTP test email shows lettre's text for errors other than "connection
   refused", and a failing S3 connection test is shaped like Flysystem's message but not identical to the AWS SDK's text.
 - **Managed DNS records.** `ConfigureDnsRecordJob` marks the row as managed itself; upstream does that from a broadcast
@@ -198,10 +202,15 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 
 These differences are deliberate.
 
-- **SSH host keys are verified.** Upstream disables checking (`StrictHostKeyChecking=no`). coolify-rs pins a server's
-  key on first use, and a changed key fails with "Host key verification failed" (with the new fingerprint and how to
-  accept it). The pin is dropped when the IP or port changes or the server is deleted.
-  `COOLIFY_RS_SSH_HOST_KEYS=ignore` restores upstream's behaviour.
+- **SSH host keys** follow upstream v4.7.5: the first key of a server is saved in `server_settings.ssh_host_key`, and
+  a different key is refused (`SSH_HOST_KEY_CHECKING=enforce`), reported (`warn`) or not checked (`off`). The default
+  differs: upstream's is `warn`, coolify-rs keeps `enforce`, as its earlier releases refused a changed key; set
+  `SSH_HOST_KEY_CHECKING=warn` in the environment file for upstream's behaviour. Accept a new key on the server's
+  Security page. A key that coolify-rs pinned in a file before 4.7.5 is moved to the database on the next connection.
+  `COOLIFY_RS_SSH_HOST_KEYS=ignore` still means `off`. coolify-rs does not multiplex SSH connections.
+- **Private key rotation** keeps its result and the delayed removal of the old key in the process, not in a queue.
+  A restart of coolify-rs before the removal (one hour, or the deployment timeout of the server) leaves the old public
+  key in `~/.ssh/authorized_keys`; rotate again or remove it by hand.
 - **SSH key files** are written `0600` for the length of a command and then removed, instead of kept in
   `storage/app/ssh/keys`. Errors still name the key `ssh_key@<uuid>`.
 - **SSH options.** coolify-rs adds `-F /dev/null`, `BatchMode`, `IdentitiesOnly`, no agent and no forwarding, and
@@ -229,6 +238,16 @@ These differences are deliberate.
   data, not PHP's. The 1000-column limit of a commit message in notifications uses its own table of wide characters.
 - **Notification requests** carry `Accept: */*`, and SMTP mail differs in MIME framing (`Message-ID`, encoding choice,
   header folding); senders, recipients, subjects and bodies are the same.
+- **Image scanning state in memory (4.7.0).** The scan locks per server, scan progress, the last scan error, the
+  image pins of "switch to a fixed version" and the scanner preparation state live in the process, where upstream
+  keeps them in Redis: a restart forgets them, and a Coolify instance on the same database does not see the locks.
+  coolify-rs has no realtime channel to the browser, so the vulnerability pages poll for progress instead of
+  updating on `ImageScanUpdated`. Scanning was not run against a real server for this release.
+- **Notification state in memory (4.7.5).** The counters of the failed API request throttle, the "one notification each
+  day" mark of a failing API token and the "this stop is expected" marks of the resource-stopped notification live in
+  the process, where upstream keeps them in Redis: a restart forgets them. A team SMTP host is resolved with the system
+  resolver only, not with the instance's custom DNS servers. The email pages keep only what the 4.7.5 views use:
+  `toggleSmtp`, `toggleResend`, `submitSmtp` and `submitResend` of the Livewire components have no endpoint.
 - **Uploaded backups** get their `mime_type` from the file signature.
 - **Scheduled tasks.** A manual execute during a run gives one execution, where upstream with one queue worker runs a
   second one afterwards. A starting service whose containers run counts as running.

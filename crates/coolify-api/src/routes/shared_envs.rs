@@ -111,18 +111,19 @@ fn fields(require_key: bool) -> Vec<Field> {
 }
 
 /// `SharedEnvironmentVariablePolicy::allows`: project and environment variables follow the
-/// grants on their project or environment; team and server variables need team-wide read to be
-/// read and an owner or admin to be changed.
+/// grants on their project or environment; team and server variables need team-wide access
+/// (owners and admins to read their values or change them). Since 4.7.5 the API token of the
+/// request must also cover the whole team at that level, so a token limited to some projects
+/// cannot use them.
 pub(crate) fn scope_allows(ctx: &AuthCtx, scope: Scope, level: AccessLevel) -> bool {
     match scope {
         Scope::Project(p) => ctx.can(level, &Target::project(p)),
         Scope::Environment(e) => ctx.can(level, &Target::environment(e)),
         Scope::Team | Scope::Server(_) => {
-            if level == AccessLevel::Read {
-                ctx.allows_team_wide(AccessLevel::Read)
-            } else {
-                ctx.is_team_admin()
+            if level != AccessLevel::Read && !ctx.is_team_admin() {
+                return false;
             }
+            ctx.allows_team_wide(level)
         }
     }
 }
@@ -277,7 +278,11 @@ async fn update_env(
     }
     for k in ["is_literal", "is_multiline", "is_shown_once"] {
         if input.has(k) {
-            let v = input_bool(&input, k);
+            // 4.7.5 (`SharedEnvironmentVariable::saving`): a lock is permanent. No UI, API, or MCP
+            // path can unlock a variable and show its value again.
+            let locked =
+                k == "is_shown_once" && current.get(k).and_then(Value::as_bool) == Some(true);
+            let v = locked || input_bool(&input, k);
             if current.get(k).and_then(Value::as_bool) != Some(v) {
                 audit_changes.insert(k.into(), json!({"old": current.get(k), "new": v}));
                 changed.push(k);

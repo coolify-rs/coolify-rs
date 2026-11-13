@@ -68,6 +68,17 @@ fn trusted(payload: &Value, a: &ApplicationRow) -> bool {
     )
 }
 
+/// `$request->header('X-Gitea-{Name}') ?? $request->header('X-Forgejo-{Name}')`: Forgejo and
+/// Codeberg send their own header names; the Gitea one wins when it is present.
+fn gitea_header(headers: &HeaderMap, name: &str) -> String {
+    let gitea = format!("x-gitea-{name}");
+    if headers.contains_key(gitea.as_str()) {
+        header(headers, &gitea)
+    } else {
+        header(headers, &format!("x-forgejo-{name}"))
+    }
+}
+
 /// `GiteaApp::findBySignature($payload, $signature)`.
 async fn find_by_signature(
     state: &AppState,
@@ -109,7 +120,7 @@ pub async fn normal(
     uri: Uri,
     body: Bytes,
 ) -> Response {
-    let event = header(&headers, "x-gitea-event").to_lowercase();
+    let event = gitea_header(&headers, "event").to_lowercase();
     if event == "ping" {
         return text_response("pong");
     }
@@ -132,7 +143,7 @@ async fn normal_inner(
             &json!({"status": "failed", "message": "Event not allowed. Only push and pull_request events are allowed."}),
         ));
     }
-    let mut signature = header(headers, "x-gitea-signature");
+    let mut signature = gitea_header(headers, "signature");
     if signature.is_empty() {
         signature = p::after_sha256(&header(headers, "x-hub-signature-256")).to_owned();
     }
@@ -270,7 +281,7 @@ pub async fn manual(
     uri: Uri,
     body: Bytes,
 ) -> Response {
-    let event = header(&headers, "x-gitea-event").to_lowercase();
+    let event = gitea_header(&headers, "event").to_lowercase();
     if event == "ping" {
         return text_response("pong");
     }
@@ -453,4 +464,23 @@ async fn manual_inner(
         }
     }
     Ok(p::manual_response(out, &key, &attempt))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forgejo_headers_are_read_when_gitea_ones_are_absent() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(gitea_header(&headers, "event"), "");
+        headers.insert("x-forgejo-event", "push".parse().unwrap());
+        headers.insert("x-forgejo-signature", "abc".parse().unwrap());
+        assert_eq!(gitea_header(&headers, "event"), "push");
+        assert_eq!(gitea_header(&headers, "signature"), "abc");
+        // Forgejo also sends the Gitea names: those win.
+        headers.insert("x-gitea-event", "pull_request".parse().unwrap());
+        assert_eq!(gitea_header(&headers, "event"), "pull_request");
+        assert_eq!(gitea_header(&headers, "signature"), "abc");
+    }
 }

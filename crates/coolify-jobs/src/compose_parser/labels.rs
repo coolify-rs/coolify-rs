@@ -451,6 +451,10 @@ pub fn fqdn_labels_for_caddy(args: &ProxyLabelArgs<'_>) -> Vec<String> {
                 "caddy_{i}.{handle}.{i}_reverse_proxy={{{{upstreams}}}}"
             )),
         }
+        labels.push(format!(
+            "caddy_{i}.{handle}.{i}_reverse_proxy.stream_close_delay={}",
+            crate::applications::labels::CADDY_STREAM_CLOSE_DELAY
+        ));
         labels.push(format!("caddy_{i}.{handle}={path}*"));
         if args.gzip {
             labels.push(format!("caddy_{i}.encode=zstd gzip"));

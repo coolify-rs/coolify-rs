@@ -1,5 +1,6 @@
 // Page endpoints of the instance settings (crates/coolify-api/src/ui_settings.rs).
 import { request } from './api';
+import type { EmailProvider, SmtpPreset, SmtpServerOption } from './smtpServers';
 
 export type Values = Record<string, any>;
 
@@ -19,6 +20,24 @@ export interface ActionResult {
   overrides?: Values;
 }
 
+/** The transactional email page (crates/coolify-api/src/ui_settings/email.rs). */
+export interface EmailSettingsResult extends ActionResult {
+  test_email?: string;
+  /** `is_transactional_emails_enabled()`. */
+  transactional_enabled?: boolean;
+  /** `activeEmailProvider()`: the provider that sends email now. */
+  active_provider?: EmailProvider;
+  /** `$settings->smtpServerName()`. */
+  smtp_server_name?: string;
+  /** `smtpServerOptions()`. */
+  smtp_server_options?: SmtpServerOption[];
+  smtp_presets?: SmtpPreset[];
+  /** The selected provider is not complete yet, so nothing was saved. */
+  pending?: boolean;
+  /** The fields `addSmtpServer` starts a new server with. */
+  new_server?: Values;
+}
+
 export interface DomainConflict {
   domain: string;
   resource_name: string;
@@ -33,6 +52,8 @@ export interface UpgradeState {
   current_version: string;
   /** `update_channel === 'custom'`: the full button upgrades to the image tag. */
   custom?: boolean;
+  /** `$updateChannel`: stable, preview, nightly or custom. */
+  update_channel?: string;
 }
 
 export interface BackupPayload extends ActionResult {
@@ -67,8 +88,8 @@ export const settingsUi = {
     if (!res.ok) throw new Error(`status ${res.status}`);
     return res.json();
   },
-  email: () => request<ActionResult & { test_email: string }>('GET', '/ui/settings/email'),
-  emailAction: (action: string, values: Values) => post('email', action, values),
+  email: () => request<EmailSettingsResult>('GET', '/ui/settings/email'),
+  emailAction: (action: string, values: Values) => post<EmailSettingsResult>('email', action, values),
   backup: () => request<BackupPayload>('GET', '/ui/settings/backup'),
   backupAction: (action: string, values: Values = {}) => post<BackupPayload>('backup', action, values),
   backupExecutions: (skip: number) => request<{ executions: Values[]; total: number }>('GET', `/ui/settings/backup/executions?skip=${skip}`),

@@ -44,6 +44,9 @@
     s = r.settings;
     s.inject_build_args_to_dockerfile ??= true;
     s.include_source_commit_in_build ??= false;
+    s.include_network_hosts_in_build ??= true;
+    s.is_auto_cancel_queued_deployments_enabled ??= true;
+    s.is_auto_cancel_building_deployments_enabled ??= false;
     s.is_git_shallow_clone_enabled ??= false;
     customName = savedCustomName = s.custom_internal_name ?? '';
     prefix = savedPrefix = s.custom_container_name_prefix ?? '';
@@ -61,9 +64,11 @@
   });
 
   async function instantSave() {
+    // Stopping older builds also cancels older queued deployments.
+    s.is_auto_cancel_queued_deployments_enabled = s.is_auto_cancel_queued_deployments_enabled || s.is_auto_cancel_building_deployments_enabled;
     try {
       const body = Object.fromEntries(
-        ['disable_build_cache', 'inject_build_args_to_dockerfile', 'include_source_commit_in_build', 'is_auto_deploy_enabled', 'is_git_submodules_enabled', 'is_git_lfs_enabled', 'is_git_shallow_clone_enabled', 'is_raw_compose_deployment_enabled', 'connect_to_docker_network', 'is_consistent_container_name_enabled', 'is_log_drain_enabled', 'is_gpu_enabled', 'is_gzip_enabled', 'is_stripprefix_enabled'].map((k) => [k, s[k]]),
+        ['disable_build_cache', 'inject_build_args_to_dockerfile', 'include_source_commit_in_build', 'include_network_hosts_in_build', 'is_auto_deploy_enabled', 'is_auto_cancel_queued_deployments_enabled', 'is_auto_cancel_building_deployments_enabled', 'is_git_submodules_enabled', 'is_git_lfs_enabled', 'is_git_shallow_clone_enabled', 'is_raw_compose_deployment_enabled', 'connect_to_docker_network', 'is_consistent_container_name_enabled', 'is_log_drain_enabled', 'is_gpu_enabled', 'is_gzip_enabled', 'is_stripprefix_enabled'].map((k) => [k, s[k]]),
       );
       const r = await request<{ message: string }>('POST', `${path}/instant`, body);
       notify.success(r.message);
@@ -117,11 +122,14 @@
           <Listbox id="disableBuildCache" label="Build cache" helper="Disabling the cache forces a completely fresh Docker build on every deployment." disabled={!canUpdate} bind:value={s.disable_build_cache} onchange={instantSave} options={[{ value: false, label: 'Use Docker build cache' }, { value: true, label: 'Rebuild from scratch every time' }]} />
           <Listbox id="injectBuildArgsToDockerfile" label="Build arguments" helper="When injected automatically, coolify-rs adds ARG statements to your Dockerfile for build-time variables. Manage them manually to preserve Docker build cache." disabled={!canUpdate} bind:value={s.inject_build_args_to_dockerfile} onchange={instantSave} options={[{ value: true, label: 'Inject build args automatically' }, { value: false, label: 'Managed manually in Dockerfile' }]} />
           <Listbox id="includeSourceCommitInBuild" label="Source commit availability" helper="SOURCE_COMMIT (git commit hash) is always available at runtime. Making it available during build invalidates the cache on every commit." disabled={!canUpdate} bind:value={s.include_source_commit_in_build} onchange={instantSave} options={[{ value: false, label: 'Runtime only (preserves cache)' }, { value: true, label: 'Available during build' }]} />
+          <Listbox id="includeNetworkHostsInBuild" label="Network hosts during build" helper="When added, the build can reach the containers on the destination network by name. Each time a resource on the network is added or removed, the Docker build cache is invalidated. Preview deployments are never added, and no hosts are added on a build server." disabled={!canUpdate} bind:value={s.include_network_hosts_in_build} onchange={instantSave} options={[{ value: true, label: 'Add network containers as hosts' }, { value: false, label: 'Do not add (preserves cache)' }]} />
         </div>
         {#if d.git_based}
           <SettingsSubsection id="advanced-deployment-section" title="Deployment" helper="Automatic deployments from Git webhooks.">
             <div class="grid w-full gap-4 sm:grid-cols-2">
               <Listbox id="isAutoDeployEnabled" label="Auto deploy" helper="Automatically deploy new commits based on Git webhooks." disabled={!canUpdate} bind:value={s.is_auto_deploy_enabled} onchange={instantSave} options={[{ value: true, label: 'Deploy on push (webhooks)' }, { value: false, label: 'Manual deployments only' }]} />
+              <Listbox id="isAutoCancelQueuedDeploymentsEnabled" label="Queued webhook deployments" helper="When a newer push arrives, cancel the older webhook deployments that still wait in the queue, so only the latest commit is built. Manual, API, restart, and rollback deployments are never cancelled." disabled={!canUpdate || s.is_auto_cancel_building_deployments_enabled} bind:value={s.is_auto_cancel_queued_deployments_enabled} onchange={instantSave} options={[{ value: true, label: 'Cancel when a newer push arrives' }, { value: false, label: 'Deploy every push' }]} />
+              <Listbox id="isAutoCancelBuildingDeploymentsEnabled" label="Building webhook deployments" helper="When a newer push arrives, also stop the older webhook deployment that is still building. A deployment that already started to replace containers always finishes. This also cancels queued webhook deployments." disabled={!canUpdate} bind:value={s.is_auto_cancel_building_deployments_enabled} onchange={instantSave} options={[{ value: false, label: 'Let the build finish' }, { value: true, label: 'Stop the build when a newer push arrives' }]} />
             </div>
           </SettingsSubsection>
           <SettingsSubsection id="advanced-git-section" title="Git" helper="Options applied while cloning the repository during builds.">

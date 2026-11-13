@@ -532,6 +532,58 @@ async fn team_two_factor_policy_blocks_the_canvas_for_that_team() {
 }
 
 #[tokio::test]
+async fn root_team_two_factor_policy_covers_instance_admin_pages() {
+    // Alice is an admin of the root team, which requires 2FA; her session is on team 1.
+    let h = Harness::with_extra_sql(
+        "INSERT INTO team_user (team_id, user_id, role) VALUES (0, 1, 'admin'); \
+         UPDATE teams SET is_two_factor_required = true WHERE id = 0; \
+         UPDATE users SET current_team_id = 1 WHERE id = 1;",
+    )
+    .await;
+    let (cookie, csrf) = h.ui_login("alice@example.test").await;
+    let headers = [("cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+    let info = h.request("GET", "/ui/session", &headers, None).await.json();
+    assert_eq!(info["current_team"]["id"], 1);
+    let blocked =
+        r#"{"message":"Your team requires two-factor authentication. Configure it to continue."}"#;
+    for (method, path) in [
+        ("GET", "/ui/settings/general"),
+        ("POST", "/ui/settings/general"),
+        ("GET", "/ui/settings/backup"),
+        ("POST", "/ui/settings/upgrade"),
+        ("GET", "/ui/settings/oauth"),
+        ("GET", "/ui/plugins"),
+        ("GET", "/ui/plugins/catalog"),
+        ("PATCH", "/ui/plugins/acme/hello"),
+        ("GET", "/ui/team/admin"),
+        ("POST", "/ui/team/admin/3/delete"),
+        ("GET", "/ui/image-scan/settings/instance"),
+    ] {
+        let body = (method != "GET").then(|| json!({}));
+        let r = h.request(method, path, &headers, body).await;
+        assert_eq!(r.status, 403, "{method} {path}: {}", r.body);
+        assert_eq!(r.body, blocked, "{method} {path}");
+    }
+    // Team pages of the session's own team are not affected (plugins are off in this harness).
+    let r = h.request("GET", "/ui/team", &headers, None).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    for path in ["/ui/plugins/nav", "/ui/plugins/team"] {
+        let r = h.request("GET", path, &headers, None).await;
+        assert_ne!(r.body, blocked, "{path}");
+    }
+    // With 2FA confirmed, the instance pages open again.
+    sqlx::query("UPDATE users SET two_factor_confirmed_at = now() WHERE id = 1")
+        .execute(h.tdb.db.pool())
+        .await
+        .unwrap();
+    let r = h
+        .request("GET", "/ui/settings/general", &headers, None)
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    h.finish().await;
+}
+
+#[tokio::test]
 async fn cookies_are_secure_behind_an_https_proxy() {
     use axum::extract::ConnectInfo;
     use tower::ServiceExt as _;
@@ -579,6 +631,48 @@ async fn cookies_are_secure_behind_an_https_proxy() {
             "{peer} {proto} {plain:?}"
         );
     }
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn an_overlong_login_email_is_refused_before_any_work() {
+    let h = Harness::new().await;
+    let long = format!("{}@example.test", "a".repeat(60_000));
+    for _ in 0..8 {
+        h.request(
+            "POST",
+            "/ui/session",
+            &[],
+            Some(json!({"email": long, "password": "nope"})),
+        )
+        .await
+        .assert(
+            422,
+            r#"{"message":"These credentials do not match our records.","errors":{"email":["These credentials do not match our records."]}}"#,
+        );
+    }
+    // Nothing was audited for it; an ordinary failure is.
+    let audited = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_events WHERE event = 'auth.user.login_failed'",
+        )
+        .fetch_one(h.tdb.db.pool())
+        .await
+        .unwrap()
+    };
+    assert_eq!(audited().await, 0);
+    h.request(
+        "POST",
+        "/ui/session",
+        &[],
+        Some(json!({"email": "nobody@example.test", "password": "nope"})),
+    )
+    .await
+    .assert(
+        422,
+        r#"{"message":"These credentials do not match our records.","errors":{"email":["These credentials do not match our records."]}}"#,
+    );
+    assert_eq!(audited().await, 1);
     h.finish().await;
 }
 

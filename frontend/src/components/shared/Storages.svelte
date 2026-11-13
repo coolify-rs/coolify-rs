@@ -44,6 +44,8 @@
   let modal = $state<'volume' | 'file' | 'host-file' | 'directory' | null>(null);
   let error = $state<ApiError | null>(null);
   let deleting = $state<Volume | null>(null);
+  /** `$pendingRename`: a volume rename that waits for confirmation. A new name mounts another Docker volume, and the data stays in the old one. */
+  let pendingRename = $state<{ storageId: number; from: string; to: string } | null>(null);
   let backupModal = $state<number | null>(null);
   let databaseBackupOpen = $state(false);
   let backupTargets = $state<BackupTargetOption[]>([]);
@@ -89,6 +91,7 @@
   async function load() {
     const d = await request<any>('GET', base);
     data = d;
+    pendingRename = null;
     forms = Object.fromEntries(d.volumes.map((v: Volume) => [v.id, { ...v }]));
     if (!tabChosen) {
       // `resolveDefaultTab`.
@@ -138,9 +141,24 @@
     }
   }
 
-  async function saveVolume(id: number, e?: Event) {
+  // `cancelRename($storageId)`.
+  function cancelRename() {
+    if (!pendingRename) return;
+    const stored = volumes.find((v) => v.id === pendingRename?.storageId);
+    if (stored && forms[stored.id]) forms[stored.id].name = stored.name;
+    pendingRename = null;
+  }
+
+  async function saveVolume(id: number, e?: Event, renameConfirmed = false) {
     e?.preventDefault();
     const f = forms[id];
+    // `submit($storageId, $renameConfirmed)`: a rename waits for confirmation.
+    const stored = volumes.find((v) => v.id === id);
+    if (stored && !stored.is_shared && f.name !== stored.name && !renameConfirmed) {
+      pendingRename = { storageId: id, from: stored.name, to: f.name };
+      return;
+    }
+    pendingRename = null;
     try {
       const r = await request<{ message: string }>('PATCH', `${base}/volume/${id}`, {
         name: f.name,
@@ -412,7 +430,9 @@
         <Callout type="warning" title="Volume mounts are unavailable" class="w-full">{data.volume_unavailable_reason}</Callout>
       {:else}
         <form class="flex w-full flex-col gap-4" onsubmit={(e) => submitNew(e, 'volume', { name, mount_path: mountPath }, 'volumes')}>
-          <p class="text-[13px] leading-5 text-neutral-500 dark:text-fg-dim">Mount a Docker volume inside the container.</p>
+          <p class="text-[13px] leading-5 text-neutral-500 dark:text-fg-dim">
+            Mount a Docker volume inside the container. coolify-rs adds the prefix <code class="break-all">{data?.uuid ?? uuid}-</code> to the name, so that the volume name is unique on the server.
+          </p>
           <div class="flex flex-col gap-4">
             <FormInput placeholder="pv-name" id="name" label="Name" required helper="Volume name." bind:value={name} error={error?.field('name')} />
             <FormInput placeholder="/tmp/root" id="mount_path" label="Destination Path" required helper="Directory inside the container." bind:value={mountPath} error={error?.field('mount_path')} />
@@ -477,6 +497,25 @@
           router.go(`${data?.backup_base}/${b}`);
         }}
       />
+    </Modal>
+  {/if}
+
+  {#if pendingRename}
+    {@const rename = pendingRename}
+    <Modal title="Change the volume name?" focusFirstField={false} onclose={cancelRename}>
+      <Callout type="warning" title="The data does not move to the new volume" class="mb-4">
+        <ul class="mt-2 ml-4 list-disc">
+          <li>Changing the name does not rename or move the Docker volume.</li>
+          <li>After the next restart or deployment, the resource uses the Docker volume <strong>{rename.to}</strong>. If that volume does not exist, Docker creates it empty.</li>
+          <li>Your data stays in <strong>{rename.from}</strong>. coolify-rs does not copy it, and does not delete it when you delete this resource.</li>
+          <li>To keep your data, stop the resource and copy the data into the new volume before you start it again.</li>
+        </ul>
+      </Callout>
+
+      <div class="mt-4 flex flex-wrap justify-end gap-2 border-t border-neutral-200 pt-4 dark:border-white/[0.08]">
+        <button type="button" class="button" onclick={cancelRename}>Cancel</button>
+        <button type="button" class="button button-error" onclick={() => saveVolume(rename.storageId, undefined, true)}>Change Volume Name</button>
+      </div>
     </Modal>
   {/if}
 

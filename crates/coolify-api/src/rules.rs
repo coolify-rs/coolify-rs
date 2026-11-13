@@ -133,47 +133,78 @@ pub fn ordered(errors: Map<String, Value>, order: &[&str]) -> Map<String, Value>
 /// The window a key is limited over (keys use different windows), and its hits.
 type Hits = (Duration, Vec<Instant>);
 
-/// Hits per key.
-static HITS: LazyLock<Mutex<HashMap<String, Hits>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Hits per key, and when keys whose window has passed were last dropped.
+struct Limiter {
+    keys: HashMap<String, Hits>,
+    pruned: Instant,
+}
+
+impl Limiter {
+    fn new() -> Self {
+        Self {
+            keys: HashMap::new(),
+            pruned: Instant::now(),
+        }
+    }
+
+    /// Drops every key whose own window has passed.
+    fn prune(&mut self, now: Instant) {
+        self.keys
+            .retain(|_, (w, v)| v.last().is_some_and(|t| now.duration_since(*t) < *w));
+        self.pruned = now;
+    }
+
+    /// Records a hit for `key`; the seconds to wait when over `max` in `window`.
+    fn hit(&mut self, key: &str, max: usize, window: Duration, now: Instant) -> Option<u64> {
+        if now.duration_since(self.pruned) >= PRUNE_EVERY {
+            self.prune(now);
+        }
+        if self.keys.len() >= MAX_KEYS && !self.keys.contains_key(key) {
+            self.prune(now);
+            if self.keys.len() >= MAX_KEYS
+                && let Some(any) = self.keys.keys().next().cloned()
+            {
+                self.keys.remove(&any);
+            }
+        }
+        let (w, v) = self
+            .keys
+            .entry(key.to_string())
+            .or_insert_with(|| (window, Vec::new()));
+        *w = (*w).max(window);
+        v.retain(|t| now.duration_since(*t) < window);
+        if v.len() >= max {
+            let oldest = v.iter().min().copied().unwrap_or(now);
+            return Some(
+                window
+                    .saturating_sub(now.duration_since(oldest))
+                    .as_secs()
+                    .max(1),
+            );
+        }
+        v.push(now);
+        None
+    }
+}
+
+static HITS: LazyLock<Mutex<Limiter>> = LazyLock::new(|| Mutex::new(Limiter::new()));
 
 /// Keys kept at most; past it, keys whose own window has passed are dropped, then any key.
 const MAX_KEYS: usize = 50_000;
 
+/// Keys whose window has passed are dropped at least this often, whatever the key count.
+const PRUNE_EVERY: Duration = Duration::from_secs(60);
+
 /// `RateLimiter`: records a hit; the seconds to wait when over `max` in `window`.
 pub fn throttle(key: &str, max: usize, window: Duration) -> Option<u64> {
-    let now = Instant::now();
-    let mut m = HITS.lock().ok()?;
-    if m.len() >= MAX_KEYS && !m.contains_key(key) {
-        m.retain(|_, (w, v)| v.last().is_some_and(|t| now.duration_since(*t) < *w));
-        if m.len() >= MAX_KEYS
-            && let Some(any) = m.keys().next().cloned()
-        {
-            m.remove(&any);
-        }
-    }
-    let (w, v) = m
-        .entry(key.to_string())
-        .or_insert_with(|| (window, Vec::new()));
-    *w = (*w).max(window);
-    v.retain(|t| now.duration_since(*t) < window);
-    if v.len() >= max {
-        let oldest = v.iter().min().copied().unwrap_or(now);
-        return Some(
-            window
-                .saturating_sub(now.duration_since(oldest))
-                .as_secs()
-                .max(1),
-        );
-    }
-    v.push(now);
-    None
+    HITS.lock().ok()?.hit(key, max, window, Instant::now())
 }
 
 /// `RateLimiter::tooManyAttempts`: whether `key` is over `max`, without a hit.
 pub fn too_many(key: &str, max: usize, window: Duration) -> Option<u64> {
     let now = Instant::now();
     let m = HITS.lock().ok()?;
-    let (_, v) = m.get(key)?;
+    let (_, v) = m.keys.get(key)?;
     let live: Vec<&Instant> = v
         .iter()
         .filter(|t| now.duration_since(**t) < window)
@@ -247,5 +278,24 @@ mod tests {
         assert!(throttle("t-key", 2, w).is_none());
         assert!(throttle("t-key", 2, w).is_none());
         assert!(throttle("t-key", 2, w).is_some());
+    }
+
+    #[test]
+    fn expired_keys_are_dropped_on_a_timer_below_the_cap() {
+        let mut l = Limiter::new();
+        let start = Instant::now();
+        let short = Duration::from_secs(5);
+        for i in 0..100 {
+            l.hit(&format!("k{i}"), 1, short, start);
+        }
+        // Still inside the prune interval: expired keys stay until the next prune.
+        let soon = start + Duration::from_secs(10);
+        l.hit("other", 1, short, soon);
+        assert_eq!(l.keys.len(), 101);
+        // Once the interval has passed, the next hit drops every expired key.
+        let later = start + PRUNE_EVERY;
+        l.hit("fresh", 1, short, later);
+        assert_eq!(l.keys.len(), 1);
+        assert!(l.keys.contains_key("fresh"));
     }
 }

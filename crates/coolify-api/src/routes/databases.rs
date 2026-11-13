@@ -67,7 +67,9 @@ pub(crate) fn nested_server(
     ctx: &AuthCtx,
     s: &ServerRow,
 ) -> Result<Value, ApiError> {
-    nested_server_with(state, s, ctx.can_read_sensitive, ctx.can_read_sensitive)
+    // 4.7.5: `canReadServerSecretsFromApi()`, not `can_read_sensitive`.
+    let server_secrets = ctx.can_read_server_sensitive();
+    nested_server_with(state, s, server_secrets, server_secrets)
 }
 
 /// `nested_server` with the two switches apart: `expose_secrets` (`exposeNestedServerSecrets`)
@@ -288,7 +290,7 @@ pub(crate) async fn present_as(
         let mut dest = dest.clone();
         if let Some(s) = &server {
             let nested = if model {
-                nested_server_with(state, s, false, ctx.can_read_sensitive)?
+                nested_server_with(state, s, false, ctx.can_read_server_sensitive())?
             } else {
                 nested_server(state, ctx, s)?
             };
@@ -709,6 +711,8 @@ async fn create_database(
         StatusCode::NOT_FOUND,
         "Server not found.",
     ))?;
+    // `$this->authorize('placeResource', $server)` (4.7.5).
+    crate::place_resource::authorize(&state, &ctx, &server).await?;
     if crate::routes::servers::effective_role_is_build(&server.settings.clone().unwrap_or_default())
     {
         let mut m = Map::new();
@@ -777,13 +781,14 @@ async fn create_database(
     validate(
         &input,
         &[
+            // `nameRules(required: false, nullable: false)`, `descriptionRules()` (4.7.5).
             Field {
                 name: "name",
-                rules: vec![Rule::String, Rule::Max(255)],
+                rules: crate::validation::patterns::present_name_rules(),
             },
             Field {
                 name: "description",
-                rules: vec![Rule::String, Rule::Nullable],
+                rules: crate::validation::patterns::description_rules(),
             },
             Field {
                 name: "image",
@@ -858,7 +863,7 @@ async fn create_database(
                 rules: vec![Rule::Array, Rule::Nullable],
             },
         ],
-        CUSTOM_API_MESSAGES,
+        crate::validation::patterns::API_COMBINED_MESSAGES,
         &present_keys,
     )?;
     // `tags.*` => `string|min:2`.
@@ -1008,7 +1013,8 @@ async fn create_database(
         environment_id: env.id,
         destination_id: destination,
         destination_type: Some(destination_type),
-        image: (kind == Kind::Postgresql).then(|| "postgres:16-alpine".to_owned()),
+        // `create_standalone_postgresql(..., string $databaseImage = 'postgres:18-alpine')`.
+        image: (kind == Kind::Postgresql).then(|| "postgres:18-alpine".to_owned()),
         secrets,
         fields,
         name,

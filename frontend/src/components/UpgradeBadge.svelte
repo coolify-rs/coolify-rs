@@ -6,6 +6,7 @@
   import { settingsUi, type UpgradeState } from '../lib/settingsApi';
   import { notify } from '../lib/toast.svelte';
   import { portal } from '../lib/portal';
+  import { link } from '../lib/router.svelte';
 
   let { fullButton = false, state: given = null }: { fullButton?: boolean; state?: UpgradeState | null } = $props();
 
@@ -36,6 +37,11 @@
   let healthTimeouts = 0;
   let wentDown = false;
   const latestVersion = $derived(upgrade?.latest_version ?? '');
+  // `$updateChannel === 'custom' ? 'Custom image' : ucfirst($updateChannel) . ' channel'`.
+  const channelLabel = $derived.by(() => {
+    const channel = upgrade?.update_channel ?? (upgrade?.custom ? 'custom' : 'stable');
+    return channel === 'custom' ? 'Custom image' : `${channel.charAt(0).toUpperCase()}${channel.slice(1)} channel`;
+  });
   // `isUpgradeAvailable`: with a custom image, only the full button, when a tag is set.
   const available = $derived(upgrade?.custom ? fullButton && latestVersion !== '' : !!upgrade?.available);
 
@@ -216,6 +222,17 @@
                   {upgrade?.current_version} <span class="mx-0.5">&rarr;</span>
                   {upgrade?.latest_version}
                 </p>
+                <p class="mt-0.5 text-[12px] leading-4" style="color: var(--coollabs-subtle)">
+                  {channelLabel}
+                  <span class="mx-0.5">&middot;</span>
+                  <a
+                    use:link
+                    href="/settings/updates"
+                    onclick={() => (open = false)}
+                    class="font-medium text-coollabs underline decoration-coollabs/30 underline-offset-2 hover:decoration-coollabs dark:text-brand-light dark:decoration-brand-light/30 dark:hover:decoration-brand-light"
+                    >Change channel</a
+                  >
+                </p>
               </div>
               {#if !showProgress || upgradeError}
               <button
@@ -228,7 +245,7 @@
               </button>
               {/if}
             </header>
-            <div class="application-settings-section-body min-h-0 flex-1 overflow-y-auto" style="-webkit-overflow-scrolling: touch;">
+            <div class="application-settings-section-body min-h-0 flex-1 overflow-y-auto">
               {#if showProgress}
                 <div class="flex flex-col gap-4">
                   <div class="w-full">

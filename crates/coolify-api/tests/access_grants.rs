@@ -136,7 +136,8 @@ async fn scoped_token_sees_only_its_projects_and_no_team_level_routes() {
     .fetch_one(h.tdb.db.pool())
     .await
     .unwrap();
-    assert_eq!(denied, 2);
+    // 4.7.5: one row per token in each 300 second window, whatever the path.
+    assert_eq!(denied, 1);
     // `version` is one of the scoped routes.
     assert_eq!(
         send(&h, "GET", "/api/v1/version", &t, None).await.status,

@@ -21,10 +21,15 @@
   let triggerEl: HTMLDivElement | undefined = $state();
   let panel: HTMLDivElement | undefined = $state();
 
-  function updatePosition() {
-    if (!triggerEl || !panel) return;
+  function updatePosition(retried = false) {
+    if (!open || !triggerEl || !panel) return;
     const t = triggerEl.getBoundingClientRect();
     const p = panel.getBoundingClientRect();
+    // The panel is laid out a frame after it shows; measure again when it has no size yet.
+    if (p.width === 0 && !retried) {
+      requestAnimationFrame(() => updatePosition(true));
+      return;
+    }
     const pad = 8;
     const left = Math.max(pad, Math.min(t.right - p.width, window.innerWidth - p.width - pad));
     const spaceBelow = window.innerHeight - t.bottom - pad;
@@ -39,7 +44,7 @@
     }
     panelStyle = 'position: fixed; min-width: 0; visibility: hidden;';
     open = true;
-    requestAnimationFrame(updatePosition);
+    requestAnimationFrame(() => updatePosition());
   }
 
   const close = () => (open = false);

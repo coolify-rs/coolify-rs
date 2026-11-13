@@ -259,6 +259,37 @@ pub async fn schedule_of(db: &Db, morph: &str, target_id: i64) -> DbResult<Optio
     Ok(text.and_then(|t| serde_json::from_str(&t).ok()))
 }
 
+/// `newS3StorageIds()`: the storage IDs that are not a stored destination of the schedule yet
+/// (every ID for a schedule that does not exist). Reads the saved state, so call it before the
+/// schedule changes.
+pub async fn new_storage_ids(
+    db: &Db,
+    backup: Option<&Record>,
+    storage_ids: &[i64],
+) -> DbResult<Vec<i64>> {
+    let mut current: Vec<i64> = Vec::new();
+    if let Some(backup) = backup {
+        current = sqlx::query_scalar(
+            "SELECT s3_storage_id FROM scheduled_volume_backup_s3_storage WHERE scheduled_volume_backup_id = $1",
+        )
+        .bind(backup.get("id").and_then(serde_json::Value::as_i64))
+        .fetch_all(db.pool())
+        .await?;
+        current.extend(
+            backup
+                .get("s3_storage_id")
+                .and_then(serde_json::Value::as_i64),
+        );
+    }
+    let mut new = Vec::new();
+    for id in storage_ids {
+        if *id != 0 && !current.contains(id) && !new.contains(id) {
+            new.push(*id);
+        }
+    }
+    Ok(new)
+}
+
 pub async fn schedule_by_id(db: &Db, id: i64) -> DbResult<Option<Record>> {
     let text: Option<String> = sqlx::query_scalar(
         "SELECT row_to_json(b)::text FROM scheduled_volume_backups b WHERE b.id = $1",

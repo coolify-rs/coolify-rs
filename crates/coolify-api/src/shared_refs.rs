@@ -29,11 +29,14 @@ pub(crate) fn references(value: Option<&str>) -> Vec<(String, String)> {
 }
 
 /// `SharedEnvironmentVariablePolicy::viewSensitive` on an unsaved variable of that type for the
-/// resource: team and server variables need an owner or admin; project and environment variables
+/// resource: team and server variables need an owner or admin, and (4.7.5) a token that reads
+/// secrets on the whole team (`allowsTeamWide`); project and environment variables
 /// read-secrets access on the resource's project or environment.
 fn can_read(ctx: &AuthCtx, kind: &str, environment_id: Option<i64>) -> bool {
     match kind {
-        "team" | "server" => ctx.is_team_admin(),
+        "team" | "server" => {
+            ctx.is_team_admin() && ctx.allows_team_wide(AccessLevel::ReadSensitive)
+        }
         "project" | "environment" => {
             let Some(env) = environment_id else {
                 return false;
@@ -144,5 +147,29 @@ mod tests {
         );
         // Unknown types are not references to shared variables.
         assert!(authorize_added(&ctx, Some(70), None, Some("{{service.X}}"), "value").is_ok());
+    }
+
+    /// 4.7.5 (`SharedEnvironmentVariablePolicy::allows`): the API token of an owner must also
+    /// cover the whole team to read team and server variables.
+    #[test]
+    fn a_token_limited_to_a_project_cannot_reference_team_or_server_variables() {
+        let mut ctx = member_with_project_write();
+        ctx.role = Role::Owner;
+        assert!(authorize_added(&ctx, Some(70), None, Some("{{team.SECRET}}"), "value").is_err());
+        assert!(authorize_added(&ctx, Some(70), None, Some("{{server.SECRET}}"), "value").is_err());
+        assert!(authorize_added(&ctx, Some(70), None, Some("{{project.A}}"), "value").is_ok());
+        // The same owner with a team-wide token (no layers) can.
+        ctx.access = Arc::new(Access::unrestricted());
+        assert!(authorize_added(&ctx, Some(70), None, Some("{{team.SECRET}}"), "value").is_ok());
+        // A team-wide read token of an owner does not read secrets.
+        let read_only = AccessGrants {
+            team_levels: expand(&[AccessLevel::Read]),
+            ..Default::default()
+        };
+        ctx.access = Arc::new(Access {
+            layers: vec![read_only],
+            environment_projects: Default::default(),
+        });
+        assert!(authorize_added(&ctx, Some(70), None, Some("{{team.SECRET}}"), "value").is_err());
     }
 }

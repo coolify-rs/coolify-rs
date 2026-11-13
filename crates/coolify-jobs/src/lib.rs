@@ -15,7 +15,9 @@ pub mod first_run;
 pub mod git_http;
 pub mod gitea;
 pub mod github;
+pub mod github_deployments;
 pub mod gitlab;
+pub mod image_scan;
 pub mod integrations;
 pub mod kernel;
 pub mod kernel_resources;
@@ -78,7 +80,7 @@ struct Inner {
 
 impl Jobs {
     pub fn new(db: Db, remote: Remote, encrypter: Option<Encrypter>) -> Self {
-        Self(Arc::new(Inner {
+        let jobs = Self(Arc::new(Inner {
             db,
             remote,
             encrypter,
@@ -87,7 +89,34 @@ impl Jobs {
             db_ops: Mutex::new(HashSet::new()),
             version: std::sync::OnceLock::new(),
             overlap_locks: Mutex::new(HashMap::new()),
-        }))
+        }));
+        jobs.listen_for_host_key_mismatches();
+        jobs
+    }
+
+    /// `SshMultiplexingHelper::noticeHostKeyMismatch()`: an SSH process that reports a changed
+    /// host key starts one connection check of that server, which saves the new key as pending
+    /// and notifies the team.
+    fn listen_for_host_key_mismatches(&self) {
+        // Outside a runtime (a synchronous caller) nothing can listen.
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, String)>();
+        self.0.remote.on_host_key_mismatch(tx);
+        // A weak reference: the listener ends with the last `Jobs`.
+        let inner = Arc::downgrade(&self.0);
+        runtime.spawn(async move {
+            while let Some((server_uuid, _stderr)) = rx.recv().await {
+                let Some(inner) = inner.upgrade() else {
+                    return;
+                };
+                let jobs = Jobs(inner);
+                tokio::spawn(async move {
+                    server_ops::host_key::noticed(&jobs, &server_uuid).await;
+                });
+            }
+        });
     }
 
     /// Sets the instance version (`COOLIFY_VERSION`) once at startup.
@@ -102,7 +131,7 @@ impl Jobs {
             .version
             .get()
             .cloned()
-            .unwrap_or_else(|| "4.6.0".into())
+            .unwrap_or_else(|| "4.7.5".into())
     }
 
     pub fn encrypter(&self) -> Option<&Encrypter> {

@@ -37,11 +37,14 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// `$this->{property}` <-> `application_settings.{column}`, the listboxes of `instantSave`.
-const FLAGS: [&str; 15] = [
+const FLAGS: [&str; 18] = [
     "disable_build_cache",
     "inject_build_args_to_dockerfile",
     "include_source_commit_in_build",
+    "include_network_hosts_in_build",
     "is_auto_deploy_enabled",
+    "is_auto_cancel_queued_deployments_enabled",
+    "is_auto_cancel_building_deployments_enabled",
     "is_git_submodules_enabled",
     "is_git_lfs_enabled",
     "is_git_shallow_clone_enabled",
@@ -203,10 +206,16 @@ async fn instant(
     }
     let mut values: Vec<(&'static str, C)> = Vec::new();
     let mut reset = false;
+    // Stopping older builds also cancels older queued deployments.
+    let cancels_builds = body
+        .get("is_auto_cancel_building_deployments_enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     for k in FLAGS {
         let Some(b) = body.get(k).and_then(Value::as_bool) else {
             continue;
         };
+        let b = b || (k == "is_auto_cancel_queued_deployments_enabled" && cancels_builds);
         if k == "is_log_drain_enabled" && b {
             let enabled = match res.server_id {
                 Some(id) => servers::find_by_id(&state.db, id)

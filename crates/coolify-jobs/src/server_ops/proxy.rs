@@ -745,12 +745,241 @@ fn maintenance_routes(domains: &[(String, bool)]) -> Vec<MaintenanceRoute> {
     routes
 }
 
-/// `Server::maintenanceTraefikConfiguration`.
+/// One of `maintenanceTraefikRouters()`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MaintenanceRouter {
+    name: String,
+    rule: String,
+    entry_points: Option<Vec<String>>,
+    /// `('certResolver' | 'options', value)`.
+    tls: Option<(&'static str, String)>,
+    priority: i64,
+}
+
+/// `maintenanceProxyLabels()`: the container labels the proxy routes the resource with, when
+/// the user edits them.
+fn maintenance_proxy_labels(resource: &MaintenanceResource) -> Option<Vec<String>> {
+    let custom = resource.custom_labels.as_deref()?;
+    let labels = crate::applications::compose::decode_base64_labels(custom)
+        .unwrap_or_else(|| custom.to_owned());
+    // `preg_split("/\r\n|\n|\r/", $labels)`.
+    Some(
+        labels
+            .replace("\r\n", "\n")
+            .split(['\n', '\r'])
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// `maintenanceLabelValues()`: `key=value` labels in order; a later label replaces an earlier one.
+fn maintenance_label_values(labels: &[String]) -> Vec<(String, String)> {
+    let mut values: Vec<(String, String)> = Vec::new();
+    for label in labels {
+        let label = label.trim();
+        if label.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = label.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().to_owned();
+        match values.iter_mut().find(|(k, _)| *k == key) {
+            Some(entry) => entry.1 = value.to_owned(),
+            None => values.push((key, value.to_owned())),
+        }
+    }
+    values
+}
+
+/// PHP `is_numeric()` then `(int)`, for a router priority.
+fn numeric_priority(value: &str) -> Option<i64> {
+    let trimmed = value.trim();
+    trimmed.parse::<i64>().ok().or_else(|| {
+        trimmed
+            .parse::<f64>()
+            .ok()
+            .filter(|f| f.is_finite())
+            .map(|f| f as i64)
+    })
+}
+
+/// `maintenanceTraefikRoutersFromLabels()`: each label router gets a maintenance router with the
+/// same rule, so wildcard and custom rules also match.
+fn maintenance_traefik_routers_from_labels(labels: &[String]) -> Vec<MaintenanceRouter> {
+    let values = maintenance_label_values(labels);
+    let enabled = values
+        .iter()
+        .find(|(k, _)| k == "traefik.enable")
+        .is_none_or(|(_, v)| v.to_lowercase() != "false");
+    if !enabled {
+        return Vec::new();
+    }
+    // Router name -> its options, in the order of the labels.
+    let mut routers: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    for (key, value) in &values {
+        let Some(rest) = key.strip_prefix("traefik.http.routers.") else {
+            continue;
+        };
+        let Some((name, option)) = rest.split_once('.') else {
+            continue;
+        };
+        let valid_name = !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if !valid_name || option.is_empty() {
+            continue;
+        }
+        let entry = (option.to_owned(), value.clone());
+        match routers.iter_mut().find(|(n, _)| n == name) {
+            Some((_, options)) => options.push(entry),
+            None => routers.push((name.to_owned(), vec![entry])),
+        }
+    }
+    routers
+        .into_iter()
+        .filter_map(|(name, options)| {
+            let rule = options
+                .iter()
+                .rev()
+                .find(|(k, _)| k == "rule")
+                .map(|(_, v)| v.clone())
+                .filter(|r| !r.trim().is_empty())?;
+            // `array_change_key_case($router)`.
+            let option = |wanted: &str| {
+                options
+                    .iter()
+                    .rev()
+                    .find(|(k, _)| k.to_lowercase() == wanted)
+                    .map(|(_, v)| v.as_str())
+            };
+            fn filled(v: Option<&str>) -> Option<&str> {
+                v.filter(|v| !v.trim().is_empty())
+            }
+            let has_tls = options
+                .iter()
+                .any(|(k, _)| k.to_lowercase().starts_with("tls."))
+                || option("tls").is_some_and(|v| v.to_lowercase() == "true");
+            let tls = has_tls.then(|| match filled(option("tls.certresolver")) {
+                Some(resolver) => ("certResolver", resolver.to_owned()),
+                None => (
+                    "options",
+                    option("tls.options").unwrap_or("default").to_owned(),
+                ),
+            });
+            let entry_points = filled(option("entrypoints")).map(|v| {
+                v.split(',')
+                    .map(str::trim)
+                    .filter(|e| !e.is_empty() && *e != "0")
+                    .map(str::to_owned)
+                    .collect()
+            });
+            let priority = option("priority")
+                .and_then(numeric_priority)
+                .unwrap_or_else(|| i64::try_from(rule.len()).unwrap_or(0));
+            Some(MaintenanceRouter {
+                name,
+                rule,
+                entry_points,
+                tls,
+                priority: priority + 1,
+            })
+        })
+        .collect()
+}
+
+/// `maintenanceTraefikRouters()`: the Traefik routers that show the maintenance page.
+fn maintenance_traefik_routers(resource: &MaintenanceResource) -> Vec<MaintenanceRouter> {
+    if let Some(labels) = maintenance_proxy_labels(resource) {
+        return maintenance_traefik_routers_from_labels(&labels);
+    }
+    let mut routers = Vec::new();
+    for (index, route) in maintenance_routes(&resource.domains).iter().enumerate() {
+        let rule = format!("Host(`{}`) && PathPrefix(`{}`)", route.host, route.path);
+        let priority = i64::try_from(rule.len()).unwrap_or(0) + 1;
+        routers.push(MaintenanceRouter {
+            name: format!("{index}-http"),
+            rule: rule.clone(),
+            entry_points: Some(vec!["http".to_owned()]),
+            tls: None,
+            priority,
+        });
+        if route.scheme == "https" {
+            routers.push(MaintenanceRouter {
+                name: format!("{index}-https"),
+                rule,
+                entry_points: Some(vec!["https".to_owned()]),
+                tls: Some(("certResolver", "letsencrypt".to_owned())),
+                priority,
+            });
+        }
+    }
+    routers
+}
+
+/// `maintenanceCaddySites()`: Caddy site addresses and path matchers that show the maintenance
+/// page. A site address must be the same as in the labels, so caddy-docker-proxy merges both
+/// into one site block.
+fn maintenance_caddy_sites(resource: &MaintenanceResource) -> Vec<(String, String)> {
+    let Some(labels) = maintenance_proxy_labels(resource) else {
+        return maintenance_routes(&resource.domains)
+            .iter()
+            .map(|route| {
+                // `caddySiteAddress()`.
+                let address = if route.scheme == "https" && !route.force_https {
+                    format!("http://{0}, https://{0}", route.host)
+                } else {
+                    format!("{}://{}", route.scheme, route.host)
+                };
+                (address, format!("{}*", route.path))
+            })
+            .collect();
+    };
+    // `maintenanceCaddySitesFromLabels()`.
+    let values = maintenance_label_values(&labels);
+    let value = |key: &str| {
+        values
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    };
+    values
+        .iter()
+        .filter(|(key, _)| {
+            key == "caddy"
+                || key
+                    .strip_prefix("caddy_")
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .filter_map(|(key, address)| {
+            let address = address.trim();
+            let path = value(&format!("{key}.handle_path"))
+                .or_else(|| value(&format!("{key}.handle")))
+                .map(str::trim)
+                .filter(|p| !p.is_empty() && *p != "0")
+                .unwrap_or("/*");
+            // The values go into the Caddyfile as plain text.
+            let address_ok = !address.is_empty()
+                && address
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || ".*:/_[], -".contains(c));
+            let path_ok = path.starts_with('/')
+                && path
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "/._~%*-".contains(c));
+            (address_ok && path_ok).then(|| (address.to_owned(), path.to_owned()))
+        })
+        .collect()
+}
+
+/// `Server::maintenanceTraefikConfiguration`: routers that use the same rule as the resource
+/// routers (from the domains, or from custom labels), with a priority one higher.
 fn maintenance_traefik_configuration(resources: &[MaintenanceResource]) -> Option<String> {
     let mut routers: Vec<(String, PhpValue)> = Vec::new();
     let mut middlewares: Vec<(String, PhpValue)> = Vec::new();
     for resource in resources {
-        let routes = maintenance_routes(&resource.domains);
+        let routes = maintenance_traefik_routers(resource);
         if routes.is_empty() {
             continue;
         }
@@ -769,38 +998,29 @@ fn maintenance_traefik_configuration(resources: &[MaintenanceResource]) -> Optio
                 ]),
             )]),
         ));
-        for (index, route) in routes.iter().enumerate() {
-            let rule = format!("Host(`{}`) && PathPrefix(`{}`)", route.host, route.path);
-            let priority = i64::try_from(rule.len()).unwrap_or(0) + 1;
-            let router = |entry: &str, tls: bool| {
-                let mut fields = vec![
-                    ("entryPoints", PhpValue::strings([entry])),
-                    ("rule", PhpValue::Str(rule.clone())),
-                    ("service", PhpValue::Str("coolify-maintenance-noop".into())),
-                    (
-                        "middlewares",
-                        PhpValue::strings(["coolify-maintenance-headers", middleware.as_str()]),
-                    ),
-                    ("priority", PhpValue::Int(priority)),
-                ];
-                if tls {
-                    fields.push((
-                        "tls",
-                        PhpValue::map([("certResolver", PhpValue::Str("letsencrypt".into()))]),
-                    ));
-                }
-                PhpValue::map(fields)
-            };
-            routers.push((
-                format!("coolify-maintenance-{}-{index}-http", resource.uuid),
-                router("http", false),
-            ));
-            if route.scheme == "https" {
-                routers.push((
-                    format!("coolify-maintenance-{}-{index}-https", resource.uuid),
-                    router("https", true),
+        for route in &routes {
+            // `array_filter([...], fn ($value) => $value !== null)`.
+            let mut fields: Vec<(&str, PhpValue)> = Vec::new();
+            if let Some(entry_points) = &route.entry_points {
+                fields.push((
+                    "entryPoints",
+                    PhpValue::strings(entry_points.iter().map(String::as_str)),
                 ));
             }
+            fields.push(("rule", PhpValue::Str(route.rule.clone())));
+            fields.push(("service", PhpValue::Str("coolify-maintenance-noop".into())));
+            fields.push((
+                "middlewares",
+                PhpValue::strings(["coolify-maintenance-headers", middleware.as_str()]),
+            ));
+            fields.push(("priority", PhpValue::Int(route.priority)));
+            if let Some((key, value)) = &route.tls {
+                fields.push(("tls", PhpValue::map([(*key, PhpValue::Str(value.clone()))])));
+            }
+            routers.push((
+                format!("coolify-maintenance-{}-{}", resource.uuid, route.name),
+                PhpValue::map(fields),
+            ));
         }
     }
     if routers.is_empty() {
@@ -853,16 +1073,10 @@ fn maintenance_traefik_configuration(resources: &[MaintenanceResource]) -> Optio
 fn maintenance_caddyfile(resources: &[MaintenanceResource]) -> String {
     let mut sites: Vec<(String, Vec<String>)> = Vec::new();
     for resource in resources {
-        for (index, route) in maintenance_routes(&resource.domains).iter().enumerate() {
-            // `caddySiteAddress()`.
-            let address = if route.scheme == "https" && !route.force_https {
-                format!("http://{0}, https://{0}", route.host)
-            } else {
-                format!("{}://{}", route.scheme, route.host)
-            };
+        for (index, (address, path)) in maintenance_caddy_sites(resource).into_iter().enumerate() {
             let matcher = format!("@coolify-maintenance-{}-{index}", resource.uuid);
             let block = [
-                format!("\t{matcher} path {}*", route.path),
+                format!("\t{matcher} path {path}"),
                 format!("\thandle {matcher} {{"),
                 format!("\t\treverse_proxy {PROXY_ERROR_PAGE_CONTAINER}:80 {{"),
                 format!("\t\t\trewrite /maintenance-{}.html", resource.uuid),
@@ -1292,7 +1506,7 @@ pub async fn setup_dynamic_proxy_configuration(srv: &Srv) -> Result<(), String> 
                 format!("{schema}://{host}")
             };
             let text = format!(
-                "\n{site} {{\n    encode zstd gzip\n    handle /app/* {{\n        reverse_proxy coolify:6001\n    }}\n    handle /terminal/ws {{\n        reverse_proxy coolify:6002\n    }}\n    reverse_proxy coolify:8080\n}}"
+                "\n{site} {{\n    encode zstd gzip\n    handle /app/* {{\n        reverse_proxy coolify:6001 {{\n            stream_close_delay {CADDY_STREAM_CLOSE_DELAY}\n        }}\n    }}\n    handle /terminal/ws {{\n        reverse_proxy coolify:6002 {{\n            stream_close_delay {CADDY_STREAM_CLOSE_DELAY}\n        }}\n    }}\n    reverse_proxy coolify:8080\n}}"
             );
             srv.run(
                 &[format!(
@@ -1567,6 +1781,10 @@ pub async fn remove_standalone_network(
     .map(|_| ())
 }
 
+/// `CADDY_STREAM_CLOSE_DELAY` (v4.7.5): Caddy keeps WebSocket and other streamed connections
+/// open across reloads for this time, so a configuration reload does not close them.
+pub const CADDY_STREAM_CLOSE_DELAY: &str = "24h";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1591,5 +1809,136 @@ mod tests {
             Some("port_conflict|tcp 0.0.0.0:80\ntcp :::80"),
             80
         ));
+    }
+}
+
+#[cfg(test)]
+mod maintenance_label_tests {
+    use super::*;
+
+    fn resource(domains: &[(&str, bool)], custom_labels: Option<&str>) -> MaintenanceResource {
+        MaintenanceResource {
+            uuid: "app1".into(),
+            page: None,
+            domains: domains.iter().map(|(d, f)| ((*d).to_owned(), *f)).collect(),
+            custom_labels: custom_labels.map(str::to_owned),
+        }
+    }
+
+    // `maintenanceTraefikRouters()` from the domains (upstream tests/Feature/MaintenanceModeTest).
+    #[test]
+    fn domain_routes_get_http_and_https_routers() {
+        let routers =
+            maintenance_traefik_routers(&resource(&[("https://app.example.com", false)], None));
+        assert_eq!(routers.len(), 2);
+        assert_eq!(routers[0].name, "0-http");
+        assert_eq!(
+            routers[0].rule,
+            "Host(`app.example.com`) && PathPrefix(`/`)"
+        );
+        assert_eq!(routers[0].entry_points, Some(vec!["http".to_owned()]));
+        assert_eq!(routers[0].tls, None);
+        assert_eq!(
+            routers[0].priority,
+            i64::try_from(routers[0].rule.len()).unwrap_or(0) + 1
+        );
+        assert_eq!(routers[1].name, "0-https");
+        assert_eq!(
+            routers[1].tls,
+            Some(("certResolver", "letsencrypt".to_owned()))
+        );
+    }
+
+    // `maintenanceTraefikRoutersFromLabels()`: custom labels route the maintenance page.
+    #[test]
+    fn custom_labels_get_a_router_with_the_same_rule_and_a_higher_priority() {
+        let labels = "traefik.enable=true\n# a comment\ntraefik.http.routers.wild.rule=HostRegexp(`^.+\\.example\\.com$`)\ntraefik.http.routers.wild.entryPoints=http, https\ntraefik.http.routers.wild.tls.certresolver=dns\ntraefik.http.routers.wild.priority=40\ntraefik.http.routers.plain.rule=Host(`a.example.com`)\ntraefik.http.routers.norule.entrypoints=http\ntraefik.http.services.x.loadbalancer.server.port=80";
+        let routers = maintenance_traefik_routers(&resource(
+            &[("https://ignored.example.com", false)],
+            Some(labels),
+        ));
+        assert_eq!(routers.len(), 2);
+        assert_eq!(routers[0].name, "wild");
+        assert_eq!(routers[0].rule, "HostRegexp(`^.+\\.example\\.com$`)");
+        assert_eq!(
+            routers[0].entry_points,
+            Some(vec!["http".to_owned(), "https".to_owned()])
+        );
+        assert_eq!(routers[0].tls, Some(("certResolver", "dns".to_owned())));
+        assert_eq!(routers[0].priority, 41);
+        assert_eq!(routers[1].name, "plain");
+        assert_eq!(routers[1].entry_points, None);
+        assert_eq!(routers[1].tls, None);
+        assert_eq!(
+            routers[1].priority,
+            i64::try_from("Host(`a.example.com`)".len()).unwrap_or(0) + 1
+        );
+        // `tls=true` without a resolver uses the default TLS options.
+        let tls = maintenance_traefik_routers(&resource(
+            &[],
+            Some(
+                "traefik.http.routers.r.rule=Host(`b.example.com`)\r\ntraefik.http.routers.r.tls=true",
+            ),
+        ));
+        assert_eq!(tls[0].tls, Some(("options", "default".to_owned())));
+        // Labels that turn Traefik off give no routers.
+        assert!(
+            maintenance_traefik_routers(&resource(
+                &[],
+                Some("traefik.enable=false\ntraefik.http.routers.r.rule=Host(`b.example.com`)")
+            ))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_traefik_file_uses_the_label_routers() {
+        let labels = "traefik.http.routers.wild.rule=Host(`a.example.com`)\ntraefik.http.routers.wild.entrypoints=https\ntraefik.http.routers.wild.tls=true";
+        let config =
+            maintenance_traefik_configuration(&[resource(&[], Some(labels))]).unwrap_or_default();
+        assert!(
+            config.contains("coolify-maintenance-app1-wild:"),
+            "{config}"
+        );
+        assert!(config.contains("Host(`a.example.com`)"), "{config}");
+        assert!(config.contains("options: default"), "{config}");
+        assert!(!config.contains("certResolver"), "{config}");
+        // No routes at all: no file.
+        assert_eq!(
+            maintenance_traefik_configuration(&[resource(&[], None)]),
+            None
+        );
+    }
+
+    // `maintenanceCaddySites()`.
+    #[test]
+    fn caddy_sites_come_from_the_domains_or_the_caddy_labels() {
+        assert_eq!(
+            maintenance_caddy_sites(&resource(
+                &[
+                    ("https://app.example.com/api", false),
+                    ("http://b.example.com", false)
+                ],
+                None
+            )),
+            [
+                (
+                    "http://app.example.com, https://app.example.com".to_owned(),
+                    "/api*".to_owned()
+                ),
+                ("http://b.example.com".to_owned(), "/*".to_owned()),
+            ]
+        );
+        let labels = "caddy_0=https://*.example.com\ncaddy_0.handle_path=/app/*\ncaddy_1=http://c.example.com\ncaddy_1.encode=zstd gzip\ncaddy_ingress_network=coolify\ncaddy_2=bad address {\ncaddy_3=https://d.example.com\ncaddy_3.handle=/bad path";
+        assert_eq!(
+            maintenance_caddy_sites(&resource(
+                &[("https://ignored.example.com", false)],
+                Some(labels)
+            )),
+            [
+                ("https://*.example.com".to_owned(), "/app/*".to_owned()),
+                ("http://c.example.com".to_owned(), "/*".to_owned()),
+            ]
+        );
     }
 }

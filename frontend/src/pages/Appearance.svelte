@@ -55,6 +55,14 @@
       // Kept for this page only.
     }
   }
+  // The UI scale cards have no `relative`, as upstream.
+  const scaleCard =
+    'group overflow-hidden rounded-[10px] border border-neutral-200 bg-white text-left transition-[border-color,box-shadow] hover:border-neutral-300 hover:shadow-sm dark:border-white/[0.07] dark:bg-white/[0.05] dark:hover:border-white/[0.12]';
+  const uiScales = [
+    { value: '80', label: '80%', description: 'Show more content on the screen.', size: 'text-base' },
+    { value: '90', label: '90%', description: 'Smaller text and controls.', size: 'text-lg' },
+    { value: '100', label: '100%', description: 'The default size.', size: 'text-xl' },
+  ];
   const widths = [
     { value: 'full', label: 'Full width', description: 'Use all available space for page content.' },
     { value: 'centered', label: 'Centered', description: 'Keep content centered at a comfortable maximum width.' },
@@ -119,6 +127,29 @@
           </div>
           {@render footer('Custom', 'Pick a preset or your own colors.', layout.theme === 'custom')}
         </div>
+      </div>
+    </section>
+
+    <section class="application-settings-section">
+      <div class="application-settings-section-header">
+        <div>
+          <h2>UI scale</h2>
+          <p>Choose the size of text and controls. Phones always use 100%.</p>
+        </div>
+      </div>
+      <div class="application-settings-section-body grid gap-3 sm:grid-cols-3">
+        {#each uiScales as o (o.value)}
+          <button
+            type="button"
+            onclick={() => layout.setUiScale(o.value)}
+            class="{scaleCard} {layout.uiScale === o.value ? selected : ''}"
+          >
+            <div class="flex h-20 items-center justify-center border-b border-neutral-200 bg-neutral-50 px-4 dark:border-white/[0.07] dark:bg-black/15">
+              <span class="{o.size} font-semibold text-black dark:text-fg">Aa</span>
+            </div>
+            {@render footer(o.label, o.description, layout.uiScale === o.value)}
+          </button>
+        {/each}
       </div>
     </section>
 

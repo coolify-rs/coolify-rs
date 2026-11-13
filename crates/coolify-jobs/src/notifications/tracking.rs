@@ -113,8 +113,8 @@ async fn send_disabled_email(
     let settings = coolify_db::instance_settings::row(db)
         .await
         .map_err(|e| e.to_string())?;
-    let enabled = |k: &str| settings.get(k).and_then(serde_json::Value::as_bool) == Some(true);
-    if !enabled("smtp_enabled") && !enabled("resend_enabled") {
+    // `is_transactional_emails_enabled()`: `filled(enabled_email_provider($settings))`.
+    if super::email_settings::enabled_email_provider_of(&settings).is_none() {
         return Ok(());
     }
     let admins: Vec<String> = sqlx::query_scalar(
@@ -132,7 +132,8 @@ async fn send_disabled_email(
         url: url.to_owned(),
     };
     for admin in admins {
-        channels::send_transactional(db, encrypter, &admin, &mail).await?;
+        // `send_user_an_email($mail, $admin->email, asNotification: true)`.
+        channels::send_instance_mail(db, encrypter, &admin, &mail, true).await?;
     }
     Ok(())
 }

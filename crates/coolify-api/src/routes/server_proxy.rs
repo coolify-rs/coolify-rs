@@ -1021,20 +1021,72 @@ fn container_state_hash(data: &Map<String, Value>) -> u64 {
 }
 
 /// `SentinelController::push`.
+/// `response()->json(..., headers: ['Retry-After' => $seconds])`: how long Sentinel waits before
+/// it pushes again.
+fn retry_after(mut response: axum::response::Response, seconds: u32) -> axum::response::Response {
+    response.headers_mut().insert(
+        axum::http::header::RETRY_AFTER,
+        axum::http::HeaderValue::from(seconds),
+    );
+    response
+}
+
+/// PHP `hash_equals()`: a comparison whose time does not depend on where the strings differ.
+fn constant_time_eq(known: &str, given: &str) -> bool {
+    let (known, given) = (known.as_bytes(), given.as_bytes());
+    if known.len() != given.len() {
+        return false;
+    }
+    known
+        .iter()
+        .zip(given)
+        .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+        == 0
+}
+
 pub async fn sentinel_push(
     State(state): State<AppState>,
+    meta: crate::audit::Meta,
     headers: HeaderMap,
     uri: Uri,
     body: Bytes,
 ) -> ApiResult {
     use axum::http::header::AUTHORIZATION;
+    // `auditLogWebhookFailure('sentinel', $reason, $context)`.
+    let request = ("POST", uri.path(), &headers);
+    let server_context = |row: &ServerRow| {
+        let mut m = Map::new();
+        m.insert("server_uuid".into(), json!(row.uuid));
+        m.insert("team_id".into(), json!(row.team_id));
+        m
+    };
     let Some(token) = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()) else {
+        crate::webhooks::record_failure(
+            &state,
+            &meta,
+            request,
+            "sentinel",
+            "token_missing",
+            Map::new(),
+        )
+        .await;
         return Ok(unauthorized("Unauthorized"));
     };
     let naked = token.replace("Bearer ", "");
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let Ok(decrypted) = enc.decrypt_maybe_serialized(&naked) else {
-        return Ok(unauthorized("Invalid token"));
+        crate::webhooks::record_failure(
+            &state,
+            &meta,
+            request,
+            "sentinel",
+            "decrypt_failed",
+            Map::new(),
+        )
+        .await;
+        // Usually a Sentinel of another instance or of an old APP_KEY: it cannot recover, so it
+        // waits one hour.
+        return Ok(retry_after(unauthorized("Invalid token"), 3600));
     };
     let server_uuid = serde_json::from_str::<Value>(&decrypted)
         .ok()
@@ -1042,23 +1094,54 @@ pub async fn sentinel_push(
         .filter(php_truthy)
         .map(|v| as_php_string(&v));
     let Some(server_uuid) = server_uuid else {
+        crate::webhooks::record_failure(
+            &state,
+            &meta,
+            request,
+            "sentinel",
+            "invalid_token_payload",
+            Map::new(),
+        )
+        .await;
         return Ok(unauthorized("Invalid token"));
     };
     let Some(row) = servers::find_any_team(&state.db, &server_uuid).await? else {
-        return Ok(json_status(
-            StatusCode::NOT_FOUND,
-            json!({"message": "Server not found"}),
+        let mut context = Map::new();
+        context.insert("server_uuid".into(), json!(server_uuid));
+        crate::webhooks::record_failure(
+            &state,
+            &meta,
+            request,
+            "sentinel",
+            "server_not_found",
+            context,
+        )
+        .await;
+        // 410 and Retry-After make Sentinel wait one day before it pushes again.
+        return Ok(retry_after(
+            json_status(StatusCode::GONE, json!({"message": "Server not found"})),
+            86400,
         ));
     };
     let info = coolify_jobs::server::ServerInfo::from_row(&row);
     if !info.is_functional() {
+        crate::webhooks::record_failure(
+            &state,
+            &meta,
+            request,
+            "sentinel",
+            "server_not_functional",
+            server_context(&row),
+        )
+        .await;
         sentinel::remember_push_problem(
             row.id,
             Some(
                 "Coolify rejected the push: the server is marked unreachable, not usable, or disabled. Validate the server connection.",
             ),
         );
-        return Ok(unauthorized("Server is not functional"));
+        // SSH checks mark the server reachable again, so pushes can wait 5 minutes.
+        return Ok(retry_after(unauthorized("Server is not functional"), 300));
     }
     let stored = row
         .settings
@@ -1066,7 +1149,17 @@ pub async fn sentinel_push(
         .and_then(|s| s.get("sentinel_token"))
         .and_then(Value::as_str)
         .and_then(|c| enc.decrypt_string(c).ok());
-    if stored.as_deref() != Some(naked.as_str()) {
+    // `hash_equals((string) $server->settings->sentinel_token, (string) $naked_token)`.
+    if !constant_time_eq(stored.as_deref().unwrap_or_default(), &naked) {
+        crate::webhooks::record_failure(
+            &state,
+            &meta,
+            request,
+            "sentinel",
+            "token_mismatch",
+            server_context(&row),
+        )
+        .await;
         sentinel::remember_push_problem(
             row.id,
             Some(

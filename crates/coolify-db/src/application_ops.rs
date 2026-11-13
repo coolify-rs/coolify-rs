@@ -549,9 +549,9 @@ pub fn cloned_volume_name(
 }
 
 /// The rows `clone_application()` creates, in one transaction: application, settings, tags,
-/// scheduled tasks, previews (without domains; the caller generates them), persistent volumes,
-/// file storages, variables and the secret manager link. Returns the new application's id, the
-/// ids of its previews and `(source volume name, new volume id, new volume name)`.
+/// scheduled tasks, persistent volumes, file storages, variables and the secret manager link.
+/// Returns the new application's id, the ids of its previews (none since v4.7: preview records
+/// are not copied) and `(source volume name, new volume id, new volume name)`.
 pub async fn clone_application(
     db: &Db,
     c: &CloneApplication,
@@ -613,34 +613,9 @@ pub async fn clone_application(
         .await?;
     }
 
-    // Previews; `saving` sets `last_online_at` because `status` is dirty.
-    let previews: Vec<i64> = sqlx::query_scalar(
-        "SELECT id FROM application_previews WHERE application_id = $1 AND deleted_at IS NULL ORDER BY pull_request_id DESC",
-    )
-    .bind(c.source_id)
-    .fetch_all(&mut *tx)
-    .await?;
-    let mut new_previews = Vec::new();
-    for id in previews {
-        new_previews.push(
-            replicate(
-                &mut tx,
-                "application_previews",
-                id,
-                &[],
-                &[
-                    ("uuid", ColumnValue::Text(Some(new_public_id()))),
-                    ("application_id", ColumnValue::Int(new_id)),
-                    ("status", ColumnValue::Text(Some("exited".into()))),
-                    ("fqdn", ColumnValue::Text(None)),
-                    ("docker_compose_domains", ColumnValue::Text(None)),
-                    ("last_online_at", ColumnValue::Time(now)),
-                ],
-                now,
-            )
-            .await?,
-        );
-    }
+    // Preview records belong to the pull request deployments of the source. The clone gets its
+    // own on the next pull request (v4.7), so none are copied.
+    let new_previews: Vec<i64> = Vec::new();
 
     // Persistent volumes.
     let volumes: Vec<(i64, String, Option<i64>)> = sqlx::query_as(
@@ -723,14 +698,18 @@ pub async fn clone_application(
 
     // Production variables (table order), then preview ones (their relation's order). They keep
     // their uuid: `withoutEvents` skips the hook, and `replicate()` copied it.
-    let production: Vec<i64> = sqlx::query_scalar(
-        "SELECT id FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 AND is_preview = false ORDER BY id",
+    // Each copy goes through `performInsert()` (v4.7): a source with a duplicate key fails the
+    // clone like upstream's unique check.
+    let production: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, key FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 AND is_preview = false ORDER BY id",
     )
     .bind(MORPH)
     .bind(c.source_id)
     .fetch_all(&mut *tx)
     .await?;
-    for id in production {
+    for (id, key) in production {
+        crate::environment_variables::refuse_duplicate_key(&mut tx, MORPH, new_id, false, &key)
+            .await?;
         replicate(
             &mut tx,
             "environment_variables",
@@ -756,15 +735,17 @@ pub async fn clone_application(
     .execute(&mut *tx)
     .await?;
 
-    let preview_vars: Vec<i64> = sqlx::query_scalar(
+    let preview_vars: Vec<(i64, String)> = sqlx::query_as(
         // `environment_variables_preview` has no order since v4.6.0.
-        "SELECT id FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 AND is_preview = true",
+        "SELECT id, key FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 AND is_preview = true",
     )
     .bind(MORPH)
     .bind(c.source_id)
     .fetch_all(&mut *tx)
     .await?;
-    for id in preview_vars {
+    for (id, key) in preview_vars {
+        crate::environment_variables::refuse_duplicate_key(&mut tx, MORPH, new_id, true, &key)
+            .await?;
         replicate(
             &mut tx,
             "environment_variables",

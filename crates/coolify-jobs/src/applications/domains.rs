@@ -408,9 +408,44 @@ pub async fn generate_url(
     format!("{}://{uuid}.{}{path}", p.scheme, p.host)
 }
 
+/// The last step of `domainConflictKey($domain)` (v4.7): the URL port is the container port, and
+/// the public address does not include it. `domain` has no scheme anymore.
+pub fn conflict_key_without_port(domain: &str) -> String {
+    static PORT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^([^/:\[]+|\[[^\]]+\]):\d+").unwrap_or_else(|_| unreachable!())
+    });
+    PORT.replace(domain, "${1}").into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `domainConflictKey()`: `https://app.example.com:3000` and `https://app.example.com` are
+    /// the same public address.
+    #[test]
+    fn conflict_keys_ignore_the_container_port() {
+        assert_eq!(
+            conflict_key_without_port("app.example.com:3000"),
+            "app.example.com"
+        );
+        assert_eq!(
+            conflict_key_without_port("app.example.com:3000/api"),
+            "app.example.com/api"
+        );
+        assert_eq!(
+            conflict_key_without_port("[2001:db8::1]:8080/x"),
+            "[2001:db8::1]/x"
+        );
+        assert_eq!(
+            conflict_key_without_port("app.example.com/a:1"),
+            "app.example.com/a:1"
+        );
+        assert_eq!(
+            conflict_key_without_port("app.example.com"),
+            "app.example.com"
+        );
+    }
 
     #[test]
     fn overrides() {

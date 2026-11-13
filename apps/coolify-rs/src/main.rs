@@ -19,7 +19,7 @@ use coolify_api::ip::TrustedProxies;
 use coolify_api::state::Options;
 use coolify_compat::Encrypter;
 use coolify_db::{Db, DbConfig};
-use coolify_remote::{HostKeyPolicy, Remote, RemoteConfig};
+use coolify_remote::{HostKeyMode, Remote, RemoteConfig};
 use std::path::PathBuf;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::{DefaultOnFailure, DefaultOnResponse, TraceLayer};
@@ -32,7 +32,7 @@ mod plugin_cli;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// The upstream release whose API contract and schema this build implements.
-const UPSTREAM_COMPAT_VERSION: &str = "4.6.0";
+const UPSTREAM_COMPAT_VERSION: &str = "4.7.5";
 
 #[derive(Parser)]
 #[command(name = "coolify-rs", version, about)]
@@ -130,11 +130,25 @@ fn urlencode(s: &str) -> String {
 fn remote_config() -> Result<RemoteConfig> {
     let mut r =
         RemoteConfig::new(env("COOLIFY_RS_DATA_DIR").unwrap_or_else(|| "/data/coolify-rs".into()));
-    r.host_keys = match env("COOLIFY_RS_SSH_HOST_KEYS").as_deref() {
-        None | Some("pin") => HostKeyPolicy::Pin,
-        Some("ignore") => HostKeyPolicy::Ignore,
-        Some(other) => anyhow::bail!("COOLIFY_RS_SSH_HOST_KEYS must be pin or ignore, not {other}"),
+    // Upstream `constants.ssh.host_key_checking`: warn (connect, report a changed key), enforce
+    // (refuse a changed key), off. Upstream's default is warn; coolify-rs refused a changed key
+    // before 4.7.5 and keeps enforce as its default, also for an unknown value.
+    r.host_key_checking = match env("SSH_HOST_KEY_CHECKING") {
+        None => HostKeyMode::Enforce,
+        Some(value) => HostKeyMode::parse(&value).unwrap_or_else(|| {
+            tracing::warn!(
+                value = %value,
+                "Unknown SSH_HOST_KEY_CHECKING value, coolify-rs uses enforce. Use warn, enforce, or off."
+            );
+            HostKeyMode::Enforce
+        }),
     };
+    // The setting of coolify-rs before 4.7.5: `ignore` checked no host key.
+    match env("COOLIFY_RS_SSH_HOST_KEYS").as_deref() {
+        None | Some("pin") => {}
+        Some("ignore") => r.host_key_checking = HostKeyMode::Off,
+        Some(other) => anyhow::bail!("COOLIFY_RS_SSH_HOST_KEYS must be pin or ignore, not {other}"),
+    }
     if let Some(n) = env("COOLIFY_RS_SSH_MAX_CONCURRENCY") {
         r.max_concurrency = n.parse().context("COOLIFY_RS_SSH_MAX_CONCURRENCY")?;
     }
@@ -453,6 +467,10 @@ async fn run() -> Result<()> {
         coolify_db::bootstrap::create_schema(&cfg.db.url)
             .await
             .context("creating the schema")?;
+        // The dump is Coolify v4.6.0; the v4.7.5 migrations bring it to this build's schema.
+        coolify_db::bootstrap::apply_migrations(&cfg.db.url, coolify_db::bootstrap::MIGRATIONS)
+            .await
+            .context("applying schema changes")?;
         println!("schema created");
         return Ok(());
     }
@@ -518,7 +536,7 @@ async fn run() -> Result<()> {
         }
         Cmd::CheckSchema => {
             // The verdict for this build: `boot` first runs the upstream migrations it knows, so
-            // those are reported apart instead of as missing (a Coolify v4.5.3 database).
+            // those are reported apart instead of as missing (a Coolify v4.6.0 database).
             let boot: Vec<&str> = coolify_db::bootstrap::MIGRATIONS
                 .iter()
                 .map(|m| m.name)
@@ -566,7 +584,7 @@ async fn run() -> Result<()> {
             }
             let remote = match Remote::new(cfg.remote.clone()) {
                 Ok(r) => {
-                    tracing::info!(data_dir = %cfg.remote.data_dir.display(), host_keys = ?cfg.remote.host_keys, "remote execution enabled");
+                    tracing::info!(data_dir = %cfg.remote.data_dir.display(), host_key_checking = ?cfg.remote.host_key_checking, "remote execution enabled");
                     match coolify_db::servers::live_uuids(&db).await {
                         Ok(live) => {
                             let dropped = r.retain_host_keys(&live.into_iter().collect());
@@ -599,6 +617,7 @@ async fn run() -> Result<()> {
                     plugins,
                     allow_unverified_plugins: env("COOLIFY_RS_ALLOW_UNVERIFIED_PLUGINS")
                         .is_some_and(|v| v == "true"),
+                    failed_api_request_limit: None,
                 },
             );
             if seeded.is_some()
@@ -632,10 +651,18 @@ async fn run() -> Result<()> {
             }
             if let (Some(seeded), Some(jobs)) = (seeded, &state.jobs) {
                 let lookup = state.clone();
+                let (update_jobs, running_version) = (jobs.clone(), state.version.to_string());
                 tokio::spawn(async move {
                     if let Err(e) = coolify_api::ui_settings::get_public_ips(&lookup).await {
                         tracing::warn!(error = ?e, "could not save the public IPs");
                     }
+                    // `Init`: `AutoUpdateNotifier::checkResult()` right after `get_public_ips()`;
+                    // a failure is only logged.
+                    coolify_jobs::updates::auto_update::check_result(
+                        &update_jobs,
+                        &running_version,
+                    )
+                    .await;
                 });
                 coolify_jobs::first_run::spawn_after_start(jobs, seeded);
                 coolify_jobs::updates::spawn_schedule(jobs, state.version.to_string());

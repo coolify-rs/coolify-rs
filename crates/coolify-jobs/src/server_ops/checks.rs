@@ -5,10 +5,10 @@
 
 use coolify_db::server_ops as ops;
 use coolify_db::servers::{self, ColumnValue, ServerRow};
-use coolify_remote::RunOptions;
+use coolify_remote::{HostKeyMode, RunOptions};
 use serde_json::{Value, json};
 
-use super::{Srv, log_drain, proxy, sentinel, version_compare, versions_data};
+use super::{Srv, host_key, log_drain, proxy, sentinel, version_compare, versions_data};
 use crate::Jobs;
 use crate::checks as vchecks;
 use crate::notifications::{self, Notification, TraefikServer, lookup};
@@ -51,30 +51,73 @@ async fn connection_check(srv: &Srv) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
         return Ok(());
     }
-    let target = srv.target().await?;
+    // Enforce mode cannot connect without the key, so the check reads the key also of an
+    // unreachable server.
+    let enforce = host_key::saved_mode(&srv.jobs, srv.id()).await == HostKeyMode::Enforce;
+    if enforce {
+        host_key::learn_now(&srv.jobs, &srv.info).await;
+    }
+    // Upstream builds the SSH command inside `attemptConnection()`, so a host key that enforce
+    // mode could not read is a failed connection, not a failed job.
+    let target = match srv.target().await {
+        Ok(target) => Some(target),
+        Err(e) if e.starts_with(host_key::UNREADABLE_HOST_KEY) => None,
+        Err(e) => return Err(e),
+    };
     let probe = format!("cat {OWNER_MARKER_PATH} 2>/dev/null || true; ls -la / > /dev/null");
     let mut reachable = false;
     let mut owner_marker = None;
+    // The server sent a host key that does not match the pinned key.
+    let mut host_key_changed = false;
+    let mut ssh_error_output = String::new();
     for attempt in 0..SSH_ATTEMPTS {
+        let Some(target) = target.as_ref() else {
+            break;
+        };
         if attempt > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         }
-        if let Ok(output) = srv
+        // `attemptConnection()`: the raw result of ssh, so that its stderr shows a changed key.
+        if let Ok(raw) = srv
             .jobs
             .remote()
-            .run(
-                &target,
-                &[probe.as_str()],
-                RunOptions::op("server.connection_check")
-                    .attempts(1)
-                    .timeout(std::time::Duration::from_secs(SSH_TIMEOUT_SECONDS)),
+            .probe(
+                target,
+                &probe,
+                std::time::Duration::from_secs(SSH_TIMEOUT_SECONDS),
+                "server.connection_check",
             )
             .await
         {
-            owner_marker = output;
-            reachable = true;
+            host_key_changed = coolify_remote::host_key::is_host_key_mismatch(&raw.stderr);
+            ssh_error_output = raw.stderr;
+            if raw.code == Some(0) && !raw.timed_out {
+                owner_marker = coolify_remote::text::command_output(raw.stdout.as_bytes());
+                reachable = true;
+                break;
+            }
+        }
+        if host_key_changed {
             break;
         }
+    }
+    if host_key_changed {
+        // A failed host key check with the pinned key (an unreadable known_hosts file) is a
+        // normal connection error.
+        host_key_changed = host_key::record_mismatch(&srv.jobs, &srv.info, &ssh_error_output).await;
+    }
+    if !reachable
+        && host_key_changed
+        && host_key::saved_mode(&srv.jobs, srv.id()).await == HostKeyMode::Enforce
+    {
+        // In enforce mode a changed host key blocks every connection: stop at once, without the
+        // retry threshold.
+        srv.settings_update(&[
+            ("is_reachable", ColumnValue::Bool(false)),
+            ("is_usable", ColumnValue::Bool(false)),
+        ])
+        .await?;
+        return Ok(());
     }
     // `releasedToAnotherInstance`.
     if reachable
@@ -119,7 +162,12 @@ async fn connection_check(srv: &Srv) -> Result<(), String> {
         }
         return Ok(());
     }
-    let target = &target;
+    let Some(target) = target.as_ref() else {
+        return Ok(());
+    };
+    // Warn mode connects without a pinned key. Commands do not scan an unreachable server, so
+    // learn the key now.
+    host_key::learn_now(&srv.jobs, &srv.info).await;
     let docker = |command: &'static str| async move {
         srv.jobs
             .remote()
@@ -474,7 +522,7 @@ pub async fn check_traefik_version(jobs: &Jobs, server_id: i64) -> Result<(), St
             Some(target.clone()),
         )))
         .await?;
-        // `storeOutdatedInfo`: a repeated upgrade does not notify again, patch updates never do.
+        // `storeOutdatedInfo`: a repeated upgrade does not notify again.
         let repeated = previous.get("type").and_then(Value::as_str) == Some("minor_upgrade")
             && previous.get("upgrade_target").and_then(Value::as_str) == Some(target.as_str());
         if !repeated && let Some((team_id, server)) = lookup::server(db, server_id).await {
@@ -500,7 +548,33 @@ pub async fn check_traefik_version(jobs: &Jobs, server_id: i64) -> Result<(), St
     } else if let Some(latest) = latest_for_branch {
         let latest = latest.trim_start_matches('v').to_string();
         if version_compare(&current, &latest) == std::cmp::Ordering::Less {
-            clear_info(Some(store(latest, "patch_update", None))).await?;
+            clear_info(Some(store(latest.clone(), "patch_update", None))).await?;
+            // v4.7.5 `storeOutdatedInfo`: notify once per new patch version.
+            let already_notified = previous.get("type").and_then(Value::as_str)
+                == Some("patch_update")
+                && previous.get("latest").and_then(Value::as_str) == Some(latest.as_str());
+            if !already_notified
+                && let Some((team_id, server)) = lookup::server(db, server_id).await
+            {
+                notifications::notify(
+                    db,
+                    jobs.0.encrypter.as_ref(),
+                    team_id,
+                    Notification::TraefikVersionOutdated {
+                        servers: vec![TraefikServer {
+                            name: server.name,
+                            uuid: server.uuid,
+                            current: Some(current.clone()),
+                            latest: Some(latest),
+                            update_type: Some("patch_update".to_owned()),
+                            upgrade_target: None,
+                            newer_branch_target: None,
+                            newer_branch_latest: None,
+                        }],
+                    },
+                )
+                .await;
+            }
         }
     }
     Ok(())

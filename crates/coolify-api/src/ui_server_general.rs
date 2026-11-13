@@ -351,7 +351,8 @@ async fn use_key(
         .await?
         .ok_or(ApiError::Internal)?;
     let srv = Srv::from_row(jobs, fresh);
-    match install::validate_connection(&srv).await {
+    // `validateConnection(justCheckingNewKey: true)`.
+    match install::validate_new_key(&srv).await {
         Ok((true, _)) => {
             Ok(ok(json!({"message": "Private key updated successfully."})).into_response())
         }
@@ -363,9 +364,24 @@ async fn use_key(
             if let Some(row) = coolify_db::servers::find_by_id(&state.db, s.id).await? {
                 let _ = install::validate_connection(&Srv::from_row(jobs, row)).await;
             }
-            toast_error(error)
+            // v4.7.5: the SSH error of the new key, not "This key is not valid for this server."
+            toast_error(unreachable_message(&error))
         }
     }
+}
+
+/// `PrivateKey\Show::unreachableMessage()`.
+fn unreachable_message(error: &str) -> String {
+    // `htmlspecialchars($error ?? '', ENT_QUOTES, 'UTF-8')`.
+    let sanitized = error
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#039;");
+    format!(
+        "Server is not reachable.<br><br>Check this <a target=\"_blank\" class=\"underline\" href=\"https://coolify.io/docs/knowledge-base/server/openssh\">documentation</a> for further help.<br><br>Error: {sanitized}"
+    )
 }
 
 async fn set_private_key(state: &AppState, server_id: i64, key_id: i64) -> Result<(), ApiError> {
@@ -426,17 +442,7 @@ async fn check_connection(
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     match install::validate_connection(&Srv::from_row(jobs, s)).await {
         Ok((true, _)) => Ok(ok(json!({"message": "Server is reachable."})).into_response()),
-        Ok((false, error)) | Err(error) => {
-            let sanitized = error
-                .replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;")
-                .replace('"', "&quot;")
-                .replace('\'', "&#039;");
-            toast_error(format!(
-                "Server is not reachable.<br><br>Check this <a target=\"_blank\" class=\"underline\" href=\"https://coolify.io/docs/knowledge-base/server/openssh\">documentation</a> for further help.<br><br>Error: {sanitized}"
-            ))
-        }
+        Ok((false, error)) | Err(error) => toast_error(unreachable_message(&error)),
     }
 }
 

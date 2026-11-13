@@ -42,6 +42,8 @@
   let removing = $state<ServiceDomainRow | null>(null);
   let conflicts = $state<{ domain: string; resource_name: string; resource_link?: string | null; resource_type: string }[] | null>(null);
   let requiredPort = $state<number | null>(null);
+  // `$requestedPort`: the port of the domain that asked for the confirmation.
+  let requestedPort = $state<number | null>(null);
   let pending: ((force: { force_domains?: boolean; force_port?: boolean }) => Promise<void>) | null = null;
   let forces: { force_domains?: boolean; force_port?: boolean } = {};
 
@@ -92,6 +94,7 @@
       }
       if (r.port_warning) {
         requiredPort = r.port_warning;
+        requestedPort = (r as { requested_port?: number | null }).requested_port ?? null;
         pending = retry;
         return;
       }
@@ -105,7 +108,10 @@
       if (dns) {
         dnsPending = { hosts: dns.pending ?? [], message: dns.pending_message ?? '' };
         if (dns.open_modal) void dnsMenu?.openProviders();
-        if (dns.jobs?.length) followDnsJobs('service', serviceUuid, dns.jobs, load);
+        if (dns.jobs?.length)
+          followDnsJobs('service', serviceUuid, dns.jobs, load, (hostname, c) =>
+            dnsMenu?.showConflict(hostname, c.zone_id, { record_id: c.record_id, current: c.current, proposed: c.proposed }),
+          );
       }
     } catch (e) {
       if (e instanceof ApiError && e.errors.domain?.length) setError(e.errors.domain[0]);
@@ -524,18 +530,18 @@
 {#if requiredPort !== null}
   <Modal title="Use a different port?" onclose={() => (requiredPort = null)}>
     <Callout type="warning" title="Port requirement" class="mb-4">
-      This service requires port <strong>{requiredPort}</strong> to function correctly. One or more of your domains use a different port, or none.
+      This service requires port <strong>{requiredPort}</strong> to function correctly. One or more of your domains use port <strong>{requestedPort}</strong>.
     </Callout>
     <div class="mt-4 flex flex-wrap justify-end gap-2 border-t border-neutral-200 pt-4 dark:border-white/[0.08]">
-      <button type="button" class="button" onclick={() => (requiredPort = null)}>Keep required port</button>
       <button
         type="button"
         class="button button-error"
         onclick={() => {
           requiredPort = null;
           pending?.({ force_port: true });
-        }}>Use this port anyway</button
+        }}>Use port {requestedPort} anyway</button
       >
+      <button type="button" class="button" onclick={() => (requiredPort = null)}>Keep port {requiredPort}</button>
     </div>
   </Modal>
 {/if}

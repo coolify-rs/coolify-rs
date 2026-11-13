@@ -119,7 +119,7 @@ async fn migrate(
         &ctx,
         &meta,
         "ui.server.migrate",
-        json!({"team_id": ctx.team_id, "server_uuid": s.uuid, "target_url": target}),
+        json!({"team_id": ctx.team_id, "server_uuid": s.uuid, "target_url": crate::routes::server_transfer::audit_url(Some(target.as_str()))}),
         "info",
     )
     .await;
@@ -194,7 +194,7 @@ async fn transfer_back(
         &ctx,
         &meta,
         "ui.server.transfer_back",
-        json!({"team_id": ctx.team_id, "server_uuid": s.uuid, "from": manager}),
+        json!({"team_id": ctx.team_id, "server_uuid": s.uuid, "from": crate::routes::server_transfer::audit_url(Some(manager.as_str()))}),
         "info",
     )
     .await;

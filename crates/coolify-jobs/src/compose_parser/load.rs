@@ -20,6 +20,7 @@ use super::php::{self, escapeshellarg};
 use super::validate;
 use crate::Jobs;
 use crate::applications::deploy::git::{ImportSettings, set_git_import_settings_with};
+use crate::applications::git_ssh;
 
 /// `Application::MAX_DOCKER_COMPOSE_SIZE_BYTES`.
 const MAX_COMPOSE_BYTES: usize = 5 * 1024 * 1024;
@@ -65,15 +66,48 @@ enum Kind {
     Other,
 }
 
-/// `gitSshCommand($port, $identityFile)`.
-fn git_ssh_command(port: &str, identity: Option<&str>) -> String {
-    let mut c = format!(
-        "ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -p {port} -o Port={port} -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-    );
-    if let Some(i) = identity {
-        c.push_str(&format!(" -i {i} -o IdentitiesOnly=yes"));
+/// `gitSshCommand($uuid, $port, $identityFile)`.
+fn git_ssh_command(uuid: &str, port: &str, identity: Option<&str>) -> String {
+    git_ssh::git_ssh_command(uuid, Some(port), identity, true)
+}
+
+/// `Application::gitUsesSsh()`: whether git can reach the repository over SSH. Only an http(s)
+/// URL without a deploy key, a GitHub App, and a connected GitLab or Gitea source (which clone
+/// with a token over HTTPS) never use SSH.
+fn git_uses_ssh(kind: &Kind, git_repository: &str) -> bool {
+    match kind {
+        Kind::DeployKey => return true,
+        Kind::GithubApp(_) => return false,
+        Kind::Oauth(src, _) => {
+            let filled = |k: &str| {
+                src.get(k)
+                    .and_then(Value::as_str)
+                    .is_some_and(|v| !v.is_empty())
+            };
+            if filled("access_token") && filled("refresh_token") {
+                return false;
+            }
+        }
+        Kind::Other => {}
     }
-    c
+    let lower = git_repository.to_ascii_lowercase();
+    !(lower.starts_with("http://") || lower.starts_with("https://"))
+}
+
+/// `Application::serverGitSshSetupPrefix($uuid)`: `gitSshSetupCommand()` and ` && ` for git
+/// commands that run on the server, not in a helper container. The files are removed when the
+/// script exits. Git over HTTP(S) gets no setup: for a non-root SSH user the setup makes the sudo
+/// parser run the whole line with bash, which the server may not have.
+fn server_git_ssh_setup_prefix(uses_ssh: bool, uuid: &str, known_hosts: Option<&str>) -> String {
+    if !uses_ssh {
+        return String::new();
+    }
+    format!(
+        "trap 'rm -f {} {}' EXIT && {} && ",
+        git_ssh::git_ssh_config_file(uuid),
+        git_ssh::git_known_hosts_file(uuid),
+        git_ssh::git_ssh_setup_command(uuid, known_hosts, true)
+    )
 }
 
 static SSH_MATCH: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -144,7 +178,11 @@ struct GitCommands {
 fn ssh_key_setup(uuid: &str, key_b64: &str) -> Vec<String> {
     let loc = format!("/root/.ssh/id_rsa_coolify_{uuid}");
     vec![
-        format!("trap 'rm -f {loc}' EXIT"),
+        format!(
+            "trap 'rm -f {loc} {} {}' EXIT",
+            git_ssh::git_ssh_config_file(uuid),
+            git_ssh::git_known_hosts_file(uuid)
+        ),
         "mkdir -p /root/.ssh".into(),
         format!("echo '{key_b64}' | base64 -d | tee {loc} > /dev/null"),
         format!("chmod 600 {loc}"),
@@ -175,10 +213,13 @@ async fn git_commands(
             submodule_flags.push_str(" --shallow-submodules");
         }
     }
+    // `--` ends the options, so a repository value that starts with `-` is not read as a git option.
     let mut clone = format!(
-        "git clone{depth}{submodule_flags} --no-checkout -b {}",
+        "git clone{depth}{submodule_flags} --no-checkout -b {} --",
         escapeshellarg(&branch)
     );
+    let uses_ssh = git_uses_ssh(kind, app.str("git_repository").unwrap_or_default());
+    let setup = server_git_ssh_setup_prefix(uses_ssh, uuid, app.str("git_ssh_known_hosts"));
     let base = escapeshellarg(checkout_dir);
     let key_loc = format!("/root/.ssh/id_rsa_coolify_{uuid}");
     // `setGitImportSettings(..., onlyCheckout: true)`: Git LFS downloads skipped, and the commit
@@ -191,6 +232,7 @@ async fn git_commands(
     let commit = app.str("git_commit_sha").unwrap_or("HEAD").to_owned();
     let import = |clone: String, public: bool, ssh: Option<&str>, git_config: Option<&str>| {
         set_git_import_settings_with(
+            uuid,
             &clone,
             settings,
             public,
@@ -215,7 +257,7 @@ async fn git_commands(
             {
                 let url = format!("{html_url}/{repository}");
                 GitCommands {
-                    ls_remote: format!("git ls-remote {}", escapeshellarg(&url)),
+                    ls_remote: format!("git ls-remote -- {}", escapeshellarg(&url)),
                     clone: import(
                         format!("{clone} {} {base}", escapeshellarg(&url)),
                         true,
@@ -247,7 +289,7 @@ async fn git_commands(
                 );
                 clone = clone.replacen("git clone", &format!("git {option} clone"), usize::MAX);
                 GitCommands {
-                    ls_remote: format!("git ls-remote {}", escapeshellarg(&repo_url)),
+                    ls_remote: format!("git ls-remote -- {}", escapeshellarg(&repo_url)),
                     clone: import(
                         format!("{clone} {} {base}", escapeshellarg(&repo_url)),
                         false,
@@ -289,7 +331,7 @@ async fn git_commands(
                     format!("{scheme}://oauth2:{encoded}@{host}{prefix}/{repository}.git");
                 clone = clone.replacen("git clone", &format!("git {option} clone"), usize::MAX);
                 GitCommands {
-                    ls_remote: format!("git ls-remote {}", escapeshellarg(&repo_url)),
+                    ls_remote: format!("git ls-remote -- {}", escapeshellarg(&repo_url)),
                     clone: import(
                         format!("{clone} {} {base}", escapeshellarg(&repo_url)),
                         false,
@@ -306,11 +348,11 @@ async fn git_commands(
                     .and_then(Value::as_i64)
                     .unwrap_or(22)
                     .to_string();
-                let ssh = git_ssh_command(&source_port, Some(&key_loc));
+                let ssh = git_ssh_command(uuid, &source_port, Some(&key_loc));
                 let env = format!("GIT_SSH_COMMAND=\"{ssh}\"");
                 let mut ls = ssh_key_setup(uuid, &key_b64);
                 ls.push(format!(
-                    "{env} git ls-remote {}",
+                    "{env} git ls-remote -- {}",
                     escapeshellarg(&repository)
                 ));
                 let mut cl = ssh_key_setup(uuid, &key_b64);
@@ -327,7 +369,7 @@ async fn git_commands(
                 }
             } else {
                 GitCommands {
-                    ls_remote: format!("git ls-remote {}", escapeshellarg(&repository)),
+                    ls_remote: format!("git ls-remote -- {}", escapeshellarg(&repository)),
                     clone: import(
                         format!("{clone} {} {base}", escapeshellarg(&repository)),
                         true,
@@ -351,11 +393,11 @@ async fn git_commands(
                 .map_err(|_| rt("The MAC is invalid."))?;
             use base64::Engine as _;
             let key_b64 = base64::engine::general_purpose::STANDARD.encode(pem.as_bytes());
-            let ssh = git_ssh_command(&port, Some(&key_loc));
+            let ssh = git_ssh_command(uuid, &port, Some(&key_loc));
             let env = format!("GIT_SSH_COMMAND=\"{ssh}\"");
             let mut ls = ssh_key_setup(uuid, &key_b64);
             ls.push(format!(
-                "{env} git ls-remote '{}'",
+                "{env} git ls-remote -- '{}'",
                 repository.replace('\'', "'\\''")
             ));
             let mut cl = ssh_key_setup(uuid, &key_b64);
@@ -383,8 +425,20 @@ async fn git_commands(
             let git = option
                 .as_ref()
                 .map_or_else(|| "git".to_owned(), |o| format!("git {o}"));
+            // Without a deploy key git uses the SSH key of the server's SSH user.
+            let ssh_env = if uses_ssh {
+                format!(
+                    "GIT_SSH_COMMAND=\"{}\" ",
+                    git_ssh::git_ssh_command(uuid, Some(&port), Some("/root/.ssh/id_rsa"), false)
+                )
+            } else {
+                String::new()
+            };
             GitCommands {
-                ls_remote: format!("{git} ls-remote {}", escapeshellarg(&repository)),
+                ls_remote: format!(
+                    "{ssh_env}{git} ls-remote -- {}",
+                    escapeshellarg(&repository)
+                ),
                 clone: import(
                     format!(
                         "{} {} {base}",
@@ -401,8 +455,9 @@ async fn git_commands(
     };
     // Callers read data from stdout after the checkout, so the checkout's progress goes to stderr.
     Ok(GitCommands {
+        ls_remote: format!("{setup}{}", out.ls_remote),
         clone: format!(
-            "exec >&2 && {}",
+            "exec >&2 && {setup}{}",
             out.clone.replace(" clone ", " clone --quiet ")
         ),
         ..out
@@ -498,21 +553,70 @@ static CREDENTIALS: LazyLock<regex::Regex> = LazyLock::new(|| {
 fn git_failure_reason(summary: &str, error: &str, app_uuid: &str) -> String {
     let masked = CREDENTIALS.replace_all(error.trim(), "$1***@").into_owned();
     tracing::warn!(application_uuid = %app_uuid, error = %masked, "{summary}");
-    let reason = masked
+    git_failure_reason_text(&masked)
+}
+
+/// The text `gitFailureReason()` returns for the (credential-masked) error output: a hint to
+/// review the SSH host key when the host key check failed, else the last error lines without the
+/// progress, known-hosts and multiplexing notes and the generic access hint that Git and SSH
+/// print around the real cause.
+pub fn git_failure_reason_text(masked: &str) -> String {
+    if masked.contains("you have requested strict checking") {
+        return format!(
+            "<br><br>Reason: {}",
+            php::html_escape(
+                "No SSH host key is saved for this Git host, and the SSH client on the server (OpenSSH older than 7.6) cannot trust a new host key on first use. Open Source > SSH host keys and use Fetch current host key. Compare the fingerprint with the Git host administrator before you accept it."
+            )
+        );
+    }
+    if masked.contains("Host key verification failed") {
+        return format!(
+            "<br><br>Reason: {}",
+            php::html_escape(
+                "The Git host sent an SSH host key that is not the saved or published key. Open Source > SSH host keys and use Fetch current host key. Compare the fingerprint with the Git host administrator before you accept it."
+            )
+        );
+    }
+    const NOISE: [&str; 7] = [
+        "Cloning into",
+        "Warning: Permanently added",
+        "Control socket connect(",
+        "ControlSocket ",
+        "mux_client_",
+        "Please make sure you have the correct access rights",
+        "and the repository exists.",
+    ];
+    let lines: Vec<&str> = masked
         .split('\n')
         .map(|l| l.trim_matches([' ', '\t', '\n', '\r', '\0', '\x0B']))
-        .rfind(|l| php::truthy(&PhpValue::Str((*l).to_owned())));
-    match reason {
-        Some(r) => {
+        .filter(|l| php::truthy(&PhpValue::Str((*l).to_owned())))
+        .collect();
+    let mut reason: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|l| !NOISE.iter().any(|n| l.starts_with(n)))
+        .collect();
+    if reason.len() > 10 {
+        reason = reason.split_off(reason.len() - 10);
+    }
+    if reason.is_empty() {
+        reason = lines.last().copied().into_iter().collect();
+    }
+    if reason.is_empty() {
+        return String::new();
+    }
+    let shown: Vec<String> = reason
+        .iter()
+        .map(|r| {
             let limited = if r.chars().count() > 300 {
                 format!("{}...", r.chars().take(300).collect::<String>().trim_end())
             } else {
-                r.to_owned()
+                (*r).to_owned()
             };
-            format!("<br><br>Reason: {}", php::html_escape(&limited))
-        }
-        None => String::new(),
-    }
+            php::html_escape(&limited)
+        })
+        .collect();
+    format!("<br><br>Reason: {}", shown.join("<br>"))
 }
 
 /// The remote commands of one `loadComposeFile()` run and what interpreting their output needs.
@@ -648,7 +752,7 @@ pub async fn apply(
     };
     if !php::truthy(&PhpValue::Str(content.clone())) {
         return Err(rt(format!(
-            "Docker Compose file not found at: {workdir}{compose_location} (branch: {branch})<br><br>Check if you used the right extension (.yaml or .yml) in the compose file name."
+            "Docker Compose file at {workdir}{compose_location} (branch: {branch}) is empty.<br><br>Check that the file in the repository has content and that your changes are committed and pushed."
         )));
     }
     if let Err(e) = validate::validate_docker_compose_for_injection(&content) {

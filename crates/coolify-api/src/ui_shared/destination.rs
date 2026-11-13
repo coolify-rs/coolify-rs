@@ -80,10 +80,13 @@ async fn show(
     };
     let mut networks = Vec::new();
     if is_app {
+        // `->filter(fn (Server $server) => ... && Gate::allows('placeResource', $server))`.
+        let placeable = crate::place_resource::allowed_server_ids(&state, &ctx).await?;
         for (id, name, net_server_id, net_server_name) in
             ops::team_standalone_networks(&state.db, res.team_id).await?
         {
-            let taken = id == dest_id
+            let taken = !placeable.contains(&net_server_id)
+                || id == dest_id
                 || net_server_id == server_id
                 || additional
                     .iter()
@@ -146,6 +149,80 @@ async fn team_server(state: &AppState, res: &Res, id: i64) -> Result<servers::Se
         .ok_or(super::NOT_FOUND)
 }
 
+/// `findUsableServer($serverId, $title)`: a server of the resource team that can take a
+/// deployment. `Err` is the error toast for a server that is not usable right now.
+async fn usable_server(
+    state: &AppState,
+    res: &Res,
+    id: i64,
+    title: &str,
+) -> Result<Result<servers::ServerRow, axum::response::Response>, ApiError> {
+    let server = team_server(state, res, id).await?;
+    let settings = server.settings.clone().unwrap_or_default();
+    let flag = |k: &str| settings.get(k).and_then(Value::as_bool).unwrap_or(false);
+    let name = server
+        .record
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let details = unusable_server_reason(
+        &name,
+        flag("is_reachable"),
+        flag("is_usable"),
+        flag("force_disabled"),
+        flag("is_swarm_worker"),
+        // `canHostResources()`: not a build-only server.
+        !crate::routes::servers::effective_role_is_build(&settings),
+    );
+    Ok(match details {
+        Some(details) => Err(ok(json!({"error": title, "details": details})).into_response()),
+        None => Ok(server),
+    })
+}
+
+/// The message of `findUsableServer()` for a server that cannot take a deployment.
+fn unusable_server_reason(
+    name: &str,
+    is_reachable: bool,
+    is_usable: bool,
+    force_disabled: bool,
+    is_swarm_worker: bool,
+    can_host_resources: bool,
+) -> Option<String> {
+    if !is_reachable || !is_usable {
+        return Some(format!(
+            "The server {name} is not reachable. Check the connection on the server page and try again."
+        ));
+    }
+    if force_disabled || is_swarm_worker || !can_host_resources {
+        return Some(format!("The server {name} cannot host resources."));
+    }
+    None
+}
+
+/// `runsOnServer($server)`: whether the application runs on the server, as its main server or as
+/// an additional server.
+async fn runs_on_server(state: &AppState, res: &Res, server_id: i64) -> Result<bool, ApiError> {
+    Ok(res.server_id == Some(server_id)
+        || ops::additional_server_ids(&state.db, res.id)
+            .await?
+            .contains(&server_id))
+}
+
+/// Whether the network is an additional network of the application on the server.
+async fn is_additional_network(
+    state: &AppState,
+    res: &Res,
+    network_id: i64,
+    server_id: i64,
+) -> Result<bool, ApiError> {
+    Ok(apps::additional_pivots(&state.db, res.id)
+        .await?
+        .iter()
+        .any(|(network, server, _)| *network == network_id && *server == server_id))
+}
+
 /// `addServer()`.
 async fn add(
     State(state): State<AppState>,
@@ -154,13 +231,25 @@ async fn add(
     Json(body): Json<Value>,
 ) -> ApiResult {
     let res = application(&state, &ctx, &kind, &uuid).await?;
-    let server = team_server(&state, &res, int(&body, "server_id")).await?;
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Unauthorized);
+    }
+    let server = match usable_server(
+        &state,
+        &res,
+        int(&body, "server_id"),
+        "Failed to add server.",
+    )
+    .await?
+    {
+        Ok(server) => server,
+        Err(toast) => return Ok(toast),
+    };
+    // `$this->authorize('placeResource', $server)`.
+    crate::place_resource::authorize(&state, &ctx, &server).await?;
     let network_id = int(&body, "network_id");
     if !ops::standalone_on_server(&state.db, network_id, server.id).await? {
         return Err(super::NOT_FOUND);
-    }
-    if !ctx.is_team_admin() {
-        return Err(ApiError::Unauthorized);
     }
     // `additionalServersUnavailableReason($server)`.
     let reason = if res.str("build_pack") == Some("dockercompose") {
@@ -247,13 +336,21 @@ async fn promote(
     Json(body): Json<Value>,
 ) -> ApiResult {
     let res = application(&state, &ctx, &kind, &uuid).await?;
-    let server = team_server(&state, &res, int(&body, "server_id")).await?;
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Unauthorized);
+    }
+    let server =
+        match usable_server(&state, &res, int(&body, "server_id"), "Failed to promote.").await? {
+            Ok(server) => server,
+            Err(toast) => return Ok(toast),
+        };
     let network_id = int(&body, "network_id");
     if !ops::standalone_on_server(&state.db, network_id, server.id).await? {
         return Err(super::NOT_FOUND);
     }
-    if !ctx.is_team_admin() {
-        return Err(ApiError::Unauthorized);
+    // Only an additional network of the application can become its main destination.
+    if !is_additional_network(&state, &res, network_id, server.id).await? {
+        return Err(super::NOT_FOUND);
     }
     let Some(primary) = ops::destination_info(&state.db, res.table, res.id).await? else {
         return Err(ApiError::Internal);
@@ -287,6 +384,10 @@ async fn stop(
         return Err(ApiError::Unauthorized);
     }
     let server = team_server(&state, &res, int(&body, "server_id")).await?;
+    // Only a server that the application runs on can be stopped.
+    if !runs_on_server(&state, &res, server.id).await? {
+        return Err(super::NOT_FOUND);
+    }
     let a = apps::find_in_team(&state.db, res.team_id, &res.uuid)
         .await?
         .ok_or(super::NOT_FOUND)?;
@@ -319,7 +420,11 @@ async fn redeploy(
     {
         return Ok(ok(json!({"error": "Failed to deploy.", "details": "Before deploying to multiple servers, you must first set a Docker image in the General tab.<br>More information here: <a target=\"_blank\" class=\"underline\" href=\"https://coolify.io/docs/knowledge-base/server/multiple-servers\">documentation</a>"})).into_response());
     }
-    let server = team_server(&state, &res, int(&body, "server_id")).await?;
+    let server =
+        match usable_server(&state, &res, int(&body, "server_id"), "Failed to deploy.").await? {
+            Ok(server) => server,
+            Err(toast) => return Ok(toast),
+        };
     let network_id = int(&body, "network_id");
     if !ops::standalone_on_server(&state.db, network_id, server.id).await? {
         return Err(super::NOT_FOUND);
@@ -327,6 +432,13 @@ async fn redeploy(
     let a = apps::find_in_team(&state.db, res.team_id, &res.uuid)
         .await?
         .ok_or(super::NOT_FOUND)?;
+    // `isAttachedDestination($destination, $server)`: the main destination or an additional
+    // network of the application on the server.
+    let is_main = a.str("destination_type") == Some(coolify_db::databases::STANDALONE_DOCKER_MORPH)
+        && a.int("destination_id") == Some(network_id);
+    if !is_main && !is_additional_network(&state, &res, network_id, server.id).await? {
+        return Err(super::NOT_FOUND);
+    }
     let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
     let deployment = coolify_domain::new_public_id();
     let result = jobs
@@ -359,4 +471,43 @@ async fn redeploy(
             ok(json!({"deployment_uuid": deployment_uuid})).into_response()
         }
     })
+}
+
+#[cfg(test)]
+mod usable_server_tests {
+    use super::unusable_server_reason;
+
+    /// `findUsableServer()`: an unreachable server is reported before one that cannot host.
+    #[test]
+    fn a_server_that_cannot_take_a_deployment_is_reported() {
+        assert_eq!(
+            unusable_server_reason("s1", true, true, false, false, true),
+            None
+        );
+        let unreachable = Some(
+            "The server s1 is not reachable. Check the connection on the server page and try again."
+                .to_owned(),
+        );
+        assert_eq!(
+            unusable_server_reason("s1", false, true, false, false, true),
+            unreachable
+        );
+        assert_eq!(
+            unusable_server_reason("s1", true, false, true, true, false),
+            unreachable
+        );
+        let cannot_host = Some("The server s1 cannot host resources.".to_owned());
+        assert_eq!(
+            unusable_server_reason("s1", true, true, true, false, true),
+            cannot_host
+        );
+        assert_eq!(
+            unusable_server_reason("s1", true, true, false, true, true),
+            cannot_host
+        );
+        assert_eq!(
+            unusable_server_reason("s1", true, true, false, false, false),
+            cannot_host
+        );
+    }
 }

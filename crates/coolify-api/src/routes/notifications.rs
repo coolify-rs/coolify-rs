@@ -58,9 +58,12 @@ pub(crate) fn decrypted(
         return Ok(Value::Null);
     };
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-    enc.decrypt_string(c)
-        .map(Value::String)
-        .map_err(|_| ApiError::Internal)
+    let plain = enc.decrypt_string(c).map_err(|_| ApiError::Internal)?;
+    // `HasSmtpServers`: `smtp_servers` is an `encrypted:array` cast.
+    if k == ns::SMTP_SERVERS {
+        return Ok(serde_json::from_str(&plain).unwrap_or(Value::Null));
+    }
+    Ok(Value::String(plain))
 }
 
 /// `channelConfig(...)['rules']`.
@@ -106,6 +109,11 @@ fn fields(ch: &Channel) -> Vec<Field> {
             out.push(text("smtp_ehlo_domain", ehlo));
             out.push(text("resend_enabled", vec![Rule::Boolean]));
             out.push(text("resend_api_key", string(255)));
+            out.push(text(
+                "resend_from_address",
+                vec![Rule::Nullable, Rule::Custom(email_rule)],
+            ));
+            out.push(text("resend_from_name", string(255)));
             out.push(text("use_instance_email_settings", vec![Rule::Boolean]));
         }
         "discord" => {
@@ -248,6 +256,27 @@ async fn update(
         };
         if let Some(msg) = msg
             && let Value::Array(list) = errors.entry(f.to_string()).or_insert_with(|| json!([]))
+        {
+            list.push(json!(msg));
+        }
+    }
+    // `'smtp_host' => [..., new SafeSmtpHost]`: the rule skips a blank value.
+    if ch.name == "email"
+        && let Some(host) = input.get("smtp_host").and_then(Value::as_str)
+        && !host.trim().is_empty()
+    {
+        let is_admin =
+            coolify_db::instance_settings::is_instance_admin(&state.db, ctx.user_id).await?;
+        if let Some(msg) = coolify_jobs::notifications::email_settings::smtp_host_error(
+            &state.db,
+            host,
+            is_admin,
+            &crate::safe_url::settings_url(&headers),
+        )
+        .await
+            && let Value::Array(list) = errors
+                .entry("smtp_host".to_string())
+                .or_insert_with(|| json!([]))
         {
             list.push(json!(msg));
         }

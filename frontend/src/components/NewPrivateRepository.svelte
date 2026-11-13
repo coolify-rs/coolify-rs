@@ -18,7 +18,7 @@
   type Row = { id: number; name: string; html_url: string };
   type Repo = Record<string, any>;
 
-  const name_ = $derived({ github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea' }[provider]);
+  const name_ = $derived({ github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea / Forgejo' }[provider]);
   let apps = $state<Row[] | null>(null);
   let meta = $state({ can_create: false, can_make_system_wide: false, random_name: '' });
   let step = $state<'apps' | 'repository'>('apps');

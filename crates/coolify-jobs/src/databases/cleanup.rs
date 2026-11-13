@@ -80,6 +80,13 @@ pub fn log_drain_configuration(server: &ServerInfo, d: &DatabaseRow) -> Option<P
                             "COOLIFY_APP_NAME,COOLIFY_PROJECT_NAME,COOLIFY_SERVER_IP,COOLIFY_ENVIRONMENT_NAME",
                         ),
                     ),
+                    // Every Coolify container has these labels. Docker skips a label that a container does not have.
+                    (
+                        "labels",
+                        PhpValue::from(
+                            "coolify.projectName,coolify.environmentName,coolify.resourceName,coolify.serviceName",
+                        ),
+                    ),
                 ]),
             ),
         ]));

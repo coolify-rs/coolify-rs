@@ -116,6 +116,28 @@ impl std::fmt::Debug for Run<'_> {
     }
 }
 
+/// `$resource` as `Application::composeImageOverride()` reads it: the application with the image
+/// overrides that security updates stored (`docker_compose_image_overrides`), nothing else.
+fn image_override_owner(app: &ApplicationRow) -> coolify_db::image_scans::ScanOwner {
+    let mut record = serde_json::Map::new();
+    if let Some(overrides) = app.raw.get("docker_compose_image_overrides") {
+        record.insert(
+            "docker_compose_image_overrides".to_owned(),
+            overrides.clone(),
+        );
+    }
+    coolify_db::image_scans::ScanOwner {
+        morph: coolify_db::image_scans::APPLICATION_MORPH,
+        id: app.id,
+        uuid: app.uuid.clone(),
+        team_id: None,
+        main_server_id: None,
+        service_id: None,
+        record,
+        settings: None,
+    }
+}
+
 fn json_value_to_php(v: Option<&Value>) -> Option<PhpValue> {
     match v {
         None | Some(Value::Null) => None,
@@ -369,10 +391,10 @@ impl<'a> Run<'a> {
 
     fn decrypt(&self, raw: Option<&str>) -> Option<String> {
         let raw = raw.filter(|r| !r.is_empty() && *r != "0")?;
-        self.enc.decrypt_maybe_serialized(raw).ok().map(|v| {
-            v.trim_matches([' ', '\t', '\n', '\r', '\0', '\x0B'])
-                .to_owned()
-        })
+        self.enc
+            .decrypt_maybe_serialized(raw)
+            .ok()
+            .map(|v| crate::databases::env::without_edge_whitespace(&v).to_owned())
     }
 
     fn encrypt(&self, value: &str) -> String {
@@ -776,7 +798,9 @@ pub(crate) async fn application_parser(
     };
     let services: Arr = match php::get(&yaml, "services") {
         Some(PhpValue::Array(items)) => items.clone(),
-        _ => Vec::new(),
+        // `services` that is not a map (for example a string): nothing to parse.
+        Some(_) => return Ok(ParsedCompose::empty()),
+        None => Vec::new(),
     };
     let service_names: Vec<String> = services.iter().map(|(k, _)| k.as_string()).collect();
     let mut top_volumes: Arr = php::collect(php::get(&yaml, "volumes"));
@@ -836,6 +860,7 @@ pub(crate) async fn application_parser(
         validate::validate_shell_safe_path(&service_name, "service name").map_err(|e| {
             format!("Invalid Docker Compose service name: {e} Service names must not contain shell metacharacters.")
         })?;
+        validate::validate_compose_service_name(&service_name)?;
         validate::validate_compose_service_scale(&service_name, service)?;
 
         let environment = env::convert_to_key_value_collection(&php::merge(
@@ -1075,6 +1100,7 @@ pub(crate) async fn application_parser(
         Vec::new()
     };
 
+    let image_owner = image_override_owner(&run.app);
     let mut parsed_services: Arr = Vec::new();
     for (name_key, service_value) in &services {
         let service_name = name_key.as_string();
@@ -1417,7 +1443,20 @@ pub(crate) async fn application_parser(
                     _ => {}
                 }
             }
-            php::put_str(&mut networks_temp, &base_network, PhpValue::Null);
+            // A preview renames its services to "<name>-pr-<id>". The alias keeps the original name as a hostname
+            // on the preview network, so that services can still reach each other by their Compose names.
+            php::put_str(
+                &mut networks_temp,
+                &base_network,
+                if is_pull_request {
+                    PhpValue::map([(
+                        "aliases",
+                        PhpValue::list([PhpValue::Str(service_name.clone())]),
+                    )])
+                } else {
+                    PhpValue::Null
+                },
+            );
             if run.setting_default("connect_to_docker_network", false) {
                 let network = run.app.network().to_owned();
                 php::put_str(&mut networks_temp, &network, PhpValue::Null);
@@ -1799,7 +1838,8 @@ pub(crate) async fn application_parser(
                     && s.contains("{{")
                     && (is_value_from_database || !is_public_pull_request)
                 {
-                    value = PhpValue::Str(run.resolve_shared(s, false).await?);
+                    // v4.7: `{{server.VAR}}` resolves in the compose parsers too.
+                    value = PhpValue::Str(run.resolve_shared(s, true).await?);
                 }
                 mapped.push((k, value));
             }
@@ -1965,6 +2005,15 @@ pub(crate) async fn application_parser(
                 (Key::Str("labels".into()), PhpValue::list(service_labels)),
             ],
         );
+        // A security update of this service, while the compose file still names the image it
+        // replaced.
+        if let Some(image_override) = crate::image_scan::update::compose_image_override(
+            &image_owner,
+            &service_name,
+            (!image.is_empty()).then_some(image.as_str()),
+        ) {
+            php::put_str(&mut payload, "image", PhpValue::Str(image_override));
+        }
         if !use_network_mode {
             php::put_str(&mut payload, "networks", PhpValue::Array(networks_temp));
         }
@@ -2206,4 +2255,60 @@ async fn sync_required_state(run: &mut Run<'_>) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod image_override_tests {
+    use super::*;
+
+    fn app(overrides: Option<Value>) -> ApplicationRow {
+        let mut raw = serde_json::Map::new();
+        if let Some(o) = overrides {
+            raw.insert("docker_compose_image_overrides".into(), o);
+        }
+        ApplicationRow {
+            id: 7,
+            uuid: "app-uuid".into(),
+            team_id: 1,
+            raw,
+            settings: serde_json::Map::new(),
+            environment: serde_json::Map::new(),
+            project: serde_json::Map::new(),
+            team: serde_json::Map::new(),
+            destination: None,
+        }
+    }
+
+    #[test]
+    fn the_owner_carries_only_the_stored_image_overrides() {
+        let owner = image_override_owner(&app(Some(Value::String(
+            r#"{"web":{"from":"nginx:1.25","to":"nginx:1.27"}}"#.into(),
+        ))));
+        assert_eq!(owner.id, 7);
+        assert_eq!(owner.morph, coolify_db::image_scans::APPLICATION_MORPH);
+        assert_eq!(owner.record.len(), 1);
+        assert_eq!(
+            crate::image_scan::update::compose_image_override(&owner, "web", Some("nginx:1.25")),
+            Some("nginx:1.27".to_owned())
+        );
+        // The compose file names another image now: it wins again.
+        assert_eq!(
+            crate::image_scan::update::compose_image_override(&owner, "web", Some("nginx:1.26")),
+            None
+        );
+        assert_eq!(
+            crate::image_scan::update::compose_image_override(&owner, "web", None),
+            None
+        );
+    }
+
+    #[test]
+    fn an_application_without_overrides_keeps_its_images() {
+        let owner = image_override_owner(&app(None));
+        assert!(owner.record.is_empty());
+        assert_eq!(
+            crate::image_scan::update::compose_image_override(&owner, "web", Some("nginx:1.25")),
+            None
+        );
+    }
 }

@@ -194,7 +194,8 @@ pub async fn delete_reset_token(db: &Db, email: &str) -> DbResult<()> {
     Ok(())
 }
 
-/// `ResetUserPassword::reset` and `CompletePasswordReset`.
+/// `ResetUserPassword::reset` and `CompletePasswordReset`. The new password also revokes the
+/// user's API tokens, as `DeletesUserSessions` does for a changed password.
 pub async fn reset_password(
     db: &Db,
     id: i64,
@@ -203,6 +204,7 @@ pub async fn reset_password(
     now: NaiveDateTime,
 ) -> DbResult<()> {
     db.ensure_writable()?;
+    let mut tx = db.pool().begin().await?;
     sqlx::query(
         // `force_password_reset => false` (96ed09f0c): a reset password clears a forced reset.
         "UPDATE users SET password = $1, remember_token = $2, force_password_reset = false, updated_at = $3 WHERE id = $4",
@@ -211,22 +213,28 @@ pub async fn reset_password(
     .bind(remember_token)
     .bind(now)
     .bind(id)
-    .execute(db.pool())
+    .execute(&mut *tx)
     .await?;
+    crate::team_pages::revoke_user_tokens(&mut tx, id).await?;
+    tx.commit().await?;
     Ok(())
 }
 
-/// `ForcePasswordReset::submit`.
+/// `ForcePasswordReset::submit`. The new password also revokes the user's API tokens, as
+/// `DeletesUserSessions` does for a changed password.
 pub async fn finish_forced_reset(db: &Db, id: i64, hash: &str, now: NaiveDateTime) -> DbResult<()> {
     db.ensure_writable()?;
+    let mut tx = db.pool().begin().await?;
     sqlx::query(
         "UPDATE users SET password = $1, force_password_reset = false, updated_at = $2 WHERE id = $3",
     )
     .bind(hash)
     .bind(now)
     .bind(id)
-    .execute(db.pool())
+    .execute(&mut *tx)
     .await?;
+    crate::team_pages::revoke_user_tokens(&mut tx, id).await?;
+    tx.commit().await?;
     Ok(())
 }
 

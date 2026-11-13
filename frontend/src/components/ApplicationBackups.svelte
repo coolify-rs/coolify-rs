@@ -8,6 +8,7 @@
   import Reicon from './Reicon.svelte';
   import SettingsSection from './SettingsSection.svelte';
   import StatusBadge from './StatusBadge.svelte';
+  import BackupS3Storage from './BackupS3Storage.svelte';
   import SortHeader from './SortHeader.svelte';
   import { backupSortLastRun, backupSortStatus, sortBackups } from '../lib/backupSort';
   import { diffForHumans } from '../lib/format';
@@ -130,11 +131,8 @@
                 </span>
                 <span>{b.frequency}</span>
                 <span><StatusBadge label={st[0]} type={st[1]} /></span>
-                <span title={b.save_s3 ? (names.length ? names.join(', ') : 'S3 storage unavailable') : 'S3 storage is not configured'}>
-                  <StatusBadge
-                    label={b.save_s3 ? (names.length === 0 ? 'Unavailable' : names.length === 1 ? 'Configured' : `${names.length} storages`) : 'Not set'}
-                    type={b.save_s3 ? (names.length ? 'success' : 'error') : 'neutral'}
-                  />
+                <span class="min-w-0">
+                  <BackupS3Storage enabled={b.save_s3} {names} tooltip={b.save_s3 ? (names.length ? `S3 storage: ${names.join(', ')}` : 'S3 storage: Unavailable') : 'S3 storage: Not configured'} />
                 </span>
                 <span>{b.latest_finished_at ? diffForHumans(b.latest_finished_at) : b.latest_status === 'running' ? 'Running now' : 'Never'}</span>
                 <span class="text-right tabular-nums text-neutral-950 dark:text-fg">{b.executions_count}</span>

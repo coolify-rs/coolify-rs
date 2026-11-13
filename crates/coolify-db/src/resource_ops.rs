@@ -339,6 +339,10 @@ pub struct MaintenanceResource {
     pub page: Option<String>,
     /// `maintenanceDomains()`: `(url, force_https)`.
     pub domains: Vec<(String, bool)>,
+    /// What `maintenanceProxyLabels()` reads (v4.7.5): `applications.custom_labels` when the user
+    /// edits the container labels (not Docker Compose, readonly labels off). `None` when the
+    /// labels come from the domains, so the domain routes apply.
+    pub custom_labels: Option<String>,
 }
 
 fn domains_of_list(fqdn: Option<&str>, force: bool) -> Vec<(String, bool)> {
@@ -359,9 +363,12 @@ pub async fn maintenance_resources(db: &Db, server_id: i64) -> DbResult<Vec<Main
         Option<String>,
         String,
         Option<bool>,
+        Option<String>,
+        Option<bool>,
     );
     let rows: Vec<AppRow> = sqlx::query_as(
-        "SELECT a.uuid, a.maintenance_page, a.fqdn, a.docker_compose_domains, a.build_pack, st.is_force_https_enabled \
+        "SELECT a.uuid, a.maintenance_page, a.fqdn, a.docker_compose_domains, a.build_pack, st.is_force_https_enabled, \
+         a.custom_labels::text, st.is_container_label_readonly_enabled \
          FROM applications a LEFT JOIN application_settings st ON st.application_id = a.id \
          WHERE a.deleted_at IS NULL AND a.is_maintenance_enabled = true AND ( \
            (a.destination_type = 'App\\Models\\StandaloneDocker' AND a.destination_id IN (SELECT id FROM standalone_dockers WHERE server_id = $1)) \
@@ -372,8 +379,15 @@ pub async fn maintenance_resources(db: &Db, server_id: i64) -> DbResult<Vec<Main
     .fetch_all(db.pool())
     .await?;
     let mut out = Vec::new();
-    for (uuid, page, fqdn, compose, build_pack, force) in rows {
+    for (uuid, page, fqdn, compose, build_pack, force, custom_labels, readonly_labels) in rows {
         let force = force.unwrap_or(false);
+        // `$this->settings?->is_container_label_readonly_enabled !== false`: only an explicit
+        // false lets the user edit the labels.
+        let custom_labels = custom_labels.filter(|labels| {
+            build_pack != "dockercompose"
+                && readonly_labels == Some(false)
+                && !labels.trim().is_empty()
+        });
         let domains = if build_pack == "dockercompose" {
             let parsed: serde_json::Value = compose
                 .as_deref()
@@ -396,6 +410,7 @@ pub async fn maintenance_resources(db: &Db, server_id: i64) -> DbResult<Vec<Main
             uuid,
             page,
             domains,
+            custom_labels,
         });
     }
     let services: Vec<(i64, String, Option<String>)> = sqlx::query_as(
@@ -418,6 +433,7 @@ pub async fn maintenance_resources(db: &Db, server_id: i64) -> DbResult<Vec<Main
                 .iter()
                 .flat_map(|(f, force)| domains_of_list(f.as_deref(), *force))
                 .collect(),
+            custom_labels: None,
         });
     }
     Ok(out)

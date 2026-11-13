@@ -4,6 +4,7 @@
   import Callout from './Callout.svelte';
   import Checkbox from './Checkbox.svelte';
   import FormInput from './FormInput.svelte';
+  import Listbox from './Listbox.svelte';
   import { ApiError } from '../lib/api';
   import { router } from '../lib/router.svelte';
   import { notify } from '../lib/toast.svelte';
@@ -41,18 +42,38 @@
         apiHelper: 'Usually your GitLab URL with /api/v4 appended.',
       },
       gitea: {
-        name: 'Gitea',
-        intro: 'Connect a Gitea OAuth2 application for private repositories, webhooks, and deployments.',
+        name: 'Gitea / Forgejo',
+        intro: 'Connect a Gitea or Forgejo OAuth2 application (Gitea.com, Codeberg, or your own instance) for private repositories, webhooks, and deployments.',
         html: 'https://gitea.com',
         api: 'https://gitea.com/api/v1',
         org: 'organization',
-        selfHosted: 'Self-hosted Gitea',
-        urlLabel: 'Gitea URL',
-        urlHelper: 'For self-hosted Gitea, enter your instance URL (e.g. https://gitea.example.com).',
-        apiHelper: 'Usually your Gitea URL with /api/v1 appended.',
+        selfHosted: 'Self-hosted Gitea or Forgejo',
+        urlLabel: 'Instance URL',
+        urlHelper: 'For self-hosted Gitea or Forgejo, enter your instance URL (e.g. https://git.example.com).',
+        apiHelper: 'Usually your instance URL with /api/v1 appended.',
       },
     }[provider],
   );
+
+  /** `Source\Gitea\Create::HOSTED_PROVIDERS`: hosted instances that the provider choice fills in. */
+  const HOSTED_PROVIDERS: Record<string, string> = {
+    'gitea.com': 'https://gitea.com',
+    'codeberg.org': 'https://codeberg.org',
+  };
+  let hostedProvider = $state('gitea.com');
+
+  /** `selectProvider()`. */
+  function selectProvider(choice: string) {
+    hostedProvider = choice;
+    // `x-effect="if ($wire.provider === 'self-hosted') open = true"`.
+    if (choice === 'self-hosted') open = true;
+    const html = HOSTED_PROVIDERS[choice];
+    if (!html) return;
+    htmlUrl = html;
+    apiUrl = html.replace(/\/+$/, '') + '/api/v1';
+    customUser = 'git';
+    customPort = '22';
+  }
 
   let name = $state(randomName);
   let organization = $state('');
@@ -132,6 +153,21 @@
 {#if canCreate}
   <form onsubmit={submit} class="flex w-full flex-col gap-4">
     <p class="text-[12px] leading-5 text-neutral-500 dark:text-fg-dim">{meta.intro}</p>
+
+    {#if provider === 'gitea'}
+      <Listbox
+        id="provider"
+        label="Provider"
+        helper="Codeberg runs Forgejo. For your own Gitea or Forgejo instance, select Self-hosted and enter its URL below."
+        bind:value={hostedProvider}
+        onchange={selectProvider}
+        options={[
+          { value: 'gitea.com', label: 'Gitea.com' },
+          { value: 'codeberg.org', label: 'Codeberg (Forgejo)' },
+          { value: 'self-hosted', label: 'Self-hosted Gitea or Forgejo' },
+        ]}
+      />
+    {/if}
 
     <div class="grid gap-4 sm:grid-cols-2">
       <FormInput id="name" label="Name" required bind:value={name} error={err('name')} />

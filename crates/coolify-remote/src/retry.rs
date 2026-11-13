@@ -27,7 +27,6 @@ const RETRYABLE_PATTERNS: &[&str] = &[
     "Timeout, server not responding",
     "Cannot assign requested address",
     "Network is down",
-    "Host key verification failed",
     "Operation timed out",
     "Connection closed unexpectedly",
     "Remote host closed connection",

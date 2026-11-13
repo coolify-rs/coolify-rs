@@ -10,6 +10,12 @@ use super::markdown;
 use super::messages::{CommitDetails, SslResource, TraefikServer};
 use super::php::{e, filled, php_string, truthy, ucfirst, value_truthy};
 
+/// `emails.image-vulnerabilities`: `slot` is what the view renders inside `<x-emails.layout>`
+/// (`ExploitedProblemFound::mail_slot`, `VulnerabilityDigest::mail_slot`).
+pub(crate) fn image_vulnerabilities(app_name: &str, slot: &str) -> String {
+    layout(app_name, slot)
+}
+
 /// `components/emails/layout`, `header` and `footer`.
 fn layout(app_name: &str, slot: &str) -> String {
     let slot = super::php::php_trim(slot);
@@ -140,6 +146,8 @@ pub fn deployment_success(
     )
 }
 
+/// `application-deployment-failed`. `blocked` is `$blockedTitle` when the image scan gate stopped
+/// the deployment; the view gets it as `NotificationText::mailMarkdown($blockedTitle)`.
 pub fn deployment_failed(
     app: &str,
     name: &str,
@@ -147,9 +155,15 @@ pub fn deployment_failed(
     pr: i64,
     url: &str,
     commit: Option<&MailCommit>,
+    blocked: Option<&str>,
 ) -> String {
     let (n, f) = (e(name), e(fqdn.unwrap_or_default()));
-    let head = if pr == 0 {
+    let head = if let Some(title) = blocked.filter(|t| truthy(Some(t))) {
+        format!(
+            "{}.\n\nThe image scan blocked the deployment of {n}. See the Vulnerabilities page of the application for the results.\n",
+            e(&escape_mail_markdown(title))
+        )
+    } else if pr == 0 {
         format!("Failed to deploy a new version of {n} at [{f}]({f}) .\n")
     } else {
         format!("Failed to deploy a pull request #{pr} of {n} at\n[{f}]({f}).\n")
@@ -164,15 +178,15 @@ pub fn deployment_failed(
     )
 }
 
-/// `application-status-changes`: upstream's view reads `$application_url`, which
-/// `StatusChanged::toMail` does not pass, so the link is always empty. Nothing dispatches
-/// `StatusChanged` upstream (only `php artisan emails`).
-pub fn application_status_changes(app: &str, name: &str) -> String {
+/// `application-status-changes`: a resource stopped without a stop from Coolify
+/// (`NotifyResourceStoppedJob`).
+pub fn application_status_changes(app: &str, name: &str, resource_url: &str) -> String {
     layout(
         app,
         &format!(
-            "{} has been stopped.\n\nIf it was your intention to stop this application, you can ignore this email.\n\nIf not, [check what is going on]().\n",
-            e(name)
+            "{} has stopped.\n\nIf it was your intention to stop this resource, you can ignore this email.\n\nIf not, [check what is going on]({}).\n",
+            e(name),
+            e(resource_url)
         ),
     )
 }
@@ -230,21 +244,25 @@ pub fn backup_success(app: &str, name: &str, database: Option<&str>, frequency: 
     )
 }
 
+/// `backup-failed`. `reminder` is `NotificationThrottle::FAILURE_REMINDER_TEXT` (`@isset($reminder)`
+/// after the output).
 pub fn backup_failed(
     app: &str,
     name: &str,
     database: Option<&str>,
     frequency: &str,
     output: &str,
+    reminder: Option<&str>,
 ) -> String {
-    layout(
-        app,
-        &format!(
-            "{} was FAILED.\n\n### Reason\n\n{}\n",
-            backup_head(name, database, frequency),
-            e(output)
-        ),
-    )
+    let mut slot = format!(
+        "{} was FAILED.\n\n### Reason\n\n{}\n\n",
+        backup_head(name, database, frequency),
+        e(output)
+    );
+    if let Some(r) = reminder {
+        slot.push_str(&format!("{}\n", e(r)));
+    }
+    layout(app, &slot)
 }
 
 pub fn backup_success_with_s3_warning(
@@ -256,13 +274,13 @@ pub fn backup_success_with_s3_warning(
     s3_url: Option<&str>,
 ) -> String {
     let mut slot = format!(
-        "{} succeeded locally but failed to upload to S3.\n\nS3 Error: {}\n\n",
+        "{} succeeded locally but failed to upload to the backup storage.\n\nStorage Error: {}\n\n",
         backup_head(name, database, frequency),
         e(s3_error)
     );
     if truthy(s3_url) {
         slot.push_str(&format!(
-            "Check S3 Configuration: {}\n",
+            "Check Storage Configuration: {}\n",
             e(s3_url.unwrap_or_default())
         ));
     }
@@ -297,13 +315,15 @@ pub fn docker_cleanup_success(app: &str, name: &str, text: &str) -> String {
     )
 }
 
-pub fn docker_cleanup_failed(app: &str, name: &str, text: &str) -> String {
+/// `docker-cleanup-failed`. `reminder` is `NotificationThrottle::FAILURE_REMINDER_TEXT`.
+pub fn docker_cleanup_failed(app: &str, name: &str, text: &str, reminder: &str) -> String {
     layout(
         app,
         &format!(
-            "Docker Cleanup on {} FAILED with the following error:\n\n<pre>\n{}\n</pre>\n\n",
+            "Docker Cleanup on {} FAILED with the following error:\n\n<pre>\n{}\n</pre>\n\n{}\n\n",
             e(name),
-            e(text)
+            e(text),
+            e(reminder)
         ),
     )
 }
@@ -356,7 +376,7 @@ pub fn s3_connection_error(app: &str, name: &str, reason: &str, url: &str) -> St
     layout(
         app,
         &format!(
-            "\nConnection could not be established with one of your S3 Storage ({}). Please fix it [here]({}).\n\n{}\n",
+            "\nConnection could not be established with one of your backup storages ({}). Please fix it [here]({}).\n\n{}\n",
             e(name),
             e(url),
             e(reason),
@@ -409,16 +429,39 @@ pub fn scheduled_task_success(app: &str, name: &str, output: &str, url: Option<&
     )
 }
 
-pub fn scheduled_task_failed(app: &str, name: &str, output: &str, url: Option<&str>) -> String {
+/// `scheduled-task-failed`: `TaskFailed::title()`, `streakSummary()` and the last error.
+pub fn scheduled_task_failed(
+    app: &str,
+    title: &str,
+    summary: &str,
+    output: &str,
+    url: Option<&str>,
+) -> String {
     layout(
         app,
         &format!(
-            "Scheduled task ({}) was FAILED with the following error:\n\n<pre>\n{}\n</pre>\n\nClick [here]({}) to view the task.\n",
-            e(name),
+            "{}\n\n{}\n\nLast error:\n\n<pre>\n{}\n</pre>\n\nClick [here]({}) to view the task.\n",
+            e(title),
+            e(summary),
             e(output),
             e(url.unwrap_or_default())
         ),
     )
+}
+
+/// `scheduled-job-recovered`.
+pub fn scheduled_job_recovered(app: &str, title: &str, url: Option<&str>) -> String {
+    let mut s = format!(
+        "{}\n\nThe last run succeeded after failed runs.\n\n",
+        e(title)
+    );
+    if truthy(url) {
+        s.push_str(&format!(
+            "Click [here]({}) to open it in Coolify.\n",
+            e(url.unwrap_or_default())
+        ));
+    }
+    layout(app, &s)
 }
 
 pub fn server_force_disabled(app: &str, name: &str) -> String {
@@ -445,6 +488,14 @@ pub fn server_lost_connection(app: &str, name: &str) -> String {
             "Coolify cannot connect to your server ({}). Please check your server and make sure it is running.\n\nAll automations & integrations are turned off!\n\nIMPORTANT: We automatically try to revive your server and turn on all automations & integrations.\n\nIf you have any questions, please contact us.\n",
             e(name)
         ),
+    )
+}
+
+/// `emails.server-host-key-changed`.
+pub fn server_host_key_changed(app: &str, text: &str, url: &str) -> String {
+    layout(
+        app,
+        &format!("{}\n\n[Check the new key]({})\n", e(text), e(url)),
     )
 }
 
@@ -686,16 +737,23 @@ pub fn volume_backup_recovery_failed(app: &str, summary: &str, url: Option<&str>
     layout(app, &s)
 }
 
+/// `volume-backup-result`. `reminder` is `NotificationThrottle::FAILURE_REMINDER_TEXT` for a failed
+/// backup (`@isset($reminder)` after the output).
 pub fn volume_backup_result(
     app: &str,
     summary: &str,
     frequency: &str,
     output: Option<&str>,
+    reminder: Option<&str>,
     url: Option<&str>,
 ) -> String {
     let mut s = format!("{}\n\nFrequency: {}\n\n", e(summary), e(frequency));
     if let Some(o) = output {
         s.push_str(&format!("### Reason\n\n{}\n", e(o)));
+    }
+    s.push('\n');
+    if let Some(r) = reminder {
+        s.push_str(&format!("{}\n", e(r)));
     }
     s.push('\n');
     if truthy(url) {
@@ -705,6 +763,26 @@ pub fn volume_backup_result(
         ));
     }
     layout(app, &s)
+}
+
+/// `api-token-failing`.
+pub fn api_token_failing(
+    app: &str,
+    summary: &str,
+    action: &str,
+    last_request: &str,
+    manage_url: &str,
+) -> String {
+    layout(
+        app,
+        &format!(
+            "{}\n\nLast failed request: {}\n\n{}\n\nManage your API tokens [here]({}).\n",
+            e(summary),
+            e(last_request),
+            e(action),
+            e(manage_url)
+        ),
+    )
 }
 
 pub fn api_token_expiring(app: &str, token: &str, expires: &str, url: &str) -> String {

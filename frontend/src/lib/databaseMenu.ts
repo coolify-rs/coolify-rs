@@ -13,7 +13,6 @@ export const CONFIGURATION_SECTIONS = [
   'general',
   'environment-variables',
   'servers',
-  'import-backup',
   'persistent-storage',
   'healthcheck',
   'webhooks',
@@ -27,7 +26,7 @@ export const CONFIGURATION_SECTIONS = [
 export function databaseNavContext(
   base: string,
   active: string,
-  opts: { canUpdate: boolean; canAccessTerminal: boolean; backups: boolean; initScripts: boolean; sqlite?: boolean },
+  opts: { canUpdate: boolean; canAccessTerminal: boolean; backups: boolean; initScripts: boolean; sqlite?: boolean; security?: string | null },
 ): NavContext {
   const item = (label: string, section: string, icon: string, extra: Partial<Entry> = {}): Entry => ({
     label,
@@ -49,7 +48,6 @@ export function databaseNavContext(
     'Environment Variables': item('Environment Variables', 'environment-variables', 'variables'),
     'Persistent Storage': item('Persistent Storage', 'persistent-storage', 'storages'),
     'Backups': item('Backups', 'backups', 'database', { visible: opts.backups }),
-    'Import Backup': item('Import Backup', 'import-backup', 'upload', { visible: opts.canUpdate }),
     'Servers': item('Servers', 'servers', 'servers'),
     'Runtime Logs': item('Runtime Logs', 'logs', 'unordered-list'),
     'Terminal': item('Terminal', 'terminal', 'browser-terminal', { visible: opts.canAccessTerminal }),
@@ -59,14 +57,16 @@ export function databaseNavContext(
     'Resource Limits': item('Resource Limits', 'resource-limits', 'cpu'),
     'Resource Operations': item('Resource Operations', 'resource-operations', 'server-update'),
     'Metrics': item('Metrics', 'metrics', 'graph'),
+    // `'security' => SecurityStatus::stored($database)->status->value` (the security dot).
+    'Security': item('Security', 'vulnerabilities', 'shield-alert', { security: opts.security ?? null }),
     'Tags': item('Tags', 'tags', 'tags'),
     'Danger Zone': item('Danger Zone', 'danger', 'danger'),
   };
   const menuGroups = [
     ['General', 'Environment Variables', 'Persistent Storage', 'Healthcheck'],
-    ['Runtime Logs', 'Terminal', 'Files', 'Metrics'],
+    ['Runtime Logs', 'Terminal', 'Files', 'Metrics', 'Security'],
     ['Servers'],
-    ['Webhooks', 'Backups', 'Import Backup'],
+    ['Webhooks', 'Backups'],
     ['Resource Operations', 'Resource Limits', 'Tags'],
     ['Danger Zone'],
   ];
@@ -112,6 +112,7 @@ export const DATABASE_SECTIONS = [
   'resource-limits',
   'resource-operations',
   'metrics',
+  'vulnerabilities',
   'tags',
   'danger',
   'logs',

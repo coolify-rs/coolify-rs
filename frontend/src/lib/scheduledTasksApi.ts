@@ -12,7 +12,11 @@ export interface ScheduledTaskRow {
   frequency: string;
   container: string | null;
   timeout: number;
+  /** Run the command with `sh -c` in the container. */
+  use_shell: boolean;
   enabled: boolean;
+  /** Why Coolify disabled the task automatically; cleared when it is enabled again. */
+  disabled_reason: string | null;
   latest_status: string | null;
 }
 
@@ -39,6 +43,7 @@ export interface TaskForm {
   frequency: string;
   container: string;
   timeout: string | number;
+  use_shell: boolean;
 }
 
 type Answer = { message: string };

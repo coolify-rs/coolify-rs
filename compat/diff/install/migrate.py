@@ -3,7 +3,7 @@
 
     migrate.py <private work folder> <coolify-rs image tag> [stage ...]
 
-One throwaway OrbStack VM: upstream's own installer at the release coolify-rs matches (UP_VERSION, default 4.6.0, from
+One throwaway OrbStack VM: upstream's own installer at the release coolify-rs matches (UP_VERSION, default 4.7.5, from
 .upstream/snapshot-<version>), a deployment on it, the dry-run check, the coolify-rs installer over it, checks and a
 deployment on coolify-rs, then upstream's installer again to go back. The image is coolify-rs/coolify-rs:<tag> in the
 local Docker. Stages: clean up user seed dryrun migrate after back delete. Without stages, all run and the VM is deleted at
@@ -20,7 +20,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 VM, PORT = "coolify-rs-agent-install-up", "28093"
-UP_VERSION = os.environ.get("UP_VERSION", "4.6.0")
+UP_VERSION = os.environ.get("UP_VERSION", "4.7.5")
 work, tag = Path(sys.argv[1]), sys.argv[2]
 stages = sys.argv[3:]
 failures = []
@@ -121,11 +121,16 @@ HISTORICAL_MIGRATIONS = [
 
 
 def stage_seed():
-    # From 4.6.0 on, Coolify on this offline VM marks the proxy "starting" after validation but never starts it, so
-    # start it the way the dashboard's Start Proxy button does. The migration must then leave it running.
-    code, out = vm("docker", "exec", "coolify", "php", "artisan", "tinker", "--execute",
-                   'App\\Actions\\Proxy\\StartProxy::run(App\\Models\\Server::find(0), async: false); echo "started";')
-    check("Coolify's proxy", "started" in out, out.strip()[-200:])
+    # On 4.6.0 Coolify on this offline VM marks the proxy "starting" after validation but never starts it, so
+    # start it the way the dashboard's Start Proxy button does; 4.7 starts it itself. The migration must then leave it
+    # running.
+    _, running = vm("docker", "ps", "--filter", "name=^coolify-proxy$", "--format", "{{.Names}}")
+    if running.strip() == "coolify-proxy":
+        out = "already running"
+    else:
+        _, out = vm("docker", "exec", "coolify", "php", "artisan", "tinker", "--execute",
+                    'App\\Actions\\Proxy\\StartProxy::run(App\\Models\\Server::find(0), async: false); echo "started";')
+    check("Coolify's proxy", "started" in out or out == "already running", out.strip()[-200:])
     show("deployments on Coolify", *run("python3", HERE / "deploy_check.py", VM, PORT, timeout=1500), tail=14)
     values = ", ".join(f"('{m}', (SELECT max(batch) FROM migrations))" for m in HISTORICAL_MIGRATIONS)
     code, out = vm("docker", "exec", "coolify-db", "psql", "-U", "coolify", "-d", "coolify", "-Atc",
