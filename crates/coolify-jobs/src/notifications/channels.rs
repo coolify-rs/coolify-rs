@@ -18,6 +18,10 @@ use lettre::transport::smtp::extension::ClientId;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
 use serde_json::{Value, json};
 
+use super::email_settings::{
+    SmtpHostErrorKind, enabled_email_provider, mail_from_identity, normalize_smtp_host,
+    smtp_connection_address,
+};
 use super::messages::{
     Mail, MailMessage, Notification, TelegramMessage, button_parts, test_notification,
 };
@@ -74,9 +78,9 @@ impl Settings {
 /// `isEnabled()` of each settings model.
 fn is_enabled(ch: &Channel, s: &Settings) -> bool {
     match ch.name {
+        // `filled(enabled_email_provider($this)) || $this->use_instance_email_settings`.
         "email" => {
-            s.flag("smtp_enabled")
-                || s.flag("resend_enabled")
+            enabled_email_provider(s.flag("resend_enabled"), s.flag("smtp_enabled")).is_some()
                 || s.flag("use_instance_email_settings")
         }
         "discord" => s.flag("discord_enabled"),
@@ -88,7 +92,7 @@ fn is_enabled(ch: &Channel, s: &Settings) -> bool {
 }
 
 /// `$alwaysSendEvents`.
-const ALWAYS_SEND: [&str; 7] = [
+const ALWAYS_SEND: [&str; 8] = [
     "server_force_enabled",
     "server_force_disabled",
     "general",
@@ -96,6 +100,7 @@ const ALWAYS_SEND: [&str; 7] = [
     "ssl_certificate_renewal",
     "hetzner_deletion_failure",
     "api_token_expiring",
+    "api_token_failing",
 ];
 
 pub(super) async fn any_enabled(
@@ -540,33 +545,78 @@ async fn telegram_send(
 ) -> Result<Response, String> {
     let url = format!("{}/bot{}/sendMessage", telegram_base(), php_trim(token));
     let payload = telegram_payload(ctx, message, chat_id, thread_id);
-    request("Telegram", &url, &payload, None).await
+    let response = request("Telegram", &url, &payload, None).await?;
+    // Telegram rejects the whole message when it cannot open a button URL (for example localhost
+    // or an IP address without a domain): the links are sent as text instead.
+    let description = match response.json("description") {
+        Some(Value::String(s)) => s,
+        Some(Value::Null) | None => String::new(),
+        Some(other) => other.to_string(),
+    };
+    if !message.buttons.is_empty() && response.status == 400 && rejects_button_url(&description) {
+        let payload = telegram_links_payload(ctx, message, chat_id, thread_id);
+        return request("Telegram", &url, &payload, None).await;
+    }
+    Ok(response)
 }
 
-/// The body of `SendMessageToTelegramJob::sendMessage`.
+/// `Str::contains($description, ['button url', 'button_url'], true)`.
+fn rejects_button_url(description: &str) -> bool {
+    let lower = description.to_lowercase();
+    lower.contains("button url") || lower.contains("button_url")
+}
+
+/// `$inlineButtons` of `SendMessageToTelegramJob::sendMessage`.
+fn telegram_buttons(ctx: &Ctx, message: &TelegramMessage) -> Vec<(String, Option<String>)> {
+    message
+        .buttons
+        .iter()
+        .map(|b| button_parts(b, &ctx.app_url))
+        .collect()
+}
+
+/// `$payload` of `SendMessageToTelegramJob::sendMessage`: the chat, the text and the thread.
+fn telegram_base_payload(text: &str, chat_id: &str, thread_id: Option<&str>) -> Value {
+    let mut payload = json!({
+        "chat_id": php_trim(chat_id),
+        "text": text,
+    });
+    if truthy(thread_id) {
+        payload["message_thread_id"] = json!(thread_id);
+    }
+    payload
+}
+
+/// The body of `SendMessageToTelegramJob::sendMessage`: the message with its buttons.
 pub(super) fn telegram_payload(
     ctx: &Ctx,
     message: &TelegramMessage,
     chat_id: &str,
     thread_id: Option<&str>,
 ) -> Value {
-    let inline: Vec<Value> = message
-        .buttons
-        .iter()
-        .map(|b| {
-            let (text, url) = button_parts(b, &ctx.app_url);
-            json!({"text": text, "url": url})
-        })
+    let inline: Vec<Value> = telegram_buttons(ctx, message)
+        .into_iter()
+        .map(|(text, url)| json!({"text": text, "url": url}))
         .collect();
-    let mut payload = json!({
-        "reply_markup": php_json::encode(&json!({"inline_keyboard": [inline]})),
-        "chat_id": php_trim(chat_id),
-        "text": message.message,
-    });
-    if truthy(thread_id) {
-        payload["message_thread_id"] = json!(thread_id);
-    }
+    let mut payload = telegram_base_payload(&message.message, chat_id, thread_id);
+    payload["reply_markup"] = json!(php_json::encode(&json!({"inline_keyboard": [inline]})));
     payload
+}
+
+/// The second body of `sendMessage`, after Telegram rejected a button URL: no buttons, and the
+/// links as lines of text (`"{$button['text']}: {$button['url']}"`) under the message.
+pub(super) fn telegram_links_payload(
+    ctx: &Ctx,
+    message: &TelegramMessage,
+    chat_id: &str,
+    thread_id: Option<&str>,
+) -> Value {
+    let links: Vec<String> = telegram_buttons(ctx, message)
+        .into_iter()
+        .map(|(text, url)| format!("{text}: {}", url.unwrap_or_default()))
+        .collect();
+    let text = format!("{}\n\n{}", message.message, links.join("\n"));
+    telegram_base_payload(&text, chat_id, thread_id)
 }
 
 /// `TelegramChannel::send` and `SendMessageToTelegramJob`: 3 exceptions end the job.
@@ -678,22 +728,27 @@ async fn webhook(
     .await
 }
 
-/// `mail_from_identity`.
-fn mail_from(settings: &Settings) -> Result<(String, String), String> {
-    let address = settings
-        .secret("smtp_from_address")?
-        .filter(|a| !php_trim(a).is_empty())
-        .ok_or("Transactional email sender address is not configured.")?;
-    let name = settings.secret("smtp_from_name")?.unwrap_or_default();
-    let name = php_trim(&name);
-    Ok((
-        address,
-        if name.is_empty() {
-            "Coolify".to_owned()
-        } else {
-            name.to_owned()
-        },
-    ))
+/// `mail_from_identity($settings, $asNotification)`: every sender column is an `encrypted` cast.
+fn mail_from(settings: &Settings, as_notification: bool) -> Result<(String, String), String> {
+    let mut senders: std::collections::HashMap<&'static str, String> =
+        std::collections::HashMap::new();
+    for key in [
+        "smtp_from_address",
+        "smtp_from_name",
+        "resend_from_address",
+        "resend_from_name",
+        "notification_from_address",
+        "notification_from_name",
+    ] {
+        if let Some(value) = settings.secret(key)? {
+            senders.insert(key, value);
+        }
+    }
+    mail_from_identity(
+        |key| senders.get(key).cloned(),
+        settings.flag("resend_enabled"),
+        as_notification,
+    )
 }
 
 /// `Symfony\Component\Mime\Address::toString()`: `"Name" <address>`, encoded when not ASCII.
@@ -720,8 +775,9 @@ async fn smtp_send(
     from: &(String, String),
     to: &[String],
     mail: &MailMessage,
+    connect_address: Option<&str>,
 ) -> Result<(), SmtpFailure> {
-    smtp_send_with_cc(settings, from, to, None, mail).await
+    smtp_send_with_cc(settings, from, to, None, mail, connect_address).await
 }
 
 /// `->replyTo($email)->cc($cc)` of `send_user_an_email`.
@@ -731,6 +787,7 @@ async fn smtp_send_with_cc(
     to: &[String],
     cc: Option<&str>,
     mail: &MailMessage,
+    connect_address: Option<&str>,
 ) -> Result<(), SmtpFailure> {
     let fail = |message: String| SmtpFailure {
         code: None,
@@ -740,16 +797,25 @@ async fn smtp_send_with_cc(
         .secret("smtp_host")
         .map_err(fail)?
         .unwrap_or_default();
-    let host = host
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_owned();
+    // `SafeSmtpHost::normalizeHost((string) $settings->smtp_host)`.
+    let host = normalize_smtp_host(&host);
+    // `$connectAddress`: connect to this checked address instead of resolving the host again.
+    // TLS still verifies the certificate for the host name (`peer_name`).
+    let connect = match connect_address {
+        Some(address) if address != host => address.to_owned(),
+        _ => host.clone(),
+    };
     let port = settings.int("smtp_port").unwrap_or(0) as u16;
     let mode = settings.plain("smtp_encryption").map(|m| m.to_lowercase());
     let tls_parameters = TlsParameters::new(host.clone()).map_err(|e| fail(e.to_string()))?;
     let implicit_tls =
         mode.as_deref() == Some("tls") || (mode.as_deref() != Some("none") && port == 465);
-    let symfony_host = host.clone();
+    // `formatHostForUrl`: the stream names the address it connects to.
+    let symfony_host = if connect.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{connect}]")
+    } else {
+        connect.clone()
+    };
     let tls = match mode.as_deref() {
         Some("none") => Tls::None,
         Some("tls") => Tls::Wrapper(tls_parameters),
@@ -758,7 +824,7 @@ async fn smtp_send_with_cc(
         _ => Tls::Opportunistic(tls_parameters),
     };
     let mut builder: AsyncSmtpTransportBuilder =
-        AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&host)
+        AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&connect)
             .port(port)
             .tls(tls);
     if let Some(ehlo) = settings.plain("smtp_ehlo_domain").filter(|d| !d.is_empty()) {
@@ -985,11 +1051,15 @@ async fn email_channel(
     team_id: i64,
     team_settings: &Settings,
     transactional: bool,
+    uses_notification_sender: Option<bool>,
     custom_emails: Option<&str>,
     is_test: bool,
     mail: &MailMessage,
 ) -> Result<(), String> {
     let use_instance = team_settings.flag("use_instance_email_settings") || transactional;
+    // Only the instance settings have a notification sender. A test email can ask for it
+    // explicitly (`usesNotificationSender`).
+    let as_notification = use_instance && uses_notification_sender.unwrap_or(!transactional);
     let instance;
     let settings = if use_instance {
         instance = Settings {
@@ -1025,7 +1095,7 @@ async fn email_channel(
     }
 
     if settings.flag("resend_enabled") {
-        let from = mail_from(settings)?;
+        let from = mail_from(settings, as_notification)?;
         let body = json!({
             "from": formatted_from(&from.0, &from.1),
             "to": recipients,
@@ -1074,8 +1144,33 @@ async fn email_channel(
             }
         }
     } else if settings.flag("smtp_enabled") {
-        let from = mail_from(settings)?;
-        if let Err(e) = smtp_send(settings, &from, &recipients, mail).await {
+        // The team's own SMTP host: check it again and connect to the checked address.
+        let mut connect_address = None;
+        if !use_instance {
+            let host = settings.secret("smtp_host")?.unwrap_or_default();
+            match smtp_connection_address(db, &host).await {
+                Ok(address) => connect_address = Some(address),
+                // `NonReportableException::fromException($e)`: the page shows the message.
+                Err(e) if is_test => return Err(e.message),
+                // A blocked host fails on every send. A host that did not resolve can be a
+                // temporary DNS failure, so the job is retried and nothing is counted.
+                Err(e) if e.kind == SmtpHostErrorKind::NotAllowed => {
+                    tracking::record_failure(db, encrypter, &ns::EMAIL, team_id, &e.message).await;
+                    return Ok(());
+                }
+                Err(e) => return Err(e.message),
+            }
+        }
+        let from = mail_from(settings, as_notification)?;
+        if let Err(e) = smtp_send(
+            settings,
+            &from,
+            &recipients,
+            mail,
+            connect_address.as_deref(),
+        )
+        .await
+        {
             if !is_test && tracked && matches!(e.code, Some(530 | 535)) {
                 tracking::record_failure(
                     db,
@@ -1115,6 +1210,10 @@ fn email_settings_json(settings: &Settings) -> String {
         "smtp_username",
         "smtp_timeout",
         "smtp_ehlo_domain",
+        "resend_from_address",
+        "resend_from_name",
+        // `HasSmtpServers::initializeHasSmtpServers`: `makeHidden('smtp_servers')`.
+        "smtp_servers",
     ] {
         row.remove(hidden);
     }
@@ -1157,6 +1256,7 @@ async fn email_with_retries(
             team_id,
             settings,
             false,
+            None,
             emails,
             notification.is_test(),
             &mail,
@@ -1213,6 +1313,7 @@ pub async fn send_test(
                 team_id,
                 &settings,
                 false,
+                None,
                 emails.as_deref(),
                 true,
                 &mail,
@@ -1301,6 +1402,19 @@ pub async fn send_transactional(
     to: &str,
     mail: &Mail,
 ) -> Result<(), String> {
+    send_instance_mail(db, encrypter, to, mail, false).await
+}
+
+/// Mail through the instance email settings. `as_notification` is `$asNotification` of
+/// `send_user_an_email` (alerts) and of `EmailChannel` for `TransactionalEmails\Test` with
+/// `usesNotificationSender`: the mail comes from the notification sender when one is set.
+pub async fn send_instance_mail(
+    db: &Db,
+    encrypter: Option<&Encrypter>,
+    to: &str,
+    mail: &Mail,
+    as_notification: bool,
+) -> Result<(), String> {
     let ctx = Ctx::load(db).await;
     let settings = Settings {
         row: instance_settings::row(db)
@@ -1309,7 +1423,12 @@ pub async fn send_transactional(
         encrypter: encrypter.cloned(),
     };
     let message = mail.render(&ctx);
-    let enabled = settings.flag("smtp_enabled") || settings.flag("resend_enabled");
+    // `blank(enabled_email_provider($settings))`.
+    let enabled = enabled_email_provider(
+        settings.flag("resend_enabled"),
+        settings.flag("smtp_enabled"),
+    )
+    .is_some();
     if !enabled {
         return match mail {
             // `TransactionalEmailChannel` and the `EmailChannel` of `Test` send nothing.
@@ -1320,7 +1439,7 @@ pub async fn send_transactional(
             _ => Err("No email settings found.".to_owned()),
         };
     }
-    let from = mail_from(&settings)?;
+    let from = mail_from(&settings, as_notification)?;
     let recipient = match mail {
         Mail::EmailChangeVerification { new_email, .. } => new_email.as_str(),
         _ => to,
@@ -1352,6 +1471,7 @@ pub async fn send_transactional(
         &[recipient.to_owned()],
         cc.as_deref(),
         &message,
+        None,
     )
     .await
     .map_err(|e| e.message)
@@ -1391,6 +1511,69 @@ mod tests {
             "https://discord.com:8443"
         );
         assert_eq!(redacted_url("nope"), "[invalid-url]");
+    }
+
+    fn telegram_message(buttons: Vec<Value>) -> TelegramMessage {
+        TelegramMessage {
+            message: "Deployment failed".to_owned(),
+            buttons,
+        }
+    }
+
+    fn telegram_ctx() -> Ctx {
+        Ctx {
+            base_url: "https://coolify.example".to_owned(),
+            app_url: "https://app.example".to_owned(),
+            app_name: "Coolify".to_owned(),
+            version: "4.7.5".to_owned(),
+            cloud: false,
+            dev: false,
+        }
+    }
+
+    #[test]
+    fn telegram_sends_buttons_as_an_inline_keyboard() {
+        let message = telegram_message(vec![
+            json!({"text": "Deployment logs", "url": "http://localhost/project/1"}),
+        ]);
+        let payload = telegram_payload(&telegram_ctx(), &message, " 42 ", Some("7"));
+        let keys: Vec<&String> = payload.as_object().unwrap().keys().collect();
+        assert_eq!(
+            keys,
+            ["chat_id", "text", "message_thread_id", "reply_markup"]
+        );
+        assert_eq!(payload["chat_id"], "42");
+        assert_eq!(payload["text"], "Deployment failed");
+        assert_eq!(payload["message_thread_id"], "7");
+        let markup: Value =
+            serde_json::from_str(payload["reply_markup"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            markup,
+            json!({"inline_keyboard": [[{"text": "Deployment logs", "url": "https://app.example/project/1"}]]})
+        );
+    }
+
+    #[test]
+    fn telegram_sends_links_as_text_when_a_button_url_is_rejected() {
+        assert!(rejects_button_url(
+            "Bad Request: inline keyboard button URL 'http://10.0.0.1:8000/x' is invalid: Wrong HTTP URL"
+        ));
+        assert!(rejects_button_url("Bad Request: BUTTON_URL_INVALID"));
+        assert!(!rejects_button_url("Bad Request: chat not found"));
+        assert!(!rejects_button_url(""));
+
+        let message = telegram_message(vec![
+            json!({"text": "Deployment logs", "url": "http://10.0.0.1:8000/project/1"}),
+            json!({"url": "http://10.0.0.1:8000/app"}),
+        ]);
+        let payload = telegram_links_payload(&telegram_ctx(), &message, "42", None);
+        assert!(payload.get("reply_markup").is_none());
+        assert!(payload.get("message_thread_id").is_none());
+        assert_eq!(payload["chat_id"], "42");
+        assert_eq!(
+            payload["text"],
+            "Deployment failed\n\nDeployment logs: http://10.0.0.1:8000/project/1\nClick here: http://10.0.0.1:8000/app"
+        );
     }
 
     #[test]

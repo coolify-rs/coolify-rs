@@ -2,6 +2,7 @@
   // Port of upstream livewire/project/shared/scheduled-task/all.blade.php and add.blade.php
   // (Project\Shared\ScheduledTask\All, Add).
   import { untrack } from 'svelte';
+  import Checkbox from '../Checkbox.svelte';
   import Empty from '../Empty.svelte';
   import FormInput from '../FormInput.svelte';
   import Listbox from '../Listbox.svelte';
@@ -23,7 +24,7 @@
   let adding = $state(false);
   let missing = $state(false);
   // `Add` stays mounted while its modal is closed, so its fields keep their values.
-  let form = $state({ name: '', command: '', frequency: '', container: '', timeout: '300' });
+  let form = $state({ name: '', command: '', frequency: '', container: '', timeout: '300', use_shell: true });
   let mounted = false;
 
   async function load() {
@@ -71,7 +72,7 @@
       const r = await scheduledTasksUi.add(kind, uuid, form);
       notify.success(r.message);
       // `clear()`
-      form = { name: '', command: '', frequency: '', container: '', timeout: '300' };
+      form = { name: '', command: '', frequency: '', container: '', timeout: '300', use_shell: true };
       await load();
     } catch (e) {
       notify.failure(e instanceof ApiError ? e.message : String(e));
@@ -167,6 +168,12 @@
         </div>
 
         <FormInput placeholder="php artisan schedule:run" id="command" label="Command" bind:value={form.command} />
+        <Checkbox
+          id="useShell"
+          label="Run in a shell"
+          helper="Run the command with <span class='font-mono'>sh -c</span>, so you can use variables, pipes, and redirects. Turn it off for containers without a shell (distroless or scratch images): Coolify then splits the command into arguments and runs it directly."
+          bind:checked={form.use_shell}
+        />
 
         <div class="grid gap-4 sm:grid-cols-2">
           <FormInput type="number" placeholder="300" id="timeout" helper="Maximum execution time from 60 to 36,000 seconds." label="Timeout (seconds)" bind:value={form.timeout} />

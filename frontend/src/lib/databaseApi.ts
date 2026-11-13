@@ -126,7 +126,7 @@ export const backupsUi = {
   remove: (uuid: string, backup: string, password: string, selected: string[]) =>
     post<ActionResult & { deleted?: boolean }>(`${base(uuid)}/backups/${backup}/delete`, { password, selected }),
   executions: (uuid: string, backup: string, skip: number) =>
-    request<{ executions: BackupExecution[]; total: number; server_timezone: string | null; s3_downloads: boolean }>(
+    request<{ executions: BackupExecution[]; total: number; server_timezone: string | null; s3_downloads: boolean; dump_all: boolean }>(
       'GET',
       `${base(uuid)}/backups/${backup}/executions?skip=${skip}`,
     ),

@@ -4,10 +4,11 @@
   import { tick } from 'svelte';
   import TeamSwitcher from './TeamSwitcher.svelte';
   import BreadcrumbSwitcher from './BreadcrumbSwitcher.svelte';
-  import { page, dashboardContext } from '../lib/page.svelte';
+  import { page, dashboardContextLink } from '../lib/page.svelte';
   import { router, link } from '../lib/router.svelte';
 
-  const context = $derived(dashboardContext(router.path));
+  const contextLink = $derived(dashboardContextLink(router.path));
+  const context = $derived(contextLink?.label ?? null);
   // Pages inside a project (its environments and their resources) show the switchers they set.
   const inProject = (name: string) =>
     ['project', 'environment', 'resource', 'database', 'application', 'service', 'destination', 'source-', 'canvas-project', 'canvas-environment'].some((prefix) => name.startsWith(prefix));
@@ -31,6 +32,9 @@
     return () => observer.disconnect();
   });
 
+  // "Go to project", "Go to environment"; for `<x-breadcrumb-switcher>`: `Go to {strtolower(str($title)->singular())}`.
+  const goTitle = (heading: string) => `Go to ${heading.replace(/s$/, '').toLowerCase()}`;
+
   let openIndex = $state(-1);
   let root: HTMLDivElement | undefined = $state();
 </script>
@@ -47,7 +51,12 @@
 
   {#if (switchers.length === 0 || router.current.name === 'destination' || page.sourceConnected !== null) && context && !titleRepeats}
     <span class="shrink-0 px-0.5 text-neutral-300 dark:text-fg-faint">/</span>
-    <span class="flex h-8 min-w-0 items-center truncate px-2 font-semibold text-black opacity-70 dark:text-fg">{context}</span>
+    <a
+      href={contextLink?.href}
+      use:link
+      class="flex h-8 min-w-0 items-center truncate rounded-md px-2 font-semibold text-black opacity-70 transition-[background-color,opacity] hover:bg-neutral-100 hover:opacity-100 dark:text-fg dark:hover:bg-white/[0.05]"
+      >{context}</a
+    >
   {/if}
 
   {#if page.resourceSwitcher}
@@ -57,17 +66,26 @@
   {#each switchers as s, i (s.heading)}
     <span class="shrink-0 text-neutral-300 dark:text-fg-faint px-0.5">/</span>
     <div class="relative min-w-0 shrink">
-      <button
-        type="button"
-        onclick={() => (openIndex = openIndex === i ? -1 : i)}
-        title={s.title}
-        class="flex items-center gap-1.5 min-w-0 max-w-full h-8 px-2 rounded-md opacity-70 transition-[background-color,opacity] hover:opacity-100 hover:bg-neutral-100 dark:hover:bg-white/[0.05]"
-      >
-        <span class="min-w-0 truncate font-semibold text-black dark:text-fg">{page.nameOf(s.uuid, s.label)}</span>
-        <svg class="size-4 shrink-0 text-neutral-400 dark:text-fg-faint" viewBox="0 0 24 24" fill="none">
-          <path d="M8 9l4-4 4 4M8 15l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      </button>
+      <div class="flex h-8 min-w-0 items-center rounded-md opacity-70 transition-opacity hover:opacity-100">
+        <a
+          href={s.items.find((item) => item.active)?.href}
+          use:link
+          title={s.goTitle ?? goTitle(s.heading)}
+          class="flex h-8 min-w-0 items-center rounded-l-md pr-1 pl-2 transition-colors hover:bg-neutral-100 dark:hover:bg-white/[0.05]"
+        >
+          <span class="min-w-0 truncate font-semibold text-black dark:text-fg">{page.nameOf(s.uuid, s.label)}</span>
+        </a>
+        <button
+          type="button"
+          onclick={() => (openIndex = openIndex === i ? -1 : i)}
+          title={s.title}
+          class="flex h-8 shrink-0 items-center rounded-r-md px-0.5 transition-colors hover:bg-neutral-100 dark:hover:bg-white/[0.05]"
+        >
+          <svg class="size-4 shrink-0 text-neutral-400 dark:text-fg-faint" viewBox="0 0 24 24" fill="none">
+            <path d="M8 9l4-4 4 4M8 15l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+      </div>
       {#if openIndex === i}
         <div class="listbox-panel scrollbar left-0! z-[90]! max-h-80! {i === 0 ? 'min-w-56' : 'min-w-52'} max-w-72">
           <div class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-400 dark:text-fg-faint">{s.heading}</div>
@@ -85,7 +103,7 @@
       {/if}
     </div>
     {#if s.meta}
-      <span class="inline-flex h-[22px] shrink-0 items-center gap-1.5 rounded-full border border-neutral-200 bg-neutral-100 px-2.5 text-xs font-medium text-black dark:border-white/[0.12] dark:bg-white/[0.08] dark:text-fg">
+      <span class="inline-flex h-[22px] shrink-0 items-center gap-1.5 text-xs text-neutral-700 dark:text-fg">
         <span class="size-1.5 rounded-full {s.meta.dot}"></span>
         {s.meta.label}
       </span>
@@ -93,9 +111,7 @@
   {/each}
 
   {#if page.sourceConnected !== null && switchers.length > 0}
-    <span
-      class="inline-flex h-[22px] shrink-0 items-center gap-1.5 rounded-full border border-neutral-200 bg-neutral-100 px-2.5 text-xs font-medium text-black dark:border-white/[0.12] dark:bg-white/[0.07] dark:text-white"
-    >
+    <span class="inline-flex h-[22px] shrink-0 items-center gap-1.5 text-xs text-neutral-700 dark:text-fg">
       <span class="size-1.5 rounded-full {page.sourceConnected ? 'bg-[#3fb950]' : 'bg-warning'}"></span>
       {page.sourceConnected ? 'Connected' : 'Setup incomplete'}
     </span>

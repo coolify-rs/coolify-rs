@@ -80,7 +80,7 @@
       </div>
       <!-- Resource pages teleport into these (layouts/app.blade.php). -->
       <div id="page-toolbar-slot" class="flex shrink-0 items-center empty:hidden"></div>
-      <div id="configuration-warning-hud-slot" class="relative shrink-0"></div>
+      <div id="configuration-warning-hud-slot" class="relative flex shrink-0 items-center gap-1"></div>
       <DeploymentsIndicator variant="topbar" />
       <div id="resource-action-hud-slot" class="hidden shrink-0 items-center xl:flex"></div>
     </div>
@@ -162,6 +162,8 @@
     </div>
     <div class="flex shrink-0 items-center gap-1">
       <div id="configuration-warning-hud-slot-mobile" class="relative shrink-0"></div>
+      <!-- Resource and server pages put their star button here. -->
+      <div id="resource-star-slot-mobile" class="flex shrink-0 items-center empty:hidden"></div>
       <DeploymentsIndicator variant="mobile" />
       {#if session.isInstanceAdmin}<UpgradeBadge />{/if}
       <UserMenu />

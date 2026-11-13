@@ -11,6 +11,7 @@ use axum::{Extension, Json, Router};
 use coolify_db::instance_settings;
 use coolify_db::notification_settings::{self as ns, Channel};
 use coolify_db::servers::ColumnValue;
+use coolify_jobs::notifications::email_settings as es;
 use serde_json::{Map, Value, json};
 
 use crate::audit::Meta;
@@ -124,18 +125,91 @@ fn present(
     }
     let is_enabled = |k: &str| row.get(k).and_then(Value::as_bool).unwrap_or(false);
     let enabled = match ch.name {
+        // `filled(enabled_email_provider($this)) || $this->use_instance_email_settings`.
         "email" => {
-            is_enabled("smtp_enabled")
-                || is_enabled("resend_enabled")
+            es::enabled_email_provider_of(row).is_some()
                 || is_enabled("use_instance_email_settings")
         }
         n => is_enabled(&format!("{n}_enabled")),
     };
-    Ok(json!({
+    let mut res = json!({
         "settings": Value::Object(out),
         "enabled": enabled,
         "can_update": can_update,
-    }))
+    });
+    if ch.name == "email" {
+        // `ManagesSmtpServers`: the name of the server in use is a form field; the saved servers
+        // are only listed by id and name, their settings never leave the server.
+        let model = email_model(state, ch, row)?;
+        res["settings"][ns::SMTP_SERVER_NAME] = row
+            .get(ns::SMTP_SERVER_NAME)
+            .cloned()
+            .unwrap_or(Value::Null);
+        // `activeEmailProvider()`.
+        res["active_provider"] = json!(es::enabled_email_provider_of(row).unwrap_or("none"));
+        res["smtp_server_name"] = json!(es::smtp_server_name(&model));
+        res["smtp_server_options"] = es::smtp_server_options(&model);
+        res["smtp_presets"] = es::smtp_presets_json();
+    }
+    Ok(res)
+}
+
+/// The attributes `HasSmtpServers` works on: the name, the saved servers and the columns of the
+/// server in use, decrypted.
+fn email_model(
+    state: &AppState,
+    ch: &Channel,
+    row: &Map<String, Value>,
+) -> Result<Map<String, Value>, ApiError> {
+    let mut model = Map::new();
+    model.insert(
+        ns::SMTP_SERVER_NAME.to_owned(),
+        row.get(ns::SMTP_SERVER_NAME)
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    model.insert(
+        ns::SMTP_SERVERS.to_owned(),
+        decrypted(state, ch, row, ns::SMTP_SERVERS)?,
+    );
+    for column in es::SMTP_SERVER_COLUMNS {
+        model.insert(column.to_owned(), decrypted(state, ch, row, column)?);
+    }
+    Ok(model)
+}
+
+/// The columns of `HasSmtpServers` that are not `$fillable`.
+const SERVER_EXTRAS: [&str; 2] = [ns::SMTP_SERVER_NAME, ns::SMTP_SERVERS];
+
+/// What `switchToSmtpServer`, `deleteActiveSmtpServer` and a rename can change.
+const SERVER_COLUMNS: [&str; 11] = [
+    ns::SMTP_SERVER_NAME,
+    ns::SMTP_SERVERS,
+    "smtp_from_address",
+    "smtp_from_name",
+    "smtp_host",
+    "smtp_port",
+    "smtp_encryption",
+    "smtp_username",
+    "smtp_password",
+    "smtp_timeout",
+    "smtp_ehlo_domain",
+];
+
+/// `Str::uuid()`.
+fn uuid4() -> String {
+    let mut b: [u8; 16] = rand::random();
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h: Vec<String> = b.iter().map(|x| format!("{x:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        h[..4].concat(),
+        h[4..6].concat(),
+        h[6..8].concat(),
+        h[8..10].concat(),
+        h[10..].concat()
+    )
 }
 
 async fn show(
@@ -172,8 +246,13 @@ async fn save_columns(
     let (row, _) = ns::first_or_create(&state.db, ch, ctx.team_id).await?;
     let mut dirty: Vec<&'static str> = Vec::new();
     let mut changes: Vec<(&'static str, ColumnValue)> = Vec::new();
+    let extras: &[&'static str] = if ch.name == "email" {
+        &SERVER_EXTRAS
+    } else {
+        &[]
+    };
     for key in row.keys() {
-        let Some(col) = ch.fillable.iter().copied().find(|f| f == key) else {
+        let Some(col) = ch.fillable.iter().chain(extras).copied().find(|f| f == key) else {
             continue;
         };
         if !columns.contains(&col) {
@@ -202,6 +281,16 @@ async fn save_columns(
             continue;
         }
         dirty.push(col);
+        if col == ns::SMTP_SERVERS {
+            // The `encrypted:array` cast: `encrypt(json_encode($value))`.
+            let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+            let cipher = match new {
+                Value::Null => None,
+                list => Some(enc.encrypt_string(&coolify_compat::php_json::encode(list))),
+            };
+            changes.push((col, ColumnValue::Text(cipher)));
+            continue;
+        }
         changes.push((col, column_value(state, ch, col, new)?));
     }
     if changes.is_empty() {
@@ -280,6 +369,22 @@ async fn component_rules(
             {
                 errors.push("The smtp timeout field must be a number.".to_owned());
             }
+            if !blank(values.get("resend_from_address"))
+                && let Some(m) = crate::rules::email_rule(&values["resend_from_address"])
+            {
+                errors.push(m.replace(":attribute", "resend from address"));
+            }
+            // `#[Validate(['required', 'in:none,smtp,resend'])] public string $emailProvider`.
+            // The property always has a value upstream; a request without it is not checked.
+            match values.get("email_provider") {
+                Some(v) if blank(Some(v)) => {
+                    errors.push("The email provider field is required.".to_owned());
+                }
+                Some(v) if !matches!(v.as_str(), Some("none" | "smtp" | "resend")) => {
+                    errors.push("The selected email provider is invalid.".to_owned());
+                }
+                _ => {}
+            }
         }
         "discord" | "slack" | "webhook" => {
             let col = match ch.name {
@@ -313,6 +418,18 @@ async fn component_rules(
         "telegram" => {
             required_if(&mut errors, values, "telegram_token", "telegram_enabled");
             required_if(&mut errors, values, "telegram_chat_id", "telegram_enabled");
+            // `#[Validate(['nullable', 'string', 'max:255'])]` of the image vulnerabilities topic.
+            let thread = "telegram_notifications_image_vulnerabilities_thread_id";
+            if values
+                .get(thread)
+                .and_then(Value::as_str)
+                .is_some_and(|t| t.chars().count() > 255)
+            {
+                errors.push(format!(
+                    "The {} field must not be greater than 255 characters.",
+                    attr(thread)
+                ));
+            }
         }
         _ => {
             required_if(&mut errors, values, "pushover_user_key", "pushover_enabled");
@@ -352,8 +469,57 @@ async fn save_model(
             m.replace(":attribute", "smtp ehlo domain"),
         )));
     }
-    save_columns(state, ctx, meta, ch, values, ch.fillable).await?;
+    if ch.name != "email" {
+        save_columns(state, ctx, meta, ch, values, ch.fillable).await?;
+        return Ok(None);
+    }
+    let (row, _) = ns::first_or_create(&state.db, ch, ctx.team_id).await?;
+    // `if ($this->smtpHost !== $this->settings->smtp_host)`: a stored host is checked again at
+    // send time, so an unchanged host must not block saving other fields.
+    if let Some(m) = changed_host_error(state, ctx, headers, ch, &row, values).await? {
+        return Ok(Some(toast_error(StatusCode::UNPROCESSABLE_ENTITY, m)));
+    }
+    // `fillSmtpServerSettings()`: a new server first keeps the server in use in the saved list.
+    let mut values = values.clone();
+    values.remove(ns::SMTP_SERVERS);
+    if is_true(&values, "is_new_smtp_server") {
+        let mut model = email_model(state, ch, &row)?;
+        es::SmtpServers(&mut model).keep_active(&uuid4());
+        values.insert(
+            ns::SMTP_SERVERS.to_owned(),
+            model.remove(ns::SMTP_SERVERS).unwrap_or(Value::Null),
+        );
+    }
+    let mut columns: Vec<&str> = ch.fillable.to_vec();
+    columns.extend(SERVER_EXTRAS);
+    save_columns(state, ctx, meta, ch, &values, &columns).await?;
     Ok(None)
+}
+
+/// `new SafeSmtpHost` for a host that differs from the stored one. A blank host passes.
+async fn changed_host_error(
+    state: &AppState,
+    ctx: &AuthCtx,
+    headers: &HeaderMap,
+    ch: &Channel,
+    row: &Map<String, Value>,
+    values: &Map<String, Value>,
+) -> Result<Option<String>, ApiError> {
+    let new = values.get("smtp_host").cloned().unwrap_or(Value::Null);
+    if new == decrypted(state, ch, row, "smtp_host")? {
+        return Ok(None);
+    }
+    let Some(host) = new.as_str().filter(|h| !h.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let is_admin = instance_settings::is_instance_admin(&state.db, ctx.user_id).await?;
+    Ok(es::smtp_host_error(
+        &state.db,
+        host,
+        is_admin,
+        &crate::safe_url::settings_url(headers),
+    )
+    .await)
 }
 
 /// `instantSave<Channel>Enabled`: the switch needs the credentials, even when turning off.
@@ -379,11 +545,20 @@ fn toggle_rules(ch: &Channel, values: &Map<String, Value>) -> Vec<String> {
         .collect()
 }
 
-/// `validateSmtpSettings`.
-fn smtp_rules(values: &Map<String, Value>) -> Vec<String> {
-    let mut e = from_rules(values);
+/// `validateSmtpSettings`, in rule order. The `SafeSmtpHost` rule of a changed host is checked
+/// by the caller ([`changed_host_error`]) right after the `required` rule of the host.
+fn smtp_rules(values: &Map<String, Value>, host_error: Option<String>) -> Vec<String> {
+    let mut e = Vec::new();
+    if let Some(name) = values.get(ns::SMTP_SERVER_NAME).and_then(Value::as_str)
+        && name.chars().count() > 255
+    {
+        e.push("The smtp server name field must not be greater than 255 characters.".to_owned());
+    }
+    e.extend(from_rules(values, "smtp"));
     if blank(values.get("smtp_host")) {
         e.push("SMTP Host is required.".to_owned());
+    } else if let Some(m) = host_error {
+        e.push(m);
     }
     match values.get("smtp_port").filter(|v| !blank(Some(v))) {
         None => e.push("SMTP Port is required.".to_owned()),
@@ -396,6 +571,18 @@ fn smtp_rules(values: &Map<String, Value>) -> Vec<String> {
             e.push("The selected smtp encryption is invalid.".to_owned());
         }
         _ => {}
+    }
+    // `Rule::requiredIf(SmtpPresets::requiresLogin($this->smtpHost))`, then `required_with`.
+    let needs_login = es::smtp_requires_login(values.get("smtp_host").and_then(Value::as_str));
+    if needs_login && blank(values.get("smtp_username")) {
+        e.push("This provider needs a username.".to_owned());
+    }
+    if blank(values.get("smtp_password")) {
+        if needs_login {
+            e.push("This provider needs a password.".to_owned());
+        } else if !blank(values.get("smtp_username")) {
+            e.push("Enter the password for this username.".to_owned());
+        }
     }
     if let Some(v) = values.get("smtp_timeout").filter(|v| !blank(Some(v)))
         && !numeric(v)
@@ -410,40 +597,85 @@ fn smtp_rules(values: &Map<String, Value>) -> Vec<String> {
     e
 }
 
-fn from_rules(values: &Map<String, Value>) -> Vec<String> {
+/// The sender rules of a provider (`smtp` or `resend`): `{provider}_from_address` and
+/// `{provider}_from_name`.
+fn from_rules(values: &Map<String, Value>, provider: &str) -> Vec<String> {
     let mut e = Vec::new();
-    if blank(values.get("smtp_from_address")) {
+    let address = format!("{provider}_from_address");
+    if blank(values.get(&address)) {
         e.push("From Address is required.".to_owned());
-    } else if crate::rules::email_rule(&values["smtp_from_address"]).is_some() {
+    } else if crate::rules::email_rule(&values[&address]).is_some() {
         e.push("Please enter a valid email address.".to_owned());
     }
-    if blank(values.get("smtp_from_name")) {
+    if blank(values.get(&format!("{provider}_from_name"))) {
         e.push("From Name is required.".to_owned());
     }
     e
 }
 
-/// `submitSmtp`.
-const SMTP_COLUMNS: &[&str] = &[
-    "smtp_enabled",
-    "smtp_from_address",
-    "smtp_from_name",
-    "smtp_host",
-    "smtp_port",
-    "smtp_encryption",
-    "smtp_username",
-    "smtp_password",
-    "smtp_timeout",
-    "smtp_ehlo_domain",
-];
+/// `validateResendSettings` with Resend turned on.
+fn resend_rules(values: &Map<String, Value>) -> Vec<String> {
+    let mut e = Vec::new();
+    if blank(values.get("resend_api_key")) {
+        e.push("Resend API Key is required.".to_owned());
+    }
+    e.extend(from_rules(values, "resend"));
+    e
+}
 
-/// `submitResend`.
-const RESEND_COLUMNS: &[&str] = &[
-    "resend_enabled",
-    "resend_api_key",
-    "smtp_from_address",
-    "smtp_from_name",
-];
+/// `enableSelectedEmailProvider()`: turns on the provider selected in the provider list and
+/// returns the errors of `validateEnabledEmailProvider()`. When they are not empty nothing is
+/// saved, so the saved provider stays on.
+async fn enable_selected_provider(
+    state: &AppState,
+    ctx: &AuthCtx,
+    headers: &HeaderMap,
+    ch: &'static Channel,
+    values: &mut Map<String, Value>,
+) -> Result<Vec<String>, ApiError> {
+    let provider = values
+        .get("email_provider")
+        .and_then(Value::as_str)
+        .unwrap_or("none")
+        .to_owned();
+    values.insert("smtp_enabled".into(), json!(provider == "smtp"));
+    values.insert("resend_enabled".into(), json!(provider == "resend"));
+    Ok(match provider.as_str() {
+        "smtp" => {
+            let (row, _) = ns::first_or_create(&state.db, ch, ctx.team_id).await?;
+            let host_error = changed_host_error(state, ctx, headers, ch, &row, values).await?;
+            smtp_rules(values, host_error)
+        }
+        "resend" => resend_rules(values),
+        _ => Vec::new(),
+    })
+}
+
+/// `saveEmailSettings()` after `switchToSmtpServer`, `deleteActiveSmtpServer` or a rename: only
+/// the model changes of the action are saved, not the form.
+async fn save_server_model(
+    state: &AppState,
+    ctx: &AuthCtx,
+    meta: &Meta,
+    ch: &'static Channel,
+    model: &Map<String, Value>,
+) -> Result<(), ApiError> {
+    save_columns(state, ctx, meta, ch, model, &SERVER_COLUMNS).await
+}
+
+/// `'required|string|max:255'` with `'Server name is required.'`.
+fn server_name_error(name: Option<&Value>, attribute: &str) -> Option<String> {
+    if blank(name) {
+        return Some("Server name is required.".to_owned());
+    }
+    match name.and_then(Value::as_str) {
+        Some(s) if s.chars().count() > 255 => Some(format!(
+            "The {attribute} field must not be greater than 255 characters."
+        )),
+        Some(_) => None,
+        None => Some(format!("The {attribute} field must be a string.")),
+    }
+}
 
 /// One Livewire action. `action` names the method; `values` is the form.
 async fn action(
@@ -471,6 +703,14 @@ async fn action(
     } else {
         "Settings saved."
     };
+    // The messages of `switchSmtpServer` and `deleteSmtpServer` name a server.
+    let mut switched: Option<String> = None;
+    // The saved servers are never taken from the request.
+    values.remove(ns::SMTP_SERVERS);
+    // Set by `enableSelectedEmailProvider` when the selected provider is not complete yet.
+    let mut pending = false;
+    // `addSmtpServer`: the fields of the new server, for the form.
+    let mut new_server: Option<Value> = None;
     match (ch.name, act) {
         ("email", "instant") => {
             // `instantSave()` with no type turns both senders off.
@@ -480,90 +720,113 @@ async fn action(
                 return Ok(r);
             }
         }
-        ("email", "smtp") => {
-            if !ctx.is_team_admin() {
-                return Ok(unauthorized());
-            }
-            if let Some(r) = validation_failed(&smtp_rules(&values)) {
+        ("email", "submit" | "provider") => {
+            // `submit()`; `selectEmailProvider()` is the same after a provider that validates.
+            let errors = if act == "provider" || !is_true(&values, "use_instance_email_settings") {
+                enable_selected_provider(&state, &ctx, &headers, ch, &mut values).await?
+            } else {
+                Vec::new()
+            };
+            if !errors.is_empty() && act == "provider" {
+                // Not complete yet: show the fields of the provider and the "Not active yet"
+                // notice, without an error. Nothing is saved.
+                pending = true;
+                message = "";
+            } else if let Some(r) = validation_failed(&errors) {
+                return Ok(r);
+            } else if let Some(r) = save_model(&state, &ctx, &meta, ch, &values, &headers).await? {
                 return Ok(r);
             }
-            let mut cols = SMTP_COLUMNS.to_vec();
-            if is_true(&values, "smtp_enabled") {
-                values.insert("resend_enabled".into(), json!(false));
-                cols.push("resend_enabled");
-            }
-            save_columns(&state, &ctx, &meta, ch, &values, &cols).await?;
-            message = "SMTP settings updated.";
         }
-        ("email", "resend") => {
+        ("email", "addServer") => {
+            // `addSmtpServer()`: starts a new server with the fields of the selected template or
+            // empty fields. Nothing is saved until the form is.
             if !ctx.is_team_admin() {
                 return Ok(unauthorized());
             }
             let mut errors = Vec::new();
-            if is_true(&values, "resend_enabled") && blank(values.get("resend_api_key")) {
-                errors.push("Resend API Key is required.".to_owned());
+            errors.extend(server_name_error(body.get("name"), "new smtp server name"));
+            let template = body.get("template").filter(|t| !blank(Some(t)));
+            let preset = template.and_then(Value::as_str).and_then(es::smtp_preset);
+            if template.is_some() && preset.is_none() {
+                errors.push("The selected new smtp server template is invalid.".to_owned());
             }
-            errors.extend(from_rules(&values));
             if let Some(r) = validation_failed(&errors) {
                 return Ok(r);
             }
-            let mut cols = RESEND_COLUMNS.to_vec();
-            if is_true(&values, "resend_enabled") {
-                values.insert("smtp_enabled".into(), json!(false));
-                cols.push("smtp_enabled");
-            }
-            save_columns(&state, &ctx, &meta, ch, &values, &cols).await?;
-            message = "Resend settings updated.";
+            new_server = Some(json!({
+                "smtp_server_name": body.get("name"),
+                "smtp_host": preset.map(|p| p.host),
+                "smtp_port": preset.map(|p| p.port.to_string()),
+                "smtp_encryption": preset.map_or("starttls", |p| p.encryption),
+                "smtp_username": preset.and_then(|p| p.username),
+                "smtp_password": null,
+                "smtp_timeout": null,
+                "smtp_ehlo_domain": null,
+            }));
+            message = "";
         }
-        ("email", "copy") => {
-            // `copyFromInstanceSettings`.
-            if !ctx.is_team_admin()
-                || !instance_settings::is_instance_admin(&state.db, ctx.user_id).await?
-            {
+        ("email", "switchServer") => {
+            // `switchSmtpServer($id)`.
+            if !ctx.is_team_admin() {
                 return Ok(unauthorized());
             }
-            let row = instance_settings::row(&state.db).await?;
-            let plain = |k: &str| -> Result<Value, ApiError> {
-                let v = row.get(k).cloned().unwrap_or(Value::Null);
-                if instance_settings::SECRET_COLUMNS.contains(&k)
-                    && let Some(c) = v.as_str()
-                {
-                    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-                    return enc
-                        .decrypt_string(c)
-                        .map(Value::String)
-                        .map_err(|_| ApiError::Internal);
+            let id = body.get("id").and_then(Value::as_str).unwrap_or("active");
+            message = "";
+            if id != "active" {
+                let (row, _) = ns::first_or_create(&state.db, ch, ctx.team_id).await?;
+                let mut model = email_model(&state, ch, &row)?;
+                if !es::SmtpServers(&mut model).switch_to(id, &uuid4()) {
+                    return Ok(toast_error(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "This SMTP server does not exist anymore. Reload the page.",
+                    ));
                 }
-                Ok(v)
-            };
-            let smtp_on = plain("smtp_enabled")?.as_bool().unwrap_or(false);
-            let resend_on = plain("resend_enabled")?.as_bool().unwrap_or(false);
-            for k in [
-                "smtp_from_address",
-                "smtp_from_name",
-                "smtp_recipients",
-                "smtp_host",
-                "smtp_port",
-                "smtp_encryption",
-                "smtp_username",
-                "smtp_password",
-                "smtp_timeout",
-                "smtp_ehlo_domain",
-                "resend_api_key",
-            ] {
-                values.insert(k.into(), plain(k)?);
+                save_server_model(&state, &ctx, &meta, ch, &model).await?;
+                switched = Some(format!(
+                    "Switched to SMTP server {}.",
+                    es::smtp_server_name(&model)
+                ));
             }
-            if smtp_on {
-                values.insert("smtp_enabled".into(), json!(true));
-                values.insert("resend_enabled".into(), json!(false));
+        }
+        ("email", "renameServer") => {
+            // `renameSmtpServer()`: only the name is saved; other unsaved changes on the page
+            // stay unsaved.
+            if !ctx.is_team_admin() {
+                return Ok(unauthorized());
             }
-            if resend_on {
-                values.insert("resend_enabled".into(), json!(true));
-                values.insert("smtp_enabled".into(), json!(false));
+            if let Some(m) = server_name_error(body.get("name"), "renamed smtp server name") {
+                return Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, m));
             }
-            if let Some(r) = save_model(&state, &ctx, &meta, ch, &values, &headers).await? {
-                return Ok(r);
+            let (row, _) = ns::first_or_create(&state.db, ch, ctx.team_id).await?;
+            let mut model = email_model(&state, ch, &row)?;
+            model.insert(
+                ns::SMTP_SERVER_NAME.to_owned(),
+                body.get("name").cloned().unwrap_or(Value::Null),
+            );
+            save_server_model(&state, &ctx, &meta, ch, &model).await?;
+            message = "SMTP server renamed.";
+        }
+        ("email", "deleteServer") => {
+            // `deleteSmtpServer()`: deletes the server in use and uses the next saved server.
+            if !ctx.is_team_admin() {
+                return Ok(unauthorized());
             }
+            let (row, _) = ns::first_or_create(&state.db, ch, ctx.team_id).await?;
+            let mut model = email_model(&state, ch, &row)?;
+            let name = es::smtp_server_name(&model);
+            if !es::SmtpServers(&mut model).delete_active() {
+                return Ok(toast_error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "This is the only SMTP server. To stop using SMTP, select another provider.",
+                ));
+            }
+            save_server_model(&state, &ctx, &meta, ch, &model).await?;
+            message = "";
+            switched = Some(format!(
+                "SMTP server {name} deleted. Now using {}.",
+                es::smtp_server_name(&model)
+            ));
         }
         (_, "toggle") => {
             if let Some(r) = validation_failed(&toggle_rules(ch, &values)) {
@@ -583,7 +846,13 @@ async fn action(
         .await?
         .ok_or(ApiError::Internal)?;
     let mut res = present(&state, &ctx, ch, &row)?;
-    res["message"] = json!(message);
+    res["message"] = json!(switched.as_deref().unwrap_or(message));
+    if pending {
+        res["pending"] = json!(true);
+    }
+    if let Some(server) = new_server {
+        res["new_server"] = server;
+    }
     Ok(ok(res).into_response())
 }
 
@@ -673,6 +942,110 @@ async fn send_test(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn form(pairs: Value) -> Map<String, Value> {
+        pairs.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn smtp_settings_need_a_login_for_a_known_provider() {
+        let mut v = form(json!({
+            "smtp_from_address": "a@example.com",
+            "smtp_from_name": "A",
+            "smtp_host": "smtp.gmail.com",
+            "smtp_port": "587",
+            "smtp_encryption": "starttls",
+        }));
+        assert_eq!(
+            smtp_rules(&v, None),
+            [
+                "This provider needs a username.",
+                "This provider needs a password."
+            ]
+        );
+        // A relay that needs no login.
+        v.insert("smtp_host".into(), json!("mail.internal.example"));
+        assert!(smtp_rules(&v, None).is_empty());
+        // A username needs its password.
+        v.insert("smtp_username".into(), json!("relay"));
+        assert_eq!(
+            smtp_rules(&v, None),
+            ["Enter the password for this username."]
+        );
+        v.insert("smtp_password".into(), json!("secret"));
+        assert!(smtp_rules(&v, None).is_empty());
+    }
+
+    #[test]
+    fn smtp_settings_report_the_host_rule_after_the_sender() {
+        let v = form(json!({
+            "smtp_host": "10.0.0.5",
+            "smtp_port": "abc",
+            "smtp_encryption": "ssl",
+        }));
+        assert_eq!(
+            smtp_rules(&v, Some("The SMTP host could not be resolved.".to_owned())),
+            [
+                "From Address is required.",
+                "From Name is required.",
+                "The SMTP host could not be resolved.",
+                "SMTP Port must be a number.",
+                "The selected smtp encryption is invalid.",
+            ]
+        );
+        // The `required` rule of the host comes before the host check.
+        assert_eq!(
+            smtp_rules(&form(json!({})), Some("unused".to_owned()))[2],
+            "SMTP Host is required."
+        );
+    }
+
+    #[test]
+    fn resend_settings_have_their_own_sender() {
+        assert_eq!(
+            resend_rules(&form(
+                json!({"smtp_from_address": "a@example.com", "smtp_from_name": "A"})
+            )),
+            [
+                "Resend API Key is required.",
+                "From Address is required.",
+                "From Name is required.",
+            ]
+        );
+        assert_eq!(
+            resend_rules(&form(json!({
+                "resend_api_key": "re_123",
+                "resend_from_address": "nope",
+                "resend_from_name": "A",
+            }))),
+            ["Please enter a valid email address."]
+        );
+    }
+
+    #[test]
+    fn server_names_are_required() {
+        assert_eq!(
+            server_name_error(None, "new smtp server name").as_deref(),
+            Some("Server name is required.")
+        );
+        assert_eq!(
+            server_name_error(Some(&json!("  ")), "new smtp server name").as_deref(),
+            Some("Server name is required.")
+        );
+        assert_eq!(server_name_error(Some(&json!("Production")), "x"), None);
+        assert_eq!(
+            server_name_error(Some(&json!("a".repeat(256))), "renamed smtp server name").as_deref(),
+            Some("The renamed smtp server name field must not be greater than 255 characters.")
+        );
+    }
+
+    #[test]
+    fn uuids_are_version_four() {
+        let id = uuid4();
+        assert_eq!(id.len(), 36);
+        assert_eq!(id.as_bytes()[14], b'4');
+        assert_ne!(id, uuid4());
+    }
 
     #[test]
     fn summarize_like_validation_exception() {

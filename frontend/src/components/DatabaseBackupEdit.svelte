@@ -214,7 +214,7 @@
           <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <FormInput label="Frequency" id="frequency" required bind:value={form.frequency} />
             <FormInput label="Timezone" id="timezone" disabled helper="Uses the deployment server timezone, or the instance timezone when none is configured." required value={edit.timezone} />
-            <FormInput label="Timeout" id="timeout" type="number" min="60" helper="Maximum backup runtime in seconds." required bind:value={form.timeout} />
+            <FormInput label="Timeout" id="timeout" type="number" min="60" helper="Maximum runtime in seconds of the complete backup run: the dumps and S3 uploads of all databases." required bind:value={form.timeout} />
             <FormInput
               label="Missing backup alert after"
               id="missingBackupNotificationDays"
@@ -280,15 +280,15 @@
       <SettingsSection title="Retention" description="The first reached limit removes the oldest backup. Use 0 for unlimited retention.">
         <div class="space-y-6">
           <div>
-            <h3 class="mb-3 text-sm font-semibold text-black dark:text-fg">Local backups</h3>
+            <h4 class="mb-2 text-xs! font-medium! text-neutral-500! dark:text-fg-dim!">Local backups</h4>
             <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <FormInput label="Backups to keep" id="databaseBackupRetentionAmountLocally" type="number" min="0" helper="Maximum number of recent local backups." required bind:value={form.database_backup_retention_amount_locally} />
               <FormInput label="Days to keep" id="databaseBackupRetentionDaysLocally" type="number" min="0" helper="Remove local backups older than this many days." required bind:value={form.database_backup_retention_days_locally} />
               <FormInput label="Maximum storage (GB)" id="databaseBackupRetentionMaxStorageLocally" type="number" min="0" step="any" helper="Remove oldest local backups after this total size is reached." required bind:value={form.database_backup_retention_max_storage_locally} />
             </div>
           </div>
-          <div class="border-t border-neutral-200 pt-6 dark:border-white/[0.06]">
-            <h3 class="mb-3 text-sm font-semibold text-black dark:text-fg">S3 backups</h3>
+          <div>
+            <h4 class="mb-2 text-xs! font-medium! text-neutral-500! dark:text-fg-dim!">S3 backups</h4>
             <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <FormInput label="Backups to keep" id="databaseBackupRetentionAmountS3" type="number" min="0" helper="Maximum number of recent S3 backups." required bind:value={form.database_backup_retention_amount_s3} />
               <FormInput label="Days to keep" id="databaseBackupRetentionDaysS3" type="number" min="0" helper="Remove S3 backups older than this many days." required bind:value={form.database_backup_retention_days_s3} />

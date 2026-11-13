@@ -36,13 +36,15 @@
     const q = search.trim().toLowerCase();
     return !q || [s.name, s.provider, s.organization, label(s)].some((v) => String(v ?? '').toLowerCase().includes(q));
   }
+  /** The grid card names a Gitea / Forgejo source "Gitea"; the list shows the full provider. */
+  const cardProvider = (s: SourceRow) => (s.type === 'gitea' ? 'Gitea' : s.provider);
   const sources = $derived(data?.sources ?? []);
   const filtered = $derived(sources.filter(matches));
-  const titles: Record<Provider, string> = { github: 'New GitHub App', gitlab: 'New GitLab App', gitea: 'New Gitea App' };
+  const titles: Record<Provider, string> = { github: 'New GitHub App', gitlab: 'New GitLab App', gitea: 'New Gitea / Forgejo App' };
   const providers: [Provider, string, string][] = [
     ['github', 'App\\Models\\GithubApp', 'GitHub App'],
     ['gitlab', 'App\\Models\\GitlabApp', 'GitLab App'],
-    ['gitea', 'App\\Models\\GiteaApp', 'Gitea App'],
+    ['gitea', 'App\\Models\\GiteaApp', 'Gitea / Forgejo App'],
   ];
 </script>
 
@@ -132,7 +134,7 @@
                   <div class="min-w-0 flex-1">
                     <h2 class="truncate text-[13px]! leading-4! font-semibold! text-black dark:text-fg">{s.name}</h2>
                     <p class="mt-0.5 truncate text-[11px] text-neutral-500 dark:text-fg-faint">
-                      {s.organization ? `${s.provider} · ${s.organization}` : s.provider}
+                      {s.organization ? `${cardProvider(s)} · ${s.organization}` : cardProvider(s)}
                     </p>
                   </div>
                 </div>

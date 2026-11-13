@@ -58,6 +58,14 @@ pub async fn tokens_index(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
 ) -> ApiResult {
+    // 4.7.5: the list is limited to owners and admins, like the other token endpoints
+    // (`$request->user()?->isAdminOfTeam((int) $teamId)`).
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Message(
+            axum::http::StatusCode::FORBIDDEN,
+            "This action is unauthorized.",
+        ));
+    }
     let rows = cloud::list_tokens(&state.db, ctx.team_id).await?;
     let items = rows
         .into_iter()

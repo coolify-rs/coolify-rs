@@ -458,12 +458,12 @@
         }
     ],
     "commands": {
-        "ls_remote": "git ls-remote 'https://github.com/coollabsio/coolify-examples'",
+        "ls_remote": "git ls-remote -- 'https://github.com/coollabsio/coolify-examples'",
         "read": [
             "rm -rf /tmp/composeparserloaduuid001",
             "mkdir -p /tmp/composeparserloaduuid001",
             "cd /tmp/composeparserloaduuid001",
-            "sh -c 'exec >&2 && export GIT_LFS_SKIP_SMUDGE=1 && git clone --quiet --depth=1 --recurse-submodules --shallow-submodules --no-checkout -b '\\''main'\\'' '\\''https://github.com/coollabsio/coolify-examples'\\'' '\\''/tmp/composeparserloaduuid001/checkout'\\'' && cd '\\''/tmp/composeparserloaduuid001/checkout'\\'' && git read-tree HEAD && git ls-files -s | while read -r mode object stage path; do if [ \"$mode\" = 160000 ]; then case '\\''internal/compose/docker-compose.yaml'\\'' in \"$path\"/*) git submodule update --init --recursive --depth=1 -- \"$path\" >/dev/null || exit 1 ;; esac; fi; done'",
+            "sh -c 'exec >&2 && export GIT_LFS_SKIP_SMUDGE=1 && git clone --quiet --depth=1 --recurse-submodules --shallow-submodules --no-checkout -b '\\''main'\\'' -- '\\''https://github.com/coollabsio/coolify-examples'\\'' '\\''/tmp/composeparserloaduuid001/checkout'\\'' && cd '\\''/tmp/composeparserloaduuid001/checkout'\\'' && git read-tree HEAD && git ls-files -s | while read -r mode object stage path; do if [ \"$mode\" = 160000 ]; then case '\\''internal/compose/docker-compose.yaml'\\'' in \"$path\"/*) git submodule update --init --recursive --depth=1 -- \"$path\" >/dev/null || exit 1 ;; esac; fi; done'",
             "cd /tmp/composeparserloaduuid001/checkout",
             "sh -c 'file='\\''internal/compose/docker-compose.yaml'\\''; while sub=$(git ls-tree -r HEAD | while read -r mode type object path; do if [ \"$mode\" = 160000 ]; then case \"$file\" in \"$path\"/*) echo \"$path\"; break ;; esac; fi; done) && [ -n \"$sub\" ]; do cd \"$sub\" || exit 1; file=\"${file#\"$sub\"/}\"; done; git ls-tree HEAD -- \"$file\" | { read -r mode type object path; case \"$mode\" in 100644|100755) ;; 120000) echo '\\''The Docker Compose file is a symbolic link.'\\'' >&2; exit 1 ;; *) echo '\\''No such file'\\'' >&2; exit 1 ;; esac; if [ \"$(git cat-file -s \"$object\")\" -gt 5242880 ]; then echo '\\''__COOLIFY_COMPOSE_TOO_LARGE__'\\''; else git cat-file blob \"$object\"; fi; }'"
         ]

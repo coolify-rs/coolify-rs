@@ -468,9 +468,9 @@ async fn request_email_change(
     {
         return Ok(error(SSO_EMAIL));
     }
+    // `! is_transactional_emails_enabled()`: `filled(enabled_email_provider($settings))`.
     let settings = coolify_db::instance_settings::row(&state.db).await?;
-    let flag = |k: &str| settings.get(k).and_then(Value::as_bool).unwrap_or(false);
-    if !flag("smtp_enabled") && !flag("resend_enabled") {
+    if coolify_jobs::notifications::email_settings::enabled_email_provider_of(&settings).is_none() {
         return Ok(error(
             "Email functionality is not configured. Please contact your administrator.",
         ));

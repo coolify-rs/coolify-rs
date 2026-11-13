@@ -11,6 +11,9 @@ export interface QueueRow {
   server_name: string | null;
   status: string;
   created_at: string;
+  finished_at?: string | null;
+  /** `ApplicationDeploymentQueue::isImageScanBlocked()`. */
+  image_scan_blocked?: boolean;
   application_uuid: string;
   project: string | null;
   environment: string | null;
@@ -78,6 +81,13 @@ export function navigationItems(c: NavContext, teamId: number | undefined): Sear
     nav('Server Shared Variables', 'Manage server shared variables', '/shared-variables/servers', 'shared variables server environment'),
     nav('Team Members', 'Manage team members and invitations', '/team/members', 'team members users invitations invite roles'),
     c.isAdmin ? nav('Team Audit Log', 'View team activity history', '/team/audit-log', 'team audit log activity history events') : null,
+    nav('Security', 'What each resource of your team needs, from its last image scan', '/vulnerabilities', 'vulnerabilities cve ghsa image scanning fixable packages security'),
+    nav(
+      'Team Image Scanning',
+      'Scan rules and ignored vulnerabilities of the team',
+      '/team/image-scanning',
+      'team image scanning vulnerabilities cve scan rules alert block deploys ignored security',
+    ),
     c.isInstanceAdmin ? nav('Team Admin View', 'Manage all users of this instance', '/team/admin', 'team admin view users instance delete') : null,
     c.isOwner ? nav('Team Danger Zone', 'Delete this team', '/team/danger', 'team danger zone delete remove') : null,
     nav('API Tokens', 'Manage API tokens', '/security/api-tokens', 'security api tokens personal access token'),
@@ -97,6 +107,12 @@ export function navigationItems(c: NavContext, teamId: number | undefined): Sear
       nav('Settings', 'Instance settings and configuration', '/settings', 'settings general configuration instance url domain name timezone public ip https redirect'),
       nav('Advanced Settings', 'Registration, API access, MCP server, DNS validation and telemetry', '/settings/advanced', 'settings advanced registration api access allowed ips mcp server dns validation custom dns domain connect confirmation telemetry sponsorship cdn'),
       nav('Update Settings', 'Configure coolify-rs auto updates', '/settings/updates', 'settings updates auto update upgrade version frequency'),
+      nav(
+        'Image Scanning Settings',
+        'Allow image scanning, the vulnerability database, and default scan rules',
+        '/settings/image-scanning',
+        'settings image scanning vulnerabilities cve scan rules grype database mirror alert block deploys security',
+      ),
       nav('Instance Backup', 'Back up the coolify-rs instance database', '/settings/backup', 'settings instance backup coolify database restore'),
       nav('Instance Email', 'Configure SMTP or Resend for system emails', '/settings/email', 'settings instance email smtp resend transactional mail'),
       nav('Authentication', 'Configure OAuth login providers', '/settings/oauth', 'settings authentication oauth sso login providers github google gitlab azure'),
@@ -138,7 +154,7 @@ export function creatableItems(isAdmin: boolean, services: CreatableItem[]): Cre
   if (isAdmin) items.push(quick('Server', 'Add a new server to deploy your applications', 'server', 'server', { component: 'server.create' }));
   items.push(quick('Team', 'Create a new team to collaborate with others', 'team', 'team', { component: 'team.create' }));
   if (isAdmin) {
-    items.push(quick('S3 Storage', 'Add S3 storage for backups and file uploads', 'storage', 'storage', { component: 'storage.create' }));
+    items.push(quick('Storage', 'Add S3, SFTP, FTPS, or WebDAV storage for backups', 'storage', 'storage', { component: 'storage.create' }));
     items.push(quick('Private Key', 'Add an SSH private key for server access', 'private key', 'private-key', { component: 'security.private-key.create' }));
     items.push(quick('GitHub App', 'Connect a GitHub app for source control', 'github', 'source', { component: 'source.github.create' }));
     items.push(quick('Canvas', 'Deploy resources visually on the deploy canvas', 'canvas', 'canvas', { route: 'canvas' }));
@@ -153,7 +169,7 @@ export function creatableItems(isAdmin: boolean, services: CreatableItem[]): Cre
       db('PostgreSQL', 'Robust, advanced open-source database', 'postgresql', 'svgs/postgresql.svg'),
       db('MySQL', 'Popular open-source relational database', 'mysql', 'svgs/mysql.svg'),
       db('MariaDB', 'Community-developed fork of MySQL', 'mariadb', 'svgs/mariadb.svg'),
-      db('Redis', 'In-memory data structure store', 'redis', 'svgs/redis.svg'),
+      { ...db('Redis / Valkey', 'In-memory data structure store (Redis or Valkey)', 'redis', 'svgs/resources/redis-valkey.svg'), quickcommand: '(type: new redis or new valkey)' },
       db('KeyDB', 'High-performance Redis alternative', 'keydb', 'svgs/keydb.svg'),
       db('Dragonfly', 'Modern in-memory datastore', 'dragonfly', 'svgs/dragonfly.svg'),
       db('MongoDB', 'Document-oriented NoSQL database', 'mongodb', 'svgs/mongodb.svg'),
@@ -173,5 +189,5 @@ export const exactMatchCommands = [
   'new private github', 'new private gh', 'new private deploy', 'new deploy key',
   'new dockerfile', 'new docker compose', 'new compose', 'new docker image', 'new image',
   'new postgresql', 'new postgres', 'new mysql', 'new mariadb',
-  'new redis', 'new keydb', 'new dragonfly', 'new mongodb', 'new mongo', 'new clickhouse', 'new sqlite',
+  'new redis', 'new valkey', 'new keydb', 'new dragonfly', 'new mongodb', 'new mongo', 'new clickhouse', 'new sqlite',
 ];

@@ -81,24 +81,50 @@ async fn empty_database_gets_the_baseline() {
             .await,
         0
     );
+    // The dump is Coolify v4.6.0: `boot` goes on to the v4.7.5 migrations, which are all it lacks.
+    let created = guard(&db.url()).await;
+    assert_eq!(created.schema().missing.len(), 27);
+    let names: Vec<&str> = bootstrap::MIGRATIONS.iter().map(|m| m.name).collect();
+    let (after, on_boot) = created.schema().after_migrations(&names, false);
+    assert_eq!(on_boot.len(), 27);
+    assert!(after.read_only_reason.is_none(), "{after:?}");
+    created.pool().close().await;
+    let ran = bootstrap::apply_migrations(&db.url(), bootstrap::MIGRATIONS)
+        .await
+        .unwrap();
+    assert_eq!(ran, on_boot);
+    assert_eq!(db.count("SELECT count(*) FROM migrations").await, 520);
+    assert_eq!(
+        db.count("SELECT count(*) FROM migrations WHERE batch = 2")
+            .await,
+        27
+    );
+    assert_eq!(
+        db.count(
+            "SELECT count(*) FROM pg_constraint WHERE contype = 'c' AND conrelid <> 0 AND pg_get_constraintdef(oid) LIKE '%ANY ((ARRAY[%::text[]%'"
+        )
+        .await,
+        10,
+        "the status check of scheduled_task_executions is replaced, not added"
+    );
     // The schema guard accepts what was created.
-    let guarded = coolify_db::Db::connect(&coolify_db::DbConfig {
-        url: db.url(),
-        max_connections: 2,
-        acquire_timeout: std::time::Duration::from_secs(5),
-        allow_unknown_schema: false,
-    })
-    .await
-    .unwrap();
+    let guarded = guard(&db.url()).await;
     assert!(guarded.schema().read_only_reason.is_none());
     assert!(guarded.schema().missing.is_empty());
+    assert!(guarded.schema().has_table("stars"));
     guarded.pool().close().await;
     // A second start leaves it alone.
     assert_eq!(
         bootstrap::prepare(&db.url()).await.unwrap(),
         Prepared::Existing
     );
-    assert_eq!(db.count("SELECT count(*) FROM migrations").await, 493);
+    assert!(
+        bootstrap::apply_migrations(&db.url(), bootstrap::MIGRATIONS)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(db.count("SELECT count(*) FROM migrations").await, 520);
     db.drop_db().await;
 }
 
@@ -352,10 +378,10 @@ INSERT INTO s3_storages (id, uuid, name, region, key, secret, bucket, endpoint, 
 "#;
 
 /// A coolify-rs install created at upstream `main` @ b5823c7 upgrades itself on `boot`: the five
-/// v4.5.3 migrations and the fifteen of v4.6.0 run, the schema equals a fresh v4.6.0 install's,
-/// and writes are allowed.
+/// v4.5.3 migrations, the fifteen of v4.6.0 and the twenty-seven of v4.7.5 run, the schema equals
+/// a fresh install's, and writes are allowed.
 #[tokio::test]
-async fn a_b5823c7_database_upgrades_to_4_6_0() {
+async fn a_b5823c7_database_upgrades_to_4_7_5() {
     use coolify_db::testing::{MIGRATIONS_B5823C7, SCHEMA_B5823C7};
 
     let old = TestDb::with_baseline(SCHEMA_B5823C7, MIGRATIONS_B5823C7, UPGRADE_SEED).await;
@@ -364,7 +390,7 @@ async fn a_b5823c7_database_upgrades_to_4_6_0() {
         old.db.schema().read_only_reason.is_some(),
         "an un-upgraded database lacks the v4.5.3 migrations"
     );
-    assert_eq!(old.db.schema().missing.len(), 20);
+    assert_eq!(old.db.schema().missing.len(), 47);
 
     // `coolify-rs boot`: prepare, the log drains to stop, then the schema changes.
     assert_eq!(bootstrap::prepare(&url).await.unwrap(), Prepared::Existing);
@@ -433,8 +459,15 @@ async fn a_b5823c7_database_upgrades_to_4_6_0() {
             .fetch_all(&mut conn)
             .await
             .unwrap();
-    assert_eq!(batches.len(), 20);
+    assert_eq!(batches.len(), 47);
     assert!(batches.iter().all(|(_, b)| *b == 2));
+    // v4.7.5: the storage from before the upgrade is an S3 one.
+    let (kind, bucket): (String, Option<String>) =
+        sqlx::query_as("SELECT type, bucket FROM s3_storages WHERE id = 1")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+    assert_eq!((kind.as_str(), bucket.as_deref()), ("s3", Some("b")));
     conn.close().await.ok();
 
     let upgraded = guard(&url).await;
@@ -447,18 +480,20 @@ async fn a_b5823c7_database_upgrades_to_4_6_0() {
     old.drop_db().await;
 }
 
-/// The schema at `url` equals a fresh v4.6.0 install's (the baseline).
+/// The schema at `url` equals a fresh install's (the baseline: Coolify v4.7.5).
 async fn assert_same_schema_as_baseline(url: &str) {
     let fresh = TestDb::new("").await;
     let expected = fingerprint(&url_of(&fresh.name)).await;
     assert!(expected.iter().any(|r| r.contains("logdrain_axiom_domain")));
     assert!(expected.iter().any(|r| r.contains("update_channel")));
+    assert!(expected.iter().any(|r| r.contains("image_scan_cpus")));
+    assert!(expected.iter().any(|r| r == "relation stars r"));
     let actual = fingerprint(url).await;
     let only_upgraded: Vec<&String> = actual.iter().filter(|r| !expected.contains(r)).collect();
     let only_fresh: Vec<&String> = expected.iter().filter(|r| !actual.contains(r)).collect();
     assert!(
         only_upgraded.is_empty() && only_fresh.is_empty(),
-        "schema differs from v4.6.0: upgraded has {only_upgraded:#?}, v4.6.0 has {only_fresh:#?}"
+        "schema differs from v4.7.5: upgraded has {only_upgraded:#?}, v4.7.5 has {only_fresh:#?}"
     );
     assert_eq!(actual, expected);
     fresh.drop_db().await;
@@ -482,16 +517,16 @@ INSERT INTO personal_access_tokens (id, tokenable_type, tokenable_id, name, toke
 "#;
 
 /// coolify-rs 4.5.3-rs.N (a database Coolify v4.5.3 created) upgrades itself on `boot`: the fifteen
-/// v4.6.0 migrations run, write tokens get the new delete ability, the schema equals a fresh v4.6.0
-/// install's, and writes are allowed.
+/// v4.6.0 migrations and the twenty-seven of v4.7.5 run in name order, write tokens get the new
+/// delete ability, the schema equals a fresh install's, and writes are allowed.
 #[tokio::test]
-async fn a_4_5_3_database_upgrades_to_4_6_0() {
+async fn a_4_5_3_database_upgrades_to_4_7_5() {
     use coolify_db::testing::{MIGRATIONS_4_5_3, SCHEMA_4_5_3};
 
     let old = TestDb::with_baseline(SCHEMA_4_5_3, MIGRATIONS_4_5_3, TOKENS_SEED).await;
     let url = url_of(&old.name);
     assert!(old.db.schema().read_only_reason.is_some());
-    assert_eq!(old.db.schema().missing.len(), 15);
+    assert_eq!(old.db.schema().missing.len(), 42);
     assert!(
         !old.db
             .schema()
@@ -500,15 +535,18 @@ async fn a_4_5_3_database_upgrades_to_4_6_0() {
     // What `check-schema` reports for it: nothing left missing once `boot` has run.
     let names: Vec<&str> = bootstrap::MIGRATIONS.iter().map(|m| m.name).collect();
     let (after, on_boot) = old.db.schema().after_migrations(&names, false);
-    assert_eq!(on_boot.len(), 15);
+    assert_eq!(on_boot.len(), 42);
     assert!(after.read_only_reason.is_none(), "{after:?}");
 
     assert_eq!(bootstrap::prepare(&url).await.unwrap(), Prepared::Existing);
     let ran = bootstrap::apply_migrations(&url, bootstrap::MIGRATIONS)
         .await
         .unwrap();
+    // Name order, as `php artisan migrate` runs pending migrations: v4.7.5's image scanning
+    // tables come before v4.6.0's last four.
     assert_eq!(ran, on_boot);
-    assert!(ran.iter().all(|m| m.as_str() < "2026_11_02"));
+    assert!(ran.windows(2).all(|w| w[0] < w[1]));
+    assert!(ran.iter().all(|m| m.as_str() < "2026_11_10"));
     assert!(
         bootstrap::apply_migrations(&url, bootstrap::MIGRATIONS)
             .await
@@ -555,7 +593,7 @@ async fn a_4_5_3_database_upgrades_to_4_6_0() {
         .fetch_all(&mut conn)
         .await
         .unwrap();
-    assert_eq!(batches, vec![2; 15]);
+    assert_eq!(batches, vec![2; 42]);
     conn.close().await.ok();
 
     let upgraded = guard(&url).await;
@@ -574,13 +612,397 @@ async fn a_4_5_3_database_upgrades_to_4_6_0() {
     old.drop_db().await;
 }
 
-/// A database Coolify v4.6.0 created is writable as it is, and boot changes nothing in it.
+/// A Coolify v4.6.0 installation with rows the v4.7.5 migrations touch or must leave alone.
+const SEED_4_6_0: &str = r#"
+INSERT INTO instance_settings (id, smtp_from_address, smtp_from_name) VALUES (0, 'enc-address', 'enc-name');
+INSERT INTO teams (id, name, personal_team) VALUES (1, 'acme', false), (2, 'other', false);
+INSERT INTO email_notification_settings (team_id, smtp_from_address, smtp_from_name) VALUES
+  (1, 'team-address', 'team-name'), (2, NULL, NULL);
+INSERT INTO private_keys (id, uuid, name, private_key, team_id) VALUES (1, 'k', 'k', 'x', 1), (2, 'k2', 'k2', 'x', 1);
+INSERT INTO servers (id, uuid, name, ip, team_id, private_key_id) VALUES (1, 's1', 'one', '10.0.0.1', 1, 1);
+INSERT INTO server_settings (server_id) VALUES (1);
+INSERT INTO standalone_dockers (id, uuid, name, network, server_id) VALUES (1, 'd1', 'd', 'coolify', 1);
+INSERT INTO standalone_redis (id, uuid, name, destination_type, destination_id) VALUES
+  (1, 'r1', 'default-image', 'App\Models\StandaloneDocker', 1);
+INSERT INTO standalone_redis (id, uuid, name, image, destination_type, destination_id) VALUES
+  (2, 'r2', 'own-image', 'redis:6', 'App\Models\StandaloneDocker', 1);
+INSERT INTO standalone_postgresqls (id, uuid, name, postgres_password, destination_type, destination_id) VALUES
+  (1, 'pg1', 'default-image', 'x', 'App\Models\StandaloneDocker', 1);
+INSERT INTO s3_storages (id, uuid, name, region, key, secret, bucket, endpoint, team_id) VALUES
+  (1, 's3', 's3', 'us-east-1', 'k', 's', 'b', 'https://s3.test', 1);
+"#;
+
+/// The instance policy row of `create_image_scanning_tables`.
+type PolicyRow = (
+    String,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    Option<bool>,
+    bool,
+);
+
+/// coolify-rs 4.6.0-rs.N (a database Coolify v4.6.0 created) upgrades itself on `boot`: the
+/// twenty-seven migrations of v4.7.0 to v4.7.5 run with their data changes, and writes are allowed.
 #[tokio::test]
-async fn a_4_6_0_database_is_writable() {
+async fn a_4_6_0_database_upgrades_to_4_7_5() {
+    use coolify_db::testing::{MIGRATIONS_4_6_0, SCHEMA_4_6_0};
+
+    let old = TestDb::with_baseline(SCHEMA_4_6_0, MIGRATIONS_4_6_0, SEED_4_6_0).await;
+    let url = url_of(&old.name);
+    assert!(
+        old.db.schema().read_only_reason.is_some(),
+        "an un-upgraded database lacks the v4.7.5 migrations"
+    );
+    assert_eq!(old.db.schema().missing.len(), 27);
+    assert!(!old.db.schema().has_column("s3_storages", "type"));
+    assert!(!old.db.schema().has_table("stars"));
+    let names: Vec<&str> = bootstrap::MIGRATIONS.iter().map(|m| m.name).collect();
+    let (after, on_boot) = old.db.schema().after_migrations(&names, false);
+    assert_eq!(on_boot.len(), 27);
+    assert!(after.read_only_reason.is_none(), "{after:?}");
+
+    assert_eq!(bootstrap::prepare(&url).await.unwrap(), Prepared::Existing);
+    assert!(
+        bootstrap::highlight_log_drain_servers(&url)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let ran = bootstrap::apply_migrations(&url, bootstrap::MIGRATIONS)
+        .await
+        .unwrap();
+    assert_eq!(ran, on_boot);
+    assert_eq!(
+        ran.first().map(String::as_str),
+        Some("2026_10_29_100000_create_image_scanning_tables")
+    );
+    // The two that share a timestamp run in file name order.
+    assert_eq!(
+        ran[1..3],
+        [
+            "2026_10_30_120000_add_git_ssh_known_hosts_to_applications_table".to_owned(),
+            "2026_10_30_120000_add_ssh_host_key_to_server_settings_table".to_owned(),
+        ]
+    );
+    assert_eq!(
+        ran.last().map(String::as_str),
+        Some("2026_11_09_140000_add_image_scanner_time_and_cpu_limits_to_server_settings_table")
+    );
+    assert!(
+        bootstrap::apply_migrations(&url, bootstrap::MIGRATIONS)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut conn = PgConnection::connect(&url).await.unwrap();
+    // `create_image_scanning_tables` inserts the instance policy.
+    let policies: Vec<PolicyRow> = sqlx::query_as(
+        "SELECT uuid, scope_type, scope_id, gate_mode, on_scan_error, count_medium, \
+                (created_at IS NOT NULL AND created_at = updated_at) FROM image_scan_policies",
+    )
+    .fetch_all(&mut conn)
+    .await
+    .unwrap();
+    assert_eq!(policies.len(), 1);
+    let (uuid, scope_type, scope_id, gate_mode, on_scan_error, count_medium, stamped) =
+        &policies[0];
+    assert_eq!(uuid.len(), 24);
+    assert!(
+        uuid.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()),
+        "{uuid}"
+    );
+    assert!(scope_type.is_none() && scope_id.is_none());
+    assert_eq!(gate_mode.as_deref(), Some("off"));
+    assert_eq!(on_scan_error.as_deref(), Some("deploy"));
+    assert_eq!(*count_medium, Some(false));
+    assert!(*stamped);
+
+    // `add_resend_sender_to_email_settings` copies the SMTP sender as it is stored.
+    let instance: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT resend_from_address, resend_from_name FROM instance_settings WHERE id = 0",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .unwrap();
+    assert_eq!(
+        instance,
+        (Some("enc-address".to_owned()), Some("enc-name".to_owned()))
+    );
+    let teams: Vec<(i64, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT team_id, resend_from_address, resend_from_name \
+         FROM email_notification_settings ORDER BY team_id",
+    )
+    .fetch_all(&mut conn)
+    .await
+    .unwrap();
+    assert_eq!(
+        teams,
+        vec![
+            (
+                1,
+                Some("team-address".to_owned()),
+                Some("team-name".to_owned())
+            ),
+            (2, None, None),
+        ]
+    );
+    // Named SMTP servers start empty; the alert switch is on for email only.
+    let smtp: (Option<String>, Option<String>, bool) = sqlx::query_as(
+        "SELECT smtp_server_name, smtp_servers, image_vulnerabilities_email_notifications \
+         FROM email_notification_settings WHERE team_id = 1",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .unwrap();
+    assert_eq!(smtp, (None, None, true));
+
+    // Existing databases keep their image; only the column defaults change.
+    let images: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, image FROM standalone_redis ORDER BY id")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap();
+    assert_eq!(
+        images,
+        vec![(1, "redis:7.2".to_owned()), (2, "redis:6".to_owned())]
+    );
+    let postgres: String =
+        sqlx::query_scalar("SELECT image FROM standalone_postgresqls WHERE id = 1")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+    assert_eq!(postgres, "postgres:16-alpine");
+    let defaults: Vec<(String, String)> = sqlx::query_as(
+        "SELECT table_name::text, column_default::text FROM information_schema.columns \
+         WHERE table_schema = 'public' AND column_name = 'image' AND table_name LIKE 'standalone%' \
+           AND column_default IS NOT NULL ORDER BY table_name",
+    )
+    .fetch_all(&mut conn)
+    .await
+    .unwrap();
+    let defaults: Vec<(&str, &str)> = defaults
+        .iter()
+        .map(|(t, d)| (t.as_str(), d.as_str()))
+        .collect();
+    assert_eq!(
+        defaults,
+        vec![
+            (
+                "standalone_clickhouses",
+                "'clickhouse/clickhouse-server:26.8'::character varying"
+            ),
+            // Not changed by v4.7: the defaults these tables have had since v4.5.
+            (
+                "standalone_dragonflies",
+                "'docker.dragonflydb.io/dragonflydb/dragonfly'::character varying"
+            ),
+            (
+                "standalone_keydbs",
+                "'eqalpha/keydb:latest'::character varying"
+            ),
+            ("standalone_mariadbs", "'mariadb:12.3'::character varying"),
+            ("standalone_mongodbs", "'mongo:9'::character varying"),
+            ("standalone_mysqls", "'mysql:9.7'::character varying"),
+            (
+                "standalone_postgresqls",
+                "'postgres:18-alpine'::character varying"
+            ),
+            (
+                "standalone_redis",
+                "'valkey/valkey:9-alpine'::character varying"
+            ),
+        ]
+    );
+
+    // The storage is an S3 one. A storage without a bucket (SFTP) can be stored, and loses its
+    // key when the key is deleted (`nullOnDelete`).
+    let storage: (String, Option<String>, Option<i64>, Option<String>, bool) = sqlx::query_as(
+        "SELECT type, bucket, private_key_id, sftp_host_key, skip_tls_verification FROM s3_storages WHERE id = 1",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .unwrap();
+    assert_eq!(
+        storage,
+        ("s3".to_owned(), Some("b".to_owned()), None, None, false)
+    );
+    conn.execute(
+        "INSERT INTO s3_storages (id, uuid, name, region, key, secret, bucket, endpoint, team_id, type, private_key_id) \
+         VALUES (2, 'sftp', 'sftp', 'us-east-1', 'k', 's', NULL, 'sftp://host', 1, 'sftp', 2); \
+         DELETE FROM private_keys WHERE id = 2",
+    )
+    .await
+    .unwrap();
+    let sftp: (String, Option<String>, Option<i64>) =
+        sqlx::query_as("SELECT type, bucket, private_key_id FROM s3_storages WHERE id = 2")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+    assert_eq!(sftp, ("sftp".to_owned(), None, None));
+
+    // Executions may be skipped; the two unused audit indexes are gone.
+    let check: String = sqlx::query_scalar(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'scheduled_task_executions_status_check'",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .unwrap();
+    assert!(check.contains("'skipped'"), "{check}");
+    let audit_indexes: Vec<String> = sqlx::query_scalar(
+        "SELECT indexname::text FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'audit_events' \
+         ORDER BY indexname COLLATE \"C\"",
+    )
+    .fetch_all(&mut conn)
+    .await
+    .unwrap();
+    assert_eq!(
+        audit_indexes,
+        [
+            "audit_events_created_at_index",
+            "audit_events_pkey",
+            "audit_events_team_id_action_created_at_id_index",
+            "audit_events_team_id_actor_id_created_at_index",
+            "audit_events_team_id_created_at_id_index",
+            "audit_events_team_id_source_created_at_id_index",
+        ]
+    );
+
+    // Column defaults of the settings the other areas read.
+    let server: (bool, bool, bool, i32, i32, i32, String, i32) = sqlx::query_as(
+        "SELECT is_ssh_host_key_check_disabled, is_ssh_host_key_check_enforced, is_image_scan_enabled, \
+                image_scan_memory_mb, image_scan_syft_timeout, image_scan_grype_timeout, image_scan_cpus::text, \
+                image_candidate_scans_today \
+         FROM server_settings WHERE server_id = 1",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .unwrap();
+    assert_eq!(
+        server,
+        (false, false, false, 1024, 600, 600, "1.00".to_owned(), 0)
+    );
+    let batches: Vec<i32> = sqlx::query_scalar("SELECT batch FROM migrations WHERE id > 493")
+        .fetch_all(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(batches, vec![2; 27]);
+    conn.close().await.ok();
+
+    let upgraded = guard(&url).await;
+    assert!(upgraded.schema().read_only_reason.is_none());
+    assert!(upgraded.schema().missing.is_empty());
+    assert!(upgraded.schema().unknown.is_empty());
+    assert!(upgraded.schema().has_column("s3_storages", "type"));
+    assert!(
+        upgraded
+            .schema()
+            .has_column("application_settings", "include_network_hosts_in_build")
+    );
+    for table in [
+        "image_scan_policies",
+        "image_scan_ignores",
+        "image_sboms",
+        "image_scans",
+        "image_scan_notification_states",
+        "server_host_scans",
+        "stars",
+    ] {
+        assert!(upgraded.schema().has_table(table), "{table}");
+    }
+    upgraded.pool().close().await;
+
+    assert_same_schema_as_baseline(&url).await;
+    old.drop_db().await;
+}
+
+async fn columns_of(url: &str, table: &str) -> Vec<String> {
+    let mut conn = PgConnection::connect(url).await.unwrap();
+    let names: Vec<String> = sqlx::query_scalar(
+        "SELECT column_name::text FROM information_schema.columns \
+         WHERE table_schema = 'public' AND table_name = $1",
+    )
+    .bind(table)
+    .fetch_all(&mut conn)
+    .await
+    .unwrap();
+    conn.close().await.ok();
+    names
+}
+
+/// The columns nightly builds of v4.7.0 created and v4.7.5 removed again are dropped, and the
+/// columns such a build already has are kept as they are.
+#[tokio::test]
+async fn a_nightly_database_loses_the_removed_columns() {
+    use coolify_db::testing::{MIGRATIONS_4_6_0, SCHEMA_4_6_0};
+
+    let old = TestDb::with_baseline(
+        SCHEMA_4_6_0,
+        MIGRATIONS_4_6_0,
+        "ALTER TABLE instance_settings ADD COLUMN is_image_scanning_allowed boolean NOT NULL DEFAULT false, \
+             ADD COLUMN image_scan_db_url text NULL, ADD COLUMN smtp_servers text NULL; \
+         ALTER TABLE scheduled_tasks ADD COLUMN failure_count integer NOT NULL DEFAULT 0, \
+             ADD COLUMN auto_disabled_at timestamp(0) without time zone NULL, \
+             ADD COLUMN failing_since timestamp(0) without time zone NULL; \
+         ALTER TABLE application_deployment_queues ADD COLUMN is_mcp boolean NOT NULL DEFAULT true;",
+    )
+    .await;
+    let url = url_of(&old.name);
+    assert_eq!(
+        bootstrap::apply_migrations(&url, bootstrap::MIGRATIONS)
+            .await
+            .unwrap()
+            .len(),
+        27
+    );
+    let has = |columns: &[String], name: &str| columns.iter().any(|c| c == name);
+    let instance = columns_of(&url, "instance_settings").await;
+    assert!(!has(&instance, "is_image_scanning_allowed"));
+    assert!(!has(&instance, "image_scan_db_url"));
+    // `smtp_servers` was there: upstream skips the table, so `smtp_server_name` is not added.
+    assert!(has(&instance, "smtp_servers"));
+    assert!(!has(&instance, "smtp_server_name"));
+    assert!(has(&instance, "resend_from_address"));
+    let email = columns_of(&url, "email_notification_settings").await;
+    assert!(has(&email, "smtp_servers") && has(&email, "smtp_server_name"));
+    let tasks = columns_of(&url, "scheduled_tasks").await;
+    assert!(!has(&tasks, "failure_count"));
+    assert!(!has(&tasks, "auto_disabled_at"));
+    for kept in [
+        "consecutive_failures",
+        "failing_since",
+        "disabled_reason",
+        "use_shell",
+    ] {
+        assert!(has(&tasks, kept), "{kept}");
+    }
+    let mut conn = PgConnection::connect(&url).await.unwrap();
+    let is_mcp_default: String = sqlx::query_scalar(
+        "SELECT column_default::text FROM information_schema.columns \
+         WHERE table_schema = 'public' AND table_name = 'application_deployment_queues' AND column_name = 'is_mcp'",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .unwrap();
+    conn.close().await.ok();
+    assert_eq!(
+        is_mcp_default, "true",
+        "the existing is_mcp column is left as it is"
+    );
+    old.drop_db().await;
+}
+
+/// A database Coolify v4.7.5 created is writable as it is, and boot changes nothing in it.
+#[tokio::test]
+async fn a_4_7_5_database_is_writable() {
     let test = TestDb::new("").await;
     let url = url_of(&test.name);
     assert!(test.db.schema().read_only_reason.is_none());
     assert!(test.db.schema().missing.is_empty());
+    assert_eq!(test.db.schema().applied, 520);
     let before = fingerprint(&url).await;
     assert!(
         bootstrap::highlight_log_drain_servers(&url)
@@ -598,12 +1020,12 @@ async fn a_4_6_0_database_is_writable() {
     test.drop_db().await;
 }
 
-/// A newer Coolify (4.7.0) has migrations this build does not know: it stays read-only.
+/// A newer Coolify (4.8.0) has migrations this build does not know: it stays read-only.
 #[tokio::test]
 async fn a_newer_coolify_database_is_read_only() {
     let test = TestDb::new(
         "INSERT INTO migrations (migration, batch) VALUES \
-         ('2026_11_20_120000_a_coolify_4_7_0_migration', 2);",
+         ('2026_11_20_120000_a_coolify_4_8_0_migration', 2);",
     )
     .await;
     let reason = test.db.schema().read_only_reason.clone();
@@ -613,12 +1035,12 @@ async fn a_newer_coolify_database_is_read_only() {
     );
     assert_eq!(
         test.db.schema().unknown,
-        vec!["2026_11_20_120000_a_coolify_4_7_0_migration".to_owned()]
+        vec!["2026_11_20_120000_a_coolify_4_8_0_migration".to_owned()]
     );
     test.drop_db().await;
 }
 
-/// The four rows a real, long-lived Coolify 4.6.0 installation has beyond the v4.6.0 tree:
+/// The four rows a real, long-lived Coolify installation has beyond the v4.7.5 tree:
 /// migrations upstream renamed or deleted after they ran.
 const HISTORICAL_ROWS: &str = "INSERT INTO migrations (migration, batch) VALUES \
      ('2018_08_08_100000_create_telescope_entries_table', 1), \
@@ -636,7 +1058,7 @@ async fn a_long_lived_coolify_database_is_writable() {
     assert!(schema.unknown.is_empty());
     assert!(schema.missing.is_empty());
     assert_eq!(schema.historical.len(), 4);
-    assert_eq!(schema.applied, 497);
+    assert_eq!(schema.applied, 524);
     test.db.ensure_writable().unwrap();
     assert!(
         bootstrap::apply_migrations(&url, bootstrap::MIGRATIONS)
@@ -649,14 +1071,14 @@ async fn a_long_lived_coolify_database_is_writable() {
     // A truly unknown name next to them still makes it read-only, and is the one reported.
     let test = TestDb::new(&format!(
         "{HISTORICAL_ROWS} INSERT INTO migrations (migration, batch) VALUES \
-         ('2026_11_20_120000_a_coolify_4_7_0_migration', 31);"
+         ('2026_11_20_120000_a_coolify_4_8_0_migration', 31);"
     ))
     .await;
     assert!(test.db.schema().read_only_reason.is_some());
     assert!(test.db.ensure_writable().is_err());
     assert_eq!(
         test.db.schema().unknown,
-        vec!["2026_11_20_120000_a_coolify_4_7_0_migration".to_owned()]
+        vec!["2026_11_20_120000_a_coolify_4_8_0_migration".to_owned()]
     );
     assert_eq!(test.db.schema().historical.len(), 4);
     test.drop_db().await;

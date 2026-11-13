@@ -38,9 +38,36 @@ async fn set_logs(srv: &Srv, message: &str) -> Result<(), String> {
 
 /// `validateConnection()`: one attempt.
 pub async fn validate_connection(srv: &Srv) -> Result<(bool, String), String> {
+    validate_connection_with(srv, false).await
+}
+
+/// `validateConnection(justCheckingNewKey: true)`: a key that cannot log in is not a server that
+/// went offline, so a failure does not mark the server unreachable. The error is the SSH error.
+pub async fn validate_new_key(srv: &Srv) -> Result<(bool, String), String> {
+    validate_connection_with(srv, true).await
+}
+
+async fn validate_connection_with(
+    srv: &Srv,
+    just_checking_new_key: bool,
+) -> Result<(bool, String), String> {
+    // v4.7.5: a validation enables a disabled self-hosted server again, but only when the
+    // connection works.
+    let re_enabling = srv.info.can_be_re_enabled() && !srv.info.has_placeholder_ip();
+    let enabled;
+    let srv = if re_enabling {
+        // `forceEnableServer()`.
+        srv.settings_update(&[("force_disabled", ColumnValue::Bool(false))])
+            .await?;
+        enabled = Srv::load(&srv.jobs, srv.id()).await?;
+        &enabled
+    } else {
+        srv
+    };
     if srv.info.skipped() {
         return Ok((false, "Server skipped.".to_string()));
     }
+    super::host_key::before_validation(&srv.jobs, &srv.info).await;
     let (uptime, error) = match srv.target().await {
         Err(e) => (false, e),
         Ok(t) => match srv
@@ -53,11 +80,22 @@ pub async fn validate_connection(srv: &Srv) -> Result<(bool, String), String> {
             )
             .await
         {
-            Ok(_) => (true, String::new()),
-            Err(e) => (false, e.message),
+            Ok(_) => {
+                super::host_key::learn_now(&srv.jobs, &srv.info).await;
+                (true, String::new())
+            }
+            Err(e) => (
+                false,
+                super::host_key::validation_error(&srv.jobs, &srv.info, e.message).await,
+            ),
         },
     };
-    if srv.info.setting_bool("is_reachable") != Some(uptime) {
+    if re_enabling && !uptime {
+        // `forceDisableServer()`.
+        srv.settings_update(&[("force_disabled", ColumnValue::Bool(true))])
+            .await?;
+    }
+    if srv.info.setting_bool("is_reachable") != Some(uptime) && (uptime || !just_checking_new_key) {
         srv.settings_update(&[("is_reachable", ColumnValue::Bool(uptime))])
             .await?;
     }
@@ -140,7 +178,9 @@ pub fn prerequisite_commands(os: &str) -> Result<Vec<String>, String> {
 pub fn docker_install_commands(os: &str, swarm: bool) -> Vec<String> {
     let config = base64::engine::general_purpose::STANDARD.encode(DAEMON_CONFIG);
     let install = if os.contains("debian") {
-        "curl -fsSL https://get.docker.com | sh || (. /etc/os-release && install -m 0755 -d /etc/apt/keyrings && curl -fsSL https://download.docker.com/linux/${ID}/gpg -o /etc/apt/keyrings/docker.asc && chmod a+r /etc/apt/keyrings/docker.asc && echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable\" > /etc/apt/sources.list.d/docker.list && apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)"
+        // v4.7.5: Docker has no repository for Ubuntu derivatives (Pop!_OS, Linux Mint) and none
+        // for Raspbian Trixie.
+        "curl -fsSL https://get.docker.com | sh || (. /etc/os-release && DOCKER_CODENAME=\"${UBUNTU_CODENAME:-$VERSION_CODENAME}\" && case \"$ID:$DOCKER_CODENAME: $ID_LIKE \" in raspbian:trixie:*) DOCKER_REPO=debian ;; *\" ubuntu \"*) DOCKER_REPO=ubuntu ;; *) DOCKER_REPO=$ID ;; esac && install -m 0755 -d /etc/apt/keyrings && curl -fsSL https://download.docker.com/linux/${DOCKER_REPO}/gpg -o /etc/apt/keyrings/docker.asc && chmod a+r /etc/apt/keyrings/docker.asc && echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${DOCKER_REPO} ${DOCKER_CODENAME} stable\" > /etc/apt/sources.list.d/docker.list && apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)"
     } else if os.contains("rhel") {
         "curl -fsSL https://get.docker.com | sh || (dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo && dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin && systemctl start docker && systemctl enable docker)"
     } else if os.contains("sles") {

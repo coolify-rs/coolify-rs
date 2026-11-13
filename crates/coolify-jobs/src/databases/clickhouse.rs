@@ -101,6 +101,14 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
         compose.set("volumes", volume_names);
     }
     let compose_yaml = yaml::dump(&compose, 10);
-    finish_commands(&mut commands, d, ctx.server, &compose_yaml, ctx.now, &[]);
+    finish_commands(
+        &mut commands,
+        d,
+        ctx.server,
+        &compose_yaml,
+        ctx.now,
+        &[],
+        &ctx.start_pins,
+    );
     (commands, compose_yaml)
 }

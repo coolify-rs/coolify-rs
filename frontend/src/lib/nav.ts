@@ -45,10 +45,11 @@ export const navSections: [string, NavItem[]][] = [
       {
         label: 'Monitoring',
         icon: 'graph',
-        visible: (c) => c.teamWide !== false,
         children: [
-          { label: 'Analytics', icon: 'analytics', href: '/analytics', active: ['analytics'] },
-          { label: 'Metrics', icon: 'graph', href: '/metrics', active: ['metrics'] },
+          { label: 'Analytics', icon: 'analytics', href: '/analytics', active: ['analytics'], visible: (c) => c.teamWide !== false },
+          { label: 'Metrics', icon: 'graph', href: '/metrics', active: ['metrics'], visible: (c) => c.teamWide !== false },
+          // Members limited to some projects see the resources they have access to.
+          { label: 'Security', icon: 'shield-alert', href: '/vulnerabilities', active: ['vulnerabilities'], ported: true },
         ],
       },
       { label: 'Terminal', icon: 'browser-terminal', href: '/terminal', active: ['terminal*'], visible: (c) => c.teamWide !== false && c.isAdmin, ported: true },
@@ -66,7 +67,7 @@ export const navSections: [string, NavItem[]][] = [
           { label: 'Sources', icon: 'sources', href: '/sources', active: ['sources', 'source/*'] },
           { label: 'Destinations', icon: 'destinations', href: '/destinations', active: ['destinations', 'destination/*'] },
           { label: 'Registries', icon: 'layers', href: '/registries', active: ['registries'], visible: (c) => c.isAdmin },
-          { label: 'S3 Storage', icon: 'storages', href: '/storages', active: ['storages', 'storages/*'], ported: true },
+          { label: 'Storage', icon: 'storages', href: '/storages', active: ['storages', 'storages/*'], ported: true },
         ],
       },
       {
@@ -93,6 +94,7 @@ export const navSections: [string, NavItem[]][] = [
           { label: 'General', icon: 'settings', href: '/team', active: ['team'], ported: true },
           { label: 'Members', icon: 'teams', href: '/team/members', active: ['team/members*'], ported: true },
           { label: 'Audit log', icon: 'time-back', href: '/team/audit-log', active: ['team/audit-log'], visible: (c) => c.isAdmin, ported: true },
+          { label: 'Image Scanning', icon: 'shield-alert', href: '/team/image-scanning', active: ['team/image-scanning'], ported: true },
           { label: 'Admin View', icon: 'admin', href: '/team/admin', active: ['team/admin'], visible: (c) => c.isInstanceAdmin, ported: true },
           { label: 'Plugins', icon: 'browser-code', href: '/team/plugins', active: ['team/plugins'], visible: (c) => !!c.pluginTeam, ported: true },
           { label: 'Danger Zone', icon: 'danger', href: '/team/danger', active: ['team/danger'], visible: (c) => c.isOwner, sectionStart: true, ported: true },
@@ -132,6 +134,7 @@ export const navSections: [string, NavItem[]][] = [
           { label: 'General', icon: 'settings', href: '/settings', active: ['settings'], ported: true },
           { label: 'Advanced', icon: 'grid', href: '/settings/advanced', active: ['settings/advanced'], ported: true },
           { label: 'Updates', icon: 'refresh3', href: '/settings/updates', active: ['settings/updates'], ported: true },
+          { label: 'Image Scanning', icon: 'shield-alert', href: '/settings/image-scanning', active: ['settings/image-scanning'], ported: true },
           { label: 'Authentication', icon: 'keys', href: '/settings/oauth', active: ['settings/oauth*'], sectionStart: true, ported: true },
           { label: 'Email', icon: 'mail', href: '/settings/email', active: ['settings/email'], ported: true },
           { label: 'Backup', icon: 'database', href: '/settings/backup', active: ['settings/backup'], ported: true },

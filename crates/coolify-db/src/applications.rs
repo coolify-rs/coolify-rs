@@ -454,6 +454,8 @@ pub async fn soft_delete(db: &Db, id: i64, now: NaiveDateTime) -> DbResult<()> {
         .bind(id)
         .execute(db.pool())
         .await?;
+    // `HasStars::bootHasStars()`.
+    crate::stars::delete_for(db, MORPH, id).await?;
     Ok(())
 }
 
@@ -706,7 +708,7 @@ impl Deployment {
     }
 }
 
-fn deployment(text: &str) -> DbResult<Deployment> {
+pub(crate) fn deployment(text: &str) -> DbResult<Deployment> {
     let raw = decode(text, "application deployment queue")?;
     Ok(Deployment {
         id: raw.get("id").and_then(Value::as_i64).unwrap_or_default(),
@@ -753,6 +755,13 @@ pub struct NewDeployment {
     pub docker_registry_image_tag: Option<String>,
     pub build_server_id: Option<i64>,
     pub parent_deployment_uuid: Option<String>,
+    /// `is_mcp`: queued by an MCP tool (data only: coolify-rs has no MCP server).
+    pub is_mcp: bool,
+    /// `scan_gate_bypassed_by`: the user who chose "Deploy anyway" for a blocked image.
+    pub scan_gate_bypassed_by: Option<i64>,
+    /// `scan_gate_result` at creation: `{"repo_digest": …}` when "Deploy anyway" of a Docker image
+    /// starts the blocked image by its digest.
+    pub scan_gate_result: Option<Value>,
 }
 
 /// `$server->destinations()->where('id', $id)->first()->network`.
@@ -859,8 +868,9 @@ pub async fn insert_deployment(db: &Db, n: &NewDeployment, now: NaiveDateTime) -
     Ok(sqlx::query_scalar(
         "INSERT INTO application_deployment_queues (application_id, deployment_uuid, pull_request_id, force_rebuild, commit, status, \
          is_webhook, created_at, updated_at, restart_only, git_type, server_id, application_name, server_name, deployment_url, \
-         destination_id, only_this_server, rollback, commit_message, is_api, build_server_id, docker_registry_image_tag, parent_deployment_uuid) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING id",
+         destination_id, only_this_server, rollback, commit_message, is_api, build_server_id, docker_registry_image_tag, parent_deployment_uuid, is_mcp, \
+         scan_gate_bypassed_by, scan_gate_result) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25::text::jsonb) RETURNING id",
     )
     .bind(n.application_id.to_string())
     .bind(&n.deployment_uuid)
@@ -884,6 +894,9 @@ pub async fn insert_deployment(db: &Db, n: &NewDeployment, now: NaiveDateTime) -
     .bind(n.build_server_id.map(|v| v as i32))
     .bind(&n.docker_registry_image_tag)
     .bind(&n.parent_deployment_uuid)
+    .bind(n.is_mcp)
+    .bind(n.scan_gate_bypassed_by)
+    .bind(n.scan_gate_result.as_ref().map(Value::to_string))
     .fetch_one(db.pool())
     .await?)
 }
@@ -941,13 +954,22 @@ pub async fn deployments_for_application(
 /// Every deployment of an application for the history list (`Deployment\Index::HISTORY_COLUMNS`):
 /// no logs and no configuration payloads, newest first.
 pub async fn deployment_history(db: &Db, application_id: i64) -> DbResult<Vec<Deployment>> {
-    let rows: Vec<String> = sqlx::query_scalar(
+    // `scan_gate_result` for `isImageScanBlocked()` (a "Blocked" row), on schemas that have it.
+    let gate = if db
+        .schema()
+        .has_column("application_deployment_queues", "scan_gate_result")
+    {
+        ", scan_gate_result"
+    } else {
+        ""
+    };
+    let rows: Vec<String> = sqlx::query_scalar(&format!(
         "SELECT row_to_json(q)::text FROM (\
            SELECT id, application_id, deployment_uuid, pull_request_id, status, commit, commit_message, \
-                  is_webhook, is_api, rollback, server_id, server_name, created_at, updated_at, finished_at \
+                  is_webhook, is_api, is_mcp, rollback, server_id, server_name, created_at, updated_at, finished_at{gate} \
              FROM application_deployment_queues WHERE application_id = $1 \
             ORDER BY created_at DESC, id DESC) q",
-    )
+    ))
     .bind(application_id.to_string())
     .fetch_all(db.pool())
     .await?;

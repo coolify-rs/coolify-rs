@@ -20,6 +20,7 @@ use serde_json::Value;
 use super::common::{helper_image, now, slug};
 use super::connection as conn;
 use super::s3::{S3Target, minio_client_resolve_options};
+use super::storage_type as st;
 use crate::Jobs;
 use crate::compose_parser::validate::validate_shell_safe_path;
 use crate::server::ServerInfo;
@@ -70,8 +71,17 @@ fn filename_part(database: &str) -> String {
         .collect()
 }
 
-/// `exitCodeReason`.
-fn exit_code_reason(code: Option<i32>) -> Option<&'static str> {
+/// `exitCodeReason`. `timeout` is the backup timeout in seconds.
+fn exit_code_reason(code: Option<i32>, timeout: i64) -> Option<String> {
+    if code == Some(124) {
+        return Some(format!(
+            "The backup stopped with exit code 124: it did not finish within the backup timeout of {timeout} seconds. The timeout counts for the complete run: the dumps and S3 uploads of all databases. Increase the timeout in the backup settings."
+        ));
+    }
+    exit_code_reason_of_signal(code).map(str::to_owned)
+}
+
+fn exit_code_reason_of_signal(code: Option<i32>) -> Option<&'static str> {
     match code {
         Some(137) => Some(
             "The backup stopped with exit code 137: the dump process or the database container was killed (SIGKILL). This is usually the out-of-memory killer: the dump runs inside the database container and shares its memory limit. Check the memory limit of the database and the kernel log (dmesg) on the server.",
@@ -86,6 +96,22 @@ fn exit_code_reason(code: Option<i32>) -> Option<&'static str> {
     }
 }
 
+/// `commandTimeout()` at `now`: at least one second must be left of the backup timeout.
+fn remaining_timeout(
+    deadline: std::time::Instant,
+    now: std::time::Instant,
+    timeout_seconds: i64,
+) -> Result<Duration, coolify_remote::RemoteError> {
+    let remaining = deadline.saturating_duration_since(now);
+    if remaining.as_secs() < 1 {
+        return Err(coolify_remote::RemoteError {
+            message: format!("The backup timeout of {timeout_seconds} seconds has passed."),
+            code: Some(124),
+        });
+    }
+    Ok(remaining)
+}
+
 /// The state of one job run.
 struct Run<'a> {
     backup: &'a Record,
@@ -96,10 +122,31 @@ struct Run<'a> {
     secrets: Vec<String>,
     /// `dump_all`.
     dump_all: bool,
-    timeout: Duration,
+    /// `$this->backup->timeout ?? 3600`.
+    timeout_seconds: i64,
+    /// `$this->deadline`: when the backup timeout of this run ends. Set when the run starts.
+    deadline: std::time::Instant,
+    /// `$runHadProblem`: a dump or an upload of this run failed.
+    had_problem: std::sync::atomic::AtomicBool,
 }
 
 impl Run<'_> {
+    /// `commandTimeout()`: the time left of the backup timeout. The timeout limits the complete
+    /// run (every database, dump and upload), so a run that takes too long fails inside the job,
+    /// where the cleanup runs.
+    fn command_timeout(&self) -> Result<Duration, coolify_remote::RemoteError> {
+        remaining_timeout(
+            self.deadline,
+            std::time::Instant::now(),
+            self.timeout_seconds,
+        )
+    }
+
+    fn problem(&self) {
+        self.had_problem
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     fn redact(&self, text: &str) -> String {
         let locked: Vec<&str> = self.secrets.iter().map(String::as_str).collect();
         coolify_compat::redact::redact_text(text, &[], &locked)
@@ -225,11 +272,23 @@ impl Jobs {
             .backup_database(&backup)
             .await
             .ok_or("Database not found?!")?;
-        let server = self.server_for(&database).await?;
+        // The coolify-db container always runs on the Coolify host, whatever its destination row says.
+        let server =
+            if database.kind == Kind::Postgresql && !database.is_service() && database.id == 0 {
+                let row = coolify_db::servers::find_by_id(db, 0)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .ok_or("Server not found?!")?;
+                ServerInfo::from_row(&row)
+            } else {
+                self.server_for(&database).await?
+            };
         let timeout = backup
             .get("timeout")
             .and_then(Value::as_i64)
             .unwrap_or(3600);
+        let deadline =
+            std::time::Instant::now() + Duration::from_secs(timeout.max(0).unsigned_abs());
         let _ = parts::fail_stale_executions(db, backup_id, timeout * 2, now()).await;
 
         let status = database.str("status").unwrap_or_default();
@@ -376,7 +435,9 @@ impl Jobs {
             backup_dir,
             secrets,
             dump_all,
-            timeout: Duration::from_secs(timeout.max(1) as u64),
+            timeout_seconds: timeout,
+            deadline,
+            had_problem: std::sync::atomic::AtomicBool::new(false),
         };
         let prefix = new_public_id().chars().take(16).collect::<String>();
         let mut last_success = false;
@@ -391,6 +452,7 @@ impl Jobs {
             {
                 Ok(done) => done,
                 Err(e) => {
+                    run.problem();
                     // `failed()`: the job ended with an exception.
                     let output = run.redact(&e);
                     self.notify_backup(&run, &name, BackupOutcome::Failed(output))
@@ -402,7 +464,60 @@ impl Jobs {
         if last_success && let Err(e) = self.remove_old_backups(&backup, &database, &server).await {
             tracing::warn!(backup = backup_id, error = %e, "database backup retention cleanup failed");
         }
+        if !run.had_problem.load(std::sync::atomic::Ordering::Relaxed) {
+            self.notify_if_backup_recovered(&run).await;
+        }
         Ok(())
+    }
+
+    /// `notifyIfRecovered()`: after a run without problems, tell the team once that a backup that
+    /// failed before works again.
+    async fn notify_if_backup_recovered(&self, run: &Run<'_>) {
+        use crate::notifications::{
+            self, DATABASE_BACKUP_THROTTLES, FailureEvent, Notification, lookup,
+        };
+        let db = &self.0.db;
+        let backup_id = parts::id_of(run.backup);
+        let (model, [failed_class, s3_warning_class]) = DATABASE_BACKUP_THROTTLES;
+        let release = |class: &'static str| async move {
+            notifications::release_throttle(db, model, backup_id, class)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(backup = backup_id, error = %e, "could not release a backup notification throttle");
+                    false
+                })
+        };
+        let was_failing = release(failed_class).await;
+        let had_s3_warning = release(s3_warning_class).await;
+        if !was_failing && !had_s3_warning {
+            return;
+        }
+        let Some(team_id) = run.backup.get("team_id").and_then(Value::as_i64) else {
+            return;
+        };
+        let d = run.database;
+        let name = d.str("name").unwrap_or_default().to_owned();
+        // `$this->database->link() ?? base_url()`.
+        let url = lookup::scheduled_database_backup(db, backup_id, d, None, "")
+            .await
+            .url(&notifications::Ctx::load(db).await);
+        notifications::notify(
+            db,
+            self.0.encrypter.as_ref(),
+            team_id,
+            Notification::ScheduledJobRecovered {
+                failure_event: FailureEvent::BackupFailure,
+                title: format!("Database backup for {name} works again."),
+                webhook_event: "backup_recovered".to_owned(),
+                url: Some(url),
+                webhook_data: serde_json::json!({
+                    "database_name": name,
+                    "database_uuid": d.uuid,
+                    "backup_uuid": parts::str_of(run.backup, "uuid").unwrap_or_default(),
+                }),
+            },
+        )
+        .await;
     }
 
     async fn selected_storages(&self, backup: &Record) -> Result<Vec<Record>, String> {
@@ -518,8 +633,9 @@ impl Jobs {
                         None,
                     ),
                 };
+                run.problem();
                 let mut failure = run.redact(&message);
-                if let Some(reason) = exit_code_reason(code) {
+                if let Some(reason) = exit_code_reason(code, run.timeout_seconds) {
                     failure = format!("{reason}\n\n{failure}");
                 }
                 let notify_failure = failure.clone();
@@ -551,7 +667,7 @@ impl Jobs {
         let mut local_deleted = false;
         if save_s3 {
             match self
-                .upload_to_destinations(run, storages, execution, uuid, &location)
+                .upload_to_destinations(run, storages, execution, uuid, &location, size)
                 .await
             {
                 Ok(failures) => {
@@ -570,9 +686,10 @@ impl Jobs {
         // Step 3: Update the status.
         let mut message = dump_output.map(|o| run.redact(&o));
         if let Some(e) = &s3_error {
+            run.problem();
             message = Some(match message {
-                Some(m) => format!("{m}\n\nWarning: S3 upload failed: {e}"),
-                None => format!("Warning: S3 upload failed: {e}"),
+                Some(m) => format!("{m}\n\nWarning: Storage upload failed: {e}"),
+                None => format!("Warning: Storage upload failed: {e}"),
             });
         }
         let done = now();
@@ -611,12 +728,10 @@ impl Jobs {
         let Some(team_id) = run.backup.get("team_id").and_then(Value::as_i64) else {
             return;
         };
-        let d = run.database;
-        let backup = lookup::database_backup(
+        let backup = lookup::scheduled_database_backup(
             db,
-            d.str("name").unwrap_or_default(),
-            &d.uuid,
-            d.int("environment_id"),
+            parts::id_of(run.backup),
+            run.database,
             Some(database_name),
             parts::str_of(run.backup, "frequency").unwrap_or_default(),
         )
@@ -799,14 +914,23 @@ impl Jobs {
             })
             .collect();
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-        let result = self
-            .remote()
-            .run(
-                &run.target,
-                &refs,
-                RunOptions::op("database.backup").timeout(run.timeout),
-            )
-            .await;
+        // `runBackupCommands()`: the commands that write the backup file run only once. An SSH
+        // retry replays the batch, and a dump that lost its SSH connection can still run in the
+        // database container, so a second dump would write into the same file.
+        let result = match run.command_timeout() {
+            Ok(timeout) => {
+                self.remote()
+                    .run(
+                        &run.target,
+                        &refs,
+                        RunOptions::op("database.backup")
+                            .timeout(timeout)
+                            .attempts(1),
+                    )
+                    .await
+            }
+            Err(e) => Err(e),
+        };
         // backup_standalone_clickhouse: `finally`.
         if d.kind == Kind::Clickhouse {
             let cleanup = format!(
@@ -854,6 +978,7 @@ impl Jobs {
         execution: i64,
         uuid: &str,
         location: &str,
+        size: i64,
     ) -> Result<Option<String>, String> {
         let db = &self.0.db;
         let enc = self
@@ -880,7 +1005,7 @@ impl Jobs {
             .await
             .map_err(|e| e.to_string())?;
             return Err(format!(
-                "S3 storage configuration is missing or has been deleted (S3 storage ID: {previous}). S3 backup has been disabled for this schedule."
+                "Backup storage configuration is missing or has been deleted (storage ID: {previous}). Uploads to a backup storage are disabled for this schedule."
             ));
         }
         let network = run
@@ -896,7 +1021,7 @@ impl Jobs {
             let name = parts::str_of(row, "name").unwrap_or_default().to_owned();
             let result = match S3Target::from_row(enc, row) {
                 Ok(t) => {
-                    self.upload_one(run, row, &t, uuid, location, &network)
+                    self.upload_one(run, row, &t, uuid, location, &network, size)
                         .await
                 }
                 Err(e) => Err(e),
@@ -927,6 +1052,7 @@ impl Jobs {
     }
 
     /// `upload_to_s3`.
+    #[allow(clippy::too_many_arguments)]
     async fn upload_one(
         &self,
         run: &Run<'_>,
@@ -935,57 +1061,18 @@ impl Jobs {
         uuid: &str,
         location: &str,
         network: &str,
+        size: i64,
     ) -> Result<(), String> {
         let path_style = self.test_s3_connection(row).await?;
         let helper = format!("backup-of-{uuid}");
-        let mount = quote(&format!("{location}:{location}:ro"));
-        // `$s3->minioClientResolveOptions($this->server, $fullImageName, $network)`.
-        let resolve = minio_client_resolve_options(
-            self,
-            &run.target,
-            &s3.endpoint,
-            &helper_image(self),
-            Some(network),
-        )
-        .await;
-        let destination = quote(&format!("temporary/{}{}/", s3.bucket, run.backup_dir));
-        let commands = [
-            format!("docker rm -f {helper} >/dev/null 2>&1 || true"),
-            format!(
-                "docker run -d --network {} --name {helper} --rm -e {} -v {mount} {}",
-                quote(network),
-                quote(&format!("MC_REGION={}", s3.region)),
-                helper_image(self)
-            ),
-        ];
-        let refs: Vec<&str> = commands.iter().map(String::as_str).collect();
-        let opts = RunOptions::op("database.backup").timeout(run.timeout);
-        let alias = minio_alias_command(&helper, &resolve, s3, path_style);
-        let copy = format!(
-            "docker exec {helper} mc cp{resolve} {} {destination}",
-            quote(location)
-        );
-        let result = match self.remote().run(&run.target, &refs, opts).await {
-            Ok(_) => match self
-                .remote()
-                .run(
-                    &run.target,
-                    &[alias.as_str()],
-                    RunOptions::op("database.backup"),
-                )
+        let result = if st::is_s3(row) {
+            self.upload_with_minio_client(
+                run, row, s3, &helper, location, network, size, path_style,
+            )
+            .await
+        } else {
+            self.upload_with_rclone(run, row, &helper, location, network)
                 .await
-            {
-                // `S3Storage::retryMinioClientUpload()` around the copy.
-                Ok(_) => {
-                    let copy = [copy.as_str()];
-                    super::s3::retry_minio_client_upload(|| {
-                        self.remote().run(&run.target, &copy, opts)
-                    })
-                    .await
-                }
-                Err(e) => Err(e),
-            },
-            Err(e) => Err(e),
         };
         let remove = super::proxy::docker_remove_command(&helper);
         let _ = self
@@ -996,7 +1083,119 @@ impl Jobs {
                 RunOptions::op("database.backup"),
             )
             .await;
-        result.map(|_| ()).map_err(|e| e.message)
+        result.map_err(|e| e.message)
+    }
+
+    /// The S3 branch of `upload_to_s3`: the MinIO client in the helper image, or curl with a
+    /// presigned URL for an endpoint with a path. The caller removes the container.
+    #[allow(clippy::too_many_arguments)]
+    async fn upload_with_minio_client(
+        &self,
+        run: &Run<'_>,
+        row: &Record,
+        s3: &S3Target,
+        helper: &str,
+        location: &str,
+        network: &str,
+        size: i64,
+        path_style: bool,
+    ) -> Result<(), coolify_remote::RemoteError> {
+        let mount = quote(&format!("{location}:{location}:ro"));
+        let commands = [
+            // Remove a leftover helper in the same batch, so a replayed batch does not fail with a name conflict.
+            format!("docker rm -f {helper} >/dev/null 2>&1 || true"),
+            format!(
+                "docker run -d --network {} --name {helper} --rm {} -v {mount} {}",
+                quote(network),
+                s3.minio_client_env_options(),
+                helper_image(self)
+            ),
+        ];
+        let refs: Vec<&str> = commands.iter().map(String::as_str).collect();
+        self.remote()
+            .run(
+                &run.target,
+                &refs,
+                RunOptions::op("database.backup").timeout(run.command_timeout()?),
+            )
+            .await?;
+        let upload = if st::uses_curl_transfer(row) {
+            let mut s3 = s3.clone();
+            s3.path_style = path_style;
+            let key = format!(
+                "{}/{}",
+                run.backup_dir.trim_start_matches('/'),
+                location.rsplit('/').next().unwrap_or(location)
+            );
+            self.prepare_curl_upload(&run.target, &s3, helper, location, &key)
+                .await?
+        } else {
+            // `$s3->minioClientResolveOptions($this->server, $fullImageName, $network)`.
+            let resolve = minio_client_resolve_options(
+                self,
+                &run.target,
+                &s3.endpoint,
+                &helper_image(self),
+                Some(network),
+            )
+            .await;
+            let alias = minio_alias_command(helper, &resolve, s3, path_style);
+            self.remote()
+                .run(
+                    &run.target,
+                    &[alias.as_str()],
+                    RunOptions::op("database.backup"),
+                )
+                .await?;
+            format!(
+                "docker exec {} {helper} mc cp{resolve} {} {}",
+                st::minio_client_part_size_option(size.max(0).unsigned_abs()),
+                quote(location),
+                quote(&format!("temporary/{}{}/", s3.bucket, run.backup_dir))
+            )
+        };
+        // `S3Storage::retryMinioClientUpload()` around the copy.
+        let upload = [upload.as_str()];
+        super::s3::retry_minio_client_upload(|| async move {
+            let opts = RunOptions::op("database.backup").timeout(run.command_timeout()?);
+            self.remote().run(&run.target, &upload, opts).await
+        })
+        .await
+        .map(|_| ())
+    }
+
+    /// `uploadWithRclone()`: uploads the backup file to an SFTP, FTPS, or WebDAV storage. The
+    /// caller removes the container.
+    async fn upload_with_rclone(
+        &self,
+        run: &Run<'_>,
+        row: &Record,
+        helper: &str,
+        location: &str,
+        network: &str,
+    ) -> Result<(), coolify_remote::RemoteError> {
+        let transfer = self.rclone_transfer(row, helper).await.map_err(|message| {
+            coolify_remote::RemoteError {
+                message,
+                code: None,
+            }
+        })?;
+        self.rclone_start(
+            &run.target,
+            &transfer,
+            &[format!("{location}:{location}:ro")],
+            Some(network),
+            Some(run.command_timeout()?),
+        )
+        .await?;
+        self.rclone_upload(
+            &run.target,
+            &transfer,
+            location,
+            location,
+            Some(run.command_timeout()?),
+        )
+        .await
     }
 
     /// `deleteBackupsLocally`.
@@ -1052,11 +1251,6 @@ impl Jobs {
     pub async fn delete_s3_copies(&self, execution: &Record) -> Result<(), String> {
         let db = &self.0.db;
         let id = parts::id_of(execution);
-        let enc = self
-            .0
-            .encrypter
-            .as_ref()
-            .ok_or("No application encryption key has been specified.")?;
         let replicas = parts::live_replicas(db, id)
             .await
             .map_err(|e| e.to_string())?;
@@ -1072,12 +1266,13 @@ impl Jobs {
                     Err("The S3 storage used by an existing backup is unavailable.".to_owned());
                 break;
             };
-            if let Some(file) = filename {
-                let target = S3Target::from_row(enc, &row)?;
-                if let Err(e) = target.delete_objects(&[file.to_owned()]).await {
-                    result = Err(e);
-                    break;
-                }
+            if let Some(file) = filename
+                && let Err(e) = self
+                    .delete_backups_from_storage(&row, &[file.to_owned()])
+                    .await
+            {
+                result = Err(e);
+                break;
             }
             parts::mark_replica_deleted(db, replica, now())
                 .await
@@ -1138,11 +1333,6 @@ impl Jobs {
     async fn delete_old_from_s3(&self, backup: &Record) -> Result<(), String> {
         let db = &self.0.db;
         let id = parts::id_of(backup);
-        let enc = self
-            .0
-            .encrypter
-            .as_ref()
-            .ok_or("No application encryption key has been specified.")?;
         let live = parts::schedule_live_replicas(db, id)
             .await
             .map_err(|e| e.to_string())?;
@@ -1203,8 +1393,7 @@ impl Jobs {
             if files.is_empty() {
                 continue;
             }
-            let target = S3Target::from_row(enc, &row)?;
-            match target.delete_objects(&files).await {
+            match self.delete_backups_from_storage(&row, &files).await {
                 Ok(()) => {
                     let gone: Vec<i64> = to_delete.iter().map(parts::id_of).collect();
                     for (replica, execution, _) in &in_storage {
@@ -1422,11 +1611,10 @@ impl Jobs {
         let Some(team_id) = backup.get("team_id").and_then(Value::as_i64) else {
             return Ok(());
         };
-        let details = lookup::database_backup(
+        let details = lookup::scheduled_database_backup(
             &self.0.db,
-            d.str("name").unwrap_or_default(),
-            &d.uuid,
-            d.int("environment_id"),
+            parts::id_of(backup),
+            d,
             Some("unknown"),
             parts::str_of(backup, "frequency").unwrap_or_default(),
         )
@@ -1568,6 +1756,7 @@ mod tests {
             bucket: "b".into(),
             region: "us-east-1".into(),
             path_style: false,
+            skip_tls_verification: false,
         };
         let command = minio_alias_command("backup-of-x", " --resolve 'a:443=1.2.3.4'", &s3, false);
         assert_eq!(
@@ -1596,6 +1785,39 @@ mod tests {
         assert_eq!(ids(outside_retention(&list, Some(2), None, 0.0)), vec![1]);
         assert_eq!(ids(outside_retention(&list, None, Some(7), 0.0)), vec![1]);
         assert!(outside_retention(&list, None, None, 0.0).is_empty());
+    }
+
+    #[test]
+    fn the_timeout_limits_the_complete_run() {
+        let start = std::time::Instant::now();
+        let deadline = start + Duration::from_secs(3600);
+        assert_eq!(
+            remaining_timeout(deadline, start + Duration::from_secs(600), 3600).unwrap(),
+            Duration::from_secs(3000)
+        );
+        let late =
+            remaining_timeout(deadline, start + Duration::from_secs(3600), 3600).unwrap_err();
+        assert_eq!(
+            late.message,
+            "The backup timeout of 3600 seconds has passed."
+        );
+        assert_eq!(late.code, Some(124));
+        // Less than a second is not enough for another command.
+        assert!(remaining_timeout(deadline, deadline - Duration::from_millis(500), 3600).is_err());
+    }
+
+    #[test]
+    fn exit_code_124_names_the_backup_timeout() {
+        assert_eq!(
+            exit_code_reason(Some(124), 900).unwrap(),
+            "The backup stopped with exit code 124: it did not finish within the backup timeout of 900 seconds. The timeout counts for the complete run: the dumps and S3 uploads of all databases. Increase the timeout in the backup settings."
+        );
+        assert!(
+            exit_code_reason(Some(137), 900)
+                .unwrap()
+                .starts_with("The backup stopped with exit code 137:")
+        );
+        assert_eq!(exit_code_reason(Some(1), 900), None);
     }
 
     #[test]

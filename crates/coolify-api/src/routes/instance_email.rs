@@ -22,6 +22,8 @@ const FIELDS: &[&str] = &[
     "smtp_enabled",
     "smtp_from_address",
     "smtp_from_name",
+    "notification_from_address",
+    "notification_from_name",
     "smtp_host",
     "smtp_port",
     "smtp_encryption",
@@ -31,6 +33,8 @@ const FIELDS: &[&str] = &[
     "smtp_ehlo_domain",
     "resend_enabled",
     "resend_api_key",
+    "resend_from_address",
+    "resend_from_name",
 ];
 
 /// `authorizeRootTeam`.
@@ -101,6 +105,11 @@ pub async fn update(
             vec![Rule::Nullable, Rule::Custom(email_rule)],
         ),
         f("smtp_from_name", string(255)),
+        f(
+            "notification_from_address",
+            vec![Rule::Nullable, Rule::Custom(email_rule)],
+        ),
+        f("notification_from_name", string(255)),
         f("smtp_host", string(255)),
         f(
             "smtp_port",
@@ -128,6 +137,11 @@ pub async fn update(
         f("smtp_ehlo_domain", ehlo),
         f("resend_enabled", vec![Rule::Boolean]),
         f("resend_api_key", string(255)),
+        f(
+            "resend_from_address",
+            vec![Rule::Nullable, Rule::Custom(email_rule)],
+        ),
+        f("resend_from_name", string(255)),
     ];
     let errors = errors_of(&input, &fields, CUSTOM_API_MESSAGES)?;
     if !errors.is_empty() {

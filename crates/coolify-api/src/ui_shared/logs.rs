@@ -161,6 +161,8 @@ fn target_of(c: &Value, group_deployments: bool) -> Option<Target> {
         },
     })
 }
+/// `GetLogs::MAX_LOG_LINES`: the most lines the log viewer keeps.
+const MAX_LOG_LINES: usize = 50000;
 
 const LIVE: [&str; 4] = ["running", "starting", "restarting", "degraded"];
 
@@ -455,8 +457,12 @@ async fn read(
             timestamps || merged,
         ),
         _ => match query.get("since").filter(|v| is_docker_timestamp(v)) {
+            // `sinceOptions($since)`: `--since` without `-n` makes dockerd decode the complete log
+            // file of the container on each stream tick, which keeps it at full CPU for large
+            // logs. With `-n`, dockerd reads from the end. The viewer keeps at most
+            // `MAX_LOG_LINES` lines, so a stream tick never needs more.
             Some(since) => (
-                format!("--since {since} -t"),
+                format!("--since {since} -n {MAX_LOG_LINES} -t"),
                 MAX_DISPLAY_SIZE_BYTES,
                 "5MB",
                 true,

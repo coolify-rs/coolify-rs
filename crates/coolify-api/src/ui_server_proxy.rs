@@ -46,6 +46,10 @@ pub fn routes() -> Router<AppState> {
         .route(&p("proxy/certificates"), get(certificates))
         .route(&p("proxy/certificates/delete"), post(delete_certificate))
         .route(
+            &p("proxy/certificates/delete-unused"),
+            post(delete_unused_certificates),
+        )
+        .route(
             &p("proxy/certificates/backups/restore"),
             post(restore_backup),
         )
@@ -922,6 +926,65 @@ async fn delete_certificate(
     let id = body.get("id").and_then(Value::as_str).unwrap_or_default();
     match acme::delete_certificate(&mut srv, id).await {
         Ok(_) => Ok(ok(json!({"message": "TLS certificate deleted. Restart Traefik to remove it from the running proxy."})).into_response()),
+        Err(e) => toast_error(e),
+    }
+}
+
+/// `Proxy\Certificates::deleteUnusedTraefikCertificates` (v4.7.5): deletes the certificates that no
+/// route and no resource on the server uses, so Traefik stops renewing them.
+async fn delete_unused_certificates(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    let s = find_server(&state, &ctx, &uuid).await?;
+    if !ctx.is_team_admin() {
+        return toast_error("This action is unauthorized.");
+    }
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    let (team_id, server_uuid, server_name) =
+        (s.team_id, s.uuid.clone(), s.record.get("name").cloned());
+    let mut srv = Srv::from_row(jobs, s);
+    match acme::delete_unused_certificates(&mut srv).await {
+        Ok(deleted) if deleted.is_empty() => Ok(ok(
+            json!({"info": "No unused TLS certificates found.", "deleted": 0}),
+        )
+        .into_response()),
+        Ok(deleted) => {
+            // `certificatesDeleted()`: one audit entry per certificate.
+            for certificate in &deleted {
+                let server_name = server_name
+                    .as_ref()
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let field = |key: &str| {
+                    certificate
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned()
+                };
+                let (domain, resolver) = (field("main_domain"), field("resolver"));
+                tracing::info!(
+                    target: "audit",
+                    event = "ui.proxy.certificate_deleted",
+                    team_id,
+                    server_uuid = %server_uuid,
+                    server_name,
+                    domain = %domain,
+                    resolver = %resolver,
+                    "certificate deleted"
+                );
+            }
+            Ok(ok(json!({
+                "message": format!(
+                    "{} unused TLS certificates deleted. Restart Traefik to remove them from the running proxy.",
+                    deleted.len()
+                ),
+                "deleted": deleted.len(),
+            }))
+            .into_response())
+        }
         Err(e) => toast_error(e),
     }
 }

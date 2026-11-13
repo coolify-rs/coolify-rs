@@ -36,9 +36,14 @@ fn api() -> String {
 /// `Http::withToken()` under the global options of `AppServiceProvider::configureHttpClient`:
 /// a 10 second connect timeout and a 30 second timeout.
 fn cloudflare_client() -> Result<Client, String> {
+    cloudflare_client_within(Duration::from_secs(30))
+}
+
+/// The client with `->timeout($timeoutSeconds)`.
+fn cloudflare_client_within(timeout: Duration) -> Result<Client, String> {
     Client::builder()
         .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
+        .timeout(timeout)
         .user_agent("coolify-rs")
         .build()
         .map_err(|e| e.to_string())
@@ -278,6 +283,51 @@ pub async fn find_zones(db: &Db, team_id: i64, hostname: &str) -> Result<Vec<Zon
         .collect())
 }
 
+/// The record names `sendsHostnameToAnotherServer()` reads, in order: the hostname, then the
+/// wildcards that cover it from the closest one up to the wildcard of the zone.
+fn origin_record_names(hostname: &str, zone: &str) -> Vec<String> {
+    let suffix = format!(".{zone}");
+    // `str($value)->after('.')`: the value itself when it has no dot.
+    let after_dot = |value: &str| {
+        value
+            .split_once('.')
+            .map_or(value, |(_, rest)| rest)
+            .to_owned()
+    };
+    let mut names = vec![hostname.to_owned()];
+    let mut parent = after_dot(hostname);
+    while parent.ends_with(&suffix) {
+        names.push(format!("*.{parent}"));
+        parent = after_dot(&parent);
+    }
+    if hostname.ends_with(&suffix) {
+        names.push(format!("*.{zone}"));
+    }
+    names
+}
+
+/// What the `(type, content)` records of one name tell `sendsHostnameToAnotherServer()`: `None`
+/// when the name has no A, AAAA or CNAME record (the next name is read), `Some(false)` when a
+/// CNAME sends the hostname on or a record has one of the addresses, else `Some(true)`.
+fn origin_is_another_server(records: &[(&str, &str)], addresses: &[&str]) -> Option<bool> {
+    let records: Vec<&(&str, &str)> = records
+        .iter()
+        .filter(|(kind, _)| matches!(*kind, "A" | "AAAA" | "CNAME"))
+        .collect();
+    if records.is_empty() {
+        return None;
+    }
+    if records.iter().any(|(kind, _)| *kind == "CNAME") {
+        return Some(false);
+    }
+    let same = records.iter().any(|(_, content)| {
+        addresses
+            .iter()
+            .any(|address| same_address(Some(*content), Some(*address)))
+    });
+    Some(!same)
+}
+
 /// `normalizeRemoteRecord`.
 #[derive(Debug, Clone)]
 struct Remote {
@@ -366,6 +416,8 @@ pub enum DnsError {
         record_id: String,
         current: String,
         proposed: String,
+        /// `$currentComment`: the provider comment of the record that blocks the create.
+        comment: Option<String>,
     },
     /// `LockTimeoutException`.
     Busy,
@@ -543,9 +595,21 @@ impl Dns<'_> {
         hostname: &str,
         kind: Option<&str>,
     ) -> Result<Vec<Remote>, DnsError> {
+        self.find_records_within(zone, hostname, kind, Duration::from_secs(30))
+            .await
+    }
+
+    /// `findRecords($zone, $hostname, $type, $timeoutSeconds)`.
+    async fn find_records_within(
+        &self,
+        zone: &Zone,
+        hostname: &str,
+        kind: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Vec<Remote>, DnsError> {
         let hostname = normalize(hostname);
         let token = self.token(&zone.token_encrypted)?;
-        let client = cloudflare_client().map_err(DnsError::Other)?;
+        let client = cloudflare_client_within(timeout).map_err(DnsError::Other)?;
         let mut query: Vec<(&str, String)> = Vec::new();
         if let Some(k) = kind {
             query.push(("type", k.to_owned()));
@@ -581,6 +645,55 @@ impl Dns<'_> {
             .filter(|r| r.is_object())
             .map(|r| remote_of(r, &hostname, kind.unwrap_or("")))
             .collect())
+    }
+
+    /// `sendsHostnameToAnotherServer($server, $hostname, $expectedIp, $timeoutSeconds)`: whether
+    /// Cloudflare sends a proxied hostname to another server than the given one. A Cloudflare IP
+    /// in DNS hides the origin, so the zone's records are read: the hostname's own record, or
+    /// else the closest wildcard record that covers it (a Cloudflare wildcard also covers deeper
+    /// names, so `*.example.com` covers `app.apps.example.com`). False when it cannot be told: no
+    /// zone of the server's team manages the hostname, the records cannot be read, a CNAME sends
+    /// the hostname on, or no record is found. `addresses` are the expected IP and
+    /// `ServerDnsAddresses::forServer($server)->addresses()`.
+    pub async fn sends_hostname_to_another_server(
+        &self,
+        team_id: Option<i64>,
+        hostname: &str,
+        addresses: &[String],
+        timeout: Duration,
+    ) -> bool {
+        let hostname = normalize(hostname);
+        let Some(team_id) = team_id else {
+            return false;
+        };
+        let Some(zone) = find_zones(self.db, team_id, &hostname)
+            .await
+            .ok()
+            .and_then(|zones| zones.into_iter().next())
+        else {
+            return false;
+        };
+        let addresses: Vec<&str> = addresses
+            .iter()
+            .map(String::as_str)
+            .filter(|a| !a.is_empty())
+            .collect();
+        if addresses.is_empty() {
+            return false;
+        }
+        for name in origin_record_names(&hostname, &zone.name) {
+            let Ok(records) = self.find_records_within(&zone, &name, None, timeout).await else {
+                return false;
+            };
+            let records: Vec<(&str, &str)> = records
+                .iter()
+                .map(|r| (r.kind.as_str(), r.content.as_str()))
+                .collect();
+            if let Some(answer) = origin_is_another_server(&records, &addresses) {
+                return answer;
+            }
+        }
+        false
     }
 
     /// `conflictingRecords`.
@@ -704,6 +817,7 @@ impl Dns<'_> {
                 record_id: r.id.clone(),
                 current: r.content.clone(),
                 proposed: content.to_owned(),
+                comment: r.comment.clone(),
             });
         }
         let uuid = new_public_id();
@@ -1356,12 +1470,73 @@ pub async fn release_removed_hostnames_job(
     );
 }
 
+/// `DnsRecordConfigurationFinished::$conflict`: the record that blocked the create.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockingRecord {
+    pub zone_id: i64,
+    pub record_id: String,
+    pub current: String,
+    pub proposed: String,
+}
+
 /// What `DnsRecordConfigurationFinished` carries.
 #[derive(Debug, Clone)]
 pub struct DnsConfigured {
     pub successful: bool,
     pub credential: String,
     pub message: String,
+    /// A record with another value blocks the create and is not replaced automatically: the UI
+    /// shows the conflict, where the user can replace it.
+    pub conflict: Option<BlockingRecord>,
+}
+
+/// The part of `isUnusedCoolifyRecord()` that needs no lookups: Coolify created the record
+/// (owned, and the provider comment still proves it).
+fn is_coolify_record(owned: bool, uuid: &str, current_comment: Option<&str>) -> bool {
+    owned && current_comment == Some(ownership_comment(uuid).as_str())
+}
+
+impl Dns<'_> {
+    /// `ConfigureDnsRecordJob::isUnusedCoolifyRecord()`: true when Coolify created the record and
+    /// no resource other than this one references the record or uses the hostname.
+    async fn is_unused_coolify_record(
+        &self,
+        zone: &Zone,
+        record_id: &str,
+        current_comment: Option<&str>,
+        hostname: &str,
+        resource: Option<&DnsResource>,
+    ) -> bool {
+        let Some(resource) = resource else {
+            return false;
+        };
+        let Ok(Some(record)) = store::record_by_provider_id(self.db, zone.id, record_id).await
+        else {
+            return false;
+        };
+        if !is_coolify_record(record.owned, &record.uuid, current_comment) {
+            return false;
+        }
+        let Ok(references) = store::references(self.db, record.id).await else {
+            return false;
+        };
+        for (_, morph, id) in references {
+            if morph == resource.morph && id == resource.id {
+                continue;
+            }
+            // `$reference->resource !== null`.
+            if store::reference_target_exists(self.db, &morph, id)
+                .await
+                .unwrap_or(true)
+            {
+                return false;
+            }
+        }
+        let except = [(resource.morph.clone(), resource.id)];
+        resources_using_hostname(self.db, hostname, &except)
+            .await
+            .is_ok_and(|users| users.is_empty())
+    }
 }
 
 /// `ConfigureDnsRecordJob`: only a busy hostname lock is retried.
@@ -1379,22 +1554,81 @@ pub async fn configure_dns_record_job(
             successful: false,
             credential: String::new(),
             message: "The DNS zone is no longer available.".to_owned(),
+            conflict: None,
         };
     };
     let finished = |successful: bool, message: String| DnsConfigured {
         successful,
         credential: zone.token_name.clone(),
         message,
+        conflict: None,
     };
     if !is_public_address(content) {
         return finished(false, NO_PUBLIC_ADDRESS_MESSAGE.to_owned());
     }
     for attempt in 1..=3u64 {
-        match dns
+        // A record with another value blocks the create. It is replaced only when it is a record
+        // that Coolify created and that no other resource uses. Otherwise the conflict goes to
+        // the UI, where the user can replace it.
+        let created = match dns
             .create_record(&zone, hostname, content, resource, &[], None)
             .await
         {
-            Ok(_) => return finished(true, format!("DNS record added for {hostname}.")),
+            Ok(_) => Ok(format!("DNS record added for {hostname}.")),
+            Err(DnsError::Conflict {
+                record_id,
+                current,
+                proposed,
+                comment,
+            }) => {
+                let message = DnsError::Conflict {
+                    record_id: record_id.clone(),
+                    current: current.clone(),
+                    proposed: proposed.clone(),
+                    comment: comment.clone(),
+                }
+                .to_string();
+                if !dns
+                    .is_unused_coolify_record(
+                        &zone,
+                        &record_id,
+                        comment.as_deref(),
+                        hostname,
+                        resource,
+                    )
+                    .await
+                {
+                    return DnsConfigured {
+                        conflict: Some(BlockingRecord {
+                            zone_id: zone.id,
+                            record_id,
+                            current,
+                            proposed,
+                        }),
+                        ..finished(false, message)
+                    };
+                }
+                dns.replace_record(
+                    &zone,
+                    &record_id,
+                    hostname,
+                    content,
+                    resource,
+                    Some(&current),
+                    &[],
+                    false,
+                )
+                .await
+                .map(|_| {
+                    format!(
+                        "DNS record replaced for {hostname}. It pointed to {current}, which no other resource uses."
+                    )
+                })
+            }
+            Err(e) => Err(e),
+        };
+        match created {
+            Ok(message) => return finished(true, message),
             Err(DnsError::Busy) if attempt < 3 => {
                 tokio::time::sleep(std::time::Duration::from_secs(10 * attempt)).await;
             }
@@ -1879,6 +2113,84 @@ pub async fn tunnel_tear_down(dns: &Dns<'_>, srv: &Srv) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn origin_records_are_the_hostname_then_the_closest_wildcards() {
+        assert_eq!(
+            origin_record_names("app.apps.example.com", "example.com"),
+            vec![
+                "app.apps.example.com",
+                "*.apps.example.com",
+                "*.example.com"
+            ]
+        );
+        assert_eq!(
+            origin_record_names("app.example.com", "example.com"),
+            vec!["app.example.com", "*.example.com"]
+        );
+        // The apex has no wildcard that covers it.
+        assert_eq!(
+            origin_record_names("example.com", "example.com"),
+            vec!["example.com"]
+        );
+        assert_eq!(
+            origin_record_names("a.b.c.example.com", "example.com"),
+            vec![
+                "a.b.c.example.com",
+                "*.b.c.example.com",
+                "*.c.example.com",
+                "*.example.com"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_proxied_hostname_goes_to_another_server_when_no_record_has_the_address() {
+        let addresses = ["203.0.113.10", "2001:db8::10"];
+        // No address record under this name: the next name is read.
+        assert_eq!(origin_is_another_server(&[], &addresses), None);
+        assert_eq!(
+            origin_is_another_server(&[("TXT", "v=spf1 -all")], &addresses),
+            None
+        );
+        // The record points to this server.
+        assert_eq!(
+            origin_is_another_server(&[("A", "203.0.113.10")], &addresses),
+            Some(false)
+        );
+        assert_eq!(
+            origin_is_another_server(&[("AAAA", "2001:DB8::0010")], &addresses),
+            Some(false)
+        );
+        // Another server.
+        assert_eq!(
+            origin_is_another_server(&[("A", "198.51.100.7")], &addresses),
+            Some(true)
+        );
+        // One of several records is enough.
+        assert_eq!(
+            origin_is_another_server(&[("A", "198.51.100.7"), ("A", "203.0.113.10")], &addresses),
+            Some(false)
+        );
+        // A CNAME sends the hostname on: it cannot be told.
+        assert_eq!(
+            origin_is_another_server(&[("CNAME", "other.example.net")], &addresses),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn only_an_owned_record_with_its_comment_is_a_coolify_record() {
+        let uuid = "abc123";
+        let comment = ownership_comment(uuid);
+        assert!(is_coolify_record(true, uuid, Some(&comment)));
+        // Tracked but created by the user.
+        assert!(!is_coolify_record(false, uuid, Some(&comment)));
+        // The user changed or removed the comment in Cloudflare.
+        assert!(!is_coolify_record(true, uuid, Some("mine")));
+        assert!(!is_coolify_record(true, uuid, None));
+        assert!(!is_coolify_record(true, "other", Some(&comment)));
+    }
 
     /// `worseResult()` of v4.6.0: a kept or deleted record beats no result.
     #[test]

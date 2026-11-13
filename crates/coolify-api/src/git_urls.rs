@@ -264,6 +264,23 @@ pub fn not_option_like(v: &Value) -> Option<String> {
 
 /// The `ValidGitRepositoryUrl` rule (SSH and IPs allowed).
 pub fn valid_git_repository_url(v: &Value) -> Option<String> {
+    valid_git_repository(v, false)
+}
+
+/// `new ValidGitRepositoryUrl(allowRepositoryPath: true)`: also accepts a repository path such as
+/// `owner/name`, which applications with a Git source store. Used wherever the repository of an
+/// existing application is changed.
+pub fn valid_git_repository_url_or_path(v: &Value) -> Option<String> {
+    valid_git_repository(v, true)
+}
+
+/// A repository path (owner/name, or group/subgroup/name) that the Git source turns into a URL.
+static REPOSITORY_PATH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\A[a-zA-Z0-9_][a-zA-Z0-9._-]*(/[a-zA-Z0-9._-]+)+\z")
+        .unwrap_or_else(|_| unreachable!())
+});
+
+fn valid_git_repository(v: &Value, allow_repository_path: bool) -> Option<String> {
     if php_empty(v) {
         return None;
     }
@@ -346,6 +363,9 @@ pub fn valid_git_repository_url(v: &Value) -> Option<String> {
         } else {
             Some("The :attribute is not a valid git:// URL.".into())
         };
+    }
+    if allow_repository_path && REPOSITORY_PATH.is_match(&value) {
+        return None;
     }
     Some("The :attribute must start with https://, http://, git://, ssh://, or be an SSH URL (user@host:path).".into())
 }
@@ -433,6 +453,35 @@ mod tests {
 
     fn repo(s: &str) -> Option<String> {
         valid_git_repository_url(&json!(s))
+    }
+
+    #[test]
+    fn repository_paths_are_accepted_only_where_a_git_source_stores_them() {
+        let path = |s: &str| valid_git_repository_url_or_path(&json!(s));
+        let scheme_error = Some("The :attribute must start with https://, http://, git://, ssh://, or be an SSH URL (user@host:path).".to_owned());
+        // A new public repository must be a URL.
+        assert_eq!(repo("coollabsio/coolify"), scheme_error);
+        // An existing application stores owner/name, or group/subgroup/name.
+        assert_eq!(path("coollabsio/coolify"), None);
+        assert_eq!(path("group/sub-group/my.repo"), None);
+        assert_eq!(path("_org/repo"), None);
+        // URLs are still checked as URLs.
+        assert_eq!(path("https://github.com/coollabsio/coolify"), None);
+        assert_eq!(
+            path("https://localhost/a/b"),
+            Some("The :attribute cannot point to internal hosts.".to_owned())
+        );
+        // Not a path: one part, a leading dot or dash, an empty part.
+        assert_eq!(path("coolify"), scheme_error);
+        assert_eq!(path(".hidden/repo"), scheme_error);
+        assert_eq!(path("-x/repo"), scheme_error);
+        assert_eq!(path("owner//repo"), scheme_error);
+        assert_eq!(path("owner/repo/"), scheme_error);
+        // Shell characters are refused before the shape is looked at.
+        assert_eq!(
+            path("owner/repo;id"),
+            Some("The :attribute contains invalid characters.".to_owned())
+        );
     }
 
     #[test]

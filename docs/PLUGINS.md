@@ -267,6 +267,8 @@ kind.
 | `proxy.traefik_outdated` | A newer Traefik version is available |
 | `ssl.certificates_expiring` | Certificates are close to expiry |
 | `api_token.expiring` | An API token expires soon |
+| `api_token.failing` | An API token keeps sending failing requests and is throttled |
+| `scheduled_job.recovered` | A scheduled job (task, backup, Docker cleanup) works again after a reported failure |
 | `general` | A general message |
 
 New kinds may be added at any time. Renaming or removing one needs a new major version of the interface.

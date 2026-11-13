@@ -159,6 +159,14 @@ pub(super) fn start_commands(ctx: &StartContext<'_>) -> (Vec<String>, String) {
     if conf.is_some() {
         extra.push(format!("chown 999:999 {dir}/keydb.conf"));
     }
-    finish_commands(&mut commands, d, ctx.server, &compose_yaml, ctx.now, &extra);
+    finish_commands(
+        &mut commands,
+        d,
+        ctx.server,
+        &compose_yaml,
+        ctx.now,
+        &extra,
+        &ctx.start_pins,
+    );
     (commands, compose_yaml)
 }

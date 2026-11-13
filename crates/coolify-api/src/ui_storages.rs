@@ -1,4 +1,5 @@
-//! Page endpoints of `App\Livewire\Storage\{Index, Create, Form, Show, Resources}`.
+//! Page endpoints of `App\Livewire\Storage\{Index, Create, Form, Show, Resources}`: the backup
+//! storages of a team (S3, SFTP, FTPS, and WebDAV).
 
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -10,7 +11,9 @@ use coolify_db::database_parts::{self as parts, NewS3Storage};
 use coolify_db::records::Record;
 use coolify_db::servers::ColumnValue as C;
 use coolify_domain::naming::{DESCRIPTION_PATTERN, NAME_PATTERN, strip_tags};
+use coolify_jobs::databases::file_storage;
 use coolify_jobs::databases::s3;
+use coolify_jobs::databases::storage_type::{self as st, BackupStorageType};
 use serde_json::{Map, Value, json};
 
 use crate::audit::Meta;
@@ -27,6 +30,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
             get(show).patch(update).delete(destroy),
         )
         .route("/ui/storages/{uuid}/test", post(test_connection))
+        .route("/ui/storages/{uuid}/reset-host-key", post(reset_host_key))
         .route("/ui/storages/{uuid}/resources", get(resources))
         .route("/ui/storages/{uuid}/resources/move", post(move_backup))
         .route(
@@ -57,18 +61,35 @@ fn host_of(headers: &HeaderMap) -> String {
         .to_owned()
 }
 
-/// The form's validation, in rule order, with the messages of `Create` and `Form`.
+/// What the validation of a form needs from the storage it edits.
+#[derive(Clone, Copy)]
+struct FormContext<'a> {
+    kind: BackupStorageType,
+    team_id: i64,
+    /// `Create`: the name is required.
+    name_required: bool,
+    /// `$this->hasSavedSecret`: an empty secret keeps the saved one.
+    has_saved_secret: bool,
+    /// `$this->storage->getOriginal('endpoint')`.
+    saved_endpoint: Option<&'a str>,
+    /// `$this->storage->trustedInternalHosts()`.
+    trusted_minio: bool,
+}
+
+/// The form's validation, in rule order, with the messages and attribute names of `Create` and
+/// `Form` (`rules()`, `messages()`, `validationAttributes()`).
 async fn validation_errors(
     state: &AppState,
     headers: &HeaderMap,
     values: &Map<String, Value>,
-    name_required: bool,
+    context: FormContext<'_>,
 ) -> Vec<String> {
     let mut e = Vec::new();
     let get = |k: &str| values.get(k).and_then(Value::as_str).unwrap_or_default();
+    let is_s3 = context.kind == BackupStorageType::S3;
     let name = get("name");
     if name.trim().is_empty() {
-        if name_required {
+        if context.name_required {
             e.push("The Name field is required.".to_owned());
         }
     } else {
@@ -92,42 +113,120 @@ async fn validation_errors(
             e.push("The description may only contain letters (including Unicode), numbers, spaces, and common punctuation: - _ . , ! ? ( ) ' \" + = * / @ &".to_owned());
         }
     }
-    for (k, label) in [
-        ("region", "Region"),
-        ("key", "Access Key"),
-        ("secret", "Secret Key"),
-    ] {
-        let v = get(k);
-        if v.trim().is_empty() {
-            e.push(format!("The {label} field is required."));
-        } else if v.chars().count() > 255 {
-            e.push(format!(
-                "The {label} may not be greater than 255 characters."
-            ));
-        }
-    }
-    let bucket = get("bucket");
-    if bucket.trim().is_empty() {
-        e.push("The Bucket field is required.".to_owned());
-    } else if !s3::valid_bucket_name(bucket) {
-        e.push("The Bucket must be a valid S3 bucket name: 3-63 letters, numbers, dots, or hyphens; start and end with a letter or number; no consecutive dots, dot-hyphen pairs, or IP address format.".to_owned());
-    }
+
+    // `connectionRules()`: the endpoint comes first for every type.
+    let attribute = if is_s3 { "Endpoint" } else { "Server" };
     let endpoint = get("endpoint");
     if endpoint.trim().is_empty() {
-        e.push("The Endpoint field is required.".to_owned());
+        e.push(format!("The {attribute} field is required."));
     } else {
         if endpoint.chars().count() > 255 {
-            e.push("The Endpoint may not be greater than 255 characters.".to_owned());
+            e.push(if is_s3 {
+                "The Endpoint may not be greater than 255 characters.".to_owned()
+            } else {
+                "The Server field must not be greater than 255 characters.".to_owned()
+            });
         }
-        let policy = s3::UrlPolicy::load(&state.db).await;
+        e.extend(file_storage::endpoint_credentials_error(
+            endpoint,
+            context.saved_endpoint,
+            attribute,
+        ));
+        e.extend(file_storage::endpoint_path_error(endpoint, attribute));
+        let mut policy = s3::UrlPolicy::load(&state.db).await;
+        if context.trusted_minio {
+            policy.allowed.push("coolify-minio".to_owned());
+        }
         let settings = format!("http://{}/settings/advanced", host_of(headers));
-        if let Some(m) = s3::endpoint_error(endpoint, "endpoint", &policy, &settings).await {
+        if let Some(m) = s3::endpoint_error_for(
+            endpoint,
+            "endpoint",
+            &policy,
+            &settings,
+            context.kind.endpoint_schemes(),
+        )
+        .await
+        {
             // `:attribute` becomes the validation attribute; the private-target message has the raw name.
             e.push(if m.contains("points to") {
                 m
             } else {
-                m.replace("The endpoint", "The Endpoint")
+                m.replace("The endpoint", &format!("The {attribute}"))
             });
+        }
+    }
+
+    if is_s3 {
+        let bucket = get("bucket");
+        if bucket.trim().is_empty() {
+            e.push("The Bucket field is required.".to_owned());
+        } else if !s3::valid_bucket_name(bucket) {
+            e.push("The Bucket must be a valid S3 bucket name: 3-63 letters, numbers, dots, or hyphens; start and end with a letter or number; no consecutive dots, dot-hyphen pairs, or IP address format.".to_owned());
+        }
+        for (k, label) in [
+            ("region", "Region"),
+            ("key", "Access Key"),
+            ("secret", "Secret Key"),
+        ] {
+            let v = get(k);
+            if v.trim().is_empty() {
+                if !(k == "secret" && context.has_saved_secret) {
+                    e.push(format!("The {label} field is required."));
+                }
+            } else if v.chars().count() > 255 {
+                e.push(format!(
+                    "The {label} may not be greater than 255 characters."
+                ));
+            }
+        }
+        return e;
+    }
+
+    let user = get("key");
+    if user.trim().is_empty() {
+        e.push("The Username field is required.".to_owned());
+    } else {
+        if user.chars().count() > 255 {
+            e.push("The Username field must not be greater than 255 characters.".to_owned());
+        }
+        if !file_storage::valid_user(user) {
+            e.push("The Username must not contain line breaks or quotes.".to_owned());
+        }
+    }
+    // `withSftpLoginRules()`: an SFTP storage logs in with a password or a private key of the team.
+    let uses_key = context.kind == BackupStorageType::Sftp && get("sftp_auth") == "key";
+    let secret = get("secret");
+    if secret.trim().is_empty() {
+        if !uses_key && !context.has_saved_secret {
+            e.push("The Password field is required.".to_owned());
+        }
+    } else if secret.chars().count() > 255 {
+        e.push("The Password field must not be greater than 255 characters.".to_owned());
+    }
+    if context.kind == BackupStorageType::Sftp {
+        let auth = get("sftp_auth");
+        if auth.trim().is_empty() {
+            e.push("The sftp auth field is required.".to_owned());
+        } else if auth != "password" && auth != "key" {
+            e.push("The selected sftp auth is invalid.".to_owned());
+        }
+        match values.get("private_key_id") {
+            None | Some(Value::Null) => {
+                if uses_key {
+                    e.push("Select the private key to log in with.".to_owned());
+                }
+            }
+            Some(v) => match v.as_i64() {
+                None => e.push("The Private key field must be an integer.".to_owned()),
+                Some(id) => {
+                    let known = parts::s3_login_keys(&state.db, context.team_id)
+                        .await
+                        .is_ok_and(|keys| keys.iter().any(|(key_id, _, _)| *key_id == id));
+                    if !known {
+                        e.push("The selected Private key is invalid.".to_owned());
+                    }
+                }
+            },
         }
     }
     e
@@ -165,9 +264,70 @@ fn normalize_endpoint(endpoint: &str) -> String {
     endpoint
 }
 
+/// `composeEndpoint()`: the endpoint from the form fields of the storage type. An SFTP or FTPS
+/// storage has a host, a port and a directory (`server_parts`); the other types send the URL.
+fn compose_endpoint(kind: BackupStorageType, values: &mut Map<String, Value>, normalize: bool) {
+    let endpoint = if matches!(kind, BackupStorageType::Sftp | BackupStorageType::Ftps) {
+        let part = |k: &str| match values.get("server_parts").and_then(|p| p.get(k)) {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Number(n)) => n.to_string(),
+            _ => String::new(),
+        };
+        st::server_endpoint(kind, &part("host"), &part("port"), &part("path"))
+    } else {
+        let endpoint = values
+            .get("endpoint")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if normalize {
+            normalize_endpoint(endpoint)
+        } else {
+            endpoint.to_owned()
+        }
+    };
+    values.insert("endpoint".into(), json!(endpoint));
+}
+
+/// `selectedPrivateKeyId()`: the private key ID to save: only when an SFTP storage logs in with a
+/// key.
+fn selected_private_key_id(kind: BackupStorageType, values: &Map<String, Value>) -> Option<i64> {
+    (kind == BackupStorageType::Sftp
+        && values.get("sftp_auth").and_then(Value::as_str) == Some("key"))
+    .then(|| values.get("private_key_id").and_then(Value::as_i64))
+    .flatten()
+}
+
+/// The secret to save or test (`secretToUse()`): none with a private key, the new one from the
+/// form, else the saved one.
+fn secret_to_use(
+    state: &AppState,
+    base: Option<&Record>,
+    values: &Map<String, Value>,
+    private_key_id: Option<i64>,
+) -> Result<String, ApiError> {
+    if private_key_id.is_some() {
+        return Ok(String::new());
+    }
+    let new = values
+        .get("secret")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    if !new.is_empty() {
+        return Ok(new.to_owned());
+    }
+    let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
+    Ok(base
+        .and_then(|row| text(row, "secret"))
+        .and_then(|c| enc.decrypt_string(c).ok())
+        .unwrap_or_default())
+}
+
 /// The candidate row `testConnection` works on.
 fn candidate(
     state: &AppState,
+    kind: BackupStorageType,
+    team_id: i64,
     base: Option<&Record>,
     values: &Map<String, Value>,
 ) -> Result<Record, ApiError> {
@@ -181,8 +341,24 @@ fn candidate(
             .trim()
             .to_owned()
     };
-    for k in ["endpoint", "bucket", "region"] {
-        r.insert(k.into(), Value::String(get(k)));
+    let is_s3 = kind == BackupStorageType::S3;
+    r.insert("type".into(), json!(kind.value()));
+    r.insert("team_id".into(), json!(team_id));
+    let endpoint = get("endpoint");
+    // The saved host key applies while the host and the port stay the same; the endpoint setter
+    // removes it otherwise.
+    if st::endpoint_change_resets_host_key(base.and_then(|b| text(b, "endpoint")), Some(&endpoint))
+    {
+        r.insert("sftp_host_key".into(), Value::Null);
+    }
+    r.insert("endpoint".into(), Value::String(endpoint.clone()));
+    if is_s3 {
+        for k in ["bucket", "region"] {
+            r.insert(k.into(), Value::String(get(k)));
+        }
+    } else if base.is_none() {
+        r.insert("bucket".into(), Value::Null);
+        r.insert("region".into(), json!("us-east-1"));
     }
     // `usePathStyleEndpoint`: the form's choice, else the saved style, else the detected one.
     let path_style = values
@@ -190,13 +366,25 @@ fn candidate(
         .and_then(Value::as_bool)
         .unwrap_or_else(|| match base {
             Some(row) => s3::uses_path_style_endpoint(row),
-            None => s3::detect_path_style_endpoint(Some(&get("endpoint"))),
+            None => !is_s3 || s3::detect_path_style_endpoint(Some(&endpoint)),
         });
     r.insert("use_path_style_endpoint".into(), Value::Bool(path_style));
+    r.insert(
+        "skip_tls_verification".into(),
+        Value::Bool(
+            is_s3
+                && values
+                    .get("skip_tls_verification")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+        ),
+    );
     r.insert("key".into(), Value::String(enc.encrypt_string(&get("key"))));
+    let private_key_id = selected_private_key_id(kind, values);
+    r.insert("private_key_id".into(), json!(private_key_id));
     r.insert(
         "secret".into(),
-        Value::String(enc.encrypt_string(&get("secret"))),
+        Value::String(enc.encrypt_string(&secret_to_use(state, base, values, private_key_id)?)),
     );
     Ok(r)
 }
@@ -205,18 +393,55 @@ fn jobs(state: &AppState) -> Result<&coolify_jobs::Jobs, ApiError> {
     state.jobs.as_ref().ok_or(ApiError::NotPorted)
 }
 
+/// `$storage->description ?: ($storage->isS3() ? 'S3-compatible storage' : $storage->type->label().' storage')`
+/// is the page's; the list sends the type.
 async fn index(State(state): State<AppState>, Extension(ctx): Extension<AuthCtx>) -> ApiResult {
     let rows = parts::s3_list(&state.db, ctx.team_id).await?;
     Ok(ok(json!({
-        "storages": rows.iter().map(|r| json!({
-            "uuid": r.get("uuid"),
-            "name": r.get("name"),
-            "description": r.get("description"),
-            "is_usable": r.get("is_usable").and_then(Value::as_bool).unwrap_or(false),
-        })).collect::<Vec<_>>(),
+        "storages": rows.iter().map(|r| {
+            let kind = BackupStorageType::of(r);
+            json!({
+                "uuid": r.get("uuid"),
+                "name": r.get("name"),
+                "description": r.get("description"),
+                "type": kind.value(),
+                "type_label": kind.label(),
+                "is_usable": r.get("is_usable").and_then(Value::as_bool).unwrap_or(false),
+            })
+        }).collect::<Vec<_>>(),
         "can_create": ctx.is_team_admin(),
+        // `BackupStorageType::options()` and the private keys of the SFTP login in `Create`.
+        "types": BackupStorageType::options(),
+        "private_keys": if ctx.is_team_admin() {
+            private_key_options(&state, ctx.team_id).await?
+        } else {
+            Vec::new()
+        },
     }))
     .into_response())
+}
+
+/// `privateKeyOptions()` with `selectedPublicKey()` of each key: the public key to add to
+/// authorized_keys on the SFTP server.
+async fn private_key_options(state: &AppState, team_id: i64) -> Result<Vec<Value>, ApiError> {
+    let mut options = Vec::new();
+    for (id, _, name) in parts::s3_login_keys(&state.db, team_id).await? {
+        let cipher: Option<String> =
+            sqlx::query_scalar("SELECT private_key FROM private_keys WHERE id = $1")
+                .bind(id)
+                .fetch_optional(state.db.pool())
+                .await
+                .map_err(|_| ApiError::Internal)?;
+        let public_key = state
+            .encrypter
+            .as_ref()
+            .zip(cipher)
+            .and_then(|(enc, c)| enc.decrypt_string(&c).ok())
+            .and_then(|plain| coolify_compat::sshkey::inspect(&plain))
+            .map(|info| info.public_key);
+        options.push(json!({"value": id, "label": name, "public_key": public_key}));
+    }
+    Ok(options)
 }
 
 /// `Create::submit`: every failure is the same toast.
@@ -240,14 +465,34 @@ async fn create(
     let Some(values) = body.as_object_mut() else {
         return Err(ApiError::Internal);
     };
-    let endpoint = normalize_endpoint(
-        values
-            .get("endpoint")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
+    // `storageType()`: `BackupStorageType::tryFrom($this->type) ?? BackupStorageType::S3`.
+    let raw_type = values
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("s3")
+        .to_owned();
+    let kind = BackupStorageType::parse(&raw_type).unwrap_or(BackupStorageType::S3);
+    compose_endpoint(kind, values, true);
+    let mut errors = Vec::new();
+    if BackupStorageType::parse(&raw_type).is_none() {
+        errors.push("The selected type is invalid.".to_owned());
+    }
+    errors.extend(
+        validation_errors(
+            &state,
+            &headers,
+            values,
+            FormContext {
+                kind,
+                team_id: ctx.team_id,
+                name_required: true,
+                has_saved_secret: false,
+                saved_endpoint: None,
+                trusted_minio: false,
+            },
+        )
+        .await,
     );
-    values.insert("endpoint".into(), json!(endpoint));
-    let errors = validation_errors(&state, &headers, values, true).await;
     if let Some(m) = summarize(&errors) {
         let settings = format!(
             "http://{}/settings/advanced#endpoint-section",
@@ -264,11 +509,14 @@ async fn create(
                 .replace(&escape_html(&plain), &link),
         ));
     }
-    let row = candidate(&state, None, values)?;
-    let (result, path_style) = jobs(&state)?.check_s3_connection_style(&row).await;
-    if let Err(e) = result {
+    let is_s3 = kind == BackupStorageType::S3;
+    let row = candidate(&state, kind, ctx.team_id, None, values)?;
+    // `$this->storage->testConnection(acceptNewHostKey: true)`.
+    let check = jobs(&state)?.check_storage_connection(&row, true).await;
+    if let Err(e) = check.result {
         return Ok(failed(escape_html(&e)));
     }
+    let path_style = check.path_style;
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let get = |k: &str| {
         values
@@ -283,6 +531,19 @@ async fn create(
         .get("description")
         .and_then(Value::as_str)
         .map(|d| strip_tags(Some(d)));
+    let private_key_id = selected_private_key_id(kind, values);
+    let secret = secret_to_use(&state, None, values, private_key_id)?;
+    let bucket = get("bucket");
+    let region = if is_s3 {
+        get("region")
+    } else {
+        "us-east-1".to_owned()
+    };
+    let skip_tls_verification = is_s3
+        && values
+            .get("skip_tls_verification")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
     let uuid = parts::s3_create(
         &state.db,
         &NewS3Storage {
@@ -290,16 +551,43 @@ async fn create(
             name: &name,
             description: description.as_deref(),
             endpoint: Some(&get("endpoint")),
-            bucket: &get("bucket"),
-            region: &get("region"),
+            kind: kind.value(),
+            bucket: is_s3.then_some(bucket.as_str()),
+            region: &region,
             key_encrypted: &enc.encrypt_string(&get("key")),
-            secret_encrypted: &enc.encrypt_string(&get("secret")),
+            secret_encrypted: &enc.encrypt_string(&secret),
             use_path_style_endpoint: path_style,
+            skip_tls_verification,
+            private_key_id,
+            // The host key that the connection test of the new SFTP storage recorded.
+            sftp_host_key: check.new_sftp_host_key.as_deref(),
             is_usable: true,
         },
         state.now(),
     )
     .await?;
+    let mut changes = Map::new();
+    let mut add = |k: &str, v: Value| {
+        changes.insert(k.to_owned(), json!({"old": null, "new": v}));
+    };
+    add("type", json!(kind.value()));
+    add("name", json!(name));
+    add("description", json!(description));
+    add("region", json!(region));
+    if let Some(id) = private_key_id {
+        add("private_key_id", json!(id));
+    }
+    add("bucket", json!(is_s3.then_some(bucket.as_str())));
+    add("endpoint", json!(get("endpoint")));
+    add("use_path_style_endpoint", json!(path_style));
+    add("skip_tls_verification", json!(skip_tls_verification));
+    add("team_id", json!(ctx.team_id));
+    if let Some(host_key) = &check.new_sftp_host_key {
+        add("sftp_host_key", json!(host_key));
+    }
+    add("unusable_email_sent", json!(false));
+    add("is_usable", json!(true));
+    add("uuid", json!(uuid));
     crate::audit::mutation(
         &state,
         &ctx,
@@ -312,18 +600,7 @@ async fn create(
             "s3_storage_name": name,
             "changed_fields": [],
         }),
-        json!({
-            "name": {"old": null, "new": name},
-            "description": {"old": null, "new": description},
-            "region": {"old": null, "new": get("region")},
-            "bucket": {"old": null, "new": get("bucket")},
-            "endpoint": {"old": null, "new": get("endpoint")},
-            "use_path_style_endpoint": {"old": null, "new": path_style},
-            "team_id": {"old": null, "new": ctx.team_id},
-            "unusable_email_sent": {"old": null, "new": false},
-            "is_usable": {"old": null, "new": true},
-            "uuid": {"old": null, "new": uuid},
-        }),
+        Value::Object(changes),
     )
     .await;
     Ok(ok(json!({"uuid": uuid})).into_response())
@@ -340,16 +617,12 @@ async fn show(
     };
     let can_update = ctx.is_team_admin();
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
-    let plain = |k: &str| -> Result<Value, ApiError> {
-        if !can_update {
-            return Ok(json!(""));
-        }
-        text(&row, k).map_or(Ok(json!("")), |c| {
-            enc.decrypt_string(c)
-                .map(Value::String)
-                .map_err(|_| ApiError::Internal)
+    let plain = |k: &str| -> Result<String, ApiError> {
+        text(&row, k).map_or(Ok(String::new()), |c| {
+            enc.decrypt_string(c).map_err(|_| ApiError::Internal)
         })
     };
+    let kind = BackupStorageType::of(&row);
     let id = parts::id_of(&row);
     let backup_count: i64 = sqlx::query_scalar(
         "SELECT (SELECT count(*) FROM scheduled_database_backups b WHERE b.s3_storage_id = $1 \
@@ -372,11 +645,19 @@ async fn show(
         })
         .collect();
     items.sort();
+    let (host, port, path) = st::split_server_endpoint(text(&row, "endpoint"));
+    let private_key_id = row.get("private_key_id").and_then(Value::as_i64);
+    let host_key = text(&row, "sftp_host_key").filter(|k| !k.trim().is_empty());
+    let is_sftp = kind == BackupStorageType::Sftp;
     Ok(ok(json!({
         "uuid": uuid,
+        "type": kind.value(),
+        "type_label": kind.label(),
+        "default_port": kind.default_port(),
         "name": row.get("name"),
         "description": row.get("description"),
         "endpoint": row.get("endpoint"),
+        "server_parts": {"host": host, "port": port, "path": path},
         "bucket": row.get("bucket"),
         "region": row.get("region"),
         "use_path_style_endpoint": s3::uses_path_style_endpoint(&row),
@@ -384,14 +665,44 @@ async fn show(
         // endpoint changes.
         "use_path_style_endpoint_changed": s3::uses_path_style_endpoint(&row)
             != s3::detect_path_style_endpoint(text(&row, "endpoint")),
-        "key": plain("key")?,
-        "secret": plain("secret")?,
+        "skip_tls_verification": parts::bool_of(&row, "skip_tls_verification"),
+        "key": if can_update { plain("key")? } else { String::new() },
+        // A new secret key or password. The saved one never goes to the browser; empty keeps it.
+        "secret": "",
+        "has_saved_secret": can_update && !plain("secret")?.trim().is_empty(),
+        "private_key_id": private_key_id,
+        "sftp_auth": if private_key_id.is_some() { "key" } else { "password" },
+        "private_keys": if is_sftp && can_update {
+            private_key_options(&state, ctx.team_id).await?
+        } else {
+            Vec::new()
+        },
+        // `$storage->sftpHostKeyFingerprint()`.
+        "sftp_host_key_fingerprint": host_key.map(st::sftp_host_key_fingerprint),
         "is_usable": row.get("is_usable").and_then(Value::as_bool).unwrap_or(false),
         "can_update": can_update,
         "backup_count": backup_count,
         "storages": items.iter().map(|(n, u)| json!({"name": n, "uuid": u})).collect::<Vec<_>>(),
     }))
     .into_response())
+}
+
+fn form_context<'a>(state: &AppState, row: &'a Record) -> FormContext<'a> {
+    let has_saved_secret = state
+        .encrypter
+        .as_ref()
+        .zip(text(row, "secret"))
+        .and_then(|(enc, c)| enc.decrypt_string(c).ok())
+        .is_some_and(|s| !s.trim().is_empty());
+    FormContext {
+        kind: BackupStorageType::of(row),
+        team_id: row.get("team_id").and_then(Value::as_i64).unwrap_or(-1),
+        name_required: false,
+        has_saved_secret,
+        saved_endpoint: text(row, "endpoint"),
+        trusted_minio: text(row, "uuid") == Some("minio")
+            && st::endpoint_host(text(row, "endpoint").unwrap_or_default()) == "coolify-minio",
+    }
 }
 
 /// `Form::submit`.
@@ -409,18 +720,23 @@ async fn update(
     if !ctx.is_team_admin() {
         return Ok(unauthorized());
     }
-    let values = body.as_object().cloned().unwrap_or_default();
-    let errors = validation_errors(&state, &headers, &values, false).await;
+    let kind = BackupStorageType::of(&row);
+    let is_s3 = kind == BackupStorageType::S3;
+    let mut values = body.as_object().cloned().unwrap_or_default();
+    compose_endpoint(kind, &mut values, false);
+    let errors = validation_errors(&state, &headers, &values, form_context(&state, &row)).await;
     if let Some(m) = summarize(&errors) {
         return Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, m));
     }
     // The transaction rolls back when the connection test fails, so test first.
-    let test = candidate(&state, Some(&row), &values)?;
+    let test = candidate(&state, kind, ctx.team_id, Some(&row), &values)?;
     let chosen_style = s3::uses_path_style_endpoint(&test);
-    let (result, path_style) = jobs(&state)?.check_s3_connection_style(&test).await;
-    if let Err(e) = result {
+    // `$this->storage->testConnection(shouldSave: false, acceptNewHostKey: true)`.
+    let check = jobs(&state)?.check_storage_connection(&test, true).await;
+    if let Err(e) = check.result {
         return Ok(toast_error(StatusCode::UNPROCESSABLE_ENTITY, e));
     }
+    let path_style = check.path_style;
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     let get = |k: &str| {
         values
@@ -448,12 +764,30 @@ async fn update(
     };
     text_field("name", Some(name.clone()));
     text_field("description", description);
-    text_field("region", Some(get("region")));
+    if is_s3 {
+        text_field("region", Some(get("region")));
+    }
     let plain = |k: &str| text(&row, k).and_then(|c| enc.decrypt_string(c).ok());
+    let private_key_id = selected_private_key_id(kind, &values);
+    let new_secret = secret_to_use(&state, Some(&row), &values, private_key_id)?;
     let key_changed = plain("key").as_deref() != Some(get("key").as_str());
-    let secret_changed = plain("secret").as_deref() != Some(get("secret").as_str());
-    text_field("bucket", Some(get("bucket")));
+    let secret_changed = plain("secret").as_deref() != Some(new_secret.as_str());
+    if is_s3 {
+        text_field("bucket", Some(get("bucket")));
+    }
     text_field("endpoint", Some(get("endpoint")));
+    // The `endpoint` mutator: another host or port is another server, so the saved SFTP host key
+    // no longer applies. The connection test above recorded the key of the new server.
+    let saved_host_key = text(&row, "sftp_host_key")
+        .filter(|k| !k.trim().is_empty())
+        .map(str::to_owned);
+    let kept_host_key = text(&test, "sftp_host_key")
+        .filter(|k| !k.trim().is_empty())
+        .map(str::to_owned);
+    let new_host_key = check.new_sftp_host_key.clone().or(kept_host_key);
+    if new_host_key != saved_host_key {
+        text_field("sftp_host_key", new_host_key);
+    }
     let saved_style = s3::uses_path_style_endpoint(&row);
     if chosen_style != saved_style {
         audit.insert(
@@ -462,11 +796,36 @@ async fn update(
         );
         changed.push("use_path_style_endpoint".to_owned());
     }
+    let saved_skip_tls = parts::bool_of(&row, "skip_tls_verification");
+    let skip_tls = parts::bool_of(&test, "skip_tls_verification");
+    if skip_tls != saved_skip_tls {
+        audit.insert(
+            "skip_tls_verification".to_owned(),
+            json!({"old": saved_skip_tls, "new": skip_tls}),
+        );
+        changed.push("skip_tls_verification".to_owned());
+        changes.push(("skip_tls_verification", C::Bool(skip_tls)));
+    }
+    let saved_key_id = row.get("private_key_id").and_then(Value::as_i64);
+    if private_key_id != saved_key_id {
+        audit.insert(
+            "private_key_id".to_owned(),
+            json!({"old": saved_key_id, "new": private_key_id}),
+        );
+        changed.push("private_key_id".to_owned());
+        changes.push((
+            "private_key_id",
+            match private_key_id {
+                Some(id) => C::Int(id),
+                None => C::Text(None),
+            },
+        ));
+    }
     if key_changed {
         changes.push(("key", C::Text(Some(enc.encrypt_string(&get("key"))))));
     }
     if secret_changed {
-        changes.push(("secret", C::Text(Some(enc.encrypt_string(&get("secret"))))));
+        changes.push(("secret", C::Text(Some(enc.encrypt_string(&new_secret)))));
     }
     // The second `save()` of the transaction: the connection works, maybe with
     // virtual-hosted-style URLs.
@@ -563,7 +922,7 @@ async fn test_connection(
     let Some(row) = parts::s3_find(&state.db, ctx.team_id, &uuid).await? else {
         return Err(ApiError::Message(StatusCode::NOT_FOUND, "Not found."));
     };
-    let values = body.as_object().cloned().unwrap_or_default();
+    let mut values = body.as_object().cloned().unwrap_or_default();
     let fail = |m: String| {
         PhpJson(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -574,17 +933,21 @@ async fn test_connection(
     if !ctx.is_team_admin() {
         return Ok(fail("This action is unauthorized.".to_owned()));
     }
-    let test = candidate(&state, Some(&row), &values)?;
+    let kind = BackupStorageType::of(&row);
+    compose_endpoint(kind, &mut values, false);
+    let test = candidate(&state, kind, ctx.team_id, Some(&row), &values)?;
     let id = parts::id_of(&row);
     let was_usable = row
         .get("is_usable")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let chosen_style = s3::uses_path_style_endpoint(&test);
-    let (result, path_style) = jobs(&state)?.check_s3_connection_style(&test).await;
+    // `$testedStorage->testConnection(acceptNewHostKey: true)`.
+    let check = jobs(&state)?.check_storage_connection(&test, true).await;
+    let path_style = check.path_style;
     let switched = chosen_style && !path_style;
     // `$this->storage->save()` with the tested `is_usable`.
-    if was_usable != result.is_ok() {
+    if was_usable != check.result.is_ok() {
         crate::audit::mutation(
             &state,
             &ctx,
@@ -597,22 +960,42 @@ async fn test_connection(
                 "s3_storage_name": row.get("name"),
                 "changed_fields": ["is_usable"],
             }),
-            json!({"is_usable": {"old": was_usable, "new": result.is_ok()}}),
+            json!({"is_usable": {"old": was_usable, "new": check.result.is_ok()}}),
         )
         .await;
     }
-    match result {
+    match check.result {
         Ok(()) => {
             parts::s3_set_usable(&state.db, id, true, state.now()).await?;
+            // The tested host key is saved while the tested endpoint is the saved one.
+            let mut fingerprint = text(&row, "sftp_host_key")
+                .filter(|k| !k.trim().is_empty())
+                .map(st::sftp_host_key_fingerprint);
+            if let Some(host_key) = &check.new_sftp_host_key
+                && text(&test, "endpoint") == text(&row, "endpoint")
+            {
+                parts::update_row(
+                    &state.db,
+                    "s3_storages",
+                    id,
+                    &[("sftp_host_key", C::Text(Some(host_key.clone())))],
+                    state.now(),
+                )
+                .await?;
+                fingerprint = Some(st::sftp_host_key_fingerprint(host_key));
+            }
             Ok(ok(json!({
                 "message": "Connection is working.",
                 "details": if switched {
                     "The provider rejects path-style URLs, so \"Use path-style URLs\" is now off. Save to keep it."
-                } else {
+                } else if kind == BackupStorageType::S3 {
                     "Tested with \"ListObjectsV2\" action."
+                } else {
+                    "Tested by listing the backup directory."
                 },
                 "is_usable": true,
                 "use_path_style_endpoint": path_style,
+                "sftp_host_key_fingerprint": fingerprint,
             }))
             .into_response())
         }
@@ -621,6 +1004,72 @@ async fn test_connection(
             Ok(fail(e))
         }
     }
+}
+
+/// `Form::resetHostKey`: removes the saved SFTP host key, for a server whose key changed on
+/// purpose. The next connection test that an admin starts (Validate) saves the key that the
+/// server presents then; backups do not.
+async fn reset_host_key(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    meta: Meta,
+    Path(uuid): Path<String>,
+) -> ApiResult {
+    let Some(row) = parts::s3_find(&state.db, ctx.team_id, &uuid).await? else {
+        return Err(ApiError::Message(StatusCode::NOT_FOUND, "Not found."));
+    };
+    if !ctx.is_team_admin() {
+        return Ok(unauthorized());
+    }
+    let was_usable = parts::bool_of(&row, "is_usable");
+    let had_key = text(&row, "sftp_host_key").is_some();
+    parts::update_row(
+        &state.db,
+        "s3_storages",
+        parts::id_of(&row),
+        &[
+            ("sftp_host_key", C::Text(None)),
+            ("is_usable", C::Bool(false)),
+        ],
+        state.now(),
+    )
+    .await?;
+    let mut changed = Vec::new();
+    let mut audit = Map::new();
+    if had_key {
+        changed.push("sftp_host_key");
+        audit.insert(
+            "sftp_host_key".into(),
+            json!({"old": row.get("sftp_host_key"), "new": null}),
+        );
+    }
+    if was_usable {
+        changed.push("is_usable");
+        audit.insert("is_usable".into(), json!({"old": true, "new": false}));
+    }
+    if !changed.is_empty() {
+        crate::audit::mutation(
+            &state,
+            &ctx,
+            &meta,
+            "s3_storage",
+            "updated",
+            json!({
+                "team_id": ctx.team_id,
+                "s3_storage_uuid": uuid,
+                "s3_storage_name": row.get("name"),
+                "changed_fields": changed,
+            }),
+            Value::Object(audit),
+        )
+        .await;
+    }
+    Ok(ok(json!({
+        "message": "Host key removed.",
+        "details": "Validate the connection to save the current host key of the server.",
+        "is_usable": false,
+    }))
+    .into_response())
 }
 
 /// `Show::delete`.

@@ -122,7 +122,7 @@
       </a>
       <a href="/profile/appearance" use:link onclick={() => (open = false)} class="listbox-option">
         <span class="flex items-center gap-2">
-          <Reicon name="settings" class="size-4 opacity-80" />
+          <Reicon name="paintbrush" class="size-4 opacity-80" />
           Appearance
         </span>
       </a>

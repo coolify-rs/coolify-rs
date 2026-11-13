@@ -32,6 +32,7 @@ const ALLOWED: &[&str] = &[
     "frequency",
     "container",
     "timeout",
+    "use_shell",
     "enabled",
 ];
 /// `enabledTaskForbiddenResponse()`.
@@ -63,7 +64,7 @@ async fn application(state: &AppState, ctx: &AuthCtx, uuid: &str) -> Result<Reso
 
 /// `$task` with `removeSensitiveData()` and `serializeApiResponse()`.
 fn present_task(ctx: &AuthCtx, raw: Record) -> Value {
-    let mut r = present(raw, &["created_at", "updated_at"]);
+    let mut r = present(raw, &["created_at", "updated_at", "failing_since"]);
     for hidden in ["id", "team_id", "application_id", "service_id"] {
         r.shift_remove(hidden);
     }
@@ -202,6 +203,7 @@ pub async fn create_task(
                 "timeout",
                 vec![Rule::Integer, Rule::MinNum(1), Rule::MaxNum(36000)],
             ),
+            field("use_shell", vec![Rule::Boolean]),
             field("enabled", vec![Rule::Boolean]),
         ],
         CUSTOM_API_MESSAGES,
@@ -229,6 +231,8 @@ pub async fn create_task(
             } else {
                 300
             },
+            // `$request->has('use_shell') ? $request->boolean('use_shell') : true`.
+            use_shell: !input.has("use_shell") || input_bool(&input, "use_shell"),
             enabled,
             team_id: ctx.team_id,
         },
@@ -236,6 +240,11 @@ pub async fn create_task(
     )
     .await
     .map_err(save_error)?;
+    // The new model holds what `createTask()` set, not the column defaults of the failure streak.
+    let mut task = task;
+    for unset in ["consecutive_failures", "failing_since", "disabled_reason"] {
+        task.shift_remove(unset);
+    }
     tracing::info!(target: "audit", event = "api.scheduled_task.created", team_id = ctx.team_id, task_uuid = uuid_of(&task), task_name = name_of(&task), resource_type = resource.kind, resource_uuid = %resource.uuid, "scheduled task created");
     Ok(created(present_task(ctx, task)))
 }
@@ -263,6 +272,7 @@ pub async fn update_task(
                 "timeout",
                 vec![Rule::Integer, Rule::MinNum(1), Rule::MaxNum(36000)],
             ),
+            field("use_shell", vec![Rule::Boolean]),
             field("enabled", vec![Rule::Boolean]),
         ],
         CUSTOM_API_MESSAGES,
@@ -296,14 +306,31 @@ pub async fn update_task(
             .has("timeout")
             .then(|| int_value(input.get("timeout")))
             .flatten(),
+        use_shell: input
+            .has("use_shell")
+            .then(|| input_bool(&input, "use_shell")),
         enabled: input.has("enabled").then_some(enabled),
     };
     let updated = tasks::update(&state.db, &task, &changes, state.now())
         .await
         .map_err(save_error)?;
-    let changed: Vec<&&str> = ALLOWED.iter().filter(|k| input.has(k)).collect();
+    // `auditChangedFields($task)`: nothing is logged when the request changed nothing.
+    let changed = changed_fields(&task, &updated);
+    if changed.is_empty() {
+        return Ok(ok(present_task(ctx, updated)));
+    }
     tracing::info!(target: "audit", event = "api.scheduled_task.updated", team_id = ctx.team_id, task_uuid = uuid_of(&updated), task_name = name_of(&updated), resource_type = resource.kind, resource_uuid = %resource.uuid, changed_fields = ?changed, "scheduled task updated");
     Ok(ok(present_task(ctx, updated)))
+}
+
+/// `auditChangedFields($task)` after `fill($request->only($allowedFields))`: the allowed fields
+/// whose value differs from the stored one, in the order of `$allowedFields`.
+fn changed_fields(before: &Record, after: &Record) -> Vec<&'static str> {
+    ALLOWED
+        .iter()
+        .copied()
+        .filter(|k| before.get(*k) != after.get(*k))
+        .collect()
 }
 
 /// `deleteTask()`.

@@ -41,6 +41,7 @@
       ['accountId', '*'],
       ['zoneId', 'all'],
       ['name', tunnel ? 'coolify-rs DNS and Tunnel Management' : 'coolify-rs DNS Management'],
+      ['ref', 'coolify.io'],
     ]
       .map(([k, v]) => `${k}=${encodeURIComponent(v).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`)
       .join('&');
@@ -166,6 +167,12 @@
     }
   }
 </script>
+
+{#snippet externalLink()}
+  <svg class="inline-flex w-3 h-3 dark:text-neutral-400 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+  </svg>
+{/snippet}
 
 <div>
   <SecurityLayout>
@@ -337,16 +344,28 @@
           <div class={box}>
             <div class="font-medium text-black dark:text-fg">Recommended Doppler token</div>
             <p>Use a read-only <span class="font-medium">Service Token</span> (dp.st.*). It is pinned to one project and config. Create it in Doppler under Project &gt; Config &gt; Access.</p>
+            <a href="https://dashboard.doppler.com?ref=coolify.io" target="_blank" rel="noopener noreferrer" class="button mt-2">
+              Open Doppler dashboard
+              {@render externalLink()}
+            </a>
           </div>
         {:else if provider === 'infisical'}
           <div class={box}>
             <div class="font-medium text-black dark:text-fg">Infisical machine identity</div>
             <p>Create a machine identity with Universal Auth and read access to your project. Paste the client ID above and the client secret in the secret field.</p>
+            <a href="https://app.infisical.com?ref=coolify.io" target="_blank" rel="noopener noreferrer" class="button mt-2">
+              Open Infisical Cloud
+              {@render externalLink()}
+            </a>
           </div>
         {:else if provider === 'vault'}
           <div class={box}>
             <div class="font-medium text-black dark:text-fg">Vault token</div>
             <p>Use a token with read access to your KV v2 secrets. Prefer a periodic or long-lived token — deployments fail when the token expires.</p>
+            <a href="https://portal.cloud.hashicorp.com?ref=coolify.io" target="_blank" rel="noopener noreferrer" class="button mt-2">
+              Open HCP Vault
+              {@render externalLink()}
+            </a>
           </div>
         {/if}
 

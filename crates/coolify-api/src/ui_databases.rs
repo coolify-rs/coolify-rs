@@ -43,6 +43,8 @@ pub async fn resources(
             StatusCode::NOT_FOUND,
             "Environment not found.",
         ))?;
+    // `Resource\Index::render()` adds `security` to every resource (below):
+    // `VulnerabilityMarkers::for($resources)[ResourceScans::key($item)] ?? null`.
     let mut databases = Vec::new();
     let mut unported = 0;
     for d in dbs::list_for_environment(&state.db, e.id).await? {
@@ -76,10 +78,21 @@ pub async fn resources(
         }
         applications.push(v);
     }
+    let mut services = crate::ui_services::environment_services(&state, e.id).await?;
+    crate::ui_image_scan::add_security_markers(
+        &state,
+        ctx.team_id,
+        &mut [
+            ("application", &mut applications),
+            ("database", &mut databases),
+            ("service", &mut services),
+        ],
+    )
+    .await?;
     Ok(ok(json!({
         "applications": applications,
         "databases": databases,
-        "services": crate::ui_services::environment_services(&state, e.id).await?,
+        "services": services,
         "unported": unported,
     }))
     .into_response())
@@ -102,6 +115,9 @@ pub async fn destinations(
 ) -> ApiResult {
     let mut servers = Vec::new();
     for s in coolify_db::servers::list_by_name(&state.db, ctx.team_id).await? {
+        // `Select::loadServers()` keeps the servers that pass `Gate::allows('placeResource', $server)`;
+        // build servers are listed without it.
+        let can_place_resource = crate::place_resource::allows(&state, &ctx, &s).await?;
         let settings = s.settings.clone().unwrap_or_default();
         let flag = |k: &str| settings.get(k).and_then(Value::as_bool);
         let ip = s
@@ -126,13 +142,14 @@ pub async fn destinations(
             "ip": ip,
             "functional": functional,
             "is_build": crate::routes::servers::effective_role_is_build(&settings),
+            "can_place_resource": can_place_resource,
             "destinations": dests,
         }));
     }
     Ok(ok(json!({"servers": servers})).into_response())
 }
 
-/// `Project\Resource\Create` for `?type=postgresql&destination=...&database_image=...`.
+/// `Project\Resource\Create::createResource()` for `?type=postgresql&destination=...&database_image=...`.
 pub async fn create(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
@@ -176,8 +193,9 @@ pub async fn create(
                 "Destination not found.",
             ))?;
     let image = s("database_image");
-    // PostgreSQL requires database_image to be explicitly set.
-    if kind == Kind::Postgresql && image.is_empty() {
+    // PostgreSQL and Redis (Redis or Valkey) require database_image to be explicitly set.
+    let chooses_image = matches!(kind, Kind::Postgresql | Kind::Redis);
+    if chooses_image && image.is_empty() {
         let mut m = Map::new();
         m.insert(
             "database_image".into(),
@@ -190,7 +208,8 @@ pub async fn create(
         destination_type: Some(dbs::destination_morph(&state.db, &s("destination_uuid")).await?),
         environment_id: env.id,
         destination_id,
-        image: (kind == Kind::Postgresql).then_some(image),
+        // `create_standalone_redis(..., ['image' => $this->databaseImage])`.
+        image: chooses_image.then_some(image),
         secrets,
         fields: Vec::new(),
         name: None,
@@ -920,7 +939,9 @@ pub async fn update(
             }) {
                 continue;
             }
-            let cipher = value.as_deref().map(|v| enc.encrypt_serialized(v.trim()));
+            let cipher = value.as_deref().map(|v| {
+                enc.encrypt_serialized(coolify_jobs::databases::env::without_edge_whitespace(v))
+            });
             coolify_db::environment_variables::upsert(
                 &state.db,
                 kind.morph(),

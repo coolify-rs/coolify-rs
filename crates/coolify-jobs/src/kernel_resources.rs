@@ -266,17 +266,93 @@ impl Jobs {
         });
     }
 
-    /// `CleanupHelperContainersJob::handle`: removes helper containers of finished deployments.
-    /// Backups, imports and file browsers also run in helper containers, so a container is removed
-    /// only when its name is the UUID of a deployment that is not queued or in progress.
+    /// `CleanupHelperContainersJob::handle`: removes helper containers of finished deployments and
+    /// the S3 upload containers (`backup-of-<execution uuid>`) of database backups that are not
+    /// running, then the rclone containers that no running backup or import owns. Imports and
+    /// file browsers also run in helper containers, so other containers stay.
     pub async fn cleanup_helper_containers(&self, row: &ServerRow) -> Result<(), String> {
         let db = &self.0.db;
         let server = ServerInfo::from_row(row);
         let target = server.target(self).await?;
+        let active_transfers = coolify_db::deployment_queue::active_transfer_owners(db)
+            .await
+            .map_err(|e| e.to_string())?;
+        self.remove_orphaned_helper_containers(&target, &active_transfers)
+            .await?;
+        self.remove_orphaned_rclone_containers(&target, &active_transfers)
+            .await;
+        Ok(())
+    }
+
+    /// `removeOrphanedRcloneContainers($activeTransfers)`: an rclone container has the storage
+    /// config with its password or SSH key. It stays until the end of its sleep when a worker
+    /// timeout kills the backup or import job before the job removes it.
+    async fn remove_orphaned_rclone_containers(
+        &self,
+        target: &coolify_remote::Target,
+        active_transfers: &[String],
+    ) {
+        let list =
+            format!("docker container ps --filter label={RCLONE_LABEL} --format '{{{{json .}}}}'");
         let output = self
             .remote()
             .run_quiet(
-                &target,
+                target,
+                &[list.as_str()],
+                RunOptions::op("server.helper_containers").timeout(Duration::from_secs(30)),
+            )
+            .await
+            .unwrap_or_default();
+        let now = chrono::Utc::now();
+        for line in output.lines() {
+            let Ok(container) = serde_json::from_str::<Value>(line.trim()) else {
+                continue;
+            };
+            let Some(id) = container
+                .get("ID")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+            else {
+                continue;
+            };
+            let name = container
+                .get("Names")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let created_at = container
+                .get("CreatedAt")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !rclone_container_is_orphaned(name, created_at, active_transfers, now) {
+                continue;
+            }
+            tracing::info!(
+                container = %name,
+                "CleanupHelperContainersJob - Removing orphaned rclone container"
+            );
+            let command = format!("docker container rm -f {}", quote(id));
+            let _ = self
+                .remote()
+                .run_quiet(
+                    target,
+                    &[command.as_str()],
+                    RunOptions::op("server.helper_containers").timeout(Duration::from_secs(30)),
+                )
+                .await;
+        }
+    }
+
+    /// `removeOrphanedHelperContainers($activeTransfers)`.
+    async fn remove_orphaned_helper_containers(
+        &self,
+        target: &coolify_remote::Target,
+        active_transfers: &[String],
+    ) -> Result<(), String> {
+        let db = &self.0.db;
+        let output = self
+            .remote()
+            .run_quiet(
+                target,
                 &[HELPER_CONTAINERS_COMMAND],
                 RunOptions::op("server.helper_containers").timeout(Duration::from_secs(30)),
             )
@@ -305,19 +381,19 @@ impl Jobs {
             .await
             .map_err(|e| e.to_string())?;
         for (id, name) in containers {
-            if !finished.contains(&name) {
+            if !finished.contains(&name) && !is_orphaned_backup_upload(&name, active_transfers) {
                 continue;
             }
             tracing::info!(
                 container = %name,
                 id = %id,
-                "CleanupHelperContainersJob - Removing orphaned deployment helper container"
+                "CleanupHelperContainersJob - Removing orphaned helper container"
             );
             let command = format!("docker container rm -f {}", quote(&id));
             let _ = self
                 .remote()
                 .run_quiet(
-                    &target,
+                    target,
                     &[command.as_str()],
                     RunOptions::op("server.helper_containers").timeout(Duration::from_secs(30)),
                 )
@@ -325,6 +401,58 @@ impl Jobs {
         }
         Ok(())
     }
+}
+
+/// `RcloneTransfer::LABEL`: the label of the rclone containers of backups and imports.
+const RCLONE_LABEL: &str = "coolify.type=rclone";
+
+/// `CleanupHelperContainersJob::RCLONE_MIN_AGE_SECONDS`: the job that starts an rclone container
+/// creates its execution or activity before it, except a database import, which creates its
+/// activity right after it. Younger containers are kept.
+const RCLONE_MIN_AGE_SECONDS: i64 = 900;
+
+/// A worker that is killed during the upload never removes its upload container
+/// (`backup-of-<execution uuid>`): it is orphaned when that execution is not running.
+fn is_orphaned_backup_upload(name: &str, active_transfers: &[String]) -> bool {
+    name.strip_prefix("backup-of-")
+        .is_some_and(|uuid| !active_transfers.iter().any(|active| active == uuid))
+}
+
+/// `belongsToActiveTransfer($containerName, $activeTransfers)`.
+fn belongs_to_active_transfer(name: &str, active_transfers: &[String]) -> bool {
+    [
+        "backup-of-",
+        "volume-backup-",
+        "volume-upload-",
+        "s3-restore-",
+        "backup-decompress-",
+    ]
+    .iter()
+    .filter_map(|prefix| name.strip_prefix(prefix))
+    .any(|uuid| !uuid.is_empty() && active_transfers.iter().any(|active| active == uuid))
+}
+
+/// Whether `removeOrphanedRcloneContainers()` removes a container: it is older than
+/// `RCLONE_MIN_AGE_SECONDS` (`created_at` is the `CreatedAt` of `docker ps`, for example
+/// `2026-11-03 10:15:00 +0000 UTC`) and no running backup or import owns it. A container whose
+/// creation time cannot be read stays.
+fn rclone_container_is_orphaned(
+    name: &str,
+    created_at: &str,
+    active_transfers: &[String],
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    // `Carbon::createFromFormat('Y-m-d H:i:s O', substr($createdAt, 0, 25))`.
+    let Some(created) = created_at
+        .get(..25)
+        .and_then(|text| chrono::DateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S %z").ok())
+    else {
+        return false;
+    };
+    if created > now - chrono::Duration::seconds(RCLONE_MIN_AGE_SECONDS) {
+        return false;
+    }
+    !belongs_to_active_transfer(name, active_transfers)
 }
 
 /// `extractPullRequestId`.
@@ -672,6 +800,72 @@ pub(crate) async fn cleanup_stucked_resources(jobs: &Jobs) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `CleanupHelperContainersJob`: the upload container of a backup that is not running goes;
+    /// one of a running backup and containers with other names stay.
+    #[test]
+    fn orphaned_backup_upload_containers_are_removed() {
+        let active = vec!["running-uuid".to_owned()];
+        assert!(is_orphaned_backup_upload("backup-of-dead-uuid", &active));
+        assert!(!is_orphaned_backup_upload(
+            "backup-of-running-uuid",
+            &active
+        ));
+        assert!(!is_orphaned_backup_upload("s3-restore-dead-uuid", &active));
+        assert!(!is_orphaned_backup_upload("abc123", &active));
+    }
+
+    /// An rclone container is removed only when it is older than 15 minutes and no running
+    /// backup or import owns it.
+    #[test]
+    fn orphaned_rclone_containers_are_removed_after_fifteen_minutes() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-03T10:30:00Z")
+            .unwrap_or_default()
+            .with_timezone(&chrono::Utc);
+        let active = vec!["running-uuid".to_owned()];
+        let old = "2026-11-03 10:00:00 +0000 UTC";
+        let young = "2026-11-03 10:20:00 +0000 UTC";
+        assert!(rclone_container_is_orphaned(
+            "volume-upload-dead-uuid",
+            old,
+            &active,
+            now
+        ));
+        assert!(!rclone_container_is_orphaned(
+            "volume-upload-dead-uuid",
+            young,
+            &active,
+            now
+        ));
+        for prefix in [
+            "backup-of-",
+            "volume-backup-",
+            "volume-upload-",
+            "s3-restore-",
+            "backup-decompress-",
+        ] {
+            let name = format!("{prefix}running-uuid");
+            assert!(
+                !rclone_container_is_orphaned(&name, old, &active, now),
+                "{name}"
+            );
+        }
+        // Another time zone is read with its offset: 12:00 +0200 is 10:00 UTC.
+        assert!(rclone_container_is_orphaned(
+            "other",
+            "2026-11-03 12:00:00 +0200 CEST",
+            &active,
+            now
+        ));
+        // A creation time that cannot be read keeps the container.
+        assert!(!rclone_container_is_orphaned("other", "", &active, now));
+        assert!(!rclone_container_is_orphaned(
+            "other",
+            "yesterday",
+            &active,
+            now
+        ));
+    }
 
     #[test]
     fn labels_of_docker_ps() {

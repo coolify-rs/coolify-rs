@@ -92,7 +92,7 @@
               options={[
                 { value: 'stable', label: 'Stable', description: 'Stable releases' },
                 { value: 'preview', label: 'Preview', description: 'Betas and release candidates, then the stable release' },
-                { value: 'nightly', label: 'Nightly', description: 'A build of the next version twice a day, then every release' },
+                { value: 'nightly', label: 'Nightly', description: 'Early access to the next version, two builds each day. Less tested' },
                 { value: 'custom', label: 'Custom image', description: 'A pinned image, such as the build of a pull request' },
               ]}
             />
@@ -111,17 +111,28 @@
               <div class="hidden lg:block"></div>
             {/if}
 
-            {#if form.update_channel === 'nightly'}
-              <Callout type="danger" title="Nightly builds can break this instance" class="lg:col-span-2">
-                Nightly builds are untested builds of the next version. Things can break at any time and breaking changes are possible, including
-                database changes a stable release does not expect. Back up first and use nightly only on an instance you can rebuild. After switching
-                back to stable, the instance keeps getting the nightlies of its version until that version is released as stable.
-              </Callout>
+            {#if form.update_channel === 'stable'}
+              <div class="lg:col-span-2">
+                <Callout type="info" title="Try the next version early">
+                  The Nightly channel installs a build of the next version two times each day. Nightly builds get less testing and can break this
+                  instance.
+                </Callout>
+              </div>
+            {:else if form.update_channel === 'nightly'}
+              <div class="lg:col-span-2">
+                <Callout type="danger" title="Nightly builds can break this instance">
+                  Nightly builds are untested builds of the next version. Things can break at any time and breaking changes are possible, including
+                  database changes a stable release does not expect. Back up first and use nightly only on an instance you can rebuild. After
+                  switching back to stable, the instance keeps getting the nightlies of its version until that version is released as stable.
+                </Callout>
+              </div>
             {:else if form.update_channel === 'custom'}
-              <Callout type="danger" title="A custom image can break this instance" class="lg:col-span-2">
-                The image installs only when you upgrade to it here, and automatic updates pause until you switch back to a channel. Pull request
-                builds are untested and can include database changes a later release does not expect.
-              </Callout>
+              <div class="lg:col-span-2">
+                <Callout type="danger" title="A custom image can break this instance">
+                  The image installs only when you upgrade to it here, and automatic updates pause until you switch back to a channel. Pull
+                  request builds are untested and can include database changes a later release does not expect.
+                </Callout>
+              </div>
             {/if}
 
             <FormInput

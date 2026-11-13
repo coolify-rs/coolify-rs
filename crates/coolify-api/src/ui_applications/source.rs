@@ -9,6 +9,7 @@ use coolify_db::applications::{self as apps, ApplicationRow};
 use coolify_db::servers::ColumnValue;
 use serde_json::{Value, json};
 
+use super::source_host_keys;
 use super::{body, find};
 use crate::auth::AuthCtx;
 use crate::git_urls;
@@ -219,10 +220,15 @@ pub async fn show(
     let has_password = a
         .str("git_https_password")
         .is_some_and(|c| !c.trim().is_empty());
+    let host_keys = source_host_keys::section(&state, &a).await;
     Ok(ok(json!({
         "git_repository": a.str("git_repository"),
         "git_branch": a.str("git_branch"),
         "git_commit_sha": a.str("git_commit_sha"),
+        "uses_git_ssh": host_keys.get("uses_git_ssh"),
+        "show_ssh_host_keys": host_keys.get("show_ssh_host_keys"),
+        "git_ssh_known_hosts": host_keys.get("git_ssh_known_hosts"),
+        "host_key_fingerprints": host_keys.get("host_key_fingerprints"),
         "private_key_id": key_id,
         "private_key_name": key_name,
         "private_keys": keys.iter().filter(|(id, _)| Some(*id) != key_id).map(|(id, n)| json!({"id": id, "name": n})).collect::<Vec<_>>(),
@@ -244,6 +250,16 @@ fn failure(message: String) -> ApiResult {
     Ok(PhpJson(
         StatusCode::UNPROCESSABLE_ENTITY,
         json!({"message": message}),
+    )
+    .into_response())
+}
+
+/// The `ValidationException` of `gitSshKnownHosts`: the message under the field, which also opens
+/// the manual editor (`known-hosts-invalid`).
+fn known_hosts_failure(message: &str) -> ApiResult {
+    Ok(PhpJson(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        json!({"message": message, "errors": {"gitSshKnownHosts": [message]}}),
     )
     .into_response())
 }
@@ -281,6 +297,22 @@ pub async fn update(
     let has_password = a
         .str("git_https_password")
         .is_some_and(|c| !c.trim().is_empty());
+    // `gitSshKnownHosts` with `loadedGitSshKnownHosts`: only a client that shows the SSH host keys
+    // section sends the text. A wrong line is a validation error on the field.
+    let known_hosts = match (
+        m.get("git_ssh_known_hosts"),
+        raw("loaded_git_ssh_known_hosts"),
+    ) {
+        (None, _) => Ok(None),
+        (Some(text), loaded) => {
+            source_host_keys::submitted_known_hosts(text.as_str(), loaded.as_deref())
+        }
+    };
+    if let Err(message) = &known_hosts
+        && message == source_host_keys::INVALID_LINE
+    {
+        return known_hosts_failure(message);
+    }
     if https_username
         .as_deref()
         .is_some_and(|u| !u.trim().is_empty())
@@ -289,6 +321,10 @@ pub async fn update(
     {
         return failure("Enter the password or token for this username.".into());
     }
+    let known_hosts = match known_hosts {
+        Ok(value) => value,
+        Err(message) => return known_hosts_failure(&message),
+    };
     let mut errors: Vec<String> = Vec::new();
     if repository.is_empty() {
         errors.push("The git repository field is required.".into());
@@ -329,6 +365,14 @@ pub async fn update(
         };
         return failure(message);
     }
+    // A changed repository must be a repository URL, or the path a Git source stores
+    // (`new ValidGitRepositoryUrl(allowRepositoryPath: true)`).
+    if a.str("git_repository") != Some(repository.as_str())
+        && let Some(msg) =
+            git_urls::valid_git_repository_url_or_path(&Value::String(repository.clone()))
+    {
+        return failure(msg.replace(":attribute", "git repository"));
+    }
     let mut columns = vec![
         ("git_repository", ColumnValue::Text(Some(repository))),
         ("git_branch", ColumnValue::Text(Some(branch))),
@@ -352,6 +396,9 @@ pub async fn update(
         } else if has_password {
             columns.push(("git_https_username", ColumnValue::Text(username)));
         }
+    }
+    if let Some(value) = known_hosts {
+        columns.push(("git_ssh_known_hosts", ColumnValue::Text(value)));
     }
     apps::update_if_changed(&state.db, a.id, &columns, state.now()).await?;
     Ok(ok(json!({"message": "Application source updated!"})).into_response())

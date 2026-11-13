@@ -3,12 +3,15 @@
 //! scheduled checks. Each submodule cites what it ports.
 
 pub mod acme;
+pub mod authorized_keys;
 pub mod certificate;
 pub mod checks;
 pub mod cleanup;
 pub mod github_runner_jobs;
 pub mod github_runners;
+pub mod host_key;
 pub mod install;
+pub mod key_rotation;
 pub mod log_drain;
 pub mod patches;
 pub mod proxy;

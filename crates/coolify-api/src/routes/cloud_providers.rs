@@ -659,7 +659,7 @@ pub(crate) async fn create_row(
         ],
         uuid: uuid.clone(),
         name: stored,
-        description: String::new(),
+        description: None,
         ip: ip.to_string(),
         port: 22,
         user: "root".to_string(),

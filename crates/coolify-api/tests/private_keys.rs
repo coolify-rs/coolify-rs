@@ -54,17 +54,44 @@ async fn create_list_show_with_sensitive_gating() {
         Some(json!({"private_key": "garbage"})),
     )
     .await
-    .assert(422, r#"{"message":"Invalid private key."}"#);
+    .assert(
+        422,
+        r#"{"message":"The private key is invalid. Paste an unencrypted private key, not a public key or a certificate."}"#,
+    );
+    // 4.7.5: text that is not base64 is validated as it is, not decoded leniently.
     h.call(
         "POST",
         "/api/v1/security/keys",
         W,
-        Some(json!({"name": "x"})),
+        Some(json!({"private_key": "ssh-ed25519 AAAA not a private key"})),
+    )
+    .await
+    .assert(
+        422,
+        r#"{"message":"The private key is invalid. Paste an unencrypted private key, not a public key or a certificate."}"#,
+    );
+    h.call(
+        "POST",
+        "/api/v1/security/keys",
+        W,
+        Some(json!({"name": "probe"})),
     )
     .await
     .assert(
         422,
         r#"{"message":"Validation failed.","errors":{"private_key":["This field is required."]}}"#,
+    );
+    // 4.7.5 (32541a32c): names and descriptions are validated like the UI.
+    h.call(
+        "POST",
+        "/api/v1/security/keys",
+        W,
+        Some(json!({"name": "x", "description": "a <b>", "private_key": cases[0]["private_key"]})),
+    )
+    .await
+    .assert(
+        422,
+        r#"{"message":"Validation failed.","errors":{"name":["The name must be at least 3 characters."],"description":["The description may only contain letters (including Unicode), numbers, spaces, and common punctuation: - _ . , ! ? ( ) ' \" + = * \/ @ &"]}}"#,
     );
 
     // Without read:sensitive the private key is hidden; public key and fingerprint match upstream.
@@ -157,7 +184,7 @@ async fn update_and_delete() {
         .assert(201, &format!(r#"{{"uuid":"{uuid}"}}"#));
     h.call("PATCH", &path, W, Some(json!({"private_key": "nope"})))
         .await
-        .assert(422, r#"{"message":"The private key is invalid.","errors":{"private_key":["The private key is invalid."]}}"#);
+        .assert(422, r#"{"message":"The private key is invalid. Paste an unencrypted private key, not a public key or a certificate.","errors":{"private_key":["The private key is invalid. Paste an unencrypted private key, not a public key or a certificate."]}}"#);
     h.call("PATCH", &path, W, Some(json!({"private_key": cases[1]["private_key"]})))
         .await
         .assert(422, r#"{"message":"This private key already exists.","errors":{"private_key":["This private key already exists."]}}"#);

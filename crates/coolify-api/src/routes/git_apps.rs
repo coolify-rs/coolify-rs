@@ -74,7 +74,7 @@ async fn authorize_change(state: &AppState, ctx: &AuthCtx, row: &Record) -> Resu
 
 /// Model attributes as `toArray()` shows them: timestamps in Laravel's format, hidden columns
 /// dropped.
-fn attributes(raw: &Record, hidden: &[&str]) -> Record {
+pub(super) fn attributes(raw: &Record, hidden: &[&str]) -> Record {
     let mut out = Record::new();
     for (k, v) in raw {
         if hidden.contains(&k.as_str()) {
@@ -91,7 +91,7 @@ fn attributes(raw: &Record, hidden: &[&str]) -> Record {
     out
 }
 
-fn decrypted_into(
+pub(super) fn decrypted_into(
     state: &AppState,
     raw: &Record,
     out: &mut Record,
@@ -149,7 +149,11 @@ fn present_gitlab(state: &AppState, ctx: &AuthCtx, raw: &Record) -> Result<Value
     Ok(Value::Object(serialize_record(r)))
 }
 
-async fn list_rows(state: &AppState, table: &str, team: i64) -> Result<Vec<Record>, ApiError> {
+pub(super) async fn list_rows(
+    state: &AppState,
+    table: &str,
+    team: i64,
+) -> Result<Vec<Record>, ApiError> {
     let rows: Vec<String> = sqlx::query_scalar(&format!(
         "SELECT row_to_json(s)::text FROM {table} s WHERE team_id = $1 OR is_system_wide = true"
     ))
@@ -356,7 +360,8 @@ pub async fn github_store(
         &github_create_fields(),
         GITHUB_ALLOWED,
         &["api_url", "html_url"],
-        true,
+        // `SafeExternalUrl::forGitSource()`: private networks for root team sources only.
+        ctx.team_id == 0,
     )
     .await?;
     if truthy_bool(input.get("is_system_wide"))
@@ -522,12 +527,41 @@ pub async fn github_repositories(
     }
 }
 
+/// The `owner` and `repo` checks of `GithubController::load_branches()`: each is one path segment
+/// of `[A-Za-z0-9_.-]`, not `.` or `..`. `None` when both are valid.
+fn repository_segment_errors(owner: &str, repo: &str) -> Option<Value> {
+    let valid = |v: &str| {
+        !v.is_empty()
+            && v != "."
+            && v != ".."
+            && v.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+    };
+    let mut errors = Map::new();
+    for (field, value) in [("owner", owner), ("repo", repo)] {
+        if !valid(value) {
+            errors.insert(
+                field.to_owned(),
+                json!([format!("The {field} is invalid.")]),
+            );
+        }
+    }
+    (!errors.is_empty()).then_some(Value::Object(errors))
+}
+
 /// `GET /github-apps/{id}/repositories/{owner}/{repo}/branches`.
 pub async fn github_branches(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
     Path((id, owner, repo)): Path<(String, String, String)>,
 ) -> ApiResult {
+    if let Some(errors) = repository_segment_errors(&owner, &repo) {
+        return Ok(PhpJson(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"message": "Validation failed.", "errors": errors}),
+        )
+        .into_response());
+    }
     let Some(row) = team_row(&state, "github_apps", &id, ctx.team_id).await? else {
         return Err(ApiError::Message(
             StatusCode::NOT_FOUND,
@@ -544,7 +578,11 @@ pub async fn github_branches(
         Ok(t) => t,
         Err(e) => return handled(e),
     };
-    let endpoint = format!("/repos/{owner}/{repo}/branches");
+    let endpoint = format!(
+        "/repos/{}/{}/branches",
+        coolify_jobs::gitea::raw_url_encode(&owner),
+        coolify_jobs::gitea::raw_url_encode(&repo)
+    );
     match coolify_jobs::github::get_with_token(&state.db, &row, &token, &endpoint, &[]).await {
         Ok((200, branches)) => Ok(ok(json!({"branches": branches})).into_response()),
         Ok((status, body)) => Ok(PhpJson(
@@ -642,7 +680,7 @@ pub async fn github_update(
         &specs,
         ALLOWED,
         &["api_url", "html_url"],
-        true,
+        coolify_jobs::git_http::may_use_private_networks(&row),
     )
     .await;
     match result {
@@ -1159,4 +1197,31 @@ pub async fn gitlab_destroy(
         .map_err(db_err)?;
     tracing::info!(target: "audit", event = "api.gitlab_app.deleted", team_id = ctx.team_id, gitlab_app_id = row_id, "gitlab app deleted");
     Ok(ok(json!({"message": "GitLab app deleted successfully"})).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn branch_routes_take_plain_repository_segments_only() {
+        assert_eq!(repository_segment_errors("coollabsio", "coolify.io"), None);
+        assert_eq!(repository_segment_errors("a_b-c", "R.1"), None);
+        assert_eq!(
+            repository_segment_errors("..", "repo"),
+            Some(json!({"owner": ["The owner is invalid."]}))
+        );
+        assert_eq!(
+            repository_segment_errors("owner", "."),
+            Some(json!({"repo": ["The repo is invalid."]}))
+        );
+        assert_eq!(
+            repository_segment_errors("o/x", "repo?x=1"),
+            Some(json!({"owner": ["The owner is invalid."], "repo": ["The repo is invalid."]}))
+        );
+        assert_eq!(
+            repository_segment_errors("owner", "re po"),
+            Some(json!({"repo": ["The repo is invalid."]}))
+        );
+    }
 }

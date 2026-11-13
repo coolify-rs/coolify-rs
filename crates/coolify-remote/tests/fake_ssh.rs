@@ -4,7 +4,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use coolify_remote::{PrivateKey, Remote, RemoteConfig, RunOptions, Target};
+use coolify_remote::{
+    HOST_KEY_CHANGED_MESSAGE, HostKeyCheck, PrivateKey, Remote, RemoteConfig, RunOptions, Target,
+};
 
 const KEY: &str =
     "-----BEGIN OPENSSH PRIVATE KEY-----\nnot-a-real-key\n-----END OPENSSH PRIVATE KEY-----";
@@ -68,6 +70,7 @@ fn target(user: &str) -> Target {
         connection_timeout: Some(7),
         cloudflare_tunnel: false,
         force_disabled: false,
+        host_key: HostKeyCheck::Off,
     }
 }
 
@@ -114,7 +117,8 @@ async fn builds_a_hardened_argv_and_sends_the_script_on_stdin() {
     );
     assert_eq!(&args[..2], ["-F", "/dev/null"]);
     for o in [
-        "StrictHostKeyChecking=accept-new",
+        "StrictHostKeyChecking=no",
+        "UserKnownHostsFile=/dev/null",
         "PasswordAuthentication=no",
         "BatchMode=yes",
         "IdentitiesOnly=yes",
@@ -127,11 +131,11 @@ async fn builds_a_hardened_argv_and_sends_the_script_on_stdin() {
     ] {
         assert!(args.iter().any(|a| a == o), "missing {o}: {args:?}");
     }
-    let known = format!(
-        "UserKnownHostsFile={}",
-        f.root.join("data/ssh/known_hosts/srv1").display()
+    // Without a pinned key there is no alias (`hostKeyOptions()`).
+    assert!(
+        !args.iter().any(|a| a.starts_with("HostKeyAlias=")),
+        "{args:?}"
     );
-    assert!(args.contains(&known), "{args:?}");
 
     assert_eq!(read(&f.root, "stdin0"), "ls /\nuptime\n");
     assert_eq!(read(&f.root, "mode0").trim(), "600");
@@ -329,12 +333,159 @@ fn prunes_pins_of_servers_that_are_gone() {
         .join("d");
     let remote = Remote::new(RemoteConfig::new(&data)).unwrap_or_else(|e| panic!("{e}"));
     let pins = data.join("ssh/known_hosts");
-    for uuid in ["kept", "gone1", "gone2"] {
-        std::fs::write(pins.join(uuid), "x").unwrap_or_else(|_| unreachable!());
+    for name in [
+        "kept",
+        "gone1",
+        "gone2",
+        "known_hosts_kept_0123456789abcdef",
+        "known_hosts_gone1_0123456789abcdef",
+        "scan_gone1_a1b2c3d4",
+    ] {
+        std::fs::write(pins.join(name), "x").unwrap_or_else(|_| unreachable!());
     }
     let live = ["kept".to_owned()].into_iter().collect();
-    assert_eq!(remote.retain_host_keys(&live), 2);
+    assert_eq!(remote.retain_host_keys(&live), 3);
     assert!(pins.join("kept").exists() && !pins.join("gone1").exists());
+    assert!(pins.join("known_hosts_kept_0123456789abcdef").exists());
+    assert!(!pins.join("known_hosts_gone1_0123456789abcdef").exists());
+    // A scan that is running keeps its file.
+    assert!(pins.join("scan_gone1_a1b2c3d4").exists());
+
+    remote.forget_host_key("kept");
+    assert!(!pins.join("kept").exists());
+    assert!(!pins.join("known_hosts_kept_0123456789abcdef").exists());
+}
+
+// `SshMultiplexingHelper::hostKeyOptions()` with a pinned key.
+#[tokio::test]
+async fn pinned_host_key_options_follow_the_mode() {
+    let f = fixture("true");
+    let pinned = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFuGmoeGq/pojrsyP1pszcNVuZx9iFkCELtxrh31QJ68";
+    for (n, enforce) in [(0, false), (1, true)] {
+        let mut t = target("root");
+        t.host_key = HostKeyCheck::Pinned {
+            keys: pinned.to_owned(),
+            enforce,
+        };
+        f.remote
+            .run(&t, &["true"], RunOptions::op("test"))
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        let args: Vec<String> = read(&f.root, &format!("args{n}"))
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        assert!(
+            args.iter().any(|a| a == "HostKeyAlias=coolify-srv1"),
+            "{args:?}"
+        );
+        let strict = format!(
+            "StrictHostKeyChecking={}",
+            if enforce { "yes" } else { "no" }
+        );
+        assert!(args.contains(&strict), "{args:?}");
+        let file = args
+            .iter()
+            .find_map(|a| a.strip_prefix("UserKnownHostsFile="))
+            .unwrap_or_default()
+            .to_owned();
+        let dir = f.root.join("data/ssh/known_hosts");
+        assert!(
+            file.starts_with(&format!("{}/known_hosts_srv1_", dir.display())),
+            "{file}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap_or_default(),
+            format!("coolify-srv1 {pinned}\n")
+        );
+        assert!(
+            args.iter().any(|a| a == "GlobalKnownHostsFile=/dev/null"),
+            "{args:?}"
+        );
+    }
+}
+
+// `excludeCertainErrors()` and `noticeHostKeyMismatch()`.
+#[tokio::test]
+async fn a_refused_host_key_is_reported_and_not_retried() {
+    let f = fixture(
+        "echo 'Host key for coolify-srv1 has changed and you have requested strict checking.' >&2; echo 'Host key verification failed.' >&2; exit 255",
+    );
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    f.remote.on_host_key_mismatch(tx);
+    let err = f
+        .remote
+        .run(&target("root"), &["true"], RunOptions::op("test"))
+        .await
+        .err();
+    assert_eq!(
+        err.as_ref().map(|e| (e.message.as_str(), e.code)),
+        Some((HOST_KEY_CHANGED_MESSAGE, Some(255)))
+    );
+    // Upstream removed "Host key verification failed" from the retryable errors.
+    assert_eq!(calls(&f.root), 1);
+    assert_eq!(
+        rx.try_recv().map(|(uuid, _)| uuid).ok().as_deref(),
+        Some("srv1")
+    );
+}
+
+// A program on the server (git) prints the same text for its own connection.
+#[tokio::test]
+async fn a_host_key_error_of_another_host_is_not_reported() {
+    let f = fixture("echo 'Host key verification failed.' >&2; exit 128");
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    f.remote.on_host_key_mismatch(tx);
+    let err = f
+        .remote
+        .run(&target("root"), &["git fetch"], RunOptions::op("test"))
+        .await
+        .err();
+    assert_eq!(
+        err.as_ref().map(|e| (e.message.as_str(), e.code)),
+        Some(("Host key verification failed.", Some(128)))
+    );
+    assert!(rx.try_recv().is_err());
+}
+
+// `readHostKey()`: the options of the scan, and the key ssh saved in the scan file.
+#[tokio::test]
+async fn scans_the_host_key_without_any_login_method() {
+    let f = fixture(
+        r#"for a in $(cat "$LOG/args0"); do case "$a" in UserKnownHostsFile=*) echo 'coolify-srv1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFuGmoeGq/pojrsyP1pszcNVuZx9iFkCELtxrh31QJ68' > "${a#UserKnownHostsFile=}";; esac; done; echo 'root@203.0.113.7: Permission denied (publickey).' >&2; exit 255"#,
+    );
+    let scan = f.remote.scan_host_key(&target("root")).await;
+    assert_eq!(
+        scan.key.as_deref(),
+        Some("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFuGmoeGq/pojrsyP1pszcNVuZx9iFkCELtxrh31QJ68")
+    );
+    assert_eq!(
+        scan.error,
+        "root@203.0.113.7: Permission denied (publickey)."
+    );
+    let args: Vec<String> = read(&f.root, "args0").lines().map(str::to_owned).collect();
+    for o in [
+        "HostKeyAlias=coolify-srv1",
+        "GlobalKnownHostsFile=/dev/null",
+        "StrictHostKeyChecking=accept-new",
+        "BatchMode=yes",
+        "PubkeyAuthentication=no",
+        "PasswordAuthentication=no",
+        "KbdInteractiveAuthentication=no",
+        "HostbasedAuthentication=no",
+        "ConnectTimeout=7",
+        "LogLevel=ERROR",
+    ] {
+        assert!(args.iter().any(|a| a == o), "missing {o}: {args:?}");
+    }
+    // The scan offers no key and runs no command of the caller.
+    assert!(!args.iter().any(|a| a == "-i"), "{args:?}");
+    assert_eq!(args.last().map(String::as_str), Some("true"));
+    // The scan file is gone.
+    let left: Vec<_> = std::fs::read_dir(f.root.join("data/ssh/known_hosts"))
+        .map(|d| d.flatten().collect())
+        .unwrap_or_default();
+    assert!(left.is_empty(), "{left:?}");
 }
 
 #[test]

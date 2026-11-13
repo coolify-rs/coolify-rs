@@ -22,7 +22,7 @@ use serde_json::{Map, Value, json};
 use crate::audit::Meta;
 use crate::auth::AuthCtx;
 use crate::response::{ApiError, ApiResult, PhpJson, ok};
-use crate::routes::audit_events::{current_url, present_row};
+use crate::routes::audit_events::present_row;
 use crate::session::SessionUser;
 use crate::state::AppState;
 use crate::ui_notifications::{summarize, toast_error, unauthorized};
@@ -485,23 +485,54 @@ fn decrypt_link(state: &AppState, stored: &str) -> String {
         .unwrap_or_default()
 }
 
-/// `InviteLink::invitationUrl`.
-async fn invitation_url(
-    state: &AppState,
-    headers: &HeaderMap,
-    path: &str,
-) -> Result<String, ApiError> {
-    let settings = coolify_db::instance_settings::row(&state.db).await?;
-    Ok(
-        match settings
-            .get("fqdn")
-            .and_then(Value::as_str)
-            .filter(|f| !f.trim().is_empty())
-        {
-            Some(fqdn) => format!("{}{path}", fqdn.trim_end_matches('/')),
-            None => current_url(headers, path),
-        },
-    )
+/// `base_url()`: the instance URL, then the public IPv4 or IPv6 address with the application
+/// port, then `config('app.url')`. Nothing here comes from the request.
+pub(crate) fn instance_base_url(
+    fqdn: Option<&str>,
+    public_ipv4: Option<&str>,
+    public_ipv6: Option<&str>,
+    port: &str,
+    app_url: &str,
+    dev: bool,
+) -> String {
+    fn filled(v: Option<&str>) -> Option<&str> {
+        v.map(str::trim).filter(|s| !s.is_empty() && *s != "0")
+    }
+    if let Some(fqdn) = filled(fqdn) {
+        return fqdn.to_owned();
+    }
+    if let Some(ip) = filled(public_ipv4) {
+        return if dev {
+            format!("http://localhost:{port}")
+        } else {
+            format!("http://{ip}:{port}")
+        };
+    }
+    if let Some(ip) = filled(public_ipv6) {
+        return format!("http://[{ip}]:{port}");
+    }
+    app_url.to_owned()
+}
+
+/// `InviteLink::invitationUrl` (4.7.5, b31c06a7e): `rtrim(base_url(), '/')` and the route path.
+/// The link is built from the instance URL, not from the request host, which a client can set.
+async fn invitation_url(state: &AppState, path: &str) -> Result<String, ApiError> {
+    let (fqdn, ipv4, ipv6) = coolify_db::servers::instance_urls(&state.db).await?;
+    let env_or = |key: &str, default: &str| {
+        std::env::var(key)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| default.to_owned())
+    };
+    let base = instance_base_url(
+        fqdn.as_deref(),
+        ipv4.as_deref(),
+        ipv6.as_deref(),
+        &env_or("APP_PORT", "8000"),
+        &env_or("APP_URL", "http://localhost"),
+        std::env::var("APP_ENV").is_ok_and(|v| v == "local"),
+    );
+    Ok(format!("{}{path}", base.trim_end_matches('/')))
 }
 
 /// `new_public_id(32)`.
@@ -574,7 +605,6 @@ async fn invite(
     State(state): State<AppState>,
     Extension(ctx): Extension<AuthCtx>,
     meta: Meta,
-    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> ApiResult {
     if !ctx.is_team_admin() {
@@ -596,6 +626,9 @@ async fn invite(
     }
     if role.trim().is_empty() {
         add("role", "The role field is required.");
+    } else if Role::parse(role).is_none() {
+        // 4.7.5: `['required', Rule::enum(Role::class)]`.
+        add("role", "The selected role is invalid.");
     }
     if let Some(m) = summarize(&errors) {
         return Ok(toast_with_errors(format!("{m} {m}"), fields));
@@ -650,10 +683,22 @@ async fn invite(
     // account. A user who never set a password cannot log in, so they get a magic link with a new
     // temporary password.
     let uuid = public_id(32);
-    let mut link = invitation_url(&state, &headers, &format!("/invitations/{uuid}")).await?;
+    let mut link = invitation_url(&state, &format!("/invitations/{uuid}")).await?;
     let existing_user = coolify_db::users::find_by_email(&state.db, &email).await?;
+    // 4.7.5: `canReceiveInvitationLoginFrom()`. A pending invitation of another team keeps the
+    // only login, so the admin of a second team cannot sign in as the invitee.
     let unused = match existing_user {
-        Some(_) => tp::is_disposable_invitee(&state.db, &email).await?,
+        Some(_) => match tp::needs_initial_invitation_login(&state.db, &email).await? {
+            Some(id) => {
+                let others =
+                    tp::other_team_invitation_dates(&state.db, &email, ctx.team_id).await?;
+                others
+                    .iter()
+                    .all(|created_at| expired(&state, *created_at))
+                    .then_some(id)
+            }
+            None => None,
+        },
         None => None,
     };
     if existing_user.is_none() || unused.is_some() {
@@ -673,12 +718,7 @@ async fn invite(
                 .await;
         }
         let token = encrypter.encrypt_string(&format!("{email}@@@{uuid}@@@{password}"));
-        link = invitation_url(
-            &state,
-            &headers,
-            &format!("/auth/link?token={}", query_value(&token)),
-        )
-        .await?;
+        link = invitation_url(&state, &format!("/auth/link?token={}", query_value(&token))).await?;
     }
     let via = if via_email { "email" } else { "link" };
     if let Err(e) = tp::create_invitation(
@@ -794,6 +834,14 @@ async fn checked_invitation(
             "You are not allowed to accept this invitation.",
         ));
     }
+    // 4.7.5: a magic link session accepts only the invitation of its own link, until the user
+    // sets a password.
+    if invitee.force_password_reset {
+        return Err(ApiError::Message(
+            StatusCode::BAD_REQUEST,
+            "Set your password before you accept another invitation.",
+        ));
+    }
     if expired(state, invitation.created_at) {
         delete_invitation_and_invitee(state, &invitation, &user_actor(state, user).await).await?;
         return Err(ApiError::Message(
@@ -818,7 +866,10 @@ pub(crate) async fn invitation_page_status(
     else {
         return Ok(StatusCode::NOT_FOUND);
     };
-    if invitee.id != user_id || expired(state, invitation.created_at) {
+    if invitee.id != user_id
+        || invitee.force_password_reset
+        || expired(state, invitation.created_at)
+    {
         return Ok(StatusCode::BAD_REQUEST);
     }
     Ok(StatusCode::OK)
@@ -878,7 +929,6 @@ async fn audit_accepted(
             "already_member": already_member,
             "member_id": user_id,
             "member_name": name,
-            "member_email": email,
             "actor_id": user_id,
             "actor_name": name,
             "actor_email": email,
@@ -1036,6 +1086,11 @@ async fn accept_link(
     let random: String = public_id(64);
     let hash = coolify_compat::password::hash(&random).ok_or(ApiError::Internal)?;
     tp::set_password(&state.db, user.id, &hash, state.now()).await?;
+    // 4.7.5: only an emailed token proves the address. A copied link can be used by the inviting
+    // admin, so it does not verify the email.
+    if invitation.via == "email" {
+        tp::verify_email_if_unverified(&state.db, user.id, state.now()).await?;
+    }
     tp::delete_invitation(&state.db, invitation.id).await?;
     state.sessions.remove_user(user.id);
     let (cookie, _) = crate::session::start_session(&state, user.id, invitation.team_id, &hash);
@@ -1346,6 +1401,35 @@ async fn admin_delete(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `InviteLink::invitationUrl` (4.7.5, b31c06a7e): `base_url()`, never the request host.
+    #[test]
+    fn invitation_links_use_the_instance_url() {
+        let url =
+            |fqdn, v4, v6, dev| instance_base_url(fqdn, v4, v6, "8000", "http://localhost", dev);
+        assert_eq!(
+            url(
+                Some("https://coolify.example.test/"),
+                Some("203.0.113.5"),
+                None,
+                false
+            ),
+            "https://coolify.example.test/"
+        );
+        assert_eq!(
+            url(None, Some("203.0.113.5"), Some("2001:db8::1"), false),
+            "http://203.0.113.5:8000"
+        );
+        assert_eq!(
+            url(Some(" "), Some("203.0.113.5"), None, true),
+            "http://localhost:8000"
+        );
+        assert_eq!(
+            url(None, None, Some("2001:db8::1"), false),
+            "http://[2001:db8::1]:8000"
+        );
+        assert_eq!(url(None, None, None, false), "http://localhost");
+    }
 
     #[test]
     fn emails() {

@@ -15,7 +15,6 @@
   import ServiceHeading from '../components/ServiceHeading.svelte';
   import ServiceResourceCard from '../components/ServiceResourceCard.svelte';
   import ServiceBackups from '../components/ServiceBackups.svelte';
-  import ServiceImportBackup from '../components/ServiceImportBackup.svelte';
   import ExecuteContainerCommand from '../components/shared/ExecuteContainerCommand.svelte';
   import ScheduledTasks from '../components/shared/ScheduledTasks.svelte';
   import ResourceOperations from '../components/shared/ResourceOperations.svelte';
@@ -29,6 +28,8 @@
   import { ApiError, uiApi, dbUi } from '../lib/api';
   import { headline, servicesApi, type ServicePage, type ServiceStoragePart } from '../lib/servicesApi';
   import { SERVICE_SECTIONS, serviceNavContext } from '../lib/serviceMenu';
+  import ResourceSecurity from '../components/imageScan/ResourceSecurity.svelte';
+  import { securityStatus } from '../lib/imageScanApi';
   import { setProjectCrumbs } from '../lib/crumbs';
   import { strnatcmp } from '../lib/natsort';
   import { page } from '../lib/page.svelte';
@@ -58,7 +59,7 @@
   );
 
   /**
-   * `VolumeBackup/Show`, `DatabaseBackups` and the `{stack}/import` route never render: they check the
+   * `VolumeBackup/Show`, `DatabaseBackups` and the import routes never render: they check the
    * record and redirect. Answers whether this page redirected.
    */
   async function redirected(): Promise<boolean> {
@@ -67,8 +68,10 @@
       router.go(`${base}/scheduled-tasks?task_uuid=${encodeURIComponent(taskUuid)}`, true);
       return true;
     }
-    if (route === 'service-database-import') {
-      router.go(`${base}/import-backup/${stack}`, true);
+    // v4.7.5: the import opens in a modal on the backups page; old links redirect
+    // (`/import-backup/{stack}` and `/{stack}/import` to `/{stack}/backups`).
+    if (route === 'service-import-backup' || route === 'service-database-import') {
+      router.go(`${base}/${stack}/backups`, true);
       return true;
     }
     if (route !== 'service-volume-backup' && route !== 'service-database-backups') return false;
@@ -117,7 +120,14 @@
     if (section === 'storages') storages = (await servicesApi.storages(service)).parts;
   }
 
+  let loadSecurity: () => void = () => {};
+
   async function load() {
+    // v4.7.5 `Route::redirect('/import-backup', '.../storage-backups')`.
+    if (route === 'service-section' && section === 'import-backup') {
+      router.go(`${base}/storage-backups`, true);
+      return;
+    }
     if (!isSection) {
       router.go(base, true);
       return;
@@ -134,19 +144,26 @@
       throw e;
     }
     data = d;
-    const titleSuffix = section === 'storage-backups' ? 'Backups' : section === 'import-backup' ? 'Import Backup' : 'Configuration';
+    const titleSuffix = section === 'storage-backups' ? 'Backups' : 'Configuration';
     document.title = `${d.service.name.slice(0, 10)} > ${titleSuffix} | coolify-rs`;
-    page.navContext = {
-      ...serviceNavContext(base, section, {
-      isDeployable: d.is_deployable,
-      canAccessTerminal: d.can_access_terminal,
-      storageSections:
-        section === 'storages'
-          ? [...d.applications, ...d.databases].map((p) => ({ id: `storage-service-${p.uuid}`, label: headline(p.name) }))
-          : [],
-      }),
-      name: d.service.name,
+    const setNav = (security: string | null) => {
+      page.navContext = {
+        ...serviceNavContext(base, section, {
+        isDeployable: d.is_deployable,
+        canAccessTerminal: d.can_access_terminal,
+        storageSections:
+          section === 'storages'
+            ? [...d.applications, ...d.databases].map((p) => ({ id: `storage-service-${p.uuid}`, label: headline(p.name) }))
+            : [],
+        security,
+        }),
+        name: d.service.name,
+      };
     };
+    setNav(null);
+    // `SecurityStatus::stored($service)->status->value`: the security dot of the menu.
+    loadSecurity = () => securityStatus('service', service).then(setNav);
+    loadSecurity();
     if (section === 'storages') storages = (await servicesApi.storages(service)).parts;
     uiApi.project(uuid).then((p) => setProjectCrumbs(p, env));
     dbUi
@@ -226,11 +243,10 @@
             </div>
           {:else if section === 'storage-backups'}
             <ServiceBackups {service} {base} />
-          {:else if section === 'import-backup'}
-            <ServiceImportBackup {service} {stack} {base} canUpdate={data.can_update} />
           {:else if section === 'domains'}
             <ServiceDomains serviceUuid={service} />
-            <div class="mt-4"><Maintenance kind="service" uuid={service} /></div>
+          {:else if section === 'maintenance'}
+            <Maintenance kind="service" uuid={service} />
           {:else if section === 'storages'}
             <div class="space-y-6">
               <div
@@ -263,6 +279,8 @@
             <FileBrowser kind="service" uuid={service} />
           {:else if section === 'analytics'}
             <ResourceAnalytics kind="service" uuid={service} />
+          {:else if section === 'vulnerabilities'}
+            <ResourceSecurity kind="service" uuid={service} onchanged={() => loadSecurity()} />
           {/if}
         </div>
       </div>

@@ -14,8 +14,10 @@
   import Modal from './Modal.svelte';
   import Reicon from './Reicon.svelte';
   import ServiceBackupExecutions from './ServiceBackupExecutions.svelte';
+  import ServiceImportBackup from './ServiceImportBackup.svelte';
   import SettingsSection from './SettingsSection.svelte';
   import StatusBadge from './StatusBadge.svelte';
+  import BackupS3Storage from './BackupS3Storage.svelte';
   import VolumeBackups from './shared/VolumeBackups.svelte';
   import { ApiError, type DatabaseRecord } from '../lib/api';
   import { backupsUi, type BackupEdit } from '../lib/databaseApi';
@@ -52,6 +54,7 @@
   let menu = $state(false);
   let addStorage = $state(false);
   let addDatabase = $state(false);
+  let importing = $state(false);
   let selectedDatabase = $state<string>('');
   let databaseFrequency = $state('');
   let databaseError = $state<ApiError | null>(null);
@@ -156,7 +159,7 @@
   const s3Of = (r: Row) => (data ? r.s3.filter((s) => s.team_id === data?.team_id) : []);
   const s3Tooltip = (r: Row) => {
     const list = s3Of(r);
-    return !r.save_s3 ? 'S3 storage: Not configured' : list.length ? `S3 storage: ${list.map((s) => `${s.name} (bucket: ${s.bucket})`).join(', ')}` : 'S3 storage: Unavailable';
+    return !r.save_s3 ? 'S3 storage: Not configured' : list.length ? `S3 storage: ${list.map((s) => `${s.name} (${s.type === 's3' ? `bucket: ${s.bucket}` : s.type_label})`).join(', ')}` : 'S3 storage: Unavailable';
   };
   const databaseRunning = (r: Row) => (r.database?.database_status ?? '').startsWith('running');
   const databaseRecord = (r: Row) => ({ uuid: r.database?.database_uuid, name: r.name, status: r.database?.database_status ?? '' }) as DatabaseRecord;
@@ -196,14 +199,16 @@
 <svelte:window onclick={() => (menu = false)} />
 
 {#if data}
+  {#if importing}
+    <Modal title="Import backup" onclose={() => (importing = false)}>
+      <ServiceImportBackup {service} canUpdate={data.can_update} />
+    </Modal>
+  {/if}
+
   {#if opened}
     {@const row = opened}
-    <Modal title="Edit backup schedule" isLarge fixedHeight focusFirstField={false} onclose={closeSchedule}>
-      <div class="flex min-w-0 flex-col gap-6">
-        <div>
-          <h2 class="text-base font-semibold text-neutral-950 dark:text-fg">{row.name}</h2>
-          <p class="mt-1 text-xs text-neutral-500 dark:text-fg-dim">{row.frequency} schedule</p>
-        </div>
+    <Modal title="Edit backup schedule" subtitle="{row.name} · {row.frequency} schedule" isLarge fixedHeight focusFirstField={false} onclose={closeSchedule}>
+      <div class="modal-flat-sections flex min-w-0 flex-col gap-6">
         <nav aria-label="Backup sections" class="flex min-w-0 flex-wrap gap-1 border-b border-neutral-200 pb-2 dark:border-white/[0.08]">
           {#each [['general', 'General'], ['danger', 'Danger Zone']] as [key, label] (key)}
             <button
@@ -251,6 +256,8 @@
     <SettingsSection title="Backups" description="Manage database, persistent volume, and directory backup schedules for this service.">
       {#snippet actions()}
         {#if data?.can_update}
+          <!-- v4.7.5: `<x-modal-input title="Import backup">` around livewire/project/service/import-backup. -->
+          <button type="button" class="button" onclick={() => (importing = true)}>Import backup</button>
           <div>
             <div class="relative">
               <button
@@ -353,13 +360,8 @@
                   </span>
                   <span>{r.frequency}</span>
                   <span><StatusBadge label={st[0]} type={st[1]} /></span>
-                  <span>
-                    <span role="note" data-tooltip={s3Tooltip(r)} aria-label={s3Tooltip(r)}>
-                      <StatusBadge
-                        label={r.save_s3 ? (s3.length === 0 ? 'Unavailable' : s3.length === 1 ? 'Configured' : `${s3.length} storages`) : 'Not set'}
-                        type={r.save_s3 ? (s3.length ? 'success' : 'error') : 'neutral'}
-                      />
-                    </span>
+                  <span class="min-w-0">
+                    <BackupS3Storage enabled={r.save_s3} names={s3.map((s) => s.name)} tooltip={s3Tooltip(r)} />
                   </span>
                   <span>{r.latest_finished_at ? diffForHumans(r.latest_finished_at) : r.latest_status === 'running' ? 'Running now' : 'Never'}</span>
                   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->

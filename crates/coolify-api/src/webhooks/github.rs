@@ -405,32 +405,7 @@ fn spawn_permissions(state: &AppState, source: Record) {
         let Some(enc) = state.encrypter.as_ref() else {
             return;
         };
-        let Ok(info) = coolify_jobs::github::fetch_permissions(&state.db, enc, &source).await
-        else {
-            return;
-        };
-        let permissions = info.get("permissions").cloned().unwrap_or(Value::Null);
-        let perm = |k: &str| {
-            permissions
-                .get(k)
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        };
-        let _ = sqlx::query(
-            "UPDATE github_apps SET contents = $1, metadata = $2, pull_requests = $3, administration = $4, \
-             organization_self_hosted_runners = $5, actions = $6, webhook_events = $7::json, updated_at = $8 WHERE id = $9",
-        )
-        .bind(perm("contents"))
-        .bind(perm("metadata"))
-        .bind(perm("pull_requests"))
-        .bind(perm("administration"))
-        .bind(perm("organization_self_hosted_runners"))
-        .bind(perm("actions"))
-        .bind(info.get("events").cloned().unwrap_or_else(|| json!([])).to_string())
-        .bind(state.now())
-        .bind(source.get("id").and_then(Value::as_i64))
-        .execute(state.db.pool())
-        .await;
+        let _ = coolify_jobs::github::sync_permissions(&state.db, enc, &source, state.now()).await;
     });
 }
 

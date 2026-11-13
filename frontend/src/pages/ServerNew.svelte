@@ -1,4 +1,5 @@
 <script lang="ts">
+  import NewServerImageScanning from '../components/imageScan/NewServerImageScanning.svelte';
   import Forbidden from '../components/Forbidden.svelte';
   // Port of upstream livewire/server/create-page.blade.php, livewire/server/create.blade.php with
   // livewire/server/new/by-ip.blade.php; the provider forms are their own pages.
@@ -35,12 +36,15 @@
   let keyMenu = $state(false);
   let keyMenuRoot: HTMLDivElement | undefined = $state();
   let busy = $state(false);
+  /** `SetsImageScanning::$scan_images`: the team default, from the form data. */
+  let scanImages = $state('off');
   let error = $state<ApiError | null>(null);
 
   async function loadForm(selectId?: number) {
     const f = await serversUi.form();
     keys = f.keys;
     if (!name) name = f.name;
+    scanImages = f.scan_images ?? 'off';
     const pick = selectId ?? keys[0]?.id;
     privateKeyId = pick === undefined ? '' : String(pick);
   }
@@ -75,6 +79,7 @@
         user,
         port: port === '' ? null : Number(port),
         server_role: serverRole,
+        scan_images: scanImages,
       });
       router.go(`/server/${uuid}`);
     } catch (err) {
@@ -302,6 +307,7 @@
                 {/if}
               </div>
             </SettingsSection>
+            <NewServerImageScanning bind:value={scanImages} />
           </form>
         </div>
       </div>

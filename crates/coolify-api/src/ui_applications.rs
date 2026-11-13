@@ -24,9 +24,11 @@ use coolify_domain::grants::AccessLevel;
 
 pub mod compose;
 mod general;
+pub mod image_scan_gate;
 pub mod private_git;
 pub mod public_git;
 pub mod source;
+pub mod source_host_keys;
 
 const NOT_FOUND: ApiError = ApiError::Message(StatusCode::NOT_FOUND, "Application not found.");
 
@@ -431,7 +433,10 @@ pub async fn state(
         }
         _ => false,
     };
+    // `Heading::imageScanGate()`: the badge of a blocked or unscanned latest deployment.
+    let image_scan_gate = image_scan_gate::heading_gate(&state, &fresh).await;
     Ok(ok(json!({
+        "image_scan_gate": image_scan_gate,
         "source_is_public": source_is_public,
         "has_build_servers": build.0,
         "build_server_fallback": build.1,
@@ -579,6 +584,8 @@ fn deployment_source(d: &apps::Deployment) -> &'static str {
         "webhook"
     } else if d.bool("rollback") {
         "rollback"
+    } else if d.bool("is_mcp") {
+        "mcp"
     } else if d.bool("is_api") {
         "api"
     } else {
@@ -661,6 +668,7 @@ pub async fn deployments(
                         "webhook" | "webhooks" => d.bool("is_webhook"),
                         "rollback" | "rollbacks" => d.bool("rollback"),
                         "api" => d.bool("is_api"),
+                        "mcp" => d.bool("is_mcp"),
                         "manual" => deployment_source(d) == "manual",
                         _ => false,
                     }
@@ -690,12 +698,15 @@ pub async fn deployments(
                 "commit_message": d.str("commit_message"),
                 "is_webhook": d.bool("is_webhook"),
                 "is_api": d.bool("is_api"),
+                "is_mcp": d.bool("is_mcp"),
                 "rollback": d.bool("rollback"),
                 "pull_request_id": d.int("pull_request_id").unwrap_or(0),
                 "server_id": d.int("server_id"),
                 "server_name": d.str("server_name"),
                 "created_at": d.str("created_at"),
                 "finished_at": d.str("finished_at"),
+                // `isImageScanBlocked()`: the row reads "Blocked" (deployment/index.blade.php).
+                "image_scan_blocked": image_scan_gate::is_blocked(&image_scan_gate::gate_result(d)),
             })
         })
         .collect();
@@ -715,6 +726,7 @@ pub async fn deployments(
         ("pull-request", "Pull requests"),
         ("webhook", "Webhooks"),
         ("api", "API"),
+        ("mcp", "MCP"),
         ("rollback", "Rollbacks"),
     ]
     .iter()
@@ -818,6 +830,15 @@ pub async fn deployment(
         return Err(ApiError::Unauthorized);
     }
     let debug = all || (ctx.can_app(AccessLevel::Write, &a) && a.setting_bool("is_debug_enabled"));
+    // `getHostKeyChangedSourceUrlProperty()`: a git command failed because the Git host sent
+    // another SSH host key. Only failed deployments are checked, so the logs are not searched on
+    // each poll of a running deployment.
+    let host_key_changed = d.status == "failed"
+        && d.str("logs").is_some_and(|logs| {
+            logs.contains(coolify_jobs::applications::git_ssh::GIT_HOST_KEY_CHANGED_HINT)
+        });
+    // `getImageScanGateProperty()`: the "Blocked" status label and the gate popover.
+    let image_scan_gate = image_scan_gate::gate(&state, &ctx, &a, &d).await;
     Ok(ok(json!({
         "deployment_uuid": d.uuid,
         "status": d.status,
@@ -826,8 +847,10 @@ pub async fn deployment(
         "created_at": d.str("created_at"),
         "finished_at": d.str("finished_at"),
         "is_keep_alive": !matches!(d.status.as_str(), "finished" | "failed"),
+        "host_key_changed": host_key_changed,
         "debug": debug,
         "lines": log_lines(d.str("logs"), debug),
+        "image_scan_gate": image_scan_gate,
     }))
     .into_response())
 }
@@ -1323,9 +1346,18 @@ pub async fn update(
         &state,
         apps::MORPH,
         a.id,
-        previous_dns_hostnames,
+        previous_dns_hostnames.clone(),
         a.team_id,
     );
+    // v4.7.5 `General::submit`: `ResourceDnsRecords::queueAutomaticRecords()` for the hostnames
+    // this save added.
+    crate::routes::dns_records::queue_automatic_records(
+        &state,
+        crate::routes::dns_records::Kind::Application,
+        a.id,
+        &previous_dns_hostnames,
+    )
+    .await;
     // Validates a changed Compose path before it counts, and puts the old values back on failure.
     let form_pack = m
         .get("build_pack")

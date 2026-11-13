@@ -23,6 +23,9 @@ use crate::response::{ApiError, ApiResult, ok};
 use crate::state::AppState;
 use crate::ui_shared::{self, Res};
 
+/// `name, bucket, team_id, type` of the storage of an execution replica.
+type ReplicaRow = (Option<String>, Option<String>, Option<i64>, Option<String>);
+
 const SCHEDULE_NOT_FOUND: ApiError =
     ApiError::Message(StatusCode::NOT_FOUND, "Backup schedule not found.");
 const INCORRECT_PASSWORD: ApiError = ApiError::Message(
@@ -240,8 +243,9 @@ async fn s3_rows(
     pivot: &str,
     pivot_key: &str,
 ) -> Result<Vec<Value>, ApiError> {
-    let rows: Vec<(String, String, i64)> = sqlx::query_as(&format!(
-        "SELECT s.name::text, s.bucket::text, s.team_id FROM {pivot} p JOIN s3_storages s ON s.id = p.s3_storage_id WHERE p.{pivot_key} = $1 ORDER BY s.name"
+    // Storages that are not S3 have no bucket (v4.7.0); their tooltip names the type.
+    let rows: Vec<(String, Option<String>, i64, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT s.name::text, s.bucket::text, s.team_id, s.type::text FROM {pivot} p JOIN s3_storages s ON s.id = p.s3_storage_id WHERE p.{pivot_key} = $1 ORDER BY s.name"
     ))
     .bind(parts::id_of(backup))
     .fetch_all(state.db.pool())
@@ -254,13 +258,27 @@ async fn s3_rows(
     {
         rows.push((
             str_of(&r, "name").to_owned(),
-            str_of(&r, "bucket").to_owned(),
+            r.get("bucket").and_then(Value::as_str).map(str::to_owned),
             r.get("team_id").and_then(Value::as_i64).unwrap_or(-1),
+            r.get("type").and_then(Value::as_str).map(str::to_owned),
         ));
     }
     Ok(rows
         .into_iter()
-        .map(|(name, bucket, team_id)| json!({"name": name, "bucket": bucket, "team_id": team_id}))
+        .map(|(name, bucket, team_id, kind)| {
+            use coolify_jobs::databases::storage_type::BackupStorageType;
+            let kind = kind
+                .as_deref()
+                .and_then(BackupStorageType::parse)
+                .unwrap_or(BackupStorageType::S3);
+            json!({
+                "name": name,
+                "bucket": bucket,
+                "team_id": team_id,
+                "type": kind.value(),
+                "type_label": kind.label(),
+            })
+        })
         .collect())
 }
 
@@ -841,6 +859,18 @@ async fn persist(
     target: &BackupTarget,
     settings: &Settings,
 ) -> Result<coolify_db::records::Record, ApiError> {
+    // A storage that is not a destination of the schedule yet needs write access on the whole
+    // team (`$this->authorize('useTeamCredentials', $this->resource)`).
+    if !vb::new_storage_ids(&state.db, Some(b), &settings.storage_ids)
+        .await?
+        .is_empty()
+        && !ctx.can_use_team_credentials()
+    {
+        return Err(ApiError::Message(
+            StatusCode::FORBIDDEN,
+            "This action is unauthorized.",
+        ));
+    }
     let now = state.now();
     let v = &settings.values;
     let target_id = parts::id_of(&target.row);
@@ -1430,17 +1460,35 @@ async fn service_executions(
     .map_err(coolify_db::DbError::from)?;
     let last_page = ((total + per_page - 1) / per_page).max(1);
     page = page.min(last_page);
-    let rows: Vec<(i64, String)> = sqlx::query_as(
+    // `sortExecutions()`: a column of `SORT_COLUMNS` and a direction, else the newest first.
+    let sort_by = q
+        .get("sort")
+        .and_then(|s| execution_sort(s).map(|_| s.as_str()))
+        .unwrap_or("started_desc");
+    let (sort_column, sort_direction) = execution_sort(sort_by).unwrap_or(("created_at", "DESC"));
+    let rows: Vec<(i64, String)> = sqlx::query_as(&format!(
         "SELECT id, type FROM (
-           SELECT id, created_at, 'database' AS type FROM scheduled_database_backup_executions WHERE scheduled_database_backup_id = ANY($1)
+           SELECT e.id, e.created_at, e.status::text AS status, 'database' AS type,
+             CAST(NULLIF(e.size::text, '') AS BIGINT) AS sort_size,
+             (SELECT LOWER(COALESCE(NULLIF(sd.human_name, ''), sd.name)) FROM scheduled_database_backups b JOIN service_databases sd ON sd.id = b.database_id WHERE b.id = e.scheduled_database_backup_id) AS sort_target,
+             'Database' AS sort_type,
+             (SELECT b.frequency::text FROM scheduled_database_backups b WHERE b.id = e.scheduled_database_backup_id) AS sort_schedule
+           FROM scheduled_database_backup_executions e WHERE e.scheduled_database_backup_id = ANY($1)
            UNION ALL
-           SELECT id, created_at, 'storage' AS type FROM scheduled_volume_backup_executions WHERE scheduled_volume_backup_id = ANY($2)
-         ) x ORDER BY created_at DESC, id DESC, type ASC LIMIT $3 OFFSET $4",
-    )
+           SELECT e.id, e.created_at, e.status::text AS status, 'storage' AS type,
+             e.size::bigint AS sort_size,
+             (SELECT LOWER(COALESCE((SELECT v.fs_path::text FROM local_file_volumes v WHERE v.id = b.backupable_id AND b.backupable_type = $5), (SELECT v.name::text FROM local_persistent_volumes v WHERE v.id = b.backupable_id AND b.backupable_type = $6))) FROM scheduled_volume_backups b WHERE b.id = e.scheduled_volume_backup_id) AS sort_target,
+             (SELECT CASE WHEN b.backupable_type = $5 THEN 'Directory' ELSE 'Volume' END FROM scheduled_volume_backups b WHERE b.id = e.scheduled_volume_backup_id) AS sort_type,
+             (SELECT b.frequency::text FROM scheduled_volume_backups b WHERE b.id = e.scheduled_volume_backup_id) AS sort_schedule
+           FROM scheduled_volume_backup_executions e WHERE e.scheduled_volume_backup_id = ANY($2)
+         ) x ORDER BY {sort_column} {sort_direction}, created_at DESC, id DESC, type ASC LIMIT $3 OFFSET $4"
+    ))
     .bind(&database_ids)
     .bind(&volume_ids)
     .bind(per_page)
     .bind((page - 1) * per_page)
+    .bind(parts::LOCAL_FILE_VOLUME_MORPH)
+    .bind(parts::LOCAL_PERSISTENT_VOLUME_MORPH)
     .fetch_all(db.pool())
     .await
     .map_err(coolify_db::DbError::from)?;
@@ -1465,7 +1513,7 @@ async fn service_executions(
             continue;
         };
         let status = str_of(&row, "status").to_owned();
-        let (target, type_label, schedule, storage_label) = if is_database {
+        let (target, type_label, schedule) = if is_database {
             let schedule_id = row
                 .get("scheduled_database_backup_id")
                 .and_then(Value::as_i64)
@@ -1474,24 +1522,10 @@ async fn service_executions(
                 .get(&schedule_id)
                 .cloned()
                 .unwrap_or_default();
-            let save = b.get("save_s3").and_then(Value::as_bool) == Some(true);
-            let names = s3_rows(
-                &state,
-                &b,
-                "scheduled_database_backup_s3_storage",
-                "scheduled_database_backup_id",
-            )
-            .await?;
-            let text = storages_text(&names, res.team_id);
             (
                 label,
                 "Database".to_owned(),
                 str_of(&b, "frequency").to_owned(),
-                if save {
-                    text
-                } else {
-                    "Not configured".to_owned()
-                },
             )
         } else {
             let schedule_id = row
@@ -1505,22 +1539,24 @@ async fn service_executions(
                 .unwrap_or_default();
             let target = vb::target_of(db, &b).await?;
             let (t, n) = target_labels(target.as_ref());
-            let s3_id = row.get("s3_storage_id").and_then(Value::as_i64);
-            let uploaded = row.get("s3_uploaded").and_then(Value::as_bool) == Some(true);
-            let deleted = row.get("s3_storage_deleted").and_then(Value::as_bool) == Some(true);
-            let label = if s3_id.is_none() && !uploaded && !deleted {
-                "No destination recorded".to_owned()
-            } else {
-                let mut names = Vec::new();
-                if let Some(id) = s3_id
-                    && let Some(r) = parts::s3_by_id(db, id).await?
-                {
-                    names.push(json!({"name": r.get("name"), "bucket": r.get("bucket"), "team_id": r.get("team_id")}));
-                }
-                storages_text(&names, res.team_id)
-            };
-            (n, t.to_owned(), str_of(&b, "frequency").to_owned(), label)
+            (n, t.to_owned(), str_of(&b, "frequency").to_owned())
         };
+        // The storages that this run was sent to (`$execution->s3Replicas`), not the storages of
+        // the schedule now. A run without a replica has no S3 badge.
+        let replicas: Vec<ReplicaRow> =
+            sqlx::query_as(&format!(
+                "SELECT s.name::text, s.bucket::text, s.team_id, s.type::text FROM {} r LEFT JOIN s3_storages s ON s.id = r.s3_storage_id WHERE r.execution_id = $1 ORDER BY r.id",
+                if is_database {
+                    "database_backup_s3_replicas"
+                } else {
+                    "volume_backup_s3_replicas"
+                }
+            ))
+            .bind(id)
+            .fetch_all(db.pool())
+            .await
+            .map_err(coolify_db::DbError::from)?;
+        let s3_storages = replica_storages_text(&replicas, res.team_id);
         // `isDownloadable()`
         let downloadable = status == "success"
             && (row.get("local_storage_deleted").and_then(Value::as_bool) != Some(true)
@@ -1532,7 +1568,7 @@ async fn service_executions(
             "target": target,
             "type": type_label,
             "schedule": schedule,
-            "s3_tooltip": format!("{}{storage_label}", if is_database { "Current schedule S3 storage: " } else { "S3 storage: " }),
+            "s3_tooltip": (!s3_storages.is_empty()).then(|| format!("S3 storage: {s3_storages}")),
             "status": status,
             "started_at": row.get("created_at"),
             "size": row.get("size"),
@@ -1554,29 +1590,56 @@ async fn service_executions(
         "per_page": per_page,
         "last_page": last_page,
         "server_timezone": timezone,
+        "sort": sort_by,
         "s3_downloads": crate::ui_database_backups::s3_downloads_enabled(&state).await,
     }))
     .into_response())
 }
 
-/// The storages of the service's team, as `name (bucket: x)`.
-fn storages_text(rows: &[Value], team_id: i64) -> String {
-    let names: Vec<String> = rows
+/// `BackupExecutions::SORT_COLUMNS` with the direction of a `sortBy` value such as `size_desc`.
+fn execution_sort(sort_by: &str) -> Option<(&'static str, &'static str)> {
+    let (column, direction) = sort_by.split_once('_')?;
+    let column = match column {
+        "target" => "sort_target",
+        "type" => "sort_type",
+        "schedule" => "sort_schedule",
+        "status" => "status",
+        "started" => "created_at",
+        "size" => "sort_size",
+        _ => return None,
+    };
+    let direction = match direction {
+        "asc" => "ASC",
+        "desc" => "DESC",
+        _ => return None,
+    };
+    Some((column, direction))
+}
+
+/// The storages of the replicas of an execution: `name (bucket: x)` for an S3 storage of the
+/// service's team, `name (SFTP)` for another type, `Unavailable` for a storage that is gone or
+/// belongs to another team. Rows are `(name, bucket, team_id, type)`.
+fn replica_storages_text(replicas: &[ReplicaRow], team_id: i64) -> String {
+    use coolify_jobs::databases::storage_type::BackupStorageType;
+    replicas
         .iter()
-        .filter(|r| r.get("team_id").and_then(Value::as_i64) == Some(team_id))
-        .map(|r| {
-            format!(
-                "{} (bucket: {})",
-                r.get("name").and_then(Value::as_str).unwrap_or_default(),
-                r.get("bucket").and_then(Value::as_str).unwrap_or_default()
-            )
+        .map(|(name, bucket, team, kind)| {
+            if *team != Some(team_id) {
+                return "Unavailable".to_owned();
+            }
+            let kind = kind
+                .as_deref()
+                .and_then(BackupStorageType::parse)
+                .unwrap_or(BackupStorageType::S3);
+            let detail = if kind == BackupStorageType::S3 {
+                format!("bucket: {}", bucket.as_deref().unwrap_or_default())
+            } else {
+                kind.label().to_owned()
+            };
+            format!("{} ({detail})", name.as_deref().unwrap_or_default())
         })
-        .collect();
-    if names.is_empty() {
-        "Unavailable".to_owned()
-    } else {
-        names.join(", ")
-    }
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// `Service/ImportBackup::mount`: the databases that take an import (`supportsImport`).
@@ -1605,4 +1668,45 @@ async fn service_import_databases(
         }
     }
     Ok(ok(json!({"databases": out})).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn executions_sort_by_a_known_column_only() {
+        assert_eq!(execution_sort("started_desc"), Some(("created_at", "DESC")));
+        assert_eq!(execution_sort("size_asc"), Some(("sort_size", "ASC")));
+        assert_eq!(execution_sort("target_desc"), Some(("sort_target", "DESC")));
+        assert_eq!(execution_sort("id_desc"), None);
+        assert_eq!(execution_sort("size_up"), None);
+        assert_eq!(execution_sort("size"), None);
+        assert_eq!(execution_sort("size_desc; DROP TABLE x"), None);
+    }
+
+    #[test]
+    fn the_s3_tooltip_names_the_storages_of_the_run() {
+        let row = |name: &str, bucket: Option<&str>, team: Option<i64>, kind: &str| {
+            (
+                Some(name.to_owned()),
+                bucket.map(str::to_owned),
+                team,
+                Some(kind.to_owned()),
+            )
+        };
+        assert_eq!(
+            replica_storages_text(
+                &[
+                    row("Primary", Some("backups"), Some(1), "s3"),
+                    row("Offsite", None, Some(1), "sftp"),
+                    row("Other team", Some("x"), Some(2), "s3"),
+                    (None, None, None, None),
+                ],
+                1
+            ),
+            "Primary (bucket: backups), Offsite (SFTP), Unavailable, Unavailable"
+        );
+        assert_eq!(replica_storages_text(&[], 1), "");
+    }
 }

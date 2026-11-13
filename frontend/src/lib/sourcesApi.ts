@@ -57,9 +57,11 @@ export interface GithubSource {
   contents: string | null;
   metadata: string | null;
   pull_requests: string | null;
+  deployments: string | null;
   organization_self_hosted_runners: string | null;
   actions: string | null;
   webhook_events: string[] | null;
+  missing_deployment_requirements: string[];
   missing_runner_requirements: string[];
   has_app_id: boolean;
   has_installation: boolean;

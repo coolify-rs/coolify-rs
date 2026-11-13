@@ -12,8 +12,8 @@
   import SecurityLayout from '../components/SecurityLayout.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
   import KeyForm from '../components/KeyForm.svelte';
-  import { api, keysUi, ApiError, type KeysPageData, type PrivateKey } from '../lib/api';
-  import { session } from '../lib/session.svelte';
+  import { api, keysUi, ApiError, type KeysPageData } from '../lib/api';
+  import { privateKeyUi, type PrivateKeyEditor } from '../lib/privateKeyApi';
   import { notify } from '../lib/toast.svelte';
 
   let data = $state<KeysPageData | null>(null);
@@ -21,7 +21,7 @@
   let menuRoot: HTMLDivElement | undefined = $state();
   let cleaning = $state(false);
   let editing = $state<{ uuid: string; name: string; description: string } | null>(null);
-  let editingKey = $state<(PrivateKey & { private_key?: string }) | null>(null);
+  let editingKey = $state<PrivateKeyEditor | null>(null);
 
   // Add manually.
   // GlobalSearch's `open-create-modal-private-key` arrives as `?create=1`.
@@ -30,6 +30,7 @@
   let newDescription = $state('');
   let newValue = $state('');
   let newPublic = $state('');
+  let newValueError = $state('');
   let addError = $state<ApiError | null>(null);
   let addBusy = $state(false);
 
@@ -59,7 +60,7 @@
     editing = { uuid: k.uuid, name: k.name, description: k.description ?? '' };
     editingKey = null;
     try {
-      editingKey = await api.get<PrivateKey & { private_key?: string }>(`/security/keys/${encodeURIComponent(k.uuid)}`);
+      editingKey = await privateKeyUi.show(k.uuid);
     } catch (e) {
       notify.error(e instanceof ApiError ? e.message : String(e));
       editing = null;
@@ -70,7 +71,10 @@
   function onValueInput() {
     clearTimeout(inspectTimer);
     inspectTimer = setTimeout(async () => {
-      newPublic = newValue.trim() ? ((await keysUi.inspect(newValue).catch(() => null))?.public_key ?? '') : '';
+      // `Create::validatePrivateKey()`: the public key, or why the key cannot be used.
+      const inspected = newValue.trim() ? await keysUi.inspect(newValue).catch(() => null) : null;
+      newPublic = inspected?.public_key ?? '';
+      newValueError = inspected?.error ?? '';
     }, 200);
   }
 
@@ -137,7 +141,7 @@
                   onclick={() => {
                     menuOpen = false;
                     adding = true;
-                    newName = newDescription = newValue = newPublic = '';
+                    newName = newDescription = newValue = newPublic = newValueError = '';
                     addError = null;
                   }}
                   class="listbox-option justify-start! gap-2.5!"
@@ -230,9 +234,6 @@
     {#if editingKey}
       <KeyForm
         key={editingKey}
-        inUse={data?.keys.find((k) => k.uuid === editing?.uuid)?.in_use ?? false}
-        canEdit={session.isAdmin}
-        modalMode
         onsaved={() => ((editing = null), load())}
         ondeleted={() => ((editing = null), load())}
       />
@@ -264,7 +265,7 @@
               required
               bind:value={newValue}
               oninput={onValueInput}
-              error={addError?.field('private_key')}
+              error={addError?.field('private_key') || newValueError || undefined}
             />
           </div>
           <div class="lg:col-span-2">

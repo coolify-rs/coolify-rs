@@ -36,6 +36,8 @@ const KEEP_DAYS: i64 = 60;
 const DELETE_BATCH_SIZE: i64 = 1000;
 /// `CleanupDatabaseImportUploads::MAX_AGE_HOURS`.
 const IMPORT_UPLOAD_MAX_AGE_HOURS: u64 = 24;
+/// `chunk-upload.clear.timestamp` (`-1 HOURS`): unfinished uploads and chunks untouched this long.
+const UPLOAD_TMP_MAX_AGE_SECS: u64 = 3600;
 
 /// What a schedule entry runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,6 +131,7 @@ pub fn schedule(
         job,
     };
     vec![
+        // No `cleanup:ssh-keys` (`CleanupUnusedSshKeys`): coolify-rs writes each key to a temporary file that is removed after the SSH command, so no `ssh_key@<uuid>` files are left to clean up.
         entry(
             "cleanup:scheduled-job-occurrences",
             "0 4 * * *",
@@ -305,6 +308,7 @@ pub async fn run_job(jobs: &Jobs, job: KernelJob, now: DateTime<Utc>) -> Result<
             .map_err(|e| e.to_string()),
         KernelJob::CleanupDatabaseImportUploads => {
             cleanup_database_import_uploads(&data_dir());
+            cleanup_upload_tmp(&data_dir());
             Ok(())
         }
         KernelJob::ReleaseOrphanedDnsRecords => {
@@ -410,9 +414,15 @@ async fn cleanup_database(db: &Db) -> Result<(), String> {
     )
     .await
     .map_err(text)?;
-    queries::delete_old_sessions(db, keep.and_utc().timestamp(), DELETE_BATCH_SIZE)
-        .await
-        .map_err(text)?;
+    // A session older than its lifetime can no longer be used, so it is not kept for the
+    // retention days.
+    queries::delete_old_sessions(
+        db,
+        session_cutoff(now, session_lifetime_minutes()),
+        DELETE_BATCH_SIZE,
+    )
+    .await
+    .map_err(text)?;
     for table in [
         "activity_log",
         "application_deployment_queues",
@@ -432,10 +442,28 @@ async fn cleanup_database(db: &Db) -> Result<(), String> {
     )
     .await
     .map_err(text)?;
+    queries::delete_old_failed_backup_executions(db, keep, DELETE_BATCH_SIZE)
+        .await
+        .map_err(text)?;
     queries::delete_finished_runner_executions(db, keep, DELETE_BATCH_SIZE)
         .await
         .map_err(text)?;
     Ok(())
+}
+
+/// `config('session.lifetime')`: `SESSION_LIFETIME` in minutes, 10080 (seven days) when unset.
+fn session_lifetime_minutes() -> i64 {
+    std::env::var("SESSION_LIFETIME")
+        .ok()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .unwrap_or(10080)
+}
+
+/// `now()->subMinutes($lifetime)->timestamp`: sessions last active before it are deleted.
+fn session_cutoff(now: chrono::NaiveDateTime, lifetime_minutes: i64) -> i64 {
+    (now - chrono::Duration::minutes(lifetime_minutes))
+        .and_utc()
+        .timestamp()
 }
 
 /// `ReleaseOrphanedManagedDnsRecords::handle` (`dns:release-orphaned-records`).
@@ -506,6 +534,29 @@ pub fn cleanup_database_import_uploads(data_dir: &std::path::Path) -> usize {
             let _ = std::fs::remove_dir(&database);
         }
         let _ = std::fs::remove_dir(&team);
+    }
+    deleted
+}
+
+/// Removes the files in `upload-tmp` (chunks being
+/// received and `<upload_id>.part` of unfinished uploads) that were not written to for an hour.
+/// An upload in progress writes its file with every chunk.
+pub fn cleanup_upload_tmp(data_dir: &std::path::Path) -> usize {
+    let cutoff = std::time::SystemTime::now() - Duration::from_secs(UPLOAD_TMP_MAX_AGE_SECS);
+    let Ok(entries) = std::fs::read_dir(data_dir.join("upload-tmp")) else {
+        return 0;
+    };
+    let mut deleted = 0;
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if meta.is_file()
+            && meta.modified().is_ok_and(|t| t < cutoff)
+            && std::fs::remove_file(entry.path()).is_ok()
+        {
+            deleted += 1;
+        }
     }
     deleted
 }
@@ -1186,5 +1237,49 @@ mod tests {
         assert!(!old.exists());
         assert!(!dir.join("upload/imports/2").exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn only_stale_unfinished_uploads_are_removed() {
+        let dir = std::env::temp_dir().join(format!(
+            "coolify-upload-tmp-{}",
+            coolify_domain::new_public_id()
+        ));
+        let tmp = dir.join("upload-tmp");
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("fresh.part"), "x").unwrap();
+        let old = tmp.join("old.part");
+        std::fs::write(&old, "x").unwrap();
+        let past = std::time::SystemTime::now() - Duration::from_secs(2 * 3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
+        assert_eq!(cleanup_upload_tmp(&dir), 1);
+        assert!(tmp.join("fresh.part").exists());
+        assert!(!old.exists());
+        // No directory, nothing to do.
+        assert_eq!(cleanup_upload_tmp(&dir.join("missing")), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `cleanup:database` drops sessions by their lifetime, not by the retention days.
+    #[test]
+    fn sessions_expire_after_the_session_lifetime() {
+        let now = at(12, 0).naive_utc();
+        // The default lifetime is seven days.
+        assert_eq!(
+            session_cutoff(now, 10080),
+            Utc.with_ymd_and_hms(2026, 9, 24, 12, 0, 0)
+                .unwrap()
+                .timestamp()
+        );
+        assert_eq!(
+            session_cutoff(now, 120),
+            at(10, 0).timestamp(),
+            "SESSION_LIFETIME=120"
+        );
     }
 }

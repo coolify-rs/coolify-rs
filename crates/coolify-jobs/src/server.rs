@@ -24,6 +24,8 @@ pub struct ServerInfo {
     pub private_key_id: Option<i64>,
     pub settings: Record,
     pub transferred: bool,
+    /// `servers.unreachable_count`: commands do not scan the host key of an unreachable server.
+    pub unreachable_count: i64,
 }
 
 pub fn str_of(r: &Record, k: &str) -> String {
@@ -60,6 +62,10 @@ impl ServerInfo {
                 .and_then(|m| m.pointer("/transfer/status"))
                 .and_then(Value::as_str)
                 == Some("transferred"),
+            unreachable_count: r
+                .get("unreachable_count")
+                .and_then(Value::as_i64)
+                .unwrap_or(0),
         }
     }
 
@@ -81,6 +87,20 @@ impl ServerInfo {
 
     pub fn has_placeholder_ip(&self) -> bool {
         self.ip.is_empty() || PLACEHOLDER_IPS.contains(&self.ip.as_str())
+    }
+
+    /// `canBeReEnabled()` (v4.7.5): on self-hosted, only the unreachable cleanup disables a
+    /// server, so a working connection can enable it again. A transferred server stays an
+    /// archive. (coolify-rs is never Coolify Cloud, where the flag enforces the plan limit.)
+    pub fn can_be_re_enabled(&self) -> bool {
+        self.setting_bool("force_disabled") == Some(true) && !self.transferred
+    }
+
+    /// The server as `forceEnableServer()` leaves it in memory.
+    pub fn force_enabled(mut self) -> Self {
+        self.settings
+            .insert("force_disabled".into(), Value::Bool(false));
+        self
     }
 
     /// `skipServer()`.
@@ -114,8 +134,18 @@ impl ServerInfo {
         self.settings.get("docker_version").and_then(Value::as_str)
     }
 
-    /// `PrivateKey::where('team_id', $server->team_id)->findOrFail($server->private_key_id)`, decrypted.
+    /// The target of a command on the server, with the host key check of
+    /// `SshMultiplexingHelper::hostKeyOptions()`: the saved host key settings are read again, and
+    /// the host key is learned on the first connection.
     pub async fn target(&self, jobs: &Jobs) -> Result<Target, String> {
+        let mut target = self.bare_target(jobs).await?;
+        target.host_key = crate::server_ops::host_key::options(jobs, self, &target).await?;
+        Ok(target)
+    }
+
+    /// The target without a host key check, as the host key scan uses it.
+    /// `PrivateKey::where('team_id', $server->team_id)->findOrFail($server->private_key_id)`, decrypted.
+    pub async fn bare_target(&self, jobs: &Jobs) -> Result<Target, String> {
         let key_id = self.private_key_id.unwrap_or_default();
         let key = private_keys::find_by_id(&jobs.0.db, self.team_id, key_id)
             .await
@@ -143,6 +173,7 @@ impl ServerInfo {
                 .and_then(Value::as_i64),
             cloudflare_tunnel: self.setting_bool("is_cloudflare_tunnel") == Some(true),
             force_disabled: self.setting_bool("force_disabled") == Some(true),
+            host_key: coolify_remote::HostKeyCheck::Off,
         })
     }
 }

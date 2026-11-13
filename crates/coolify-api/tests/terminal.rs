@@ -75,7 +75,7 @@ async fn fixture() -> Fixture {
             "POST",
             "/api/v1/security/keys",
             Some(W),
-            Some(json!({"name": "k", "private_key": pem})),
+            Some(json!({"name": "key", "private_key": pem})),
         )
         .await;
     assert_eq!(r.status, 201, "{}", r.body);
@@ -137,7 +137,8 @@ async fn open(f: &Fixture, cookie: Option<&str>, origin: Option<&str>) -> Socket
     tokio_tungstenite::connect_async(req).await.unwrap().0
 }
 
-/// The next text frame, or how the socket closed as `close:<code>:<reason>`.
+/// The next frame as text (PTY output comes in binary frames, control messages in text frames),
+/// or how the socket closed as `close:<code>:<reason>`.
 async fn next(ws: &mut Socket) -> String {
     loop {
         let frame = tokio::time::timeout(Duration::from_secs(15), ws.next())
@@ -145,7 +146,7 @@ async fn next(ws: &mut Socket) -> String {
             .expect("a frame in time");
         match frame {
             Some(Ok(Message::Text(t))) => return t.to_string(),
-            Some(Ok(Message::Binary(b))) => return format!("binary:{}", b.len()),
+            Some(Ok(Message::Binary(b))) => return String::from_utf8_lossy(&b).into_owned(),
             Some(Ok(Message::Close(Some(c)))) => {
                 return format!("close:{}:{}", u16::from(c.code), c.reason);
             }
@@ -253,8 +254,9 @@ async fn a_session_runs_the_command_of_the_server() {
     send(&mut ws, json!({"pause": true})).await;
     send(&mut ws, json!({"ping": true})).await;
     assert_eq!(next(&mut ws).await, "pong");
+    // v4.7.5: `String(session.isActive)` in a text frame.
     send(&mut ws, json!({"checkActive": "check"})).await;
-    assert_eq!(next(&mut ws).await, "binary:0");
+    assert_eq!(next(&mut ws).await, "false");
 
     let answer = token(&f, &f.alice, None).await;
     assert_eq!(answer["ok"], true, "{answer}");
@@ -265,7 +267,7 @@ async fn a_session_runs_the_command_of_the_server() {
     until(&mut ws, "READY").await;
 
     send(&mut ws, json!({"checkActive": "check"})).await;
-    assert_eq!(next(&mut ws).await, "binary:0");
+    until(&mut ws, "true").await;
     send(&mut ws, json!({"message": "hello\r"})).await;
     until(&mut ws, "GOT:hello").await;
     send(&mut ws, json!({"resize": {"cols": 101, "rows": 37}})).await;
@@ -285,7 +287,25 @@ async fn a_session_runs_the_command_of_the_server() {
     send(&mut ws, json!({"message": "exit\r"})).await;
     until(&mut ws, "pty-exited").await;
     send(&mut ws, json!({"checkActive": "force"})).await;
-    assert_eq!(next(&mut ws).await, "binary:0");
+    assert_eq!(next(&mut ws).await, "false");
+    // `terminal.session.started` and `terminal.session.ended` (reason `exited`) are recorded.
+    let mut recorded: Vec<String> = Vec::new();
+    for _ in 0..50 {
+        recorded = sqlx::query_scalar(
+            "SELECT event::text FROM audit_events WHERE event LIKE 'terminal.session.%' ORDER BY id",
+        )
+        .fetch_all(f.h.tdb.db.pool())
+        .await
+        .unwrap();
+        if recorded.len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        recorded,
+        ["terminal.session.started", "terminal.session.ended"]
+    );
 
     // The process got exactly what the service builds, in a TTY.
     let args = std::fs::read_to_string(f.log.join("tty-args")).unwrap();

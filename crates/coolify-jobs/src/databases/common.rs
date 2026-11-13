@@ -4,6 +4,7 @@
 use chrono::{NaiveDateTime, Utc};
 
 use crate::Jobs;
+use crate::image_scan::update::image_start_pin::{self, Pins};
 use crate::server::ServerInfo;
 
 /// `database_configuration_dir()` with upstream's default base path.
@@ -84,6 +85,24 @@ pub(crate) fn docker_stop_command(
         format!("--time={timeout}")
     };
     format!("docker stop {flag} {container}")
+}
+
+/// `ExecutesDatabaseStartCommands::pullImageCommands($composeFile)`: the image pull of the start:
+/// the scanned build of a "Pull latest" security update when one waits for this database (the
+/// compose file keeps the tag), else a pull of the configured image. `pins` are
+/// `ImageStartPin::for(ImageStartPin::take($database), [$database->image])`
+/// ([`StartContext::start_pins`](super::StartContext::start_pins)).
+pub(crate) fn pull_image_commands(
+    compose_file: &str,
+    server: &ServerInfo,
+    pins: &Pins,
+) -> Vec<String> {
+    let prefix = server_docker_config_prefix(server);
+    if pins.is_empty() {
+        vec![format!("{prefix}docker compose -f {compose_file} pull")]
+    } else {
+        image_start_pin::commands(pins, prefix)
+    }
 }
 
 /// `serverDockerConfigPrefix`.
@@ -245,6 +264,7 @@ pub(crate) fn finish_commands(
     compose_yaml: &str,
     now: NaiveDateTime,
     extra: &[String],
+    pins: &Pins,
 ) {
     let name = d.uuid.as_str();
     let dir = format!("{CONFIGURATION_DIR}/{name}");
@@ -263,9 +283,10 @@ pub(crate) fn finish_commands(
             d.str("image").unwrap_or_default()
         ))
     ));
-    commands.push(format!(
-        "{}docker compose -f {dir}/docker-compose.yml pull",
-        server_docker_config_prefix(server)
+    commands.extend(pull_image_commands(
+        &format!("{dir}/docker-compose.yml"),
+        server,
+        pins,
     ));
     commands.extend(extra.iter().cloned());
     commands.push(format!(

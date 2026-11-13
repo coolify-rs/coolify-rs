@@ -46,6 +46,16 @@
     await load();
     showProviders = true;
   }
+  /**
+   * `dnsRecordConfigurationFinished` with a conflict: the record that blocked the automatic create
+   * shows in the provider modal, where the user can replace it.
+   */
+  export async function showConflict(hostname: string, zoneId: number, conflict: Conflict) {
+    conflicts[`${hostname.toLowerCase()}|${zoneId}`] = conflict;
+    await load();
+    showRecords = false;
+    showProviders = true;
+  }
   /** `openManualDnsRecords`. */
   async function manualRecords() {
     open = false;
@@ -227,13 +237,13 @@
             <div class="truncate font-medium text-black dark:text-fg">{p.hostname} → {p.target}</div>
             <div class="text-xs text-neutral-500 dark:text-fg-dim">{p.credential} · {p.zone}</div>
           </div>
-          {#if p.managed}
-            <span class="text-xs text-green-600">Managed by coolify-rs</span>
-          {:else if conflict}
+          {#if conflict}
             <div class="flex flex-col items-end gap-2 text-xs">
               <span class="text-red-600 dark:text-red-400">Currently {conflict.current}</span>
               <button type="button" class="button button-error" onclick={() => (replacing = p)}>Replace record</button>
             </div>
+          {:else if p.managed}
+            <span class="text-xs text-green-600">Managed by coolify-rs</span>
           {:else if !p.target}
             <span class="text-xs text-neutral-500 dark:text-fg-dim">Add manually</span>
           {:else if data.can_update}

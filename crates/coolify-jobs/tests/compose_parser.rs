@@ -11,6 +11,9 @@
 //! skip, and the submodule step inside the clone script). For 1a2a5362a the preview copies the
 //! `created` hook made of generated magic variables (`SERVICE_PASSWORD_*` and friends) of these
 //! compose applications were removed by hand: a compose preview now generates its own.
+//! For v4.7.5 the `load-*` commands got the `--` before the repository (`git ls-remote --`,
+//! `git clone ... -b <branch> --`) and the fluentd log driver options of `reference-settings` got
+//! the `labels` option, both by hand.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -26,8 +29,17 @@ const APP_KEY: &str = "base64:JgOyH5GGzVhKpVXBi9VwoVxVN2T8j3tfdGFmFzT0g5E=";
 
 const SEED: &str = "INSERT INTO instance_settings (id) VALUES (0);";
 
-fn insert_row(table: &str) -> String {
-    format!("INSERT INTO {table} SELECT * FROM json_populate_record(NULL::{table}, $1::json)")
+/// The captured rows are upstream v4.6.0 rows: columns added later are left out of the insert, so
+/// they get their database defaults (a NOT NULL column with a default would get NULL otherwise).
+fn insert_row(table: &str, row: &Value) -> String {
+    let cols: Vec<String> = row
+        .as_object()
+        .map(|o| o.keys().map(|k| format!("\"{k}\"")).collect())
+        .unwrap_or_default();
+    let cols = cols.join(", ");
+    format!(
+        "INSERT INTO {table} ({cols}) SELECT {cols} FROM json_populate_record(NULL::{table}, $1::json)"
+    )
 }
 
 async fn seed(db: &coolify_db::Db, enc: &Encrypter, ctx: &Value, before: &Value) -> i64 {
@@ -48,7 +60,18 @@ async fn seed(db: &coolify_db::Db, enc: &Encrypter, ctx: &Value, before: &Value)
                 json_texts.push((c, text));
             }
         }
-        sqlx::query(&insert_row(table))
+        // Columns the captured row has and the table no longer has are left out.
+        let table_columns: Vec<String> = sqlx::query_scalar(
+            "SELECT column_name::text FROM information_schema.columns WHERE table_name = $1 AND table_schema = current_schema()",
+        )
+        .bind(table)
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        if let Some(o) = row.as_object_mut() {
+            o.retain(|k, _| table_columns.contains(k));
+        }
+        sqlx::query(&insert_row(table, &row))
             .bind(row.to_string())
             .execute(pool)
             .await

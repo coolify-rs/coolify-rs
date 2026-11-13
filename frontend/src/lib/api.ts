@@ -186,6 +186,10 @@ export interface DashboardData {
   can_create: boolean;
   /** `Dashboard::$showsTeamSections`: false for a member limited to some projects. */
   shows_team_sections?: boolean;
+  /** `Dashboard::starredResources()`. */
+  starred_resources?: import('./starsApi.svelte').StarredResource[];
+  /** `Dashboard::$securityUpdateNow`: uuids of the resources that need a security update now. */
+  security_update_now?: string[];
 }
 
 export const uiApi = {
@@ -222,7 +226,7 @@ export const keysUi = {
   list: () => request<KeysPageData>('GET', '/ui/keys'),
   generate: (type: 'ed25519' | 'rsa') => request<{ uuid: string }>('POST', '/ui/keys/generate', { type }),
   cleanup: () => request<{ deleted: number }>('POST', '/ui/keys/cleanup', {}),
-  inspect: (privateKey: string) => request<{ public_key: string | null }>('POST', '/ui/keys/inspect', { private_key: privateKey }),
+  inspect: (privateKey: string) => request<{ public_key: string | null; error?: string | null }>('POST', '/ui/keys/inspect', { private_key: privateKey }),
 };
 
 /** `GET /ui/team` (coolify-rs read model for the team pages). */
@@ -271,6 +275,10 @@ export interface ServerFacts {
   status_type: 'success' | 'warning' | 'error';
   functional: boolean;
   transferred: boolean;
+  /** `$server->canBeReEnabled()`: disabled by the unreachable cleanup; a validation enables it again. */
+  can_be_re_enabled?: boolean;
+  /** A host key is pending: the server sent a key that is not the trusted key. */
+  ssh_host_key_changed?: boolean;
   transfer_target_url?: string | null;
   is_coolify_host: boolean;
   is_localhost: boolean;
@@ -335,7 +343,7 @@ export interface ValidationState {
 export const serversUi = {
   timezones: () => request<string[]>('GET', '/ui/timezones'),
   list: () => request<ServersPageData>('GET', '/ui/servers'),
-  form: () => request<{ keys: { id: number; name: string }[]; name: string }>('GET', '/ui/servers/form'),
+  form: () => request<{ keys: { id: number; name: string }[]; name: string; scan_images?: string }>('GET', '/ui/servers/form'),
   create: (body: Record<string, unknown>) => request<{ uuid: string }>('POST', '/ui/servers', body),
   validation: (uuid: string) => request<ValidationState>('GET', `/ui/servers/${encodeURIComponent(uuid)}/validation`),
   validate: (uuid: string) => request<{ started: boolean }>('POST', `/ui/servers/${encodeURIComponent(uuid)}/validation`),
@@ -454,6 +462,8 @@ export interface DestinationServer {
   ip: string;
   functional: boolean;
   is_build: boolean;
+  /** `Gate::allows('placeResource', $server)` (`ServerPolicy::placeResource`). */
+  can_place_resource: boolean;
   destinations: { uuid: string; name: string; network: string }[];
 }
 
@@ -488,6 +498,8 @@ export const dbUi = {
 
 /** What the application pages poll besides the record. */
 export interface ApplicationState {
+  /** `Heading::imageScanGate()`: a blocked or unscanned latest deployment. */
+  image_scan_gate?: { result: Record<string, unknown>; action: string | null; deployment_uuid: string } | null;
   can_update: boolean;
   can_deploy: boolean;
   running_deployment_url: string | null;
@@ -570,12 +582,16 @@ export interface DeploymentListItem {
   commit_message: string | null;
   is_webhook: boolean;
   is_api: boolean;
+  /** Queued by an MCP tool (upstream data; coolify-rs has no MCP server). */
+  is_mcp?: boolean;
   rollback: boolean;
   pull_request_id: number;
   server_id: number | null;
   server_name: string | null;
   created_at: string | null;
   finished_at: string | null;
+  /** `isImageScanBlocked()`: the image scan gate stopped this deployment. */
+  image_scan_blocked?: boolean;
 }
 
 export interface DeploymentFilterOption {
@@ -608,8 +624,12 @@ export interface DeploymentDetail {
   created_at: string | null;
   finished_at: string | null;
   is_keep_alive: boolean;
+  /** A git command failed because the Git host sent an SSH host key that is not the saved or published key. */
+  host_key_changed?: boolean;
   debug: boolean;
   lines: DeploymentLine[];
+  /** `getImageScanGateProperty()`: the image scan gate of a blocked or unscanned deployment. */
+  image_scan_gate?: { result: Record<string, unknown>; blocked: boolean; action: string | null; can_deploy_anyway: boolean } | null;
 }
 
 /** The answer of a deploy or restart: the deployment to open, or the toast upstream shows instead. */
@@ -676,6 +696,9 @@ export const appUi = {
     request<DeploymentDetail>('GET', `${appPath(uuid)}/deployments/${encodeURIComponent(dep)}${all ? '?all=1' : ''}`),
   cancel: (uuid: string, dep: string) => request<{ status: string }>('POST', `${appPath(uuid)}/deployments/${encodeURIComponent(dep)}/cancel`, {}),
   forceStart: (uuid: string, dep: string) => request<{ started: boolean }>('POST', `${appPath(uuid)}/deployments/${encodeURIComponent(dep)}/force-start`, {}),
+  /** `Deployment\Show::deployAnyway()`. */
+  deployAnyway: (uuid: string, dep: string) =>
+    request<{ message: string; deployment_uuid: string }>('POST', `${appPath(uuid)}/deployments/${encodeURIComponent(dep)}/deploy-anyway`, {}),
   remove: (uuid: string, body: { password: string; delete_volumes: boolean; delete_configurations: boolean; delete_connected_networks: boolean; docker_cleanup: boolean }) =>
     request<{ message: string }>('POST', `${appPath(uuid)}/delete`, body),
 };

@@ -82,6 +82,34 @@ fn host_of(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
+/// `PrivateKey::validationError($server->privateKey->private_key)`: why the SSH key of the server
+/// is weak, if it is. A key that cannot be decrypted gives no reason here.
+async fn server_key_error(
+    state: &AppState,
+    server_id: i64,
+) -> Result<Option<&'static str>, String> {
+    let cipher: Option<String> = sqlx::query_scalar(
+        "SELECT k.private_key FROM servers s JOIN private_keys k ON k.id = s.private_key_id WHERE s.id = $1",
+    )
+    .bind(server_id)
+    .fetch_optional(state.db.pool())
+    .await
+    .map_err(db_error)?;
+    let plain = cipher.and_then(|c| state.encrypter.as_ref()?.decrypt_string(&c).ok());
+    Ok(plain.and_then(|p| coolify_compat::sshkey::validation_error(&p, true)))
+}
+
+/// The hint of the `previous_ssh_key` step.
+fn previous_ssh_key_hint(weak_key_error: Option<&str>) -> String {
+    let mut hint = "The previous instance keeps a copy of the SSH key. Open the SSH key of this server in Security > Private Keys and use Rotate key. It moves the server to a new key and removes the old public key from ~/.ssh/authorized_keys on the server.".to_owned();
+    if let Some(error) = weak_key_error {
+        hint.push_str(&format!(
+            " The key is also weak: {error} Rotate key replaces it with an Ed25519 key."
+        ));
+    }
+    hint
+}
+
 /// `buildItems`.
 async fn build_items(
     state: &AppState,
@@ -95,6 +123,7 @@ async fn build_items(
     let service_apps = query_rows(state, "SELECT sa.id, sa.fqdn FROM service_applications sa JOIN services s ON s.id = sa.service_id WHERE s.server_id = $1", server_id).await?;
     let runner = query_rows(state, "SELECT c.uuid, g.uuid AS app_uuid, g.name AS app_name, g.is_system_wide, g.is_public FROM github_runner_configs c LEFT JOIN github_apps g ON g.id = c.github_app_id WHERE c.server_id = $1 LIMIT 1", server_id).await?;
     let runner = runner.first();
+    let previous_key_hint = previous_ssh_key_hint(server_key_error(state, server_id).await?);
 
     let mut items = vec![
         item(
@@ -120,9 +149,7 @@ async fn build_items(
             "previous_ssh_key",
             "server",
             "Remove the SSH key of the previous instance from the server".into(),
-            Some(
-                "The previous instance keeps a copy of the SSH key. Add a new key of this instance to the server and select it here, then remove the old public key from ~/.ssh/authorized_keys on the server.",
-            ),
+            Some(previous_key_hint.as_str()),
             json!([]),
             Some(format!("/server/{uuid}/private-key")),
             Some("Open private key"),
@@ -939,5 +966,21 @@ mod tests {
         assert_eq!(normalize_ip_address("2001:db8:0:0:0:0:0:1"), "2001:db8::1");
         assert_eq!(normalize_ip_address("10.0.0.1"), "10.0.0.1");
         assert_eq!(normalize_ip_address("host.example.com"), "host.example.com");
+    }
+
+    /// `buildItems()`: a weak key of the server adds its reason to the hint.
+    #[test]
+    fn a_weak_server_key_extends_the_previous_key_hint() {
+        let plain = super::previous_ssh_key_hint(None);
+        assert!(
+            plain
+                .ends_with("removes the old public key from ~/.ssh/authorized_keys on the server.")
+        );
+        assert_eq!(
+            super::previous_ssh_key_hint(Some("RSA keys must have at least 2048 bits.")),
+            format!(
+                "{plain} The key is also weak: RSA keys must have at least 2048 bits. Rotate key replaces it with an Ed25519 key."
+            )
+        );
     }
 }

@@ -158,8 +158,16 @@ fn present_settings(state: &AppState, ctx: &AuthCtx, raw: &Record) -> ApiResult<
         let v = translate_cron(f).to_string();
         s.insert("docker_cleanup_frequency".into(), Value::String(v));
     }
+    let fingerprints = |key: &str| {
+        let keys = s.get(key).and_then(Value::as_str);
+        json!(coolify_remote::host_key::ssh_host_key_fingerprints(keys))
+    };
+    let pinned = fingerprints("ssh_host_key");
+    let pending = fingerprints("ssh_host_key_pending");
     let mut out = serialize_record(s);
     out.insert("is_build_server".into(), Value::Bool(is_build));
+    out.insert("ssh_host_key_fingerprints".into(), pinned);
+    out.insert("ssh_host_key_pending_fingerprints".into(), pending);
     Ok(Value::Object(out))
 }
 
@@ -246,10 +254,12 @@ pub async fn show(
 /// `SERVER_NAME_CONTROL_CHARACTERS_PATTERN`.
 static CONTROL_CHARS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[\x00-\x1F\x7F]").unwrap_or_else(|_| unreachable!()));
-/// `SERVER_USERNAME_PATTERN` (`/^[a-zA-Z0-9._-]+$/`; PHP's `$` also matches
-/// before a final newline).
-static USERNAME: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9._-]+\n?\z").unwrap_or_else(|_| unreachable!()));
+/// `SERVER_USERNAME_PATTERN` (4.7.5: `/^[a-zA-Z0-9_.][a-zA-Z0-9._-]*$/`, so the first character
+/// is not a hyphen, which ssh would read as an option; PHP's `$` also matches before a final
+/// newline).
+pub(crate) static USERNAME: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[a-zA-Z0-9_.][a-zA-Z0-9._-]*\n?\z").unwrap_or_else(|_| unreachable!())
+});
 
 const CREATE_FIELDS: &[&str] = &[
     "name",
@@ -262,6 +272,7 @@ const CREATE_FIELDS: &[&str] = &[
     "is_build_server",
     "instant_validate",
     "proxy_type",
+    "ssh_host_key",
 ];
 /// `customApiValidator` messages plus the controller's.
 const MESSAGES: crate::validation::Messages = &[
@@ -269,6 +280,24 @@ const MESSAGES: crate::validation::Messages = &[
     (
         "user.regex",
         "The User may only contain letters, numbers, dots, hyphens, and underscores.",
+    ),
+    // `...ValidationPatterns::combinedMessages()` (4.7.5).
+    (
+        "name.regex",
+        "The name may only contain letters (including Unicode), numbers, spaces, and these characters: - _ . / @ & ( ) # , : +",
+    ),
+    ("name.min", "The name must be at least :min characters."),
+    (
+        "name.max",
+        "The name may not be greater than :max characters.",
+    ),
+    (
+        "description.regex",
+        "The description may only contain letters (including Unicode), numbers, spaces, and common punctuation: - _ . , ! ? ( ) ' \" + = * / @ &",
+    ),
+    (
+        "description.max",
+        "The description may not be greater than :max characters.",
     ),
     (
         "name.not_regex",
@@ -326,7 +355,61 @@ pub(crate) fn valid_server_ip(v: &Value) -> Option<&'static str> {
     }
 }
 
+/// `'ssh_host_key' => 'string|nullable|max:16384'`.
+fn ssh_host_key_rules() -> Vec<Rule> {
+    vec![Rule::String, Rule::Nullable, Rule::Max(16384)]
+}
+
+/// The error of an `ssh_host_key` without a key that `ServerSetting::normalizeSshHostKeys()` reads.
+const SSH_HOST_KEY_INVALID: &str =
+    "The SSH host key must contain public key lines (\"type base64\") or known_hosts lines.";
+
+/// `ServerSetting::normalizeSshHostKeys()` of a string `ssh_host_key`, and whether a filled value
+/// had no key in it.
+fn requested_ssh_host_key(input: &Input) -> (Option<String>, bool) {
+    let key = input
+        .get("ssh_host_key")
+        .and_then(Value::as_str)
+        .and_then(|raw| coolify_remote::host_key::normalize_ssh_host_keys(Some(raw)));
+    let invalid = filled(input, "ssh_host_key") && key.is_none();
+    (key, invalid)
+}
+
+/// The validator's errors with `$errors->add('ssh_host_key', ...)` when the field has none yet.
+/// Laravel adds it after the rule errors and before the controller's extra-field errors.
+fn with_ssh_host_key_error(errors: Map<String, Value>, allowed: &[&str]) -> Map<String, Value> {
+    if errors.contains_key("ssh_host_key") {
+        return errors;
+    }
+    let mut out = Map::new();
+    let mut added = false;
+    for (key, value) in errors {
+        if !added && !allowed.contains(&key.as_str()) {
+            out.insert("ssh_host_key".into(), json!([SSH_HOST_KEY_INVALID]));
+            added = true;
+        }
+        out.insert(key, value);
+    }
+    if !added {
+        out.insert("ssh_host_key".into(), json!([SSH_HOST_KEY_INVALID]));
+    }
+    out
+}
+
 /// `Server::normalizeIp`: unsafe characters removed, IPv6 in short lower-case form.
+/// `create_server` / `update_server` (4.7.5): another server uses the SSH endpoint.
+const SSH_ENDPOINT_IN_USE: &str = "A server with this IP/Domain and SSH port is already in use.";
+
+/// `$endpointChanged` of `update_server` (4.7.5), on normalized IPs.
+pub(crate) fn ssh_endpoint_changed(
+    current_ip: &str,
+    current_port: i64,
+    new_ip: &str,
+    new_port: i64,
+) -> bool {
+    current_ip != new_ip || current_port != new_port
+}
+
 pub(crate) fn normalize_ip(v: &str) -> String {
     let stripped = ip_accessor(v);
     let t = stripped.trim();
@@ -339,13 +422,16 @@ pub(crate) fn normalize_ip(v: &str) -> String {
 
 fn create_fields() -> Vec<Field> {
     vec![
+        // `['not_regex:...', ...nameRules(required: false, nullable: false)]` (4.7.5).
         Field {
             name: "name",
-            rules: vec![Rule::String, Rule::Max(255), Rule::NotRegex(&CONTROL_CHARS)],
+            rules: std::iter::once(Rule::NotRegex(&CONTROL_CHARS))
+                .chain(crate::validation::patterns::present_name_rules())
+                .collect(),
         },
         Field {
             name: "description",
-            rules: vec![Rule::String, Rule::Nullable],
+            rules: crate::validation::patterns::description_rules(),
         },
         Field {
             name: "ip",
@@ -382,6 +468,10 @@ fn create_fields() -> Vec<Field> {
         Field {
             name: "proxy_type",
             rules: vec![Rule::String, Rule::Nullable],
+        },
+        Field {
+            name: "ssh_host_key",
+            rules: ssh_host_key_rules(),
         },
     ]
 }
@@ -506,7 +596,23 @@ pub async fn create(
         return Err(ApiError::Unauthorized);
     }
     let input = validated_json(&headers, &uri, &body)?;
-    validate(&input, &create_fields(), MESSAGES, CREATE_FIELDS)?;
+    let (ssh_host_key, ssh_host_key_invalid) = requested_ssh_host_key(&input);
+    match validate(&input, &create_fields(), MESSAGES, CREATE_FIELDS) {
+        Ok(()) if !ssh_host_key_invalid => {}
+        Ok(()) => {
+            return Err(ApiError::Validation(with_ssh_host_key_error(
+                Map::new(),
+                CREATE_FIELDS,
+            )));
+        }
+        Err(ApiError::Validation(errors)) if ssh_host_key_invalid => {
+            return Err(ApiError::Validation(with_ssh_host_key_error(
+                errors,
+                CREATE_FIELDS,
+            )));
+        }
+        Err(e) => return Err(e),
+    }
     let name = match input.get("name") {
         Some(v) if php_truthy(v) => as_php_string(v),
         _ => crate::routes::private_keys::random_name(),
@@ -561,10 +667,11 @@ pub async fn create(
         ))?;
     let ip_raw = input.get("ip").map(as_php_string).unwrap_or_default();
     let ip = normalize_ip(&ip_raw);
-    if servers::ip_in_use(&state.db, &ip, None).await? {
+    // 4.7.5: `Server::sshEndpointInUse($request->ip, $request->port)`.
+    if servers::ssh_endpoint_in_use(&state.db, &ip, port, None).await? {
         return Err(ApiError::Message(
             StatusCode::BAD_REQUEST,
-            "A server with this IP/Domain is already in use.",
+            SSH_ENDPOINT_IN_USE,
         ));
     }
     let instant_validate = input_bool(&input, "instant_validate");
@@ -577,7 +684,7 @@ pub async fn create(
     ))?;
     let uuid = new_public_id();
     let name = strip_tags(Some(&name));
-    let description = strip_tags(input.str("description"));
+    let description = coolify_domain::naming::strip_tags_nullable(input.str("description"));
     let peer = peer
         .map(|c| (c.0).0)
         .unwrap_or_else(|| SocketAddr::from((IpAddr::from([127, 0, 0, 1]), 0)));
@@ -609,6 +716,18 @@ pub async fn create(
         always_write_role: true,
     };
     let id = servers::create(&state.db, &new, state.now()).await?;
+    // The key the admin gave is trusted from the first connection on.
+    if let Some(key) = ssh_host_key.as_deref()
+        && let Some(settings) = coolify_db::ssh_host_keys::load(&state.db, id).await?
+    {
+        coolify_db::ssh_host_keys::set_manual(
+            &state.db,
+            settings.settings_id,
+            Some(key),
+            state.now(),
+        )
+        .await?;
+    }
     if let (true, Some(jobs)) = (instant_validate, state.jobs.as_ref()) {
         jobs.spawn_validation(
             id,
@@ -657,18 +776,17 @@ fn update_fields() -> Vec<Field> {
         rules: vec![Rule::Integer, Rule::MinNum(1)],
     };
     vec![
+        // `['not_regex:...', ...nameRules(required: false, nullable: false)]` (4.7.5): the
+        // name is no longer nullable.
         Field {
             name: "name",
-            rules: vec![
-                Rule::String,
-                Rule::Max(255),
-                Rule::Nullable,
-                Rule::NotRegex(&CONTROL_CHARS),
-            ],
+            rules: std::iter::once(Rule::NotRegex(&CONTROL_CHARS))
+                .chain(crate::validation::patterns::present_name_rules())
+                .collect(),
         },
         Field {
             name: "description",
-            rules: vec![Rule::String, Rule::Nullable],
+            rules: crate::validation::patterns::description_rules(),
         },
         Field {
             name: "ip",
@@ -836,6 +954,29 @@ pub async fn update(
             return Err(ApiError::Validation(errors));
         }
     }
+    // 4.7.5: a changed SSH endpoint (IP or port) must not be the one of another server.
+    {
+        let current_ip = normalize_ip(&raw_str("ip").unwrap_or_default());
+        let current_port = raw("port").as_i64().unwrap_or(22);
+        let new_ip = if filled(&input, "ip") {
+            normalize_ip(&input.get("ip").map(as_php_string).unwrap_or_default())
+        } else {
+            current_ip.clone()
+        };
+        let new_port = if filled(&input, "port") {
+            input.get("port").map(int_value).unwrap_or(current_port)
+        } else {
+            current_port
+        };
+        if ssh_endpoint_changed(&current_ip, current_port, &new_ip, new_port)
+            && servers::ssh_endpoint_in_use(&state.db, &new_ip, new_port, Some(s.id)).await?
+        {
+            return Err(ApiError::Message(
+                StatusCode::BAD_REQUEST,
+                SSH_ENDPOINT_IN_USE,
+            ));
+        }
+    }
     if let Some(t) = input
         .get("proxy_type")
         .filter(|v| php_truthy(v))
@@ -871,11 +1012,12 @@ pub async fn update(
         );
     }
     if input.has("description") {
-        push_if_dirty(
-            "description",
-            C::Text(Some(strip_tags(Some(&text("description"))))),
-            &mut changes,
-        );
+        // `HasSafeStringAttribute`: a null description stays NULL (4.7.5).
+        let description = match input.get("description") {
+            None | Some(Value::Null) => None,
+            Some(_) => Some(strip_tags(Some(&text("description")))),
+        };
+        push_if_dirty("description", C::Text(description), &mut changes);
     }
     let mut ip_changed = false;
     if input.has("ip") {
@@ -984,13 +1126,22 @@ pub async fn update(
         return Err(ApiError::NotPorted);
     }
     let now = state.now();
-    servers::update_columns(&state.db, s.id, &changes, now).await?;
-    // A new address means a new host: drop the pinned host key.
+    // `Server::saved`: a new address means a new host, so `forgetSshHostKey('address_changed')`
+    // drops the pinned host key. It runs first: it writes the audit entry, and the update below
+    // would already clear the key.
     if changes.iter().any(|(c, _)| *c == "ip" || *c == "port")
         && let Some(jobs) = &state.jobs
     {
-        jobs.remote().forget_host_key(&s.uuid);
+        coolify_jobs::server_ops::host_key::forget(
+            jobs,
+            s.id,
+            s.team_id,
+            &s.uuid,
+            "address_changed",
+        )
+        .await;
     }
+    servers::update_columns(&state.db, s.id, &changes, now).await?;
     if let Some(role) = role {
         servers::update_settings(
             &state.db,
@@ -1101,6 +1252,13 @@ pub async fn delete(
             StatusCode::UNPROCESSABLE_ENTITY,
             "delete_from_provider must be a boolean.",
         ))?;
+    // 4.7.5: `remove_ssh_key` removes the key of the server from its authorized_keys first.
+    let remove_ssh_key = php_filter_bool(query_param(&uri, "remove_ssh_key").as_deref()).ok_or(
+        ApiError::Message(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "remove_ssh_key must be a boolean.",
+        ),
+    )?;
     let transferred = s
         .record
         .get("server_metadata")
@@ -1108,10 +1266,10 @@ pub async fn delete(
         .and_then(Value::as_str)
         == Some("transferred");
     if transferred {
-        if from_provider {
+        if from_provider || remove_ssh_key {
             return Err(ApiError::Message(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                "This server is managed by another Coolify instance. Delete its cloud server from that instance.",
+                "This server is managed by another Coolify instance. Delete its cloud server or SSH key from that instance.",
             ));
         }
         crate::server_transfer::delete_archive_now(&state, s.id)
@@ -1137,7 +1295,11 @@ pub async fn delete(
                 .into_response(),
         );
     }
-    let resources = servers::resource_count(&state.db, s.id).await?;
+    // `$server->primaryResources()` (4.7.5): applications that use the server only as an
+    // additional destination are detached by the delete, so they do not block it.
+    let resources = servers::primary_resource_names(&state.db, s.id)
+        .await?
+        .len();
     if resources > 0 && !force {
         return Err(ApiError::Message(
             StatusCode::BAD_REQUEST,
@@ -1191,6 +1353,20 @@ pub async fn delete(
             "Missing required permissions: deploy. Deleting the resources or the cloud server needs a token with the deploy permission.",
         )?;
     }
+    // The key is removed before the server record, while the connection still works.
+    if remove_ssh_key && !from_provider {
+        // `$server->definedResources()->count()`: also applications that use the server as an
+        // additional destination.
+        if servers::resource_count(&state.db, s.id).await? > 0 {
+            return Err(ApiError::Message(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Delete the resources of the server first, then delete the server with remove_ssh_key.",
+            ));
+        }
+        remove_authorized_key(&state, &ctx, &meta, &s).await?;
+    }
+    // `$server->detachAdditionalApplications()`, the forced delete of `$server->primaryResources()`
+    // and `$server->delete()` run in `Jobs::delete_server`.
     let name = s.record.get("name").cloned();
     let ip = s.record.get("ip").cloned();
     let uuid = s.uuid.clone();
@@ -1228,11 +1404,173 @@ pub async fn delete(
             "ip": ip,
             "force": force,
             "delete_from_provider": from_provider,
+            "remove_ssh_key": remove_ssh_key,
         }),
         "info",
     )
     .await;
     Ok(ok(json!({"message": "Server deleted."})).into_response())
+}
+
+/// `AuthorizedKeys::remove($server, $server->privateKey)` of `delete_server`, with its audit rows.
+/// `Err` is the 422 that keeps the server.
+async fn remove_authorized_key(
+    state: &AppState,
+    ctx: &AuthCtx,
+    meta: &crate::audit::Meta,
+    server: &ServerRow,
+) -> Result<(), ApiError> {
+    use coolify_jobs::server_ops::{Srv, authorized_keys};
+    let jobs = state.jobs.as_ref().ok_or(ApiError::NotPorted)?;
+    let key_uuid = match server.record.get("private_key_id").and_then(Value::as_i64) {
+        Some(id) => coolify_db::private_keys::uuid_by_id(&state.db, id).await?,
+        None => None,
+    };
+    let context = |result: &str| {
+        json!({
+            "team_id": ctx.team_id,
+            "server_uuid": server.uuid,
+            "server_name": server.record.get("name"),
+            "private_key_uuid": key_uuid,
+            "result": result,
+        })
+    };
+    let srv = Srv::from_row(jobs, server.clone());
+    match authorized_keys::remove_server_key(&srv).await {
+        Ok(removed) => {
+            let result = if removed {
+                "removed"
+            } else {
+                "kept_for_other_server"
+            };
+            crate::audit::log(
+                state,
+                ctx,
+                meta,
+                "api.server.ssh_key_removed",
+                context(result),
+                "info",
+            )
+            .await;
+            Ok(())
+        }
+        Err(e) => {
+            crate::audit::log(
+                state,
+                ctx,
+                meta,
+                "api.server.ssh_key_removed",
+                context("failed"),
+                "warning",
+            )
+            .await;
+            // `remove_iip($e->getMessage())`.
+            let error = coolify_compat::redact::redact_text(&e.message, &[], &[]);
+            Err(ApiError::Status(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({"message": format!(
+                    "The SSH key was not removed from the server, so the server was not deleted: {error}"
+                )}),
+            ))
+        }
+    }
+}
+
+/// `POST /servers/{uuid}/host-key/reset` (`ServersController::reset_host_key`, 4.7.5): removes the
+/// trusted SSH host key of the server, so the next connection trusts the key the server sends, or
+/// trusts the given `ssh_host_key`.
+pub async fn reset_host_key(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<AuthCtx>,
+    meta: crate::audit::Meta,
+    Path(uuid): Path<String>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> ApiResult {
+    let s = servers::find(&state.db, ctx.team_id, &uuid)
+        .await?
+        .ok_or(NOT_FOUND)?;
+    // `authorize('update', $server)`.
+    if !ctx.is_team_admin() {
+        return Err(ApiError::Unauthorized);
+    }
+    // `canBeValidated()`.
+    if is_transferred(&s) {
+        return Err(ApiError::Message(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "This server was transferred to another Coolify instance.",
+        ));
+    }
+    let input = lenient_json(&headers, &uri, &body);
+    let present: Vec<&str> = input.keys().map(String::as_str).collect();
+    let (ssh_host_key, ssh_host_key_invalid) = requested_ssh_host_key(&input);
+    let validated = validate(
+        &input,
+        &[Field {
+            name: "ssh_host_key",
+            rules: ssh_host_key_rules(),
+        }],
+        crate::validation::CUSTOM_API_MESSAGES,
+        &present,
+    );
+    match validated {
+        Ok(()) if !ssh_host_key_invalid => {}
+        Ok(()) => {
+            return Err(ApiError::Validation(with_ssh_host_key_error(
+                Map::new(),
+                &present,
+            )));
+        }
+        Err(ApiError::Validation(errors)) => {
+            return Err(ApiError::Validation(with_ssh_host_key_error(
+                errors, &present,
+            )));
+        }
+        Err(e) => return Err(e),
+    }
+    let settings = coolify_db::ssh_host_keys::load(&state.db, s.id)
+        .await?
+        .ok_or(ApiError::Internal)?;
+    let previous_fingerprints =
+        coolify_remote::host_key::ssh_host_key_fingerprints(settings.ssh_host_key.as_deref());
+    coolify_db::ssh_host_keys::set_manual(
+        &state.db,
+        settings.settings_id,
+        ssh_host_key.as_deref(),
+        state.now(),
+    )
+    .await?;
+    if let Some(jobs) = &state.jobs {
+        // `ServerSetting::updated`: the known_hosts files of older keys go.
+        if ssh_host_key != settings.ssh_host_key {
+            jobs.remote()
+                .delete_stale_known_hosts_files(&s.uuid, ssh_host_key.as_deref());
+        }
+        // `ServerConnectionCheckJob::dispatch($server)`.
+        jobs.spawn_connection_check(s.id);
+    }
+    let fingerprints = coolify_remote::host_key::ssh_host_key_fingerprints(ssh_host_key.as_deref());
+    crate::audit::log(
+        &state,
+        &ctx,
+        &meta,
+        "api.server.ssh_host_key.reset",
+        json!({
+            "team_id": ctx.team_id,
+            "server_uuid": s.uuid,
+            "server_name": s.record.get("name"),
+            "previous_fingerprints": previous_fingerprints,
+            "fingerprints": fingerprints,
+        }),
+        "info",
+    )
+    .await;
+    Ok(ok(json!({
+        "message": "Host key reset.",
+        "ssh_host_key_fingerprints": fingerprints,
+    }))
+    .into_response())
 }
 
 /// `ServersController::validate_server`: starts `ValidateServer` in the
@@ -1311,6 +1649,76 @@ pub(crate) fn is_transferred(s: &ServerRow) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `SERVER_USERNAME_PATTERN` (4.7.5): a hyphen first would be an ssh option.
+    #[test]
+    fn server_usernames_do_not_start_with_a_hyphen() {
+        for user in ["root", "deploy-user", "_svc", ".hidden", "a", "root\n"] {
+            assert!(USERNAME.is_match(user), "{user}");
+        }
+        for user in ["-oProxyCommand=x", "-", "ro ot", "", "root\n\n"] {
+            assert!(!USERNAME.is_match(user), "{user}");
+        }
+    }
+
+    /// `create_server` / `reset_host_key`: the host key error comes after the rule errors and
+    /// before the extra-field errors.
+    #[test]
+    fn the_host_key_error_goes_before_the_extra_fields() {
+        let mut errors = Map::new();
+        errors.insert("ip".into(), json!(["The ip field is required."]));
+        errors.insert("foo".into(), json!(["This field is not allowed."]));
+        let out = with_ssh_host_key_error(errors, CREATE_FIELDS);
+        let keys: Vec<&str> = out.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["ip", "ssh_host_key", "foo"]);
+        assert_eq!(out["ssh_host_key"], json!([SSH_HOST_KEY_INVALID]));
+        // A rule error of the field stays alone.
+        let mut errors = Map::new();
+        errors.insert(
+            "ssh_host_key".into(),
+            json!(["The ssh host key field must be a string."]),
+        );
+        let out = with_ssh_host_key_error(errors, CREATE_FIELDS);
+        assert_eq!(
+            out["ssh_host_key"],
+            json!(["The ssh host key field must be a string."])
+        );
+    }
+
+    #[test]
+    fn a_filled_host_key_without_keys_is_refused() {
+        let input = |v: Value| match v {
+            Value::Object(m) => Input(m),
+            _ => unreachable!(),
+        };
+        assert_eq!(requested_ssh_host_key(&input(json!({}))), (None, false));
+        assert_eq!(
+            requested_ssh_host_key(&input(json!({"ssh_host_key": null}))),
+            (None, false)
+        );
+        assert_eq!(
+            requested_ssh_host_key(&input(json!({"ssh_host_key": "  "}))),
+            (None, false)
+        );
+        assert_eq!(
+            requested_ssh_host_key(&input(json!({"ssh_host_key": "not a key"}))),
+            (None, true)
+        );
+    }
+
+    /// `update_server` (4.7.5): the endpoint is the normalized IP and the port.
+    #[test]
+    fn ssh_endpoint_changes() {
+        assert!(!ssh_endpoint_changed("10.0.0.1", 22, "10.0.0.1", 22));
+        assert!(ssh_endpoint_changed("10.0.0.1", 22, "10.0.0.1", 2222));
+        assert!(ssh_endpoint_changed("10.0.0.1", 22, "10.0.0.2", 22));
+        assert!(!ssh_endpoint_changed(
+            &normalize_ip("[2001:DB8::0001]"),
+            22,
+            &normalize_ip("2001:db8::1"),
+            22
+        ));
+    }
 
     #[test]
     fn accessors() {

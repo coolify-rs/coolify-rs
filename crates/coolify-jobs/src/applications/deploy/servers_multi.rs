@@ -9,7 +9,6 @@ use coolify_db::application_ops as ops;
 use coolify_db::applications as apps;
 use coolify_db::servers;
 use coolify_remote::shell::quote;
-use rand::seq::SliceRandom as _;
 use serde_json::Value;
 
 use super::{Cmd, Fail, Run, Step, in_docker};
@@ -92,8 +91,9 @@ impl Run {
             .await;
             return Ok(());
         }
-        let must_build_elsewhere = !self.server_can_build()
-            && !matches!(build_pack.as_str(), "dockerimage" | "dockercompose");
+        // `$this->application->mustBuildOnBuildServer($this->server)`.
+        let must_build_elsewhere =
+            crate::applications::queue::must_build_on_build_server(&self.app, &self.server);
         if !must_build_elsewhere && !self.app.setting_bool("is_build_server_enabled") {
             return Ok(());
         }
@@ -104,10 +104,26 @@ impl Run {
             )));
         }
         let db = self.jobs.0.db.clone();
-        let ids = apps::build_server_ids(&db, self.app.team_id, self.server.id)
+        // `$this->application->buildServerCandidates($this->server)`.
+        let jobs = self.jobs.clone();
+        let ids = jobs.build_server_candidates(&self.app, &self.server).await;
+        // Admission reserved a build server with a free build slot. A forced start reserved none, and
+        // the reserved server can become unusable before the job runs.
+        let reserved = apps::deployment_by_id(&db, self.queue_id)
             .await
-            .map_err(|e| Fail::new(e.to_string()))?;
-        let Some(id) = ids.choose(&mut rand::thread_rng()).copied() else {
+            .ok()
+            .flatten()
+            .and_then(|d| d.int("build_server_id"))
+            .filter(|id| ids.contains(id));
+        let chosen = match reserved {
+            Some(id) => Some(id),
+            None if ids.is_empty() => None,
+            None => match jobs.least_busy_build_server(&ids, true).await {
+                Some(id) => Some(id),
+                None => jobs.least_busy_build_server(&ids, false).await,
+            },
+        };
+        let Some(id) = chosen else {
             if must_build_elsewhere && !self.b.restart_only {
                 return Err(Fail::new(format!(
                     "The deployment server ({name}) is set to deployments only, and no usable build server was found. Add a build server or change the server role."
@@ -174,17 +190,19 @@ impl Run {
                 "Before deploying to multiple servers, you must set a Docker image in the General tab. More information: https://coolify.io/docs/knowledge-base/server/multiple-servers",
             ));
         }
-        // `ensureRegistryImageIsNotShared()` (v4.6.0), previews included.
+        // `ensureRegistryImageIsNotShared()` (v4.6.0), previews included. A restart and an
+        // additional server build nothing, so they do not check (v4.7).
         let image_name = self.app.str("docker_registry_image_name");
-        if let Some((_, other)) = apps::other_application_building_same_image(
-            &db,
-            self.app.team_id,
-            Some(self.app.id),
-            image_name,
-            self.app.str("build_pack"),
-        )
-        .await
-        .map_err(|e| Fail::new(e.to_string()))?
+        if !(self.b.restart_only || self.is_additional)
+            && let Some((_, other)) = apps::other_application_building_same_image(
+                &db,
+                self.app.team_id,
+                Some(self.app.id),
+                image_name,
+                self.app.str("build_pack"),
+            )
+            .await
+            .map_err(|e| Fail::new(e.to_string()))?
         {
             return Err(Fail::new(apps::shared_image_name_message(
                 other.as_deref(),
@@ -307,6 +325,14 @@ impl Run {
             return 0;
         }
         let tag = self.b.preview_tag.clone();
+        // The deployments to the other servers keep the origin of this one.
+        let this = apps::deployment_by_id(&db, self.queue_id)
+            .await
+            .ok()
+            .flatten();
+        let origin = |key: &str| this.as_ref().is_some_and(|d| d.bool(key));
+        let (is_webhook, is_api, is_mcp) =
+            (origin("is_webhook"), origin("is_api"), origin("is_mcp"));
         let mut queued = 0;
         for d in destinations {
             let Some(row) = servers::find_by_id(&db, d.server_id).await.ok().flatten() else {
@@ -334,6 +360,9 @@ impl Run {
                     &deployment_uuid,
                     QueueOptions {
                         commit: Some(self.commit.clone()),
+                        is_webhook,
+                        is_api,
+                        is_mcp,
                         no_questions_asked: true,
                         server_id: Some(d.server_id),
                         destination_id: Some(d.id),

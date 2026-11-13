@@ -141,6 +141,14 @@ fn timeout_of(input: &Input) -> i64 {
     }
 }
 
+/// `public bool $useShell = true`: "Run in a shell".
+fn use_shell_of(input: &Input) -> bool {
+    input
+        .get("use_shell")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
 fn text<'a>(r: &'a Record, key: &str) -> Option<&'a str> {
     r.get(key).and_then(Value::as_str)
 }
@@ -223,7 +231,11 @@ fn task_json(ctx: &AuthCtx, task: &Record, latest: Option<&Record>) -> Value {
         "frequency": text(task, "frequency"),
         "container": text(task, "container"),
         "timeout": task.get("timeout").and_then(Value::as_i64).unwrap_or(300),
+        // `$this->task->use_shell ?? true`.
+        "use_shell": task.get("use_shell").and_then(Value::as_bool).unwrap_or(true),
         "enabled": task.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+        // Why Coolify disabled the task automatically; cleared when it is enabled again.
+        "disabled_reason": text(task, "disabled_reason"),
         // `$task->latest_log`.
         "latest_status": latest.and_then(|e| text(e, "status")),
     })
@@ -329,6 +341,7 @@ async fn add(
             frequency,
             container: Some(container),
             timeout: timeout_of(&input),
+            use_shell: use_shell_of(&input),
             enabled: true,
             team_id: res.team_id,
         },
@@ -386,6 +399,7 @@ async fn save(
             input.str("container").unwrap_or_default().trim().to_owned(),
         )),
         timeout: Some(timeout_of(&input)),
+        use_shell: Some(use_shell_of(&input)),
         enabled: None,
     };
     // `auditChangedFields()`: a loose comparison, so null and '' are the same.
@@ -407,6 +421,14 @@ async fn save(
     }
     if task.get("timeout").and_then(Value::as_i64) != changes.timeout {
         changed.push("timeout");
+    }
+    if task
+        .get("use_shell")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+        != changes.use_shell.unwrap_or(true)
+    {
+        changed.push("use_shell");
     }
     let updated = tasks::update(&state.db, &task, &changes, state.now()).await?;
     audit_updated(&state, &ctx, &meta, &res, &updated, changed).await;
@@ -435,6 +457,7 @@ async fn toggle(
         frequency: None,
         container: None,
         timeout: None,
+        use_shell: None,
         enabled: Some(enabled),
     };
     let updated = tasks::update(&state.db, &task, &changes, state.now()).await?;

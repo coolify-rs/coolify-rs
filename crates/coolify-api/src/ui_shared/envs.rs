@@ -142,15 +142,17 @@ fn row_id(r: &Record) -> i64 {
     r.get("id").and_then(Value::as_i64).unwrap_or_default()
 }
 
-/// The `value` accessor: `trim(decrypt($value))`.
+/// The `value` accessor: the decrypted value without edge whitespace (multiline content is
+/// kept as it is).
 fn plain(state: &AppState, r: &Record) -> Result<Option<String>, ApiError> {
     let enc = state.encrypter.as_ref().ok_or(ApiError::Internal)?;
     match text(r, "value").filter(|c| !c.is_empty()) {
         Some(c) => Ok(Some(
-            enc.decrypt_maybe_serialized(c)
-                .map_err(|_| ApiError::Internal)?
-                .trim()
-                .to_owned(),
+            without_edge_whitespace(
+                &enc.decrypt_maybe_serialized(c)
+                    .map_err(|_| ApiError::Internal)?,
+            )
+            .to_owned(),
         )),
         None => Ok(None),
     }
@@ -1075,7 +1077,7 @@ async fn add(
     let value = body
         .get("value")
         .and_then(Value::as_str)
-        .map(|v| v.trim().to_owned());
+        .map(|v| without_edge_whitespace(v).to_owned());
     let cipher = value.as_deref().map(|v| enc.encrypt_serialized(v));
     let n = NewEnv {
         morph: &res.morph,
@@ -1096,6 +1098,11 @@ async fn add(
     };
     create_model(&state, &ctx, &meta, &res, &n, ADDED_FIELDS).await?;
     Ok(ok(json!({"message": "Environment variable added."})).into_response())
+}
+
+/// `EnvironmentVariable::withoutEdgeWhitespace($value)`.
+pub(crate) fn without_edge_whitespace(value: &str) -> &str {
+    coolify_jobs::databases::env::without_edge_whitespace(value)
 }
 
 /// `formatEnvironmentVariables`.
@@ -1302,112 +1309,115 @@ async fn update_or_create(
         if is_magic(key) {
             continue;
         }
-        match re::by_key(&state.db, &res.morph, res.id, is_preview, key).await? {
-            Some(found) => {
-                let current = plain(state, &found)?;
-                // A value the view could not show is not overwritten by its placeholder.
-                if flag(&found, "is_shown_once")
-                    || flag(&found, "is_multiline")
-                    || dev_view::format_value(current.as_deref()).is_none()
-                {
-                    continue;
-                }
-                let trimmed = value.trim();
-                let mut values: Vec<(&'static str, C)> = Vec::new();
-                let mut changed: Vec<&str> = Vec::new();
-                let mut changes = Map::new();
-                if current.as_deref() != Some(value.as_str()) {
-                    values.push(("value", C::Text(Some(enc.encrypt_serialized(trimmed)))));
-                    if current.as_deref() != Some(trimmed) {
-                        changed.push("value");
-                    }
-                }
-                if let Some(c) = comment
-                    && text(&found, "comment") != Some(c.as_str())
-                {
-                    values.push(("comment", C::Text(Some(c.clone()))));
-                    changed.push("comment");
-                    changes.insert(
-                        "comment".into(),
-                        json!({"old": found.get("comment"), "new": c}),
-                    );
-                }
-                // `$found->fill($data['settings'])`: flags change only when a "# coolify:" line sets them.
-                for (attribute, new) in &parsed.settings {
-                    let column = match attribute.as_str() {
-                        "is_literal" => "is_literal",
-                        "is_buildtime" => "is_buildtime",
-                        "is_runtime" => "is_runtime",
-                        _ => continue,
-                    };
-                    if *new != flag(&found, column) {
-                        values.push((column, C::Bool(*new)));
-                        changed.push(column);
-                        changes.insert(
-                            column.into(),
-                            json!({"old": flag(&found, column), "new": new}),
-                        );
-                    }
-                }
-                let shared = is_shared_reference(Some(trimmed));
-                if shared != flag(&found, "is_shared") && !values.is_empty() {
-                    values.push(("is_shared", C::Bool(shared)));
-                    changed.push("is_shared");
-                    changes.insert(
-                        "is_shared".into(),
-                        json!({"old": flag(&found, "is_shared"), "new": shared}),
-                    );
-                }
-                if !values.is_empty() {
-                    parts::update_row(
-                        &state.db,
-                        "environment_variables",
-                        row_id(&found),
-                        &values,
-                        state.now(),
-                    )
-                    .await?;
-                    if !changed.is_empty() {
-                        column_order(&mut changed);
-                        audit_env(
-                            state,
-                            ctx,
-                            meta,
-                            res,
-                            "updated",
-                            text(&found, "uuid").unwrap_or_default(),
-                            key,
-                            changed,
-                            Value::Object(changes),
-                        )
-                        .await;
-                    }
-                    count += 1;
+        // A key can have copies from earlier duplicate saves. Each copy gets the saved value,
+        // so that a deployment uses this value whichever copy it reads last.
+        let copies = re::all_by_key(&state.db, &res.morph, res.id, is_preview, key).await?;
+        let is_new = copies.is_empty();
+        for found in copies {
+            let current = plain(state, &found)?;
+            // A value the view could not show is not overwritten by its placeholder.
+            if flag(&found, "is_shown_once")
+                || flag(&found, "is_multiline")
+                || dev_view::format_value(current.as_deref()).is_none()
+            {
+                continue;
+            }
+            // The `value` setter: `withoutEdgeWhitespace()`.
+            let trimmed = without_edge_whitespace(value);
+            let mut values: Vec<(&'static str, C)> = Vec::new();
+            let mut changed: Vec<&str> = Vec::new();
+            let mut changes = Map::new();
+            if current.as_deref() != Some(value.as_str()) {
+                values.push(("value", C::Text(Some(enc.encrypt_serialized(trimmed)))));
+                if current.as_deref() != Some(trimmed) {
+                    changed.push("value");
                 }
             }
-            None => {
-                let cipher = enc.encrypt_serialized(value.trim());
-                let n = NewEnv {
-                    morph: &res.morph,
-                    resource_id: res.id,
-                    key,
-                    value_encrypted: Some(&cipher),
-                    comment: comment.as_deref(),
-                    is_multiline: false,
-                    is_literal: parsed.setting("is_literal").unwrap_or(false),
-                    is_runtime: parsed.setting("is_runtime").unwrap_or(true),
-                    is_buildtime: parsed.setting("is_buildtime").unwrap_or(true),
-                    is_required: false,
-                    is_shown_once: false,
-                    is_preview,
-                    is_shared: is_shared_reference(Some(value.trim())),
-                    order: None,
-                    version: &state.version,
+            if let Some(c) = comment
+                && text(&found, "comment") != Some(c.as_str())
+            {
+                values.push(("comment", C::Text(Some(c.clone()))));
+                changed.push("comment");
+                changes.insert(
+                    "comment".into(),
+                    json!({"old": found.get("comment"), "new": c}),
+                );
+            }
+            // `$found->fill($data['settings'])`: flags change only when a "# coolify:" line sets them.
+            for (attribute, new) in &parsed.settings {
+                let column = match attribute.as_str() {
+                    "is_literal" => "is_literal",
+                    "is_buildtime" => "is_buildtime",
+                    "is_runtime" => "is_runtime",
+                    _ => continue,
                 };
-                let fields = bulk_fields(&parsed.settings);
-                create_model(state, ctx, meta, res, &n, &fields).await?;
+                if *new != flag(&found, column) {
+                    values.push((column, C::Bool(*new)));
+                    changed.push(column);
+                    changes.insert(
+                        column.into(),
+                        json!({"old": flag(&found, column), "new": new}),
+                    );
+                }
+            }
+            let shared = is_shared_reference(Some(trimmed));
+            if shared != flag(&found, "is_shared") && !values.is_empty() {
+                values.push(("is_shared", C::Bool(shared)));
+                changed.push("is_shared");
+                changes.insert(
+                    "is_shared".into(),
+                    json!({"old": flag(&found, "is_shared"), "new": shared}),
+                );
+            }
+            if !values.is_empty() {
+                parts::update_row(
+                    &state.db,
+                    "environment_variables",
+                    row_id(&found),
+                    &values,
+                    state.now(),
+                )
+                .await?;
+                if !changed.is_empty() {
+                    column_order(&mut changed);
+                    audit_env(
+                        state,
+                        ctx,
+                        meta,
+                        res,
+                        "updated",
+                        text(&found, "uuid").unwrap_or_default(),
+                        key,
+                        changed,
+                        Value::Object(changes),
+                    )
+                    .await;
+                }
                 count += 1;
             }
+        }
+        if is_new {
+            let cipher = enc.encrypt_serialized(without_edge_whitespace(value));
+            let n = NewEnv {
+                morph: &res.morph,
+                resource_id: res.id,
+                key,
+                value_encrypted: Some(&cipher),
+                comment: comment.as_deref(),
+                is_multiline: false,
+                is_literal: parsed.setting("is_literal").unwrap_or(false),
+                is_runtime: parsed.setting("is_runtime").unwrap_or(true),
+                is_buildtime: parsed.setting("is_buildtime").unwrap_or(true),
+                is_required: false,
+                is_shown_once: false,
+                is_preview,
+                is_shared: is_shared_reference(Some(value.trim())),
+                order: None,
+                version: &state.version,
+            };
+            let fields = bulk_fields(&parsed.settings);
+            create_model(state, ctx, meta, res, &n, &fields).await?;
+            count += 1;
         }
     }
     Ok(count)
@@ -1606,13 +1616,12 @@ fn uses_exact_escaping(res: &Res, r: &Record, resolved: Option<&str>) -> bool {
         return false;
     }
     // `legacyEnvFileLineIsUnreadable()`
-    if (flag(r, "is_literal") || flag(r, "is_multiline"))
-        && resolved.is_some_and(|value| {
-            value.contains('\'')
-                && !((value.starts_with('{') || value.starts_with('['))
-                    && serde_json::from_str::<Value>(value).is_ok())
-        })
-    {
+    if resolved.is_some_and(|value| {
+        coolify_jobs::databases::env::legacy_line_is_unreadable(
+            value,
+            flag(r, "is_literal") || flag(r, "is_multiline"),
+        )
+    }) {
         return true;
     }
     let parses_compose = res.is_service()
@@ -1911,14 +1920,36 @@ async fn save(
             ));
         }
     }
+    // `keyBelongsToAnotherVariable()`.
+    if re::same_key_exists(
+        &state.db,
+        &res.morph,
+        res.id,
+        flag(r, "is_preview"),
+        key.trim(),
+        row_id(r),
+    )
+    .await?
+    {
+        return Ok(toast_error(
+            StatusCode::CONFLICT,
+            "Environment variable already exists.",
+        ));
+    }
     let locked = flag(r, "is_shown_once");
     let current = plain(state, r)?;
+    // `$newLockedValue`: the locked value is never sent to the browser, but it can be replaced.
+    let new_locked_value = body
+        .get("new_locked_value")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+        .map(|v| without_edge_whitespace(v).to_owned());
     let new_value = if locked {
-        current.clone()
+        new_locked_value.clone().or_else(|| current.clone())
     } else {
         body.get("value")
             .and_then(Value::as_str)
-            .map(|v| v.trim().to_owned())
+            .map(|v| without_edge_whitespace(v).to_owned())
     };
     if flag(r, "is_required") && new_value.as_deref().unwrap_or_default().is_empty() {
         return Ok(toast_error(
@@ -1943,7 +1974,7 @@ async fn save(
         changed.push("key");
         changes.insert("key".into(), json!({"old": stored_key, "new": key}));
     }
-    if !locked && new_value != current {
+    if (!locked || new_locked_value.is_some()) && new_value != current {
         values.push((
             "value",
             C::Text(new_value.as_deref().map(|v| enc.encrypt_serialized(v))),
@@ -2028,7 +2059,18 @@ async fn destroy(
     };
     let key = text(&r, "key").unwrap_or_default();
     let compose = res.str("docker_compose").filter(|c| !c.is_empty());
-    if (res.is_service() || (res.is_application() && compose.is_some()))
+    // A Compose variable must keep one row, but an extra copy of it can go.
+    let is_duplicate = re::same_key_exists(
+        &state.db,
+        &res.morph,
+        res.id,
+        flag(&r, "is_preview"),
+        key,
+        row_id(&r),
+    )
+    .await?;
+    if !is_duplicate
+        && (res.is_service() || (res.is_application() && compose.is_some()))
         && used_in_compose(compose, key)
     {
         return Ok(toast_error(

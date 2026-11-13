@@ -35,7 +35,7 @@
   const isApplication = $derived(!isDatabase);
   const status = $derived(resource.status ?? '');
   const statusType = $derived<'success' | 'warning' | 'error'>(
-    status.includes('running') ? 'success' : ['starting', 'restarting', 'degraded'].some((s) => status.includes(s)) ? 'warning' : 'error',
+    status.includes('running') && !status.includes('starting') ? 'success' : ['starting', 'restarting', 'degraded'].some((s) => status.includes(s)) ? 'warning' : 'error',
   );
   const statusLabel = $derived(formatContainerStatus(status));
   const name = $derived(headline(resource.human_name || resource.name));
@@ -73,6 +73,17 @@
     }
   }
 </script>
+
+{#snippet statusBadge()}
+  {#if resource.is_removed_from_compose}
+    <span class="inline-flex h-6 max-w-full items-center gap-1.5 whitespace-nowrap rounded-full border border-red-200 bg-red-50 px-2 text-xs font-medium leading-none text-red-700 dark:border-red-500/30 dark:bg-red-500/15 dark:text-red-300">
+      <span class="size-1.5 shrink-0 rounded-full bg-red-500"></span>
+      <span class="truncate">Not in Compose file</span>
+    </span>
+  {:else}
+    <StatusBadge label={statusLabel} type={statusType} />
+  {/if}
+{/snippet}
 
 {#snippet limitWarning()}
   {#if restartLimit !== null}
@@ -114,10 +125,12 @@
             <div class="truncate text-sm font-semibold text-black dark:text-fg">{name}</div>
             <div class="mt-0.5 truncate font-mono text-xs text-neutral-500 dark:text-fg-faint">{resource.image}</div>
           </div>
-          <StatusBadge label={statusLabel} type={statusType} />
+          {@render statusBadge()}
           {@render limitWarning()}
         </div>
-        {#if resource.configuration_required}
+        {#if resource.is_removed_from_compose}
+          <p class="mt-2 text-xs leading-5 text-neutral-500 dark:text-fg-dim">This resource is not in the Docker Compose file. Add it back to use it again, or delete it in its settings.</p>
+        {:else if resource.configuration_required}
           <div class="mt-2"><StatusBadge label="Configuration required" type="warning" /></div>
         {:else if resource.description}
           <p class="mt-2 line-clamp-2 text-xs leading-5 text-neutral-500 dark:text-fg-dim">{resource.description}</p>
@@ -149,8 +162,8 @@
       </div>
     </div>
     <div class="truncate font-mono text-xs text-neutral-500 dark:text-fg-faint">{resource.image}</div>
-    <div class="flex flex-wrap items-center gap-1">
-      <StatusBadge label={statusLabel} type={statusType} />
+    <div class="flex flex-wrap items-center gap-1" title={resource.is_removed_from_compose ? 'Not in the Docker Compose file. Add it back to use it again, or delete it in its settings.' : undefined}>
+      {@render statusBadge()}
       {@render limitWarning()}
     </div>
     <div class="flex items-center justify-end">

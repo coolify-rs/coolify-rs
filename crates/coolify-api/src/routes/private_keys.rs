@@ -13,7 +13,7 @@ use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use coolify_compat::Encrypter;
-use coolify_compat::sshkey::{KeyKind, format_private_key, generate, inspect};
+use coolify_compat::sshkey::{KeyKind, format_private_key, generate, inspect, validation_error};
 use coolify_db::private_keys::{self, KeyRow, KeyUpdate, NewKey};
 use coolify_domain::ROOT_TEAM_ID;
 use serde_json::{Value, json};
@@ -23,11 +23,14 @@ use crate::input::{Input, validated_json};
 use crate::response::{ApiError, ApiResult, created, ok};
 use crate::serialize::serialize_record;
 use crate::state::AppState;
-use crate::validation::{CUSTOM_API_MESSAGES, Field, Rule, validate};
+use crate::validation::{Field, Rule, validate};
 
 const NOT_FOUND: ApiError = ApiError::Message(StatusCode::NOT_FOUND, "Private Key not found.");
-const INVALID: ApiError =
-    ApiError::Message(StatusCode::UNPROCESSABLE_ENTITY, "Invalid private key.");
+/// `PrivateKey::validationError()` (4.7.5): `create_key` answers 422 with the reason (a key that
+/// cannot be loaded, PuTTY format, DSA, RSA below 2048 bits, an unsupported key type).
+const fn invalid(reason: &'static str) -> ApiError {
+    ApiError::Message(StatusCode::UNPROCESSABLE_ENTITY, reason)
+}
 
 fn encrypter(state: &AppState) -> ApiResult<&Encrypter> {
     state.encrypter.as_ref().ok_or(ApiError::Message(
@@ -116,22 +119,40 @@ fn string_max(name: &'static str, required: bool) -> Field {
     Field { name, rules }
 }
 
-/// PHP `base64_decode` (non-strict): characters outside the alphabet are skipped.
-fn php_base64_decode(s: &str) -> String {
-    let filtered: String = s
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '+' || *c == '/')
-        .collect();
-    // A lone trailing sextet cannot form a byte; PHP drops it.
-    let usable = if filtered.len() % 4 == 1 {
-        filtered.len() - 1
-    } else {
-        filtered.len()
-    };
-    let bytes = base64::engine::general_purpose::STANDARD_NO_PAD
-        .decode(&filtered[..usable])
-        .unwrap_or_default();
-    String::from_utf8_lossy(&bytes).into_owned()
+/// PHP `base64_decode($s, true)` (strict, `php_base64_decode_ex`): whitespace is skipped, any
+/// other character outside the alphabet fails, as does data after padding, a truncated last
+/// group, or a wrong padding length. `None` is PHP's `false`.
+fn php_base64_decode_strict(s: &str) -> Option<String> {
+    let mut sextets = String::new();
+    let mut padding = 0usize;
+    for c in s.chars() {
+        if c == '=' {
+            padding += 1;
+            continue;
+        }
+        if matches!(c, ' ' | '\t' | '\n' | '\r') {
+            continue;
+        }
+        if !(c.is_ascii_alphanumeric() || c == '+' || c == '/') || padding > 0 {
+            return None;
+        }
+        sextets.push(c);
+    }
+    if sextets.len() % 4 == 1 {
+        return None;
+    }
+    if padding > 0 && (padding > 2 || !(sextets.len() + padding).is_multiple_of(4)) {
+        return None;
+    }
+    // The leftover bits of the last group are dropped, whatever they are.
+    let engine = base64::engine::GeneralPurpose::new(
+        &base64::alphabet::STANDARD,
+        base64::engine::GeneralPurposeConfig::new()
+            .with_decode_padding_mode(base64::engine::DecodePaddingMode::RequireNone)
+            .with_decode_allow_trailing_bits(true),
+    );
+    let bytes = engine.decode(&sextets).ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn truthy_str(input: &Input, key: &str) -> Option<String> {
@@ -150,25 +171,41 @@ pub async fn create(
 ) -> ApiResult {
     require_admin(&ctx)?;
     let input = validated_json(&headers, &uri, &body)?;
+    // `nameRules(required: false, nullable: false)`, `descriptionRules()` (4.7.5).
     let fields = [
-        string_max("name", false),
-        string_max("description", false),
+        Field {
+            name: "name",
+            rules: crate::validation::patterns::present_name_rules(),
+        },
+        crate::validation::patterns::description(),
         string_max("private_key", true),
     ];
     let allowed: Vec<&str> = input.keys().map(String::as_str).collect();
-    validate(&input, &fields, CUSTOM_API_MESSAGES, &allowed)?;
+    validate(
+        &input,
+        &fields,
+        crate::validation::patterns::API_COMBINED_MESSAGES,
+        &allowed,
+    )?;
     let enc = encrypter(&state)?;
 
     let name = truthy_str(&input, "name").unwrap_or_else(random_name);
     let description =
         truthy_str(&input, "description").unwrap_or_else(|| "Created by Coolify via API".into());
+    // 4.7.5: a key that is not PEM text can be sent base64 encoded. Other text is validated as
+    // it is (`base64_decode($request->private_key, true)`).
     let raw = input.str("private_key").unwrap_or_default();
     let key = if raw.starts_with("-----BEGIN") {
         raw.to_string()
     } else {
-        php_base64_decode(raw)
+        php_base64_decode_strict(raw).unwrap_or_else(|| raw.to_string())
     };
-    let info = inspect(&key).ok_or(INVALID)?;
+    if let Some(reason) = validation_error(&key, true) {
+        return Err(invalid(reason));
+    }
+    let info = inspect(&key).ok_or(invalid(
+        "The private key is invalid. Paste an unencrypted private key, not a public key or a certificate.",
+    ))?;
     if private_keys::fingerprint_exists(&state.db, ctx.team_id, &info.fingerprint, None).await? {
         return Err(ApiError::Message(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -258,15 +295,19 @@ pub async fn update(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     let input = validated_json(&headers, &uri, &body)?;
+    // `nameRules(required: false, nullable: false)`, `descriptionRules()` (4.7.5).
     let fields = [
-        string_max("name", false),
-        string_max("description", false),
+        Field {
+            name: "name",
+            rules: crate::validation::patterns::present_name_rules(),
+        },
+        crate::validation::patterns::description(),
         string_max("private_key", false),
     ];
     validate(
         &input,
         &fields,
-        CUSTOM_API_MESSAGES,
+        crate::validation::patterns::API_COMBINED_MESSAGES,
         &["name", "description", "private_key"],
     )?;
     let key = private_keys::find(&state.db, ctx.team_id, &uuid)
@@ -283,8 +324,20 @@ pub async fn update(
     let effective = new_plain
         .clone()
         .unwrap_or_else(|| format_private_key(&current));
-    let info =
-        inspect(&effective).ok_or_else(|| model_validation("The private key is invalid."))?;
+    // v4.7.5: `validationError()` checks only new or changed keys, so older keys can still be
+    // renamed.
+    let normalize = |k: &str| format_private_key(k).replace("\r\n", "\n");
+    let is_changed = new_plain
+        .as_deref()
+        .is_some_and(|n| normalize(n) != normalize(&current));
+    if is_changed && let Some(error) = validation_error(&effective, true) {
+        return Err(model_validation(error));
+    }
+    let info = inspect(&effective).ok_or_else(|| {
+        model_validation(
+            "The private key is invalid. Paste an unencrypted private key, not a public key or a certificate.",
+        )
+    })?;
     if private_keys::fingerprint_exists(&state.db, ctx.team_id, &info.fingerprint, Some(key.id))
         .await?
     {
@@ -372,11 +425,24 @@ pub(crate) fn random_name() -> String {
 mod tests {
     use super::*;
 
+    /// `base64_decode($value, true)` (4.7.5 `create_key`).
     #[test]
-    fn php_base64_is_lenient() {
-        assert_eq!(php_base64_decode("aGVsbG8="), "hello");
-        assert_eq!(php_base64_decode("aGVs\nbG8"), "hello");
-        assert_eq!(php_base64_decode("!!"), "");
+    fn php_base64_strict_rejects_what_is_not_base64() {
+        let d = |s: &str| php_base64_decode_strict(s);
+        assert_eq!(d("aGVsbG8=").as_deref(), Some("hello"));
+        // Padding is optional, whitespace is skipped.
+        assert_eq!(d("aGVsbG8").as_deref(), Some("hello"));
+        assert_eq!(d("aGVs\nbG8=\n").as_deref(), Some("hello"));
+        assert_eq!(d("").as_deref(), Some(""));
+        // Characters outside the alphabet, data after padding, truncated groups, wrong padding.
+        assert_eq!(d("!!"), None);
+        assert_eq!(d("ssh-ed25519 AAAA"), None);
+        assert_eq!(d("aGVs=bG8"), None);
+        assert_eq!(d("aGVsb"), None);
+        assert_eq!(d("aGVsbG8=="), None);
+        assert_eq!(d("aGVsbG8==="), None);
+        // "garbage" is seven alphabet characters: PHP decodes it, and the key check then fails.
+        assert!(d("garbage").is_some());
     }
 
     #[test]

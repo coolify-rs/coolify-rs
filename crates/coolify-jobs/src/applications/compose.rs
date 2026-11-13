@@ -59,7 +59,7 @@ fn is_base64(v: &str) -> bool {
 }
 
 /// `decodeBase64EncodedLabels`: peels nested base64 layers that decode to label lines.
-fn decode_base64_labels(v: &str) -> Option<String> {
+pub(crate) fn decode_base64_labels(v: &str) -> Option<String> {
     if !is_base64(v) {
         return None;
     }
@@ -126,9 +126,12 @@ pub struct EnvContext<'a> {
     /// A preview deployment: `$this->preview->fqdn`, and `variables` holds the deployed preview
     /// variables.
     pub preview: Option<Option<&'a str>>,
-    /// A preview that keeps production values (`$this->preview->keeps_production_values`): the
-    /// production variables, of which the runtime ones without a preview copy are added.
+    /// A preview that gets the production runtime variables without a preview variable
+    /// (`previewGetsProductionRuntimeFallback()`): the production variables.
     pub production_values: Vec<Var>,
+    /// `$this->application->environment_variables_preview()->pluck('key')`: the keys of all
+    /// preview variables; `production_values` with one of these keys are not added.
+    pub preview_keys: Vec<String>,
 }
 
 /// What a Docker Compose deployment adds to the runtime env file.
@@ -150,7 +153,7 @@ fn hosts_from_fqdn(fqdn: Option<&str>) -> String {
 }
 
 /// The NIXPACKS_ / RAILPACK_ variables `runtime_environment_variables` leaves out.
-fn excluded_runtime_key(key: &str) -> bool {
+pub(crate) fn excluded_runtime_key(key: &str) -> bool {
     const KEEP: [&str; 4] = [
         "NIXPACKS_PHP_ROOT_DIR",
         "NIXPACKS_PHP_FALLBACK_PATH",
@@ -276,16 +279,15 @@ pub fn runtime_env(
         };
         format!("{}={line}", v.key)
     };
-    let runtime_keys: Vec<&str> = runtime.iter().map(|v| v.key.as_str()).collect();
-    // A preview from before v4.5.1 also gets the production variables that have no preview copy.
-    let kept: Vec<&Var> = if ctx.preview.is_some() && !runtime.is_empty() {
+    // The production runtime variables that have no preview variable.
+    let kept: Vec<&Var> = if ctx.preview.is_some() {
         runtime_of(
             ctx.production_values.iter().collect(),
             excluded,
             sort_by_key,
         )
         .into_iter()
-        .filter(|v| !runtime_keys.contains(&v.key.as_str()))
+        .filter(|v| !ctx.preview_keys.contains(&v.key))
         .collect()
     } else {
         Vec::new()
@@ -316,10 +318,14 @@ pub fn runtime_env(
             ports.join(",")
         ));
     }
-    if ctx.compose.is_none() && !defined("PORT") && !ports.is_empty() {
+    // A preview can get PORT and HOST from the production variables without a preview variable.
+    let has_line = |envs: &[String], prefix: &str| {
+        ctx.preview.is_some() && envs.iter().any(|e| e.starts_with(prefix))
+    };
+    if ctx.compose.is_none() && !defined("PORT") && !ports.is_empty() && !has_line(&envs, "PORT=") {
         envs.push(format!("PORT={}", ports[0]));
     }
-    if !defined("HOST") {
+    if !defined("HOST") && !has_line(&envs, "HOST=") {
         envs.push("HOST=0.0.0.0".into());
     }
     (envs, warning)
@@ -742,6 +748,7 @@ mod tests {
     }
 
     fn lines(production_values: Vec<Var>, preview: &[Var]) -> Vec<String> {
+        let preview_keys = preview.iter().map(|v| v.key.clone()).collect();
         let ctx = EnvContext {
             commit: "abc",
             branch: None,
@@ -752,8 +759,31 @@ mod tests {
             server_ip: None,
             preview: Some(Some("https://pr-7.example.com")),
             production_values,
+            preview_keys,
         };
         runtime_env(&app(), preview, &ctx).0
+    }
+
+    /// The production `PORT` and `HOST` that a preview gets as a fallback are not added twice.
+    #[test]
+    fn previews_do_not_repeat_port_and_host_of_the_production_fallback() {
+        let preview = [var(11, "DATABASE_URL", "postgres://preview", true)];
+        let production = vec![
+            var(1, "PORT", "8080", false),
+            var(2, "HOST", "127.0.0.1", false),
+        ];
+        let got = lines(production, &preview);
+        assert_eq!(
+            got.iter().filter(|l| l.starts_with("PORT=")).count(),
+            1,
+            "{got:?}"
+        );
+        assert_eq!(
+            got.iter().filter(|l| l.starts_with("HOST=")).count(),
+            1,
+            "{got:?}"
+        );
+        assert!(!got.contains(&"HOST=0.0.0.0".to_owned()));
     }
 
     /// `generate_runtime_environment_variables()` of a preview: one from before v4.5.1
@@ -778,9 +808,10 @@ mod tests {
         assert!(
             position(r#"SECRET_KEY="s3cret""#) > position(r#"DATABASE_URL="postgres://preview""#)
         );
-        // Without any preview variable, nothing is added.
+        // The caller passes no production values when the preview has no runtime preview
+        // variable (`previewGetsProductionRuntimeFallback()`), so nothing is added then.
         assert!(
-            !lines(production, &[])
+            !lines(Vec::new(), &[])
                 .iter()
                 .any(|l| l.starts_with("SECRET_KEY="))
         );

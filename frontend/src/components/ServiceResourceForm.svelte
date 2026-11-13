@@ -58,6 +58,8 @@
   let error = $state<ApiError | null>(null);
   let conflicts = $state<{ domain: string; resource_name: string; resource_type: string; resource_link?: string | null }[] | null>(null);
   let requiredPort = $state<number | null>(null);
+  /** `$requestedPort`: the port of the domain that does not use the required port. */
+  let requestedPort = $state<number | null>(null);
   let forceDomains = false;
   let forcePort = false;
   let confirmDelete = $state(false);
@@ -97,6 +99,7 @@
       }
       if (r.port_warning) {
         requiredPort = r.port_warning;
+        requestedPort = r.requested_port ?? null;
         return;
       }
       if (r.warning) notify.warning(r.warning);
@@ -356,7 +359,7 @@
 {#if requiredPort !== null}
   <Modal title="Use a different port?" onclose={() => (requiredPort = null)}>
     <Callout type="warning" title="Port requirement" class="mb-4">
-      This service requires port <strong>{requiredPort}</strong> to function correctly. One or more of your domains use a different port, or none.
+      This service requires port <strong>{requiredPort}</strong> to function correctly. One or more of your domains use port <strong>{requestedPort}</strong>.
     </Callout>
     <Callout type="danger" title="What will happen if you continue?" class="mb-4">
       <ul class="mt-2 ml-4 list-disc">
@@ -369,20 +372,20 @@
     <div class="mt-4 flex flex-wrap justify-end gap-2 border-t border-neutral-200 pt-4 dark:border-white/[0.08]">
       <button
         type="button"
-        class="button w-auto"
-        onclick={() => {
-          requiredPort = null;
-          url = resource.url ?? '';
-        }}>Keep required port</button
-      >
-      <button
-        type="button"
         class="button button-error w-auto"
         onclick={() => {
           requiredPort = null;
           forcePort = true;
           submit();
-        }}>Use this port anyway</button
+        }}>Use port {requestedPort} anyway</button
+      >
+      <button
+        type="button"
+        class="button w-auto"
+        onclick={() => {
+          requiredPort = null;
+          url = resource.url ?? '';
+        }}>Keep port {requiredPort}</button
       >
     </div>
   </Modal>

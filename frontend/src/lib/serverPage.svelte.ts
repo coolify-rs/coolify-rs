@@ -5,6 +5,7 @@ import { page } from './page.svelte';
 import { session } from './session.svelte';
 import { serverNavContext } from './serverMenu';
 import { pluginNav } from './plugins.svelte';
+import { router } from './router.svelte';
 
 export async function loadServerContext(uuid: string, active: string, sub?: string): Promise<{ facts: ServerFacts; list: ServersPageData } | null> {
   const [list] = await Promise.all([serversUi.list(), pluginNav.ready()]);
@@ -25,4 +26,13 @@ export async function loadServerContext(uuid: string, active: string, sub?: stri
     servers: list.servers.map((s) => ({ uuid: s.uuid, name: s.name, functional: s.functional })),
   };
   return { facts, list };
+}
+
+/**
+ * `$showProxyActions` of livewire/server/navbar.blade.php (v4.7.5): the proxy actions show on
+ * `server.proxy` and the `server.proxy.*` pages only.
+ */
+export function showProxyActions(uuid: string): boolean {
+  const base = `/server/${uuid}/proxy`;
+  return router.path === base || router.path.startsWith(`${base}/`);
 }

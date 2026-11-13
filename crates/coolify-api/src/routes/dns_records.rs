@@ -500,6 +500,7 @@ fn dns_error(e: DnsError, hostname: &str) -> ApiError {
             record_id,
             current,
             proposed,
+            ..
         } => ApiError::Status(
             StatusCode::CONFLICT,
             json!({

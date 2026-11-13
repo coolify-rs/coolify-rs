@@ -695,6 +695,7 @@
                     bind:file={() => form.dockerComposeLocation, (v) => (form.dockerComposeLocation = v ?? '')}
                     showFile
                     fileLabel="Docker compose location"
+                    compose
                     defaultFile="/docker-compose.yaml"
                     disabled={!canUpdate || composeBusy}
                     baseError={err('base_directory')}

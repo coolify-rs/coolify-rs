@@ -311,6 +311,24 @@ upstream.paths = [
   "resources/views/components/modal-input.blade.php",
   "resources/views/components/modal-confirmation.blade.php",
   "resources/views/components/toast.blade.php",
+  # v4.7.5 pages.
+  "resources/views/livewire/security/private-key/partials/key-field.blade.php",
+  "resources/views/livewire/security/private-key/rotate.blade.php",
+  "resources/views/livewire/server/security/patches.blade.php",
+  "resources/views/livewire/server/security/host-key.blade.php",
+  "resources/views/livewire/server/sentinel.blade.php",
+  "resources/views/livewire/server/partials/force-disabled-callout.blade.php",
+  "resources/views/components/server/remove-unused-packages-button.blade.php",
+  "resources/views/livewire/project/service/import-backup.blade.php",
+  "resources/views/livewire/project/service/volume-backup/index.blade.php",
+  "resources/views/livewire/project/shared/resource-operations.blade.php",
+  "resources/views/livewire/project/application/general.blade.php",
+  "resources/views/livewire/settings-backup.blade.php",
+  "resources/views/livewire/star-toggle.blade.php",
+  "resources/views/livewire/partials/smtp-server-picker.blade.php",
+  "resources/views/livewire/storage/server-endpoint-fields.blade.php",
+  "resources/views/livewire/storage/sftp-login-fields.blade.php",
+  "resources/views/components/backup-s3-storage.blade.php",
 ]
 rust.paths = ["frontend/src/**"]
 rust.packages = []
@@ -335,6 +353,15 @@ upstream.paths = [
   "app/Livewire/Server/New/ByIp.php",
   "app/Livewire/Server/Show.php",
   "app/Livewire/Server/Delete.php",
+  # v4.7.5 pages.
+  "app/Livewire/Security/PrivateKey/Show.php",
+  "app/Livewire/Security/PrivateKey/Rotate.php",
+  "app/Livewire/Server/Security/Patches.php",
+  "app/Livewire/Concerns/ManagesServerPackageUpdates.php",
+  "app/Livewire/Project/Service/ImportBackup.php",
+  "app/Livewire/Project/CloneMe.php",
+  "app/Livewire/Project/Shared/ResourceOperations.php",
+  "app/Livewire/StarToggle.php",
 ]
 upstream.symbols = [
   "app/Models/PrivateKey.php::generateNewKeyPair()",
@@ -342,9 +369,20 @@ upstream.symbols = [
   "bootstrap/helpers/shared.php::generateSSHKey()",
 ]
 upstream.tables = ["projects", "environments", "servers", "server_settings", "private_keys", "teams", "team_user", "personal_access_tokens"]
-rust.paths = ["crates/coolify-api/src/ui.rs", "crates/coolify-db/src/dashboard.rs", "crates/coolify-db/src/teams.rs", "crates/coolify-compat/src/sshkey.rs"]
-rust.tests = ["crates/coolify-api/tests/ui_pages.rs"]
-rust.packages = ["coolify-api", "coolify-db", "coolify-compat"]
+rust.paths = [
+  "crates/coolify-api/src/ui.rs",
+  "crates/coolify-db/src/dashboard.rs",
+  "crates/coolify-db/src/teams.rs",
+  "crates/coolify-compat/src/sshkey.rs",
+  "crates/coolify-api/src/ui_private_key.rs",
+  "crates/coolify-api/src/ui_key_rotation.rs",
+  "crates/coolify-api/src/ui_server_patches.rs",
+  "crates/coolify-api/src/ui_shared/operations.rs",
+  "crates/coolify-api/src/ui_stars.rs",
+  "crates/coolify-jobs/src/server_ops/patches.rs",
+]
+rust.tests = ["crates/coolify-api/tests/ui_pages.rs", "crates/coolify-api/tests/ui_pages_4_7_5.rs", "crates/coolify-api/tests/ui_stars.rs"]
+rust.packages = ["coolify-api", "coolify-db", "coolify-compat", "coolify-jobs"]
 divergences = [
   "server status omits the Traefik-outdated and Sentinel checks (Attention required comes only from a stopped proxy)",
   "audit events (auditLog, Auditable) are not written, as for every coolify-rs write",

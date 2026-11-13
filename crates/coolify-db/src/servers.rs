@@ -238,7 +238,8 @@ pub async fn instance_urls(db: &Db) -> DbResult<(Option<String>, Option<String>,
 pub struct NewServer {
     pub uuid: String,
     pub name: String,
-    pub description: String,
+    /// `HasSafeStringAttribute`: NULL when the request has none (4.7.5).
+    pub description: Option<String>,
     pub ip: String,
     pub port: i64,
     pub user: String,
@@ -382,6 +383,116 @@ pub async fn resource_count(db: &Db, server_id: i64) -> DbResult<i64> {
         .await?)
 }
 
+/// `$server->primaryResources()->pluck('name')` (v4.7.5): the resources that deleting the server
+/// with "Delete all resources" deletes: the applications whose primary destination is on the
+/// server, the databases and the services. An application that has the server only as an
+/// additional destination runs on another server, so it is detached instead.
+pub async fn primary_resource_names(db: &Db, server_id: i64) -> DbResult<Vec<String>> {
+    let mut parts = vec![format!(
+        "SELECT 0 AS kind, id, name::text AS name FROM applications WHERE deleted_at IS NULL AND {DESTINATION_MATCH}"
+    )];
+    parts.extend(DATABASE_TABLES.iter().map(|t| {
+        format!(
+            "SELECT 1 AS kind, id, name::text AS name FROM {t} WHERE deleted_at IS NULL AND {DESTINATION_MATCH}"
+        )
+    }));
+    parts.push(
+        "SELECT 2 AS kind, id, name::text AS name FROM services WHERE server_id = $1 AND deleted_at IS NULL"
+            .to_string(),
+    );
+    let sql = format!(
+        "SELECT name FROM ({}) r ORDER BY kind, id",
+        parts
+            .iter()
+            .map(|p| format!("({p})"))
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ")
+    );
+    Ok(sqlx::query_scalar(&sql)
+        .bind(server_id)
+        .fetch_all(db.pool())
+        .await?)
+}
+
+/// One of `$server->additionalApplications()`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdditionalApplication {
+    pub id: i64,
+    pub name: String,
+    /// `destination.server.name`: the server the application keeps running on.
+    pub primary_server_name: Option<String>,
+}
+
+/// `$server->additionalApplications()` (v4.7.5): the applications that use this server only as
+/// an additional destination. Their primary destination is on another server.
+pub async fn additional_applications(
+    db: &Db,
+    server_id: i64,
+) -> DbResult<Vec<AdditionalApplication>> {
+    let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT a.id::bigint, a.name::text, \
+         COALESCE((SELECT s.name::text FROM standalone_dockers sd JOIN servers s ON s.id = sd.server_id \
+                   WHERE a.destination_type = 'App\\Models\\StandaloneDocker' AND sd.id = a.destination_id), \
+                  (SELECT s.name::text FROM swarm_dockers sw JOIN servers s ON s.id = sw.server_id \
+                   WHERE a.destination_type = 'App\\Models\\SwarmDocker' AND sw.id = a.destination_id)) \
+         FROM applications a WHERE a.deleted_at IS NULL \
+         AND a.id IN (SELECT application_id FROM additional_destinations WHERE server_id = $1) \
+         AND a.id NOT IN (SELECT id FROM applications WHERE {DESTINATION_MATCH}) ORDER BY a.id"
+    ))
+    .bind(server_id)
+    .fetch_all(db.pool())
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, primary_server_name)| AdditionalApplication {
+            id,
+            name,
+            primary_server_name,
+        })
+        .collect())
+}
+
+/// The delete of `$server->detachAdditionalApplications()`: removes this server from the
+/// applications that use it only as an additional destination.
+pub async fn detach_additional_applications(
+    db: &Db,
+    server_id: i64,
+    application_ids: &[i64],
+) -> DbResult<()> {
+    if application_ids.is_empty() {
+        return Ok(());
+    }
+    db.ensure_writable()?;
+    sqlx::query(
+        "DELETE FROM additional_destinations WHERE server_id = $1 AND application_id = ANY($2)",
+    )
+    .bind(server_id)
+    .bind(application_ids)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
+/// `Server::sshEndpointInUse()` (v4.7.5): whether a server of any team already uses this SSH
+/// endpoint. The port is part of the endpoint, so servers behind one NAT address with different
+/// forwarded SSH ports are different servers. `ip` is already normalized.
+pub async fn ssh_endpoint_in_use(
+    db: &Db,
+    ip: &str,
+    port: i64,
+    except_id: Option<i64>,
+) -> DbResult<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM servers WHERE deleted_at IS NULL AND ip = $1 AND port = $2::integer \
+         AND ($3::bigint IS NULL OR id <> $3))",
+    )
+    .bind(ip)
+    .bind(port)
+    .bind(except_id)
+    .fetch_one(db.pool())
+    .await?)
+}
+
 /// `$server->delete()`: the soft delete.
 pub async fn soft_delete(db: &Db, server_id: i64, now: chrono::NaiveDateTime) -> DbResult<()> {
     db.ensure_writable()?;
@@ -390,6 +501,8 @@ pub async fn soft_delete(db: &Db, server_id: i64, now: chrono::NaiveDateTime) ->
         .bind(now)
         .execute(db.pool())
         .await?;
+    // `HasStars::bootHasStars()`.
+    crate::stars::delete_for(db, crate::stars::SERVER_MORPH, server_id).await?;
     Ok(())
 }
 
@@ -464,6 +577,68 @@ pub(crate) fn set_clause(values: &[(&'static str, ColumnValue)], first_param: us
         .join(", ")
 }
 
+/// The SSH address of a server: `ip`, `port` and `server_settings.is_cloudflare_tunnel`.
+type SshAddress = Option<(Option<String>, Option<i64>, Option<bool>)>;
+
+/// True when a write can change the address that the pinned SSH host key belongs to. A write
+/// that sets the key too (a transfer import) already has the key of the new address.
+fn touches_ssh_address(values: &[(&'static str, ColumnValue)]) -> bool {
+    values
+        .iter()
+        .any(|(c, _)| matches!(*c, "ip" | "port" | "is_cloudflare_tunnel"))
+        && !values.iter().any(|(c, _)| *c == "ssh_host_key")
+}
+
+async fn ssh_address(db: &Db, server_id: i64) -> DbResult<SshAddress> {
+    Ok(sqlx::query_as(
+        "SELECT s.ip::text, s.port::bigint, (SELECT ss.is_cloudflare_tunnel FROM server_settings ss \
+         WHERE ss.server_id = s.id LIMIT 1) FROM servers s WHERE s.id = $1",
+    )
+    .bind(server_id)
+    .fetch_optional(db.pool())
+    .await?)
+}
+
+/// The address before a write that [`touches_ssh_address`]; `None` when the write does not.
+async fn ssh_address_before(
+    db: &Db,
+    server_id: i64,
+    values: &[(&'static str, ColumnValue)],
+) -> DbResult<Option<SshAddress>> {
+    if !touches_ssh_address(values) {
+        return Ok(None);
+    }
+    Ok(Some(ssh_address(db, server_id).await?))
+}
+
+/// The `saved` hook of `Server` (`wasChanged(['ip', 'port'])`) and the `updated` hook of
+/// `ServerSetting` (`wasChanged('is_cloudflare_tunnel')`) at v4.7.5:
+/// `forgetSshHostKey()` removes the pinned and the pending host key after the address of the
+/// server changed, so that the next connection trusts the key of the new address.
+async fn forget_ssh_host_key_if_address_changed(
+    db: &Db,
+    server_id: i64,
+    before: Option<SshAddress>,
+    now: chrono::NaiveDateTime,
+) -> DbResult<()> {
+    let Some(before) = before else {
+        return Ok(());
+    };
+    if ssh_address(db, server_id).await? == before {
+        return Ok(());
+    }
+    sqlx::query(
+        "UPDATE server_settings SET ssh_host_key = NULL, ssh_host_key_source = NULL, \
+         ssh_host_key_trusted_at = NULL, ssh_host_key_pending = NULL, updated_at = $2 \
+         WHERE server_id = $1 AND (ssh_host_key IS NOT NULL OR ssh_host_key_pending IS NOT NULL)",
+    )
+    .bind(server_id)
+    .bind(now)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
 /// `$server->update($fields)` after the caller's dirty check: the changed
 /// columns plus `updated_at` (nothing when nothing changed).
 pub async fn update_columns(
@@ -476,6 +651,7 @@ pub async fn update_columns(
         return Ok(());
     }
     db.ensure_writable()?;
+    let address = ssh_address_before(db, server_id, changes).await?;
     let sql = format!(
         "UPDATE servers SET {}, updated_at = $1 WHERE id = $2",
         set_clause(changes, 3)
@@ -483,6 +659,7 @@ pub async fn update_columns(
     bind_all(sqlx::query(&sql).bind(now).bind(server_id), changes)
         .execute(db.pool())
         .await?;
+    forget_ssh_host_key_if_address_changed(db, server_id, address, now).await?;
     Ok(())
 }
 
@@ -522,6 +699,8 @@ pub async fn update_if_changed(
         .map(|(i, (col, _))| format!("\"{col}\" IS DISTINCT FROM ${}", i + 3))
         .collect::<Vec<_>>()
         .join(" OR ");
+    // Both keys are the server id.
+    let address = ssh_address_before(db, key, values).await?;
     let sql = format!(
         "UPDATE {table} SET {}, updated_at = $1 WHERE {key_col} = $2 AND ({changed})",
         set_clause(values, 3)
@@ -529,6 +708,7 @@ pub async fn update_if_changed(
     let done = bind_all(sqlx::query(&sql).bind(now).bind(key), values)
         .execute(db.pool())
         .await?;
+    forget_ssh_host_key_if_address_changed(db, key, address, now).await?;
     Ok(done.rows_affected() > 0)
 }
 
@@ -546,10 +726,12 @@ pub async fn update_settings(
     } else {
         format!("{}, ", set_clause(values, 3))
     };
+    let address = ssh_address_before(db, server_id, values).await?;
     let sql = format!("UPDATE server_settings SET {sets}updated_at = $1 WHERE server_id = $2");
     bind_all(sqlx::query(&sql).bind(now).bind(server_id), values)
         .execute(db.pool())
         .await?;
+    forget_ssh_host_key_if_address_changed(db, server_id, address, now).await?;
     Ok(())
 }
 

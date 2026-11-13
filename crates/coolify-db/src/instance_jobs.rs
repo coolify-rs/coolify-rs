@@ -171,11 +171,12 @@ pub async fn prune_expired_tokens(db: &Db, now: NaiveDateTime) -> DbResult<u64> 
 
 /// `cleanup:unreachable-servers`, off Coolify Cloud: `forceDisableServer()` for servers that stayed
 /// unreachable. The key file it deletes does not exist here: keys are read from the database.
+/// The localhost server (id 0) is the host itself and is never touched.
 pub async fn force_disable_abandoned_servers(db: &Db) -> DbResult<u64> {
     db.ensure_writable()?;
     Ok(sqlx::query(
         "UPDATE server_settings SET force_disabled = true WHERE server_id IN ( \
-           SELECT s.id FROM servers s WHERE s.unreachable_count >= 3 \
+           SELECT s.id FROM servers s WHERE s.id != 0 AND s.unreachable_count >= 3 \
              AND s.updated_at < now() - interval '7 days' \
              AND EXISTS (SELECT 1 FROM notification_throttles t WHERE t.notifiable_type = 'App\\Models\\Server' \
                AND t.notifiable_id = s.id AND t.notification = 'App\\Notifications\\Server\\Unreachable'))",
@@ -294,6 +295,31 @@ pub async fn delete_old_sessions(db: &Db, older_than: i64, batch: i64) -> DbResu
             "DELETE FROM sessions WHERE ctid IN (SELECT ctid FROM sessions WHERE last_activity < $1 LIMIT $2)",
         )
         .bind(i32::try_from(older_than).unwrap_or(i32::MAX))
+        .bind(batch)
+        .execute(db.pool())
+        .await?
+        .rows_affected();
+        if deleted == 0 {
+            return Ok(());
+        }
+    }
+}
+
+/// `cleanupTable('scheduled_database_backup_executions', ...)` with `status = 'failed'`: backup
+/// retention removes only successful runs, and a failed run has no file, only its record.
+pub async fn delete_old_failed_backup_executions(
+    db: &Db,
+    older_than: NaiveDateTime,
+    batch: i64,
+) -> DbResult<()> {
+    db.ensure_writable()?;
+    loop {
+        let deleted = sqlx::query(
+            "DELETE FROM scheduled_database_backup_executions WHERE ctid IN ( \
+             SELECT ctid FROM scheduled_database_backup_executions \
+             WHERE created_at < $1 AND status = 'failed' LIMIT $2)",
+        )
+        .bind(older_than)
         .bind(batch)
         .execute(db.pool())
         .await?

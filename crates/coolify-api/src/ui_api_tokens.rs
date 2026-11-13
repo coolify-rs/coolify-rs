@@ -157,14 +157,11 @@ impl TokenRow {
             .unwrap_or_default()
     }
 
-    /// `$token->scopes` (`array` cast): `None` when the token is not limited.
+    /// `$token->scopes`: `None` when the token is not limited, else the readable scopes
+    /// (`Grant::listFrom($token->scopes)`, 4.7.5: an item that is not a scope is left out, so the
+    /// page opens when a token has unreadable scopes).
     fn scopes(&self) -> Option<Vec<Value>> {
-        let v: Value = serde_json::from_str(self.scopes.as_deref()?).ok()?;
-        match v {
-            Value::Array(a) => Some(a),
-            Value::Object(o) => Some(o.into_iter().map(|(_, v)| v).collect()),
-            _ => None,
-        }
+        readable_scopes(self.scopes.as_deref())
     }
 }
 
@@ -696,6 +693,21 @@ async fn validate_form(
     })
 }
 
+/// The scopes of a stored `scopes` column as `{"scope", "uuid"}` items. NULL (SQL or JSON) is a
+/// token for the whole team; anything else limits the token, readable or not.
+pub(crate) fn readable_scopes(stored: Option<&str>) -> Option<Vec<Value>> {
+    let value: Value = serde_json::from_str(stored?).ok()?;
+    if value.is_null() {
+        return None;
+    }
+    Some(
+        Grant::list_from(&value)
+            .iter()
+            .map(|g| json!({"scope": g.scope.as_str(), "uuid": g.uuid}))
+            .collect(),
+    )
+}
+
 /// Stored `scopes`: `[{"scope": ..., "uuid": ...}]`, or NULL for the whole team.
 fn stored_scopes(scopes: &Option<Vec<Grant>>) -> Value {
     match scopes {
@@ -967,6 +979,26 @@ async fn revoke(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Grant::listFrom($token->scopes)` (4.7.5): the page opens when a token has unreadable
+    /// scopes.
+    #[test]
+    fn unreadable_token_scopes_are_left_out() {
+        assert_eq!(readable_scopes(None), None);
+        assert_eq!(readable_scopes(Some("null")), None);
+        assert_eq!(
+            readable_scopes(Some(
+                r#"[{"scope":"project","uuid":"p-one"},"junk",null,{"scope":"nope","uuid":"x"},{"scope":"resource"},{"scope":"environment","uuid":"e-one"}]"#
+            )),
+            Some(vec![
+                json!({"scope": "project", "uuid": "p-one"}),
+                json!({"scope": "environment", "uuid": "e-one"}),
+            ])
+        );
+        // A value that is not a list still limits the token: no readable scope, not the whole team.
+        assert_eq!(readable_scopes(Some(r#""broken""#)), Some(vec![]));
+        assert_eq!(readable_scopes(Some("[]")), Some(vec![]));
+    }
 
     #[test]
     fn crc32b_matches_php() {

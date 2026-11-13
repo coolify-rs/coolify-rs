@@ -1,5 +1,12 @@
 <script lang="ts">
-  // Port of upstream livewire/server/security/terminal-access.blade.php.
+  // Port of upstream livewire/server/security/index.blade.php at v4.7.5: the Security page of a
+  // server shows the SSH host key (`ServerHostKey`) and the terminal access section
+  // (livewire/server/security/terminal-access.blade.php, which is a section of this page now).
+  // `Server\Security\Index` polls `pollConnectionCheck` every 3 s while it waits for the
+  // connection check after a host key change, and redirects the old patching anchors
+  // (#server-patching-overview-section, ...) to /security/patches.
+  import ServerHostKey from '../components/ServerHostKey.svelte';
+  import StatusBadge from '../components/StatusBadge.svelte';
   import Reicon from '../components/Reicon.svelte';
   import ConfirmModal from '../components/ConfirmModal.svelte';
   import ServerFrame from '../components/ServerFrame.svelte';
@@ -8,6 +15,7 @@
   import { get, post } from '../lib/serverApi';
   import { session } from '../lib/session.svelte';
   import { notify } from '../lib/toast.svelte';
+  import { loadServerContext } from '../lib/serverPage.svelte';
 
   let { uuid }: { uuid: string } = $props();
   type Data = { is_terminal_enabled: boolean; confirm: { text: boolean; password: boolean } };
@@ -19,6 +27,40 @@
   async function load() {
     data = await get<Data>(url);
   }
+
+  // Links sent before the patching sections got their own page (notifications) end with their
+  // section ID.
+  $effect(() => {
+    if (['#server-patching-overview-section', '#server-package-updates-section', '#server-held-updates-section'].includes(location.hash)) {
+      window.location.replace(`/server/${uuid}/security/patches${location.hash}`);
+    }
+  });
+
+  /** `waitForConnectionCheck()`: a host key change queues a connection check. */
+  let waiting = $state(false);
+  let deadline = 0;
+  let wasFunctional = false;
+  /** Load the page again when the server state changed: the navbar and the sidebar show the old status. */
+  let frameKey = $state(0);
+  async function waitForConnectionCheck() {
+    const ctx = await loadServerContext(uuid, 'security', 'overview');
+    wasFunctional = ctx?.facts.functional ?? false;
+    deadline = Date.now() + 60_000;
+    waiting = true;
+  }
+  $effect(() => {
+    if (!waiting) return;
+    const timer = setInterval(async () => {
+      const ctx = await loadServerContext(uuid, 'security', 'overview').catch(() => null);
+      if (ctx && ctx.facts.functional !== wasFunctional) {
+        waiting = false;
+        frameKey++;
+        return;
+      }
+      if (Date.now() >= deadline) waiting = false;
+    }, 3000);
+    return () => clearInterval(timer);
+  });
   async function toggle(password: string): Promise<string | void> {
     try {
       const r = await post<{ message: string; is_terminal_enabled: boolean }>(url, { password });
@@ -31,12 +73,26 @@
   }
 </script>
 
-<ServerFrame {uuid} active="security" sub="terminal-access" title="Terminal Access" onloaded={(f) => ((serverName = f.name), load())}>
+{#key frameKey}
+<ServerFrame {uuid} active="security" sub="overview" title="Security" onloaded={(f) => ((serverName = f.name), load())}>
   {#snippet children()}
-    {#if data}
-      <div class="application-settings-form w-full">
-        <SettingsSection id="server-terminal-access-section" title="Terminal access" description="Control dashboard terminal access for this server and its containers.">
-          <div class="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+    <div class="application-settings-form flex w-full min-w-0 flex-col gap-6">
+      <ServerHostKey {uuid} onchanged={waitForConnectionCheck} />
+      {#if data}
+        <div class="application-settings-form w-full">
+          <SettingsSection id="server-terminal-access-section" title="Terminal access" description="Control dashboard terminal access for this server and its containers.">
+            {#snippet badges()}
+              <StatusBadge label={data?.is_terminal_enabled ? 'Enabled' : 'Disabled'} type={data?.is_terminal_enabled ? 'success' : 'neutral'} />
+            {/snippet}
+            {#snippet actions()}
+              {#if session.isAdmin && data}
+                <div>
+                  <button type="button" class="button {data.is_terminal_enabled ? '' : 'button-highlighted'}" onclick={() => (confirming = true)}>
+                    {data.is_terminal_enabled ? 'Disable terminal' : 'Enable terminal'}
+                  </button>
+                </div>
+              {/if}
+            {/snippet}
             <div class="flex items-start gap-3">
               <div class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-neutral-500 dark:bg-white/[0.06] dark:text-fg-dim">
                 <Reicon name="browser-terminal" class="size-4" />
@@ -48,19 +104,13 @@
                 </p>
               </div>
             </div>
-            {#if session.isAdmin}
-              <div>
-                <button type="button" class="button {data.is_terminal_enabled ? '' : 'button-highlighted'}" onclick={() => (confirming = true)}>
-                  {data.is_terminal_enabled ? 'Disable terminal' : 'Enable terminal'}
-                </button>
-              </div>
-            {/if}
-          </div>
-        </SettingsSection>
-      </div>
-    {/if}
+          </SettingsSection>
+        </div>
+      {/if}
+    </div>
   {/snippet}
 </ServerFrame>
+{/key}
 
 {#if confirming && data}
   <ConfirmModal

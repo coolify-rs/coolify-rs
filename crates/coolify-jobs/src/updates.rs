@@ -15,8 +15,13 @@ use serde_json::{Value, json};
 use crate::Jobs;
 use crate::server_ops::{Srv, helper_version, shell_arg, version_compare};
 
+pub mod auto_update;
+
 /// `CoolifyUpgradeStatus::FILE`.
 pub const STATUS_FILE: &str = "/data/coolify/source/.upgrade-status";
+/// `CoolifyUpgradeStatus::LOCK_FILE`: `upgrade.sh` holds this lock while it writes a status, so
+/// an error write cannot interleave with it.
+pub const STATUS_LOCK_FILE: &str = "/data/coolify/source/.upgrade-status.lock";
 /// `CoolifyUpgradeStatus::STALE_AFTER_MINUTES`.
 const STALE_AFTER_MINUTES: i64 = 10;
 /// `CoolifyUpgradeStatus::RUNNING_LOCK_EXPIRES_AFTER_MINUTES`.
@@ -227,6 +232,8 @@ pub fn latest_in(file: &Value, settings: &UpdateChannel, running: &str) -> Optio
 
 /// `CheckForUpdatesJob::handle`. `true` when `new_version_available` is up to date.
 pub async fn check_for_updates(jobs: &Jobs, current: &str) -> bool {
+    // `AutoUpdateNotifier::checkResult()`: the new version reports the result of the attempt.
+    auto_update::check_result(jobs, current).await;
     let settings = UpdateChannel::load(&jobs.0.db).await;
     let Some(latest) = refresh_versions()
         .await
@@ -277,19 +284,7 @@ pub fn status_from_file(content: &str, running: &str, target: &str, now: DateTim
         return json!({"status": "error", "step": 0, "message": message, "running_version": running, "target_version": target});
     }
     let step: i64 = step.parse().unwrap_or(0);
-    // `hasReachedTargetVersion()`: an image tag that is not a version (v4.6.0) counts as reached.
-    let is_version = {
-        let mut parts = target.splitn(3, '.');
-        let numeric = |p: Option<&str>| {
-            p.is_some_and(|p| p.chars().next().is_some_and(|c| c.is_ascii_digit()))
-        };
-        let first = parts.next();
-        first.is_some_and(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_digit()))
-            && numeric(parts.next())
-    };
-    let reached = !running.is_empty()
-        && !target.is_empty()
-        && (!is_version || version_compare(running, target) != Ordering::Less);
+    let reached = has_reached_target_version(running, target);
     if step >= 6 && !reached {
         return json!({
             "status": "in_progress",
@@ -308,6 +303,92 @@ pub fn status_from_file(content: &str, running: &str, target: &str, now: DateTim
     })
 }
 
+/// `CoolifyUpgradeStatus::hasReachedTargetVersion`: an image tag that is not a version (v4.6.0)
+/// counts as reached.
+pub fn has_reached_target_version(running: &str, target: &str) -> bool {
+    if running.is_empty() || target.is_empty() {
+        return false;
+    }
+    // `preg_match('/^\d+\.\d+/', $targetVersion)`.
+    let is_version = {
+        let mut parts = target.splitn(3, '.');
+        let numeric = |p: Option<&str>| {
+            p.is_some_and(|p| p.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        };
+        let first = parts.next();
+        first.is_some_and(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_digit()))
+            && numeric(parts.next())
+    };
+    !is_version || version_compare(running, target) != Ordering::Less
+}
+
+/// `CoolifyUpgradeStatus::compareAndWriteCommand($expected, $line)`: a shell command that writes
+/// `line` to the status file only if the file still contains `expected`. It holds the lock that
+/// `upgrade.sh` takes for its status writes, if `flock` is available.
+pub fn compare_and_write_command(expected: &str, line: &str) -> String {
+    use base64::Engine as _;
+    let b64 = |text: &str| base64::engine::general_purpose::STANDARD.encode(text);
+    let script = concat!(
+        "if command -v flock >/dev/null 2>&1; then exec 9>\"$2\"; flock -w 10 9 || exit 1; fi; ",
+        "if [ \"$(cat \"$1\" 2>/dev/null)\" = \"$(printf %s \"$3\" | base64 -d)\" ]; then printf %s \"$4\" | base64 -d > \"$1\"; echo >> \"$1\"; fi"
+    );
+    format!(
+        "sh -c {} _ {} {} {} {}",
+        shell_arg(script),
+        shell_arg(STATUS_FILE),
+        shell_arg(STATUS_LOCK_FILE),
+        shell_arg(&b64(expected.trim())),
+        shell_arg(&b64(line)),
+    )
+}
+
+/// The line `writeError()` writes: `error|<message without separators>|<ISO 8601 time>`.
+pub fn error_status_line(message: &str, now: DateTime<Utc>) -> String {
+    // `trim(preg_replace('/[|\r\n]+/', ' ', $message))`.
+    let mut clean = String::with_capacity(message.len());
+    let mut in_run = false;
+    for c in message.chars() {
+        if matches!(c, '|' | '\r' | '\n') {
+            if !in_run {
+                clean.push(' ');
+            }
+            in_run = true;
+        } else {
+            clean.push(c);
+            in_run = false;
+        }
+    }
+    format!(
+        "error|{}|{}",
+        clean.trim(),
+        now.format("%Y-%m-%dT%H:%M:%S+00:00")
+    )
+}
+
+/// `CoolifyUpgradeStatus::writeError($server, $message)`: writes an error that stopped an upgrade
+/// before the upgrade script started, so the upgrade modal shows it. Does nothing while an
+/// upgrade script runs, because the error then belongs to this attempt only. The write happens
+/// only if the status file did not change after the read, so a status that an upgrade script
+/// wrote in the meantime is kept.
+pub async fn write_error(jobs: &Jobs, message: &str) -> Result<(), String> {
+    let srv = Srv::load(jobs, 0).await?;
+    let current = srv
+        .run_quiet(
+            &[format!("cat {STATUS_FILE} 2>/dev/null || true")],
+            "upgrade-status",
+        )
+        .await
+        .unwrap_or_default();
+    let now = Utc::now();
+    if is_running(&current, now) {
+        return Ok(());
+    }
+    let command = compare_and_write_command(&current, &error_status_line(message, now));
+    // `instant_remote_process(..., throwError: false)`.
+    let _ = srv.run_quiet(&[command], "upgrade-status").await;
+    Ok(())
+}
+
 /// `Upgrade::getUpgradeStatus`, read from the server.
 pub async fn upgrade_status(jobs: &Jobs, running: &str, target: &str) -> Value {
     let Ok(srv) = Srv::load(jobs, 0).await else {
@@ -323,8 +404,20 @@ pub async fn upgrade_status(jobs: &Jobs, running: &str, target: &str) -> Value {
     status_from_file(&content, running, target, Utc::now())
 }
 
-/// `UpdateCoolify::backupDatabase`: the instance database's backup schedule, when there is one.
-/// `upgrade.sh` always takes its own dump as well.
+/// The exception of `UpdateCoolify::backupDatabase` when the backup did not succeed. `reason` is
+/// the message of the backup execution.
+fn backup_failed_message(reason: Option<&str>) -> String {
+    let reason = reason
+        .filter(|r| !r.is_empty() && *r != "0")
+        .map(|r| format!(" Error: {r}"))
+        .unwrap_or_default();
+    format!(
+        "The database backup failed, so the update was not started.{reason} You can turn off \"Backup before update\" in Settings > Backup to update without a backup."
+    )
+}
+
+/// `UpdateCoolify::backupDatabase`: the instance database's backup schedule, when there is one
+/// and it is enabled. `upgrade.sh` always takes its own dump as well.
 async fn backup_database(jobs: &Jobs) -> Result<(), String> {
     let db = jobs.0.db.pool();
     let enabled: bool = sqlx::query_scalar(
@@ -333,34 +426,125 @@ async fn backup_database(jobs: &Jobs) -> Result<(), String> {
     .fetch_one(db)
     .await
     .map_err(|e| e.to_string())?;
-    let backup: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM scheduled_database_backups \
+    // `! $backup?->enabled`: the first schedule, when it is enabled.
+    let backup: Option<(i64, Option<bool>)> = sqlx::query_as(
+        "SELECT id, enabled FROM scheduled_database_backups \
          WHERE database_id = 0 AND database_type = 'App\\Models\\StandalonePostgresql' ORDER BY id LIMIT 1",
     )
     .fetch_optional(db)
     .await
     .map_err(|e| e.to_string())?;
-    let Some(backup) = backup.filter(|_| enabled) else {
+    let Some((backup, _)) = backup.filter(|(_, on)| enabled && *on == Some(true)) else {
         return Ok(());
     };
     jobs.run_database_backup(backup).await;
-    let status: Option<String> = sqlx::query_scalar(
-        "SELECT status FROM scheduled_database_backup_executions \
+    let execution: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT status::text, message::text FROM scheduled_database_backup_executions \
          WHERE scheduled_database_backup_id = $1 ORDER BY id DESC LIMIT 1",
     )
     .bind(backup)
     .fetch_optional(db)
     .await
     .map_err(|e| e.to_string())?;
+    let (status, message) = execution.unwrap_or_default();
     if status.as_deref() == Some("success") {
         Ok(())
     } else {
-        Err("The database backup failed, so the update was not started.".to_owned())
+        Err(backup_failed_message(message.as_deref()))
     }
+}
+
+/// Why `UpdateCoolify::handle` did not start an upgrade.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateError {
+    /// `UpgradeAlreadyRunningException`: another upgrade script is still running. This is not a
+    /// failure of the running upgrade.
+    AlreadyRunning(String),
+    Failed(String),
+}
+
+impl UpdateError {
+    pub fn message(&self) -> &str {
+        match self {
+            UpdateError::AlreadyRunning(m) | UpdateError::Failed(m) => m,
+        }
+    }
+}
+
+impl From<String> for UpdateError {
+    fn from(message: String) -> Self {
+        UpdateError::Failed(message)
+    }
+}
+
+/// The message of `UpgradeAlreadyRunningException`.
+fn already_running_message() -> String {
+    format!(
+        "Another coolify-rs upgrade is already running. Wait for it to finish. If it has stopped, you can upgrade again {RUNNING_LOCK_EXPIRES_AFTER_MINUTES} minutes after its last status update."
+    )
+}
+
+/// `UpdateCoolify::ensureNoUpgradeIsRunning`.
+async fn ensure_no_upgrade_is_running(srv: &Srv) -> Result<(), UpdateError> {
+    let status = srv
+        .run_quiet(
+            &[format!("cat {STATUS_FILE} 2>/dev/null || true")],
+            "upgrade-status",
+        )
+        .await
+        .unwrap_or_default();
+    if is_running(&status, Utc::now()) {
+        return Err(UpdateError::AlreadyRunning(already_running_message()));
+    }
+    Ok(())
 }
 
 /// `UpdateCoolify::handle`. `Ok(false)` when there is nothing to do.
 pub async fn update_coolify(jobs: &Jobs, current: &str, manual: bool) -> Result<bool, String> {
+    start_update(jobs, current, manual)
+        .await
+        .map_err(|e| e.message().to_owned())
+}
+
+/// `Upgrade::upgrade`: `UpdateCoolify::run(manual_update: true)`, and an error that stopped the
+/// upgrade before the script started is written to the status file, so the upgrade modal of
+/// every viewer shows it.
+pub async fn upgrade_manually(jobs: &Jobs, current: &str) -> Result<bool, String> {
+    match start_update(jobs, current, true).await {
+        Ok(started) => Ok(started),
+        Err(e) => {
+            if let Err(status_error) = write_error(jobs, e.message()).await {
+                tracing::warn!(error = %status_error, "could not write the upgrade error");
+            }
+            Err(e.message().to_owned())
+        }
+    }
+}
+
+/// `UpdateCoolifyJob::handle` after `CheckForUpdatesJob`: starts the automatic update and tells
+/// the root team when it could not start.
+pub async fn run_update_job(jobs: &Jobs, current: &str) {
+    match start_update(jobs, current, false).await {
+        Ok(true) => tracing::info!(
+            "coolify-rs upgrade script started. Result: {STATUS_FILE}, log: /data/coolify/source/upgrade-*.log."
+        ),
+        Ok(false) => {}
+        // The running upgrade keeps its saved attempt, so its result is still reported.
+        Err(UpdateError::AlreadyRunning(message)) => {
+            tracing::warn!("Automatic update skipped: {message}");
+        }
+        Err(UpdateError::Failed(message)) => {
+            tracing::error!("UpdateCoolifyJob failed: {message}");
+            if let Err(status_error) = write_error(jobs, &message).await {
+                tracing::warn!(error = %status_error, "could not write the upgrade error");
+            }
+            auto_update::failed(jobs, &message).await;
+        }
+    }
+}
+
+/// `UpdateCoolify::handle` with the reason an upgrade did not start.
+async fn start_update(jobs: &Jobs, current: &str, manual: bool) -> Result<bool, UpdateError> {
     let settings = UpdateChannel::load(&jobs.0.db).await;
     // A custom image (v4.6.0) installs only when upgraded to by hand, from ghcr.io.
     if settings.is_custom() {
@@ -368,10 +552,14 @@ pub async fn update_coolify(jobs: &Jobs, current: &str, manual: bool) -> Result<
             return Ok(false);
         };
         let Some(script_url) = upgrade_script_url() else {
-            return Err("This installation has no update address (COOLIFY_RS_CDN).".to_owned());
+            return Err("This installation has no update address (COOLIFY_RS_CDN)."
+                .to_owned()
+                .into());
         };
         backup_database(jobs).await?;
-        return run_upgrade(jobs, &script_url, &tag, Some("ghcr.io")).await;
+        let srv = Srv::load(jobs, 0).await?;
+        ensure_no_upgrade_is_running(&srv).await?;
+        return Ok(run_upgrade(jobs, srv, &script_url, &tag, Some("ghcr.io")).await?);
     }
     let file = match refresh_versions().await {
         Some(file) => Some(file),
@@ -386,7 +574,9 @@ pub async fn update_coolify(jobs: &Jobs, current: &str, manual: bool) -> Result<
     let latest =
         version_of(&versions).ok_or_else(|| "Cannot determine latest version.".to_owned())?;
     let Some(script_url) = upgrade_script_url_for(&channel) else {
-        return Err("This installation has no update address (COOLIFY_RS_CDN).".to_owned());
+        return Err("This installation has no update address (COOLIFY_RS_CDN)."
+            .to_owned()
+            .into());
     };
     let db = jobs.0.db.pool();
     if !manual {
@@ -403,33 +593,33 @@ pub async fn update_coolify(jobs: &Jobs, current: &str, manual: bool) -> Result<
     if version_compare(&latest, current) == Ordering::Less {
         return Err(format!(
             "Cannot downgrade from {current} to {latest}. If you need to downgrade, please do so manually via Docker commands."
-        ));
+        )
+        .into());
     }
     backup_database(jobs).await?;
-    run_upgrade(jobs, &script_url, &latest, None).await
+    // Check the lock before the attempt is saved, so a running upgrade keeps its own saved
+    // attempt.
+    let srv = Srv::load(jobs, 0).await?;
+    ensure_no_upgrade_is_running(&srv).await?;
+    if !manual {
+        auto_update::save_attempt(jobs, &latest).await?;
+    }
+    let started = run_upgrade(jobs, srv, &script_url, &latest, None).await?;
+    if !manual {
+        auto_update::started(jobs, current, &latest);
+    }
+    Ok(started)
 }
 
 /// `UpdateCoolify::update($registryUrl)`: runs `upgrade.sh` for the version or image tag.
 async fn run_upgrade(
     jobs: &Jobs,
+    srv: Srv,
     script_url: &str,
     latest: &str,
     registry_url: Option<&str>,
 ) -> Result<bool, String> {
     let db = jobs.0.db.pool();
-    let srv = Srv::load(jobs, 0).await?;
-    let status = srv
-        .run_quiet(
-            &[format!("cat {STATUS_FILE} 2>/dev/null || true")],
-            "upgrade-status",
-        )
-        .await
-        .unwrap_or_default();
-    if is_running(&status, Utc::now()) {
-        return Err(format!(
-            "Another coolify-rs upgrade is already running. Wait for it to finish. If it has stopped, you can upgrade again {RUNNING_LOCK_EXPIRES_AFTER_MINUTES} minutes after its last status update."
-        ));
-    }
     let (helper, registry): (Option<String>, Option<String>) = sqlx::query_as(
         "SELECT helper_version, docker_registry_url FROM instance_settings WHERE id = 0",
     )
@@ -519,9 +709,7 @@ pub fn spawn_schedule(jobs: &Jobs, current: String) {
                 if !check_for_updates(&jobs, &current).await {
                     continue;
                 }
-                if let Err(e) = update_coolify(&jobs, &current, false).await {
-                    tracing::error!(error = %e, "UpdateCoolifyJob failed");
-                }
+                run_update_job(&jobs, &current).await;
             }
         }
     });
@@ -648,6 +836,77 @@ mod tests {
             now,
         );
         assert_eq!(waiting["status"], "in_progress");
+    }
+
+    #[test]
+    fn the_target_version_is_reached_when_the_running_version_is_not_older() {
+        assert!(has_reached_target_version("4.7.5", "4.7.5"));
+        assert!(has_reached_target_version("4.7.6", "4.7.5"));
+        assert!(!has_reached_target_version("4.7.4", "4.7.5"));
+        assert!(!has_reached_target_version("", "4.7.5"));
+        assert!(!has_reached_target_version("4.7.5", ""));
+        // An image tag that is not a version counts as reached.
+        assert!(has_reached_target_version("4.7.5", "pr-1234"));
+    }
+
+    #[test]
+    fn an_error_is_written_only_over_the_status_that_was_read() {
+        let command =
+            compare_and_write_command(" 2|Pulling images|2026-11-10T12:00:00+00:00\n", "error|x|y");
+        assert_eq!(
+            command,
+            "sh -c 'if command -v flock >/dev/null 2>&1; then exec 9>\"$2\"; flock -w 10 9 || exit 1; fi; if [ \"$(cat \"$1\" 2>/dev/null)\" = \"$(printf %s \"$3\" | base64 -d)\" ]; then printf %s \"$4\" | base64 -d > \"$1\"; echo >> \"$1\"; fi' _ '/data/coolify/source/.upgrade-status' '/data/coolify/source/.upgrade-status.lock' 'MnxQdWxsaW5nIGltYWdlc3wyMDI2LTExLTEwVDEyOjAwOjAwKzAwOjAw' 'ZXJyb3J8eHx5'"
+        );
+        // No status file yet: the expected content is empty.
+        assert!(compare_and_write_command("", "error|x|y").contains(" '' 'ZXJyb3J8eHx5'"));
+    }
+
+    #[test]
+    fn the_error_line_has_no_separators_of_the_status_file() {
+        assert_eq!(
+            error_status_line(
+                " The backup failed.\r\nError: a|b || c \n",
+                at("2026-11-10T12:00:05Z")
+            ),
+            "error|The backup failed. Error: a b   c|2026-11-10T12:00:05+00:00"
+        );
+        // The line is a status that the upgrade modal shows.
+        let status = status_from_file(
+            &error_status_line("no space left", at("2026-11-10T12:00:05Z")),
+            "4.7.4",
+            "4.7.5",
+            at("2026-11-10T12:01:00Z"),
+        );
+        assert_eq!(status["status"], "error");
+        assert_eq!(status["message"], "no space left");
+    }
+
+    #[test]
+    fn a_failed_backup_tells_the_reason_and_the_way_out() {
+        assert_eq!(
+            backup_failed_message(Some("pg_dump: connection refused")),
+            "The database backup failed, so the update was not started. Error: pg_dump: connection refused You can turn off \"Backup before update\" in Settings > Backup to update without a backup."
+        );
+        assert_eq!(
+            backup_failed_message(None),
+            "The database backup failed, so the update was not started. You can turn off \"Backup before update\" in Settings > Backup to update without a backup."
+        );
+        assert_eq!(backup_failed_message(Some("")), backup_failed_message(None));
+    }
+
+    #[test]
+    fn an_upgrade_that_is_already_running_is_not_a_failure() {
+        let running = UpdateError::AlreadyRunning(already_running_message());
+        assert!(
+            running
+                .message()
+                .starts_with("Another coolify-rs upgrade is already running.")
+        );
+        assert!(running.message().contains("15 minutes"));
+        assert_eq!(
+            UpdateError::from("boom".to_owned()),
+            UpdateError::Failed("boom".to_owned())
+        );
     }
 
     #[test]

@@ -1483,6 +1483,10 @@ async fn validate_token(
     Path(uuid): Path<String>,
 ) -> ApiResult {
     let s = find_server(&state, &ctx, &uuid).await?;
+    // v4.7.5: `$this->authorize('update', $this->server)`.
+    if !ctx.is_team_admin() {
+        return toast_error("This action is unauthorized.");
+    }
     let (_, label, _) = server_provider(&s);
     let token = match current_token(&s) {
         Some(id) => db::find_token_by_id(&state.db, id).await?,

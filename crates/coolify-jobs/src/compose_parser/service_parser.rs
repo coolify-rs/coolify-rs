@@ -1203,7 +1203,9 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
     };
     let services: Arr = match php::get(&yaml, "services") {
         Some(PhpValue::Array(items)) => items.clone(),
-        _ => Vec::new(),
+        // `services` that is not a map (for example a string): nothing to parse.
+        Some(_) => return Ok(ParsedCompose::empty()),
+        None => Vec::new(),
     };
     svc::env_delete_corrupted(run.db, run.service.id)
         .await
@@ -1263,6 +1265,7 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
         validate::validate_shell_safe_path(&service_name, "service name").map_err(|e| {
             format!("Invalid Docker Compose service name: {e} Service names must not contain shell metacharacters.")
         })?;
+        validate::validate_compose_service_name(&service_name)?;
         validate::validate_compose_service_scale(&service_name, service)?;
         let image = php::data_get_str(service, "image", "");
         let mut saved = match run.migrated(&service_name).await? {
@@ -1278,6 +1281,16 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
         };
         run.set_image(&mut saved, &image).await?;
     }
+    // markServicePartsRemovedFromCompose($resource, $services)
+    let compose_service_names: Vec<String> = services.iter().map(|(k, _)| k.as_string()).collect();
+    coolify_db::service_parts::mark_removed_from_compose(
+        run.db,
+        run.service.id,
+        &compose_service_names,
+        run.now,
+    )
+    .await
+    .map_err(db_err)?;
 
     let server_is_log_drain = service_helpers::is_log_drain_enabled(&run.server.settings);
     let mut all_magic: Vec<String> = Vec::new();
@@ -2119,7 +2132,8 @@ pub async fn service_parser(run: &mut ServiceRun<'_>) -> Result<ParsedCompose, S
                 if let PhpValue::Str(s) = &value
                     && s.contains("{{")
                 {
-                    value = PhpValue::Str(run.resolve_shared(s, false).await?);
+                    // v4.7: `{{server.VAR}}` resolves in the compose parsers too.
+                    value = PhpValue::Str(run.resolve_shared(s, true).await?);
                 }
                 mapped.push((k, value));
             }

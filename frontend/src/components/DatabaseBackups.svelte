@@ -3,6 +3,7 @@
   // scheduled-backups.blade.php (Project/Database/ScheduledBackups) and
   // create-scheduled-backup.blade.php (Project/Database/CreateScheduledBackup).
   import { untrack } from 'svelte';
+  import DatabaseImport from './DatabaseImport.svelte';
   import Empty from './Empty.svelte';
   import FormInput from './FormInput.svelte';
   import Modal from './Modal.svelte';
@@ -17,6 +18,8 @@
   let { record, base, canUpdate }: { record: DatabaseRecord; base: string; canUpdate: boolean } = $props();
 
   let schedules = $state<BackupSchedule[]>([]);
+  // The import form opens in a dialog on the backups page (v4.7.0).
+  let importing = $state(false);
   let loaded = $state(false);
   let search = $state('');
   let adding = $state(false);
@@ -79,6 +82,7 @@
   <SettingsSection title="Database backups" description="Automate database backups and track the latest execution for each schedule.">
     {#snippet actions()}
       {#if canUpdate}
+        <button type="button" class="button" onclick={() => (importing = true)}>Import backup</button>
         <button type="button" class="button button-highlighted" onclick={() => (adding = true)}>+ Add</button>
       {/if}
     {/snippet}
@@ -157,6 +161,13 @@
     </div>
   {/if}
 </div>
+
+{#if importing}
+  <!-- `<x-modal-input title="Import backup">` around livewire/project/database/import. -->
+  <Modal title="Import backup" onclose={() => (importing = false)}>
+    <DatabaseImport {record} {canUpdate} />
+  </Modal>
+{/if}
 
 {#if adding}
   <Modal title="New Scheduled Backup" onclose={() => (adding = false)}>

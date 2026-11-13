@@ -3,7 +3,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use coolify_db::testing::{MIGRATIONS_4_5_3, SCHEMA_4_5_3, TestDb};
+use coolify_db::testing::{MIGRATIONS_4_5_3, MIGRATIONS_4_6_0, SCHEMA_4_5_3, SCHEMA_4_6_0, TestDb};
 use serde_json::Value;
 
 fn url(tdb: &TestDb) -> String {
@@ -32,7 +32,7 @@ const HISTORICAL_ROWS: &str = "INSERT INTO migrations (migration, batch) VALUES 
 
 #[tokio::test]
 async fn check_schema_reports_what_boot_leaves() {
-    // A long-lived Coolify 4.6.0: writable, the old names counted, nothing to apply.
+    // A long-lived Coolify 4.7.5: writable, the old names counted, nothing to apply.
     let tdb = TestDb::new(HISTORICAL_ROWS).await;
     let v = check_schema(&url(&tdb));
     assert_eq!(v["read_only_reason"], Value::Null, "{v}");
@@ -40,14 +40,26 @@ async fn check_schema_reports_what_boot_leaves() {
     assert_eq!(v["unknown_migrations"], serde_json::json!([]));
     assert_eq!(v["missing_migrations"], serde_json::json!([]));
     assert_eq!(v["applied_on_boot"], serde_json::json!([]));
-    assert_eq!(v["applied_migrations"], 497);
+    assert_eq!(v["applied_migrations"], 524);
     tdb.drop_db().await;
 
-    // Coolify v4.5.3: boot applies the fifteen v4.6.0 migrations, then it is writable.
+    // Coolify v4.6.0: boot applies the twenty-seven v4.7.5 migrations, then it is writable.
+    let tdb = TestDb::with_baseline(SCHEMA_4_6_0, MIGRATIONS_4_6_0, "").await;
+    let v = check_schema(&url(&tdb));
+    assert_eq!(v["read_only_reason"], Value::Null, "{v}");
+    let on_boot = v["applied_on_boot"].as_array().unwrap();
+    assert_eq!(on_boot.len(), 27);
+    assert_eq!(on_boot[0], "2026_10_29_100000_create_image_scanning_tables");
+    assert_eq!(v["missing_migrations"], serde_json::json!([]));
+    assert_eq!(v["applied_migrations"], 493);
+    tdb.drop_db().await;
+
+    // Coolify v4.5.3: boot applies the fifteen v4.6.0 migrations and the twenty-seven of v4.7.5,
+    // then it is writable.
     let tdb = TestDb::with_baseline(SCHEMA_4_5_3, MIGRATIONS_4_5_3, "").await;
     let v = check_schema(&url(&tdb));
     assert_eq!(v["read_only_reason"], Value::Null, "{v}");
-    assert_eq!(v["applied_on_boot"].as_array().unwrap().len(), 15);
+    assert_eq!(v["applied_on_boot"].as_array().unwrap().len(), 42);
     assert_eq!(v["missing_migrations"], serde_json::json!([]));
     assert_eq!(v["applied_migrations"], 478);
     tdb.drop_db().await;
@@ -55,14 +67,14 @@ async fn check_schema_reports_what_boot_leaves() {
     // A newer Coolify: read-only, and the unknown name is the one reported.
     let tdb = TestDb::new(&format!(
         "{HISTORICAL_ROWS} INSERT INTO migrations (migration, batch) VALUES \
-         ('2026_11_20_120000_a_coolify_4_7_0_migration', 31);"
+         ('2026_11_20_120000_a_coolify_4_8_0_migration', 31);"
     ))
     .await;
     let v = check_schema(&url(&tdb));
     assert!(v["read_only_reason"].is_string(), "{v}");
     assert_eq!(
         v["unknown_migrations"],
-        serde_json::json!(["2026_11_20_120000_a_coolify_4_7_0_migration"])
+        serde_json::json!(["2026_11_20_120000_a_coolify_4_8_0_migration"])
     );
     assert_eq!(v["historical_migrations"], 4);
     tdb.drop_db().await;

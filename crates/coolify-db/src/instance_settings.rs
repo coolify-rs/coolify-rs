@@ -6,16 +6,25 @@ use crate::records::{Record, parse_row};
 use crate::servers::{ColumnValue, bind_all, set_clause};
 use crate::{Db, DbError, DbResult};
 
-/// `encrypted` casts of `InstanceSettings` that hold email configuration.
+/// `encrypted` casts of `InstanceSettings` that hold email configuration. `smtp_servers` is the
+/// `encrypted:array` cast of `HasSmtpServers`: its plain text is JSON.
 pub const SECRET_COLUMNS: &[&str] = &[
     "smtp_from_address",
     "smtp_from_name",
+    "notification_from_address",
+    "notification_from_name",
     "smtp_recipients",
     "smtp_host",
     "smtp_username",
     "smtp_password",
     "resend_api_key",
+    "resend_from_address",
+    "resend_from_name",
+    SMTP_SERVERS,
 ];
+
+/// `HasSmtpServers`: the other saved SMTP servers of the instance.
+pub const SMTP_SERVERS: &str = "smtp_servers";
 
 fn decode(text: &str) -> DbResult<Record> {
     parse_row(text).map_err(|e| DbError::Schema(format!("decoding settings: {e}")))

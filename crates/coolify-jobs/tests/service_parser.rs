@@ -36,8 +36,25 @@ async fn insert(pool: &sqlx::PgPool, table: &str, row: &Value) {
             texts.push((c, text));
         }
     }
+    // Columns the captured row has and the table no longer has are left out.
+    let table_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT column_name::text FROM information_schema.columns WHERE table_name = $1 AND table_schema = current_schema()",
+    )
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    if let Some(o) = row.as_object_mut() {
+        o.retain(|k, _| table_columns.contains(k));
+    }
+    // The captured rows are upstream v4.6.0 rows: columns added later get their database defaults.
+    let cols: Vec<String> = row
+        .as_object()
+        .map(|o| o.keys().map(|k| format!("\"{k}\"")).collect())
+        .unwrap_or_default();
+    let cols = cols.join(", ");
     sqlx::query(&format!(
-        "INSERT INTO {table} SELECT * FROM json_populate_record(NULL::{table}, $1::json)"
+        "INSERT INTO {table} ({cols}) SELECT {cols} FROM json_populate_record(NULL::{table}, $1::json)"
     ))
     .bind(row.to_string())
     .execute(pool)

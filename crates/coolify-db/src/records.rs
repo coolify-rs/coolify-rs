@@ -388,6 +388,23 @@ pub static SERVER_SETTING: ModelSpec = ModelSpec {
         "auto_security_updates_time",
         // v4.5.3 (`2026_10_27_155023_add_logdrain_axiom_domain_to_server_settings_table`).
         "logdrain_axiom_domain",
+        // v4.7.5 (`add_ssh_host_key_to_server_settings_table`,
+        // `add_ssh_host_key_check_enforced_to_server_settings_table`).
+        "ssh_host_key",
+        "ssh_host_key_source",
+        "ssh_host_key_trusted_at",
+        "ssh_host_key_pending",
+        "is_ssh_host_key_check_disabled",
+        "is_ssh_host_key_check_enforced",
+        // v4.7 image scanning (`create_image_scanning_tables`, `add_image_scan_memory_mb_…`,
+        // `add_image_scanner_time_and_cpu_limits_…`): fillable and not `$hidden` upstream.
+        "is_image_scan_enabled",
+        "image_scan_memory_mb",
+        "image_candidate_scans_today",
+        "image_candidate_scans_date",
+        "image_scan_syft_timeout",
+        "image_scan_grype_timeout",
+        "image_scan_cpus",
     ],
     hidden: &[],
     timestamps: &[
@@ -396,6 +413,7 @@ pub static SERVER_SETTING: ModelSpec = ModelSpec {
         "docker_version_checked_at",
         "compose_version_checked_at",
         "patch_checked_at",
+        "ssh_host_key_trusted_at",
     ],
     datetimes: &[
         "created_at",
@@ -403,6 +421,7 @@ pub static SERVER_SETTING: ModelSpec = ModelSpec {
         "docker_version_checked_at",
         "compose_version_checked_at",
         "patch_checked_at",
+        "ssh_host_key_trusted_at",
     ],
 };
 

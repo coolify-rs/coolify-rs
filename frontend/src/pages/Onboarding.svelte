@@ -111,7 +111,11 @@
     if (r.private_keys) privateKeys = r.private_keys;
     if ('selected_private_key' in r) selectedExistingPrivateKey = r.selected_private_key;
     if (r.generated) applyGenerated(r.generated);
-    if (r.created_private_key) createdPrivateKey = r.created_private_key;
+    if (r.created_private_key) {
+      createdPrivateKey = r.created_private_key;
+      // `$this->privateKey = null`: the saved key is not kept on the page.
+      privateKey = '';
+    }
     if (r.server) createdServer = r.server;
     if (r.server_public_key) serverPublicKey = r.server_public_key;
     if ('selected_server' in r && r.selected_server !== null) selectedExistingServer = r.selected_server;
@@ -543,7 +547,7 @@
           {#snippet createKeyDetails()}
             <p>{@render high('Key Storage:')} Private keys are encrypted at rest in coolify-rs's database.</p>
             <p>{@render high('Public Key Distribution:')} Deploy the public key to <code class={code}>~/.ssh/authorized_keys</code> on your target server for the specified user.</p>
-            <p>{@render high('Key Format:')} Supports RSA, ED25519, ECDSA, and DSA key types in OpenSSH format.</p>
+            <p>{@render high('Key Format:')} Supports ED25519, ECDSA, and RSA (2048 bits or more) key types in OpenSSH format.</p>
           {/snippet}
           {@render step('SSH Key Configuration', 'Configure your SSH key for server authentication.', createKeyActions, createKeyDetails)}
         {:else if currentState === 'create-server'}

@@ -125,6 +125,10 @@ pub async fn show(
         json!(part.bool("exclude_from_status")),
     );
     m.insert(
+        "is_removed_from_compose".into(),
+        json!(part.bool("is_removed_from_compose")),
+    );
+    m.insert(
         "is_log_drain_enabled".into(),
         json!(part.bool("is_log_drain_enabled")),
     );
@@ -175,46 +179,31 @@ fn errors_one(key: &str, message: String) -> ApiError {
     ApiError::Validation(m)
 }
 
-/// `ServiceApplication::portRequiresConfirmation`.
-pub(super) fn port_requires_confirmation(
-    sub: &SubRow,
-    fqdn: &str,
-    required: i64,
-    previous: Option<&str>,
-) -> bool {
+/// `ServiceApplication::extractPortFromUrl($fqdn)`.
+fn port_of_url(url: &str) -> Option<i64> {
+    let with_scheme = if url.starts_with("http://") || url.starts_with("https://") {
+        url.to_owned()
+    } else {
+        format!("http://{url}")
+    };
+    app_domains::UrlParts::parse(&with_scheme).and_then(|p| p.port_number())
+}
+
+/// `ServiceApplication::portRequiresConfirmation($fqdn, $requiredPort)`: true when saving this
+/// URL should confirm that it does not use the required template port. A domain without a port
+/// routes to the required port (v4.7), so only another explicit port asks.
+pub(super) fn port_requires_confirmation(sub: &SubRow, fqdn: &str, required: i64) -> bool {
     let fqdn = fqdn.trim();
     if fqdn.is_empty() {
         return false;
     }
-    let extract = |u: &str| {
-        let with_scheme = if u.starts_with("http://") || u.starts_with("https://") {
-            u.to_owned()
-        } else {
-            format!("http://{u}")
-        };
-        app_domains::UrlParts::parse(&with_scheme).and_then(|p| p.port_number())
-    };
-    let canonical = app_domains::without_port(fqdn);
-    let explicit = extract(fqdn);
-    if explicit == Some(required) {
+    let Some(explicit) = port_of_url(fqdn).filter(|port| *port != required) else {
         return false;
-    }
-    let Some(explicit) = explicit else {
-        let found = previous
-            .unwrap_or_default()
-            .split(',')
-            .filter(|p| !p.is_empty())
-            .find(|p| app_domains::without_port(p.trim()) == canonical);
-        return match found {
-            Some(url) if extract(url).is_some() => true,
-            Some(_) => false,
-            None => true,
-        };
     };
     let existing = sub
         .raw
         .get("domain_port_overrides")
-        .and_then(|o| o.get(&canonical))
+        .and_then(|o| o.get(app_domains::without_port(fqdn)))
         .and_then(Value::as_i64)
         .unwrap_or(0);
     existing != explicit
@@ -280,8 +269,6 @@ async fn submit_application(
     }
     // `ValidationPatterns::normalizeApplicationDomains`.
     let normalized = app_domains::normalize_domains(raw_url.as_deref());
-    let previous_editable = editable_urls(part);
-    let previous_editable = previous_editable.as_str();
     let force_domains = flag(body, "force_domains", false);
     if !force_domains && let Some(n) = &normalized {
         let list: Vec<String> = n.split(',').map(str::to_owned).collect();
@@ -293,10 +280,16 @@ async fn submit_application(
     if !flag(body, "force_port", false)
         && let Some(required) = templates::required_port(s.str("service_type"))
         && let Some(n) = &normalized
-        && n.split(',')
-            .any(|f| port_requires_confirmation(part, f, required, previous_editable))
+        && let Some(asked) = n
+            .split(',')
+            .find(|f| port_requires_confirmation(part, f, required))
     {
-        return Ok(ok(json!({"port_warning": required})).into_response());
+        // `$requestedPort`: the port of the domain that asks.
+        return Ok(ok(json!({
+            "port_warning": required,
+            "requested_port": port_of_url(asked.trim()),
+        }))
+        .into_response());
     }
     if text(body, "image").is_none() {
         return Err(errors_one("image", "The image field is required.".into()));

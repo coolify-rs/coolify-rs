@@ -11,10 +11,10 @@ fn b64(s: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(s)
 }
 
-const COMPOSE: &str = "\nservices:\n  coolify-log-drain:\n    image: cr.fluentbit.io/fluent/fluent-bit:5.1\n    container_name: coolify-log-drain\n    command: -c /fluent-bit.conf\n    env_file:\n      - .env\n    volumes:\n      - ./fluent-bit.conf:/fluent-bit.conf:ro\n      - ./parsers.conf:/parsers.conf:ro\n    ports:\n      - 127.0.0.1:24224:24224\n    labels:\n      - coolify.managed=true\n      - coolify.logDrainConfigVersion=1\n    restart: unless-stopped\n";
+const COMPOSE: &str = "\nservices:\n  coolify-log-drain:\n    image: cr.fluentbit.io/fluent/fluent-bit:5.1\n    container_name: coolify-log-drain\n    command: -c /fluent-bit.conf\n    env_file:\n      - .env\n    volumes:\n      - ./fluent-bit.conf:/fluent-bit.conf:ro\n      - ./parsers.conf:/parsers.conf:ro\n    ports:\n      - 127.0.0.1:24224:24224\n    labels:\n      - coolify.managed=true\n      - coolify.logDrainConfigVersion=2\n    restart: unless-stopped\n";
 /// `CONFIG_VERSION`: bump when the generated files change (image, config, compose, or README), so
 /// that the server checks start running log drains again with the new files.
-pub const CONFIG_VERSION: &str = "1";
+pub const CONFIG_VERSION: &str = "2";
 /// `CONFIG_VERSION_LABEL`.
 pub const CONFIG_VERSION_LABEL: &str = "coolify.logDrainConfigVersion";
 /// `ServerSetting::DEFAULT_AXIOM_DOMAIN`: the Axiom edge deployment for US East 1.
@@ -132,7 +132,7 @@ pub async fn start_log_drain(srv: &Srv) -> Result<Option<String>, String> {
     }
     let server_name = fluent_bit_value(srv.str_column("name").unwrap_or_default());
     let filter = format!(
-        "[FILTER]\n    Name grep\n    Match *\n    Exclude log 127.0.0.1\n[FILTER]\n    Name                modify\n    Match               *\n    Set                 coolify.server_name {server_name}\n    Rename              COOLIFY_APP_NAME coolify.app_name\n    Rename              COOLIFY_PROJECT_NAME coolify.project_name\n    Rename              COOLIFY_SERVER_IP coolify.server_ip\n    Rename              COOLIFY_ENVIRONMENT_NAME coolify.environment_name\n"
+        "[FILTER]\n    Name grep\n    Match *\n    Exclude log 127.0.0.1\n[FILTER]\n    Name                modify\n    Match               *\n    Set                 coolify.server_name {server_name}\n    Rename              COOLIFY_APP_NAME coolify.app_name\n    Rename              COOLIFY_PROJECT_NAME coolify.project_name\n    Rename              COOLIFY_SERVER_IP coolify.server_ip\n    Rename              COOLIFY_ENVIRONMENT_NAME coolify.environment_name\n    Rename              coolify.resourceName coolify.app_name\n    Rename              coolify.projectName coolify.project_name\n    Rename              coolify.environmentName coolify.environment_name\n    Rename              coolify.serviceName coolify.service_name\n    Remove              coolify.resourceName\n    Remove              coolify.projectName\n    Remove              coolify.environmentName\n"
     );
     let (config, parsers, env) = match kind {
         "newrelic" => (
@@ -282,22 +282,26 @@ mod tests {
     #[test]
     fn compose_and_readme_carry_the_new_files() {
         assert!(COMPOSE.contains("image: cr.fluentbit.io/fluent/fluent-bit:5.1\n"));
-        assert!(COMPOSE.contains("      - coolify.logDrainConfigVersion=1\n"));
+        assert!(COMPOSE.contains("      - coolify.logDrainConfigVersion=2\n"));
         assert_eq!(
             format!("{CONFIG_VERSION_LABEL}={CONFIG_VERSION}"),
-            "coolify.logDrainConfigVersion=1"
+            "coolify.logDrainConfigVersion=2"
         );
         assert!(README_FILES.starts_with("\nFiles:\n- `fluent-bit.conf`"));
     }
 
     #[test]
     fn outdated_drains_are_refreshed_once() {
-        let labels = "coolify.managed=true,coolify.logDrainConfigVersion=1";
-        assert_eq!(ps_label(labels, CONFIG_VERSION_LABEL), Some("1"));
+        let labels = "coolify.managed=true,coolify.logDrainConfigVersion=2";
+        assert_eq!(ps_label(labels, CONFIG_VERSION_LABEL), Some("2"));
         assert_eq!(ps_label("coolify.managed=true", CONFIG_VERSION_LABEL), None);
-        assert!(!claim_outdated_refresh("log-drain-current", Some("1")));
+        assert!(!claim_outdated_refresh(
+            "log-drain-current",
+            Some(CONFIG_VERSION)
+        ));
         assert!(claim_outdated_refresh("log-drain-old", None));
         assert!(!claim_outdated_refresh("log-drain-old", None));
-        assert!(claim_outdated_refresh("log-drain-other", Some("0")));
+        // A drain started with the version before v4.7 (`1`) is refreshed.
+        assert!(claim_outdated_refresh("log-drain-other", Some("1")));
     }
 }

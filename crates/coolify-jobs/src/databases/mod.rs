@@ -25,6 +25,7 @@ pub(crate) mod common;
 pub mod connection;
 pub mod docker_options;
 pub mod env;
+pub mod file_storage;
 pub mod import;
 mod keydb;
 mod mongodb;
@@ -32,11 +33,13 @@ mod mysql;
 pub mod paths;
 mod postgresql;
 pub mod proxy;
+pub mod rclone;
 mod redis;
 pub mod s3;
 mod sqlite;
 pub mod ssl;
 pub mod storage;
+pub mod storage_type;
 mod ui_ops;
 pub mod variables;
 pub mod volume_backup;
@@ -69,6 +72,10 @@ pub struct StartContext<'a> {
     pub file_mounts: Vec<String>,
     /// `generate_log_drain_configuration`, when the server and the database use a log drain.
     pub logging: Option<coolify_compat::yaml::PhpValue>,
+    /// `ImageStartPin::for(ImageStartPin::take($database), [$database->image])`: the scanned build
+    /// of a "Pull latest" security update that this start pulls instead of the tag. Taking them
+    /// uses them up.
+    pub start_pins: crate::image_scan::update::image_start_pin::Pins,
 }
 
 impl StartContext<'_> {
@@ -343,6 +350,13 @@ impl Jobs {
                     }
                 }
             }
+            // `HasImageScans` (the model's `deleting` hook): the scans, scan rules, ignores and
+            // notification state of the database go with it.
+            if let Err(e) =
+                coolify_db::image_scans::delete_resource_data(&jobs.0.db, d.morph(), d.id).await
+            {
+                tracing::warn!(database = %d.uuid, error = %e, "image scan data could not be deleted");
+            }
             if let Err(e) = dbs::force_delete(&jobs.0.db, d.kind, d.id, delete_volumes).await {
                 tracing::warn!(database = %d.uuid, error = %e, "database rows could not be deleted");
             }
@@ -477,6 +491,12 @@ impl Jobs {
         server: &ServerInfo,
         docker_cleanup: bool,
     ) {
+        // `NotifyResourceStoppedJob::expectStop($database)`: this stop sends no notification.
+        crate::notifications::resource_stopped::expect_stop(
+            d.kind.morph(),
+            d.id,
+            crate::notifications::resource_stopped::DEFAULT_STOP_TIMEOUT_SECONDS,
+        );
         if let Ok(t) = server.target(self).await {
             let stop = docker_stop_command(30, &d.uuid, server.docker_version());
             let rm = format!("docker rm -f {}", d.uuid);
@@ -677,6 +697,7 @@ impl Jobs {
                 )
             })
             .collect();
+        let start_pins = self.take_start_pins(d).await;
         Ok(StartContext {
             db: d,
             secrets,
@@ -690,7 +711,32 @@ impl Jobs {
             ensure_commands,
             file_mounts,
             logging: cleanup::log_drain_configuration(server, d),
+            start_pins,
         })
+    }
+
+    /// The database as the owner of image scans (`$database` in the scan calls of the start).
+    async fn scan_owner(&self, d: &DatabaseRow) -> Option<coolify_db::image_scans::ScanOwner> {
+        match coolify_db::image_scans::find_owner(&self.0.db, d.kind.morph(), d.id).await {
+            Ok(owner) => owner,
+            Err(e) => {
+                tracing::warn!(database = %d.uuid, error = %e, "the database could not be loaded for the image scan");
+                None
+            }
+        }
+    }
+
+    /// `ImageStartPin::for(ImageStartPin::take($database), [(string) $database->image])`.
+    async fn take_start_pins(
+        &self,
+        d: &DatabaseRow,
+    ) -> crate::image_scan::update::image_start_pin::Pins {
+        use crate::image_scan::update::image_start_pin;
+        let Some(owner) = self.scan_owner(d).await else {
+            return Vec::new();
+        };
+        let image = d.str("image").unwrap_or_default().to_owned();
+        image_start_pin::for_images(&image_start_pin::take(&owner, None), &[image])
     }
 
     /// The compose file a start would write, with no change on the server (for checks).
@@ -715,6 +761,7 @@ impl Jobs {
             ensure_commands: Vec::new(),
             file_mounts: Vec::new(),
             logging: None,
+            start_pins: Vec::new(),
         }
     }
 
@@ -793,6 +840,11 @@ impl Jobs {
             .run_streaming(&target, &commands, RunOptions::op("database.start"), tx)
             .await;
         let _ = writer.await;
+        // `executeDatabaseStartCommands()` ends with `ScanResourceImagesJob::dispatchAfterStart()`,
+        // whatever the result of the commands.
+        if let Some(owner) = self.scan_owner(d).await {
+            crate::image_scan::scan_jobs::dispatch_after_start(self, &owner).await;
+        }
         match result {
             Ok(_) => {
                 let _ = dbs::update_activity(
@@ -993,6 +1045,25 @@ impl Jobs {
 
     /// The database part of `GetContainersStatus` and `PushServerUpdateJob`.
     pub async fn apply_database_containers(
+        &self,
+        databases: &[DatabaseRow],
+        containers: &[Value],
+        snapshot: crate::applications::status::Snapshot,
+    ) {
+        use crate::notifications::resource_stopped;
+        // `NotifyResourceStoppedJob::upResourceIds()` before the statuses change,
+        // `dispatchForStopped()` after.
+        let up = resource_stopped::up_resources(
+            databases
+                .iter()
+                .map(|d| (d.kind.morph(), d.id, d.str("status"))),
+        );
+        self.apply_database_container_statuses(databases, containers, snapshot)
+            .await;
+        resource_stopped::dispatch_for_stopped(self, &up).await;
+    }
+
+    async fn apply_database_container_statuses(
         &self,
         databases: &[DatabaseRow],
         containers: &[Value],

@@ -639,6 +639,12 @@ pub async fn check_updates(srv: &Srv) -> Map<String, Value> {
             "reboot_required".into(),
             parse_reboot(&quiet(REBOOT_CHECK).await),
         );
+        // v4.7.5: the kernels, so the vulnerability list can tell an installed fix that waits
+        // for a reboot from a kernel that does not run.
+        out.insert(
+            "kernels".into(),
+            parse_kernels(&quiet(KERNELS_COMMAND).await).unwrap_or(Value::Null),
+        );
         out.insert("osId".into(), json!(os_id));
         out.insert("package_manager".into(), json!(pm));
         Ok(out)
@@ -834,22 +840,31 @@ pub async fn update_package(
     package_manager: Option<&str>,
     all: bool,
 ) -> Result<i64, String> {
+    let packages: Vec<String> = package
+        .filter(|p| !p.is_empty())
+        .map(|p| vec![p.to_owned()])
+        .unwrap_or_default();
+    update_packages(srv, &packages, package_manager, all).await
+}
+
+/// `UpdatePackage::handle` at v4.7.5: `$packages` is a list; it is ignored when `$all` is true.
+pub async fn update_packages(
+    srv: &Srv,
+    packages: &[String],
+    package_manager: Option<&str>,
+    all: bool,
+) -> Result<i64, String> {
     if !srv.info.is_functional() {
         return Err("Server is not reachable or not ready.".to_string());
     }
-    if !all && package.is_none_or(str::is_empty) {
+    if !all && packages.is_empty() {
         return Err("Package name required when 'all' is false.".to_string());
     }
-    let mut escaped = None;
-    if let (Some(p), false) = (package, all) {
-        if !p
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | ':' | '-'))
-        {
-            return Err("Invalid package name. Package names can only contain alphanumeric characters, hyphens, underscores, periods, plus signs, and colons.".to_string());
-        }
-        escaped = Some(shell_arg(p));
-    }
+    let escaped = if all {
+        None
+    } else {
+        Some(escaped_packages(packages)?)
+    };
     if !all && package_manager == Some("pacman") {
         return Err(
             "This operating system supports only a full system upgrade. Use \"Update all packages\"."
@@ -866,7 +881,7 @@ pub async fn update_package(
         srv.row.uuid.clone(),
         srv.info.team_id,
     );
-    let packages = package.filter(|_| !all).map(str::to_string);
+    let packages = (!all).then(|| unique_packages(packages).join(","));
     let manager = package_manager.map(str::to_string);
     tokio::spawn(async move {
         let Ok(s) = Srv::load(&jobs, id).await else {
@@ -885,6 +900,7 @@ pub async fn update_package(
             "packages update finished"
         );
         dispatch_manual(&jobs, id, &uuid);
+        scan_host_packages_after_update(&jobs, id).await;
     });
     Ok(activity)
 }
@@ -1006,6 +1022,364 @@ pub async fn configure_auto_updates(
     .map(|_| ())
 }
 
+/// `array_values(array_unique($packages))`.
+fn unique_packages(packages: &[String]) -> Vec<String> {
+    let mut unique: Vec<String> = Vec::new();
+    for package in packages {
+        if !unique.contains(package) {
+            unique.push(package.clone());
+        }
+    }
+    unique
+}
+
+/// The package arguments of `UpdatePackage::handle`: only characters that are valid in package
+/// names of all supported package managers; no leading hyphen, so a name is never read as an
+/// option. Several escaped names are separated by spaces.
+pub fn escaped_packages(packages: &[String]) -> Result<String, String> {
+    let unique = unique_packages(packages);
+    for package in &unique {
+        let mut chars = package.chars();
+        let valid = chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | ':' | '-'));
+        if !valid {
+            return Err("Invalid package name. Package names can only contain alphanumeric characters, hyphens, underscores, periods, plus signs, and colons.".to_string());
+        }
+    }
+    Ok(unique
+        .iter()
+        .map(|p| shell_arg(p))
+        .collect::<Vec<_>>()
+        .join(" "))
+}
+
+/// `RemoveUnusedPackages::commands()` (v4.7.5): apt autoremove also removes old kernels. dnf
+/// autoremove does not, so old install-only packages (kernels) are removed separately; dnf fails
+/// when there are none. zypper removes old kernels with purge-kernels. `None` when the package
+/// manager is not supported.
+pub fn remove_unused_commands(package_manager: Option<&str>) -> Option<Vec<String>> {
+    let commands: &[&str] = match package_manager {
+        Some("apt") => &["env DEBIAN_FRONTEND=noninteractive apt-get -y autoremove"],
+        Some("dnf") => &[
+            "dnf autoremove -y",
+            "sh -c 'dnf remove -y --oldinstallonly || true'",
+        ],
+        Some("zypper") => &["zypper --non-interactive purge-kernels"],
+        _ => return None,
+    };
+    Some(commands.iter().map(|c| (*c).to_owned()).collect())
+}
+
+/// `RemoveUnusedPackages::handle`: removes packages that nothing needs anymore, and old kernels.
+/// The package managers keep the running kernel. Returns the id of the activity.
+pub async fn remove_unused_packages(
+    srv: &Srv,
+    package_manager: Option<&str>,
+) -> Result<i64, String> {
+    let commands = remove_unused_commands(package_manager).ok_or_else(|| {
+        "Coolify cannot remove unused packages on this operating system.".to_string()
+    })?;
+    if !srv.info.is_functional() {
+        return Err("Server is not reachable or not ready.".to_string());
+    }
+    let update_id = coolify_domain::new_public_id();
+    let activity = queue_activity(srv, "patch.update", Some(&update_id)).await?;
+    let (jobs, id, uuid, team_id) = (
+        srv.jobs.clone(),
+        srv.id(),
+        srv.row.uuid.clone(),
+        srv.info.team_id,
+    );
+    let manager = package_manager.map(str::to_string);
+    tokio::spawn(async move {
+        let Ok(s) = Srv::load(&jobs, id).await else {
+            return;
+        };
+        let result = run_activity(&s, activity, &commands, "patch.update").await;
+        // `FinishServerPackagesUpdate`: `'packages' => 'unused'` for the action `remove_unused`.
+        tracing::info!(
+            target: "audit",
+            event = "ui.server.packages_update_finished",
+            team_id,
+            server_uuid = %uuid,
+            packages = "unused",
+            package_manager = manager.as_deref().unwrap_or_default(),
+            activity_id = activity,
+            result = if result.is_ok() { "success" } else { "failed" },
+            "packages update finished"
+        );
+        dispatch_manual(&jobs, id, &uuid);
+        scan_host_packages_after_update(&jobs, id).await;
+    });
+    Ok(activity)
+}
+
+/// The end of `FinishServerPackagesUpdate`: `ScanHostPackagesJob::dispatchManual($server)` when
+/// `ImageRescanJob::canRunOn($server)`, so the OS package vulnerabilities of the server are checked
+/// again after the update.
+async fn scan_host_packages_after_update(jobs: &Jobs, server_id: i64) {
+    use crate::image_scan::{ScanServer, host, scan_jobs};
+    match ScanServer::load(jobs, server_id).await {
+        Ok(server) if scan_jobs::can_run_on(&server) => host::dispatch_manual(jobs, &server),
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!(server_id, error = %e, "the host package scan after the update could not be queued");
+        }
+    }
+}
+
+/// `CheckUpdates::KERNELS_COMMAND` (v4.7.5): prints the running kernel (`RUNNING|<uname -r>`),
+/// each installed kernel (`KERNEL|<package>|<version>[|<arch>]`), and the kernel that boots next
+/// (`BOOT|<uname -r>`, or `BOOT|newest`) when the boot loader tells it.
+pub const KERNELS_COMMAND: &str = r#"sh -c 'echo "RUNNING|$(uname -r)"; if command -v dpkg-query >/dev/null 2>&1; then dpkg-query -W -f="\${db:Status-Abbrev}|\${Package}|\${Version}\n" "linux-image-[0-9]*" 2>/dev/null | sed -n "s/^ii *|/KERNEL|/p"; fi; if command -v rpm >/dev/null 2>&1; then rpm -q --qf "KERNEL|%{NAME}|%{VERSION}-%{RELEASE}|%{ARCH}\n" kernel-core kernel kernel-uek-core 2>/dev/null | grep "^KERNEL|"; fi; if command -v grubby >/dev/null 2>&1; then b=$(grubby --default-kernel 2>/dev/null); case "$b" in */vmlinuz-*) echo "BOOT|${b##*/vmlinuz-}";; esac; elif [ -f /etc/default/grub ]; then d=$(cat /etc/default/grub /etc/default/grub.d/*.cfg 2>/dev/null | sed -n "s/^[[:space:]]*GRUB_DEFAULT=//p" | tail -n 1 | tr -d "\042\047"); if [ "$d" = saved ]; then d=$(grub-editenv list 2>/dev/null | sed -n "s/^saved_entry=//p"); fi; case "$d" in ""|0) echo "BOOT|newest";; *) r=$(printf "%s\n" "$d" | sed -n -e "s/.*with Linux \([^ ]*\).*/\1/p" -e "s/.*gnulinux-\([0-9][^>]*\)-\(advanced\|recovery\)-.*/\1/p" | head -n 1); if [ -n "$r" ]; then echo "BOOT|$r"; fi;; esac; fi; exit 0'"#;
+
+/// `withoutEpoch()`.
+fn without_epoch(version: &str) -> &str {
+    match version.split_once(':') {
+        Some((epoch, rest)) if !epoch.is_empty() && epoch.bytes().all(|b| b.is_ascii_digit()) => {
+            rest
+        }
+        _ => version,
+    }
+}
+
+/// `versionAtLeast()`: PHP `version_compare($version, $minimum, '>=')` without the epochs.
+fn version_at_least(version: &str, minimum: &str) -> bool {
+    super::version_compare(without_epoch(version), without_epoch(minimum))
+        != std::cmp::Ordering::Less
+}
+
+/// `CheckUpdates::parseKernels()`: `{running, boot, installed: [{package, version, release}]}`,
+/// or `None` when the output names no running kernel.
+pub fn parse_kernels(output: &str) -> Option<Value> {
+    let mut running: Option<String> = None;
+    let mut boot: Option<String> = None;
+    let mut installed: Vec<(String, String, String)> = Vec::new();
+    let filled = |part: Option<&&str>| part.is_some_and(|p| !p.trim().is_empty());
+    for line in output.lines() {
+        let parts: Vec<&str> = line.trim().split('|').collect();
+        match parts.first().copied() {
+            Some("RUNNING") if filled(parts.get(1)) => running = Some(parts[1].to_owned()),
+            Some("BOOT") if filled(parts.get(1)) => boot = Some(parts[1].to_owned()),
+            Some("KERNEL") if filled(parts.get(1)) && filled(parts.get(2)) => {
+                // uname -r of this kernel: the package name without the prefix (dpkg), or
+                // version.arch (rpm).
+                let release = if filled(parts.get(3)) {
+                    format!("{}.{}", parts[2], parts[3])
+                } else {
+                    parts[1]
+                        .strip_prefix("linux-image-")
+                        .unwrap_or(parts[1])
+                        .to_owned()
+                };
+                installed.push((parts[1].to_owned(), parts[2].to_owned(), release));
+            }
+            _ => {}
+        }
+    }
+    if boot.as_deref() == Some("newest") {
+        let mut newest: Option<&(String, String, String)> = None;
+        for kernel in &installed {
+            if newest.is_none_or(|n| version_at_least(&kernel.1, &n.1)) {
+                newest = Some(kernel);
+            }
+        }
+        boot = newest.map(|k| k.2.clone());
+    }
+    let running = running?;
+    Some(json!({
+        "running": running,
+        "boot": boot,
+        "installed": installed
+            .iter()
+            .map(|(package, version, release)| json!({"package": package, "version": version, "release": release}))
+            .collect::<Vec<_>>(),
+    }))
+}
+
+/// `CheckUpdates::FULL_UPGRADE_ONLY`.
+pub const FULL_UPGRADE_ONLY: &[&str] = &["pacman"];
+
+static KERNEL_FLAVOR_VERSIONED: LazyLock<Regex> =
+    LazyLock::new(|| re(r"^linux-.*?-\d+\.\d+\.\d+[^-]*(?:-\d+)?-([a-z].*)$"));
+static KERNEL_FLAVOR_META: LazyLock<Regex> = LazyLock::new(|| {
+    re(
+        r"^linux-(?:(?:signed-|unsigned-)?image-|headers-|modules-(?:extra-)?|tools-)?([a-z][a-z0-9-]*?)(?:-(?:hwe|lts)-[\d.]+(?:-edge)?)?$",
+    )
+});
+static DEBIAN_KERNEL_PACKAGE: LazyLock<Regex> =
+    LazyLock::new(|| re(r"^linux-.*?-(\d+\.\d+(?:\.\d+)?-\d+)(?:-|$)"));
+static RUNNING_DEBIAN_KERNEL: LazyLock<Regex> = LazyLock::new(|| re(r"^(\d+\.\d+(?:\.\d+)?-\d+)"));
+static SUSE_RELEASE: LazyLock<Regex> = LazyLock::new(|| re(r"^(.+)-[a-z][a-z0-9_]*$"));
+static LAST_NUMBER: LazyLock<Regex> = LazyLock::new(|| re(r"\.\d+$"));
+static LAST_PART: LazyLock<Regex> = LazyLock::new(|| re(r"\.[^.]+$"));
+
+fn str_at<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    value.get(key).and_then(Value::as_str)
+}
+
+/// `CheckUpdates::kernelFlavor()`: flavor of a Debian or Ubuntu kernel package, so that an update
+/// of another flavor (linux-aws for a generic kernel) is not offered as the fix: the suffix after
+/// the version (linux-modules-6.8.0-139-generic: generic), or the meta package name without the
+/// part and the HWE/LTS suffix (linux-image-generic-hwe-24.04: generic). Ubuntu's virtual meta
+/// packages install the generic kernel. `None` when the name has no flavor.
+fn kernel_flavor(package: &str) -> Option<String> {
+    let flavor = KERNEL_FLAVOR_VERSIONED
+        .captures(package)
+        .or_else(|| KERNEL_FLAVOR_META.captures(package))?
+        .get(1)?
+        .as_str();
+    Some(
+        if flavor == "virtual" {
+            "generic"
+        } else {
+            flavor
+        }
+        .to_owned(),
+    )
+}
+
+/// `CheckUpdates::fixingUpdates()` (v4.7.5): updates of a saved check result that fix a vulnerable
+/// package: its own update, or for a kernel package that has the version in its name (Debian,
+/// Ubuntu: linux-modules-6.8.0-139-generic) the kernel updates of the same flavor, because the
+/// fixed kernel comes as a new package of the kernel meta packages. Empty on systems that only do
+/// full upgrades.
+pub fn fixing_updates(package: &str, patch_result: &Value) -> Vec<Value> {
+    let package_manager = str_at(patch_result, "package_manager");
+    if package_manager.is_some_and(|pm| FULL_UPGRADE_ONLY.contains(&pm)) {
+        return Vec::new();
+    }
+    let updates = patch_result
+        .get("updates")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(own) = updates
+        .iter()
+        .find(|u| str_at(u, "package") == Some(package))
+    {
+        return vec![own.clone()];
+    }
+    let Some(flavor) = kernel_flavor(package) else {
+        return Vec::new();
+    };
+    if risk_for(package_manager.unwrap_or_default(), package) != Some("kernel") {
+        return Vec::new();
+    }
+    updates
+        .into_iter()
+        .filter(|u| {
+            str_at(u, "risk") == Some("kernel")
+                && kernel_flavor(str_at(u, "package").unwrap_or_default()).as_deref()
+                    == Some(flavor.as_str())
+        })
+        .collect()
+}
+
+/// `CheckUpdates::bootKernel()` (v4.7.5): the installed kernel (`{package, version, release}`)
+/// that the boot loader starts at the next reboot, or `None` when the last patch check could not
+/// tell.
+pub fn boot_kernel(patch_result: &Value) -> Option<Value> {
+    let kernels = patch_result.get("kernels")?;
+    let boot = str_at(kernels, "boot")?;
+    kernels
+        .get("installed")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|k| str_at(k, "release") == Some(boot))
+        .cloned()
+}
+
+/// `CheckUpdates::kernelHasPackage()`: Debian packages of a kernel have its release in the name
+/// (linux-modules-6.8.0-139-generic); RPM kernel packages have a fixed name and the version of the
+/// kernel.
+fn kernel_has_package(kernel: &Value, package: &str, version: &str) -> bool {
+    let release = str_at(kernel, "release").unwrap_or_default();
+    if package.ends_with(&format!("-{release}")) {
+        return true;
+    }
+    package.starts_with("kernel")
+        && without_epoch(version) == without_epoch(str_at(kernel, "version").unwrap_or_default())
+}
+
+/// `CheckUpdates::kernelStatus()` (v4.7.5): kernel state of a vulnerable package, from the kernels
+/// of the last patch check:
+/// - `fixed_after_reboot`: the package belongs to the running kernel, and the kernel that boots
+///   next has the fix.
+/// - `runs_after_reboot`: the package belongs to the kernel that boots next, which is not the
+///   running one.
+///
+/// Both need the boot kernel ([`boot_kernel`]); without it, there is no claim. Other kernels that
+/// the server does not run: see [`is_other_kernel_package`].
+pub fn kernel_status(
+    package: &str,
+    version: &str,
+    fixed_in: Option<&str>,
+    patch_result: &Value,
+) -> Option<&'static str> {
+    let kernels = patch_result.get("kernels")?;
+    let running = str_at(kernels, "running")?;
+    let installed = kernels.get("installed").and_then(Value::as_array)?;
+    if installed.is_empty() {
+        return None;
+    }
+    installed
+        .iter()
+        .find(|k| str_at(k, "release") == Some(running))?;
+    let kernel = installed
+        .iter()
+        .find(|k| kernel_has_package(k, package, version))?;
+    let boot = boot_kernel(patch_result)?;
+    let boot_release = str_at(&boot, "release").unwrap_or_default();
+    if boot_release == running {
+        return None;
+    }
+    let release = str_at(kernel, "release").unwrap_or_default();
+    if release != running {
+        return (release == boot_release).then_some("runs_after_reboot");
+    }
+    fixed_in
+        .filter(|fixed| version_at_least(str_at(&boot, "version").unwrap_or_default(), fixed))
+        .map(|_| "fixed_after_reboot")
+}
+
+/// `CheckUpdates::isRpmKernelPackage()`: packages of a bootable RPM kernel (dnf, zypper).
+/// Userspace packages such as kernel-tools or kernel-headers have their own version and are not
+/// part of a kernel.
+fn is_rpm_kernel_package(package: &str) -> bool {
+    risk_for("dnf", package) == Some("kernel") || risk_for("zypper", package) == Some("kernel")
+}
+
+/// `CheckUpdates::isOtherKernelPackage()` (v4.7.5): true for a package of an installed kernel that
+/// the server does not run (`uname -r`), older or newer. Its vulnerabilities are no risk now; a
+/// newer one runs after the next reboot and then replaces the running kernel. Debian kernel
+/// packages carry the release in the name (linux-modules-6.8.0-139-generic,
+/// linux-headers-6.8.0-139), RPM kernel packages the version.
+pub fn is_other_kernel_package(
+    package: &str,
+    version: &str,
+    running_release: Option<&str>,
+) -> bool {
+    let Some(running_release) = running_release.filter(|r| !r.trim().is_empty()) else {
+        return false;
+    };
+    if let Some(package_kernel) = DEBIAN_KERNEL_PACKAGE.captures(package) {
+        return RUNNING_DEBIAN_KERNEL
+            .captures(running_release)
+            .is_some_and(|running| package_kernel[1] != running[1]);
+    }
+    if !is_rpm_kernel_package(package) {
+        return false;
+    }
+    let version = without_epoch(version);
+    // SUSE: uname -r 6.4.0-150600.23.17-default for kernel-default 6.4.0-150600.23.17.1 (the last
+    // number is the rebuild).
+    if let Some(suse) = SUSE_RELEASE.captures(running_release) {
+        return LAST_NUMBER.replace(version, "") != suse[1];
+    }
+    version != LAST_PART.replace(running_release, "")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1056,5 +1430,275 @@ mod tests {
         assert!(!valid_update_time("24:00"));
         assert!(!valid_update_time("3:00"));
         assert!(!valid_update_time("12:60"));
+    }
+}
+
+#[cfg(test)]
+mod v475_tests {
+    use super::*;
+
+    // `CheckUpdates::parseKernels()` (upstream tests/Unit/CheckUpdatesKernelsTest).
+    #[test]
+    fn parses_debian_kernels_and_the_newest_boot_kernel() {
+        let output = "RUNNING|6.8.0-100-generic\nKERNEL|linux-image-6.8.0-100-generic|6.8.0-100.100\nKERNEL|linux-image-6.8.0-139-generic|6.8.0-139.139\nBOOT|newest\n";
+        assert_eq!(
+            parse_kernels(output),
+            Some(json!({
+                "running": "6.8.0-100-generic",
+                "boot": "6.8.0-139-generic",
+                "installed": [
+                    {"package": "linux-image-6.8.0-100-generic", "version": "6.8.0-100.100", "release": "6.8.0-100-generic"},
+                    {"package": "linux-image-6.8.0-139-generic", "version": "6.8.0-139.139", "release": "6.8.0-139-generic"},
+                ],
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_rpm_kernels_with_the_architecture_in_the_release() {
+        let output = "RUNNING|5.14.0-427.el9.x86_64\r\nKERNEL|kernel-core|5.14.0-427.el9|x86_64\nBOOT|5.14.0-427.el9.x86_64\n";
+        let kernels = parse_kernels(output).unwrap_or_default();
+        assert_eq!(kernels["boot"], "5.14.0-427.el9.x86_64");
+        assert_eq!(kernels["installed"][0]["release"], "5.14.0-427.el9.x86_64");
+        // Without a boot loader answer there is no boot kernel.
+        let kernels = parse_kernels("RUNNING|6.1.0\n").unwrap_or_default();
+        assert_eq!(kernels["boot"], Value::Null);
+        assert_eq!(kernels["installed"], json!([]));
+        assert_eq!(parse_kernels("KERNEL|linux-image-6.1|6.1\n"), None);
+        assert_eq!(parse_kernels(""), None);
+    }
+
+    #[test]
+    fn several_packages_are_escaped_one_by_one() {
+        let packages = vec![
+            "openssl".to_owned(),
+            "libc6".to_owned(),
+            "openssl".to_owned(),
+        ];
+        assert_eq!(
+            escaped_packages(&packages),
+            Ok("'openssl' 'libc6'".to_owned())
+        );
+        // No leading hyphen, so a name is never read as an option.
+        for bad in ["-y", "a b", "x;rm", ""] {
+            assert!(escaped_packages(&[bad.to_owned()]).is_err(), "{bad}");
+        }
+        assert_eq!(
+            update_commands(Some("apt"), Some("'openssl' 'libc6'")).map(|c| !c.is_empty()),
+            Some(true)
+        );
+    }
+
+    // Upstream tests/Unit/Actions/Server/ServerPatchCommandsTest.php.
+    #[test]
+    fn finds_the_packages_of_kernels_that_the_server_does_not_run() {
+        let cases = [
+            (
+                "linux-modules-6.8.0-139-generic",
+                "6.8.0-139.149",
+                "6.8.0-139-generic",
+                false,
+            ),
+            (
+                "linux-modules-6.8.0-130-generic",
+                "6.8.0-130.140",
+                "6.8.0-139-generic",
+                true,
+            ),
+            (
+                "kernel-core",
+                "5.14.0-427.13.1.el9_4",
+                "5.14.0-427.13.1.el9_4.x86_64",
+                false,
+            ),
+            (
+                "kernel-core",
+                "5.14.0-362.8.1.el9_3",
+                "5.14.0-427.13.1.el9_4.x86_64",
+                true,
+            ),
+            (
+                "kernel-tools",
+                "5.14.0-362.8.1.el9_3",
+                "5.14.0-427.13.1.el9_4.x86_64",
+                false,
+            ),
+            (
+                "kernel-headers",
+                "5.14.0-362.8.1.el9_3",
+                "5.14.0-427.13.1.el9_4.x86_64",
+                false,
+            ),
+            (
+                "kernel-default",
+                "6.4.0-150600.23.17.1",
+                "6.4.0-150600.23.17-default",
+                false,
+            ),
+            (
+                "kernel-default",
+                "6.4.0-150600.23.14.1",
+                "6.4.0-150600.23.17-default",
+                true,
+            ),
+            ("kernel-default", "6.11.8-1.1", "6.11.8-1-default", false),
+        ];
+        for (package, version, running, other) in cases {
+            assert_eq!(
+                is_other_kernel_package(package, version, Some(running)),
+                other,
+                "{package} {version}"
+            );
+        }
+        assert!(!is_other_kernel_package(
+            "linux-modules-6.8.0-130-generic",
+            "1",
+            None
+        ));
+    }
+
+    #[test]
+    fn claims_a_kernel_fix_after_a_reboot_only_when_the_boot_kernel_has_it() {
+        let cases = [
+            (
+                "BOOT|newest",
+                Some("fixed_after_reboot"),
+                Some("runs_after_reboot"),
+            ),
+            (
+                "BOOT|6.8.0-139-generic",
+                Some("fixed_after_reboot"),
+                Some("runs_after_reboot"),
+            ),
+            ("BOOT|6.8.0-130-generic", None, None),
+            ("", None, None),
+        ];
+        for (boot, running_status, new_status) in cases {
+            let output = [
+                "RUNNING|6.8.0-130-generic",
+                "KERNEL|linux-image-6.8.0-130-generic|6.8.0-130.140",
+                "KERNEL|linux-image-6.8.0-139-generic|6.8.0-139.149",
+                boot,
+            ]
+            .join("\n");
+            let result = json!({"kernels": parse_kernels(&output)});
+            assert_eq!(
+                kernel_status(
+                    "linux-modules-6.8.0-130-generic",
+                    "6.8.0-130.140",
+                    Some("6.8.0-135.1"),
+                    &result
+                ),
+                running_status,
+                "{boot}"
+            );
+            assert_eq!(
+                kernel_status(
+                    "linux-modules-6.8.0-139-generic",
+                    "6.8.0-139.149",
+                    None,
+                    &result
+                ),
+                new_status,
+                "{boot}"
+            );
+        }
+    }
+
+    #[test]
+    fn claims_a_fix_after_a_reboot_only_when_the_rhel_boot_kernel_has_it() {
+        let output = "RUNNING|5.14.0-427.13.1.el9_4.x86_64\nKERNEL|kernel-core|5.14.0-427.13.1.el9_4|x86_64\nKERNEL|kernel-core|5.14.0-503.11.1.el9_5|x86_64\nKERNEL|kernel-core|5.14.0-570.1.1.el9_6|x86_64\nBOOT|5.14.0-503.11.1.el9_5.x86_64";
+        let result = json!({"kernels": parse_kernels(output)});
+        assert_eq!(
+            boot_kernel(&result).and_then(|k| k["version"].as_str().map(str::to_owned)),
+            Some("5.14.0-503.11.1.el9_5".to_owned())
+        );
+        assert_eq!(
+            kernel_status(
+                "kernel-core",
+                "5.14.0-427.13.1.el9_4",
+                Some("5.14.0-503.1.1.el9_5"),
+                &result
+            ),
+            Some("fixed_after_reboot")
+        );
+        assert_eq!(
+            kernel_status(
+                "kernel-core",
+                "5.14.0-427.13.1.el9_4",
+                Some("5.14.0-570.1.1.el9_6"),
+                &result
+            ),
+            None
+        );
+        assert_eq!(
+            kernel_status("kernel-core", "5.14.0-570.1.1.el9_6", None, &result),
+            None
+        );
+        assert_eq!(boot_kernel(&json!({})), None);
+    }
+
+    // `CheckUpdates::fixingUpdates()`: the own update, or kernel updates of the same flavor.
+    #[test]
+    fn fixing_updates_are_the_own_update_or_kernels_of_the_same_flavor() {
+        let result = json!({
+            "package_manager": "apt",
+            "updates": [
+                {"package": "openssl", "new_version": "3.0.13-2"},
+                {"package": "linux-image-generic", "risk": "kernel", "new_version": "6.8.0.139"},
+                {"package": "linux-headers-generic-hwe-24.04", "risk": "kernel"},
+                {"package": "linux-image-aws", "risk": "kernel"},
+            ],
+        });
+        assert_eq!(
+            fixing_updates("openssl", &result),
+            vec![json!({"package": "openssl", "new_version": "3.0.13-2"})]
+        );
+        let kernels = fixing_updates("linux-modules-6.8.0-130-generic", &result);
+        let names: Vec<&str> = kernels
+            .iter()
+            .filter_map(|u| u["package"].as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["linux-image-generic", "linux-headers-generic-hwe-24.04"]
+        );
+        assert!(fixing_updates("curl", &result).is_empty());
+        let pacman = json!({"package_manager": "pacman", "updates": [{"package": "openssl"}]});
+        assert!(fixing_updates("openssl", &pacman).is_empty());
+        assert_eq!(
+            kernel_flavor("linux-image-virtual"),
+            Some("generic".to_owned())
+        );
+        assert_eq!(
+            kernel_flavor("linux-modules-6.8.0-139-generic"),
+            Some("generic".to_owned())
+        );
+        assert_eq!(kernel_flavor("openssl"), None);
+    }
+
+    // `RemoveUnusedPackages::commands()`.
+    #[test]
+    fn unused_packages_are_removed_per_package_manager() {
+        assert_eq!(
+            remove_unused_commands(Some("apt")),
+            Some(vec![
+                "env DEBIAN_FRONTEND=noninteractive apt-get -y autoremove".to_owned()
+            ])
+        );
+        assert_eq!(
+            remove_unused_commands(Some("dnf")),
+            Some(vec![
+                "dnf autoremove -y".to_owned(),
+                "sh -c 'dnf remove -y --oldinstallonly || true'".to_owned()
+            ])
+        );
+        assert_eq!(
+            remove_unused_commands(Some("zypper")),
+            Some(vec!["zypper --non-interactive purge-kernels".to_owned()])
+        );
+        for unsupported in [Some("pacman"), Some("apk"), None] {
+            assert_eq!(remove_unused_commands(unsupported), None);
+        }
     }
 }

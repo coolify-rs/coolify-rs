@@ -528,9 +528,8 @@ impl Jobs {
             // ensureRemoteSecretsResolvable(): before stopping, so the service keeps running.
             vars::load_for(&self.0.db, enc, &owner(&s), s.server_id()).await?;
         }
-        if stop_before_start && !pull_latest {
-            self.stop_service(&s, false).await;
-        }
+        // Compose recreates the containers, so a status check can find them stopped for a moment.
+        self.expect_service_parts_stop(s.id).await;
         self.save_compose_configs(&s, &target).await?;
         self.save_configuration_hash(&s).await;
         let now = Jobs::now();
@@ -564,12 +563,34 @@ impl Jobs {
             commands.push("echo 'Pulling images.'".into());
             commands.push(format!("{compose} pull < /dev/null"));
         }
+        // After the pull: the scanned build of a "Pull latest" security update keeps the tag of
+        // the compose file.
+        let scan_owner = self.service_scan_owner(&s).await;
+        commands.extend(start_pin_commands(scan_owner.as_ref(), &server));
         if has_networks(&s) {
             commands.push("echo 'Creating Docker network.'".into());
             commands.push(format!(
                 "docker network inspect {u} >/dev/null 2>&1 || docker network create --attachable {u}",
                 u = s.uuid
             ));
+        }
+        // shouldStopBeforeStarting($pullLatestImages, $stopBeforeStart)
+        if stop_before_start && !pull_latest {
+            // The stop removes every container, so no container keeps a deleted volume.
+            let containers: Vec<String> = subs
+                .iter()
+                .map(|sub| format!("{}-{}", sub.name, s.uuid))
+                .collect();
+            commands.extend(stop_after_image_check_commands(
+                &containers,
+                &compose,
+                server.docker_version(),
+            ));
+        } else {
+            commands.extend(
+                self.remove_containers_with_removed_volumes_commands(&s, &target, None)
+                    .await,
+            );
         }
         commands.push("echo Starting service.".into());
         if s.bool("connect_to_docker_network") {
@@ -616,8 +637,90 @@ impl Jobs {
                 ));
             }
         }
-        self.run_service_process(&s, &server, &target, commands)
+        let started = self
+            .run_service_process(&s, &server, &target, commands)
+            .await;
+        if let Some(owner) = &scan_owner {
+            crate::image_scan::scan_jobs::dispatch_after_start(self, owner).await;
+        }
+        started
+    }
+
+    /// `NotifyResourceStoppedJob::expectStop($part)` for each application and database of the
+    /// service: a stop or a recreation by Coolify sends no notification.
+    async fn expect_service_parts_stop(&self, service_id: i64) {
+        for kind in [SubKind::Application, SubKind::Database] {
+            for part in svc::subs(&self.0.db, kind, service_id)
+                .await
+                .unwrap_or_default()
+            {
+                expect_part_stop(&part);
+            }
+        }
+    }
+
+    /// The service as the owner of image scans (`$service` in the scan calls of a start).
+    async fn service_scan_owner(
+        &self,
+        s: &ServiceRow,
+    ) -> Option<coolify_db::image_scans::ScanOwner> {
+        match coolify_db::image_scans::find_owner(
+            &self.0.db,
+            coolify_db::image_scans::SERVICE_MORPH,
+            s.id,
+        )
+        .await
+        {
+            Ok(owner) => owner,
+            Err(e) => {
+                tracing::warn!(service = %s.uuid, error = %e, "the service could not be loaded for the image scan");
+                None
+            }
+        }
+    }
+
+    /// `StartService::removeContainersWithRemovedVolumesCommands($service, $composeServiceName)`:
+    /// removes the containers that `docker compose up` would give a volume that the user deleted
+    /// in Coolify (see `compose_containers_with_removed_volumes()`). `compose_service_name`: only
+    /// this Compose service, when `up` starts only it.
+    async fn remove_containers_with_removed_volumes_commands(
+        &self,
+        s: &ServiceRow,
+        target: &Target,
+        compose_service_name: Option<&str>,
+    ) -> Vec<String> {
+        use crate::compose_parser::removed_volumes as removed;
+        let mounts_command = removed::compose_project_mounts_command(&s.uuid);
+        let project_mounts = self
+            .remote()
+            .run_quiet(
+                target,
+                &[mounts_command.as_str()],
+                RunOptions::op("service.mounts"),
+            )
             .await
+            .unwrap_or_default();
+        if project_mounts.trim().is_empty() {
+            return Vec::new();
+        }
+        let parsed =
+            validate::parse_docker_compose_yaml(s.str("docker_compose").unwrap_or_default()).ok();
+        let mut services = match parsed.as_ref().and_then(|p| php::get(p, "services")) {
+            Some(PhpValue::Array(items)) => items.clone(),
+            _ => Vec::new(),
+        };
+        if let Some(name) = compose_service_name {
+            services.retain(|(key, _)| key.as_string() == name);
+        }
+        let storage_names = coolify_db::service_parts::storage_names(&self.0.db, s.id)
+            .await
+            .unwrap_or_default();
+        removed_volume_commands(&removed::compose_containers_with_removed_volumes(
+            &project_mounts,
+            &services,
+            &s.uuid,
+            &storage_names,
+        ))
     }
 
     /// `StartService::dispatch($service)`.
@@ -658,15 +761,11 @@ impl Jobs {
             .chain(databases.iter())
             .map(|sub| format!("{}-{}", sub.name, s.uuid))
             .collect();
+        for part in apps.iter().chain(databases.iter()) {
+            expect_part_stop(part);
+        }
         if !containers.is_empty() {
-            let timeout = if containers.len() > 5 { 10 } else { 30 };
-            let list = containers
-                .iter()
-                .map(|c| quote(c))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let stop = docker_stop_command(timeout, &list, server.docker_version());
-            let rm = format!("docker rm -f {list}");
+            let [stop, rm] = stop_containers_commands(&containers, server.docker_version());
             self.remote()
                 .run_quiet(
                     &target,
@@ -760,6 +859,21 @@ impl Jobs {
                     .await;
                 }
             }
+            // `HasImageScans` of each service application and service database (the `deleting`
+            // hook of the models): their scans, scan rules, ignores and notification state.
+            for kind in [SubKind::Application, SubKind::Database] {
+                for part in svc::subs(&jobs.0.db, kind, s.id).await.unwrap_or_default() {
+                    if let Err(e) = coolify_db::image_scans::delete_resource_data(
+                        &jobs.0.db,
+                        kind.morph(),
+                        part.id,
+                    )
+                    .await
+                    {
+                        tracing::warn!(service = %s.uuid, error = %e, "image scan data could not be deleted");
+                    }
+                }
+            }
             if let Err(e) = svc::force_delete(&jobs.0.db, s.id).await {
                 tracing::warn!(service = %s.uuid, error = %e, "deleting service rows failed");
             }
@@ -845,6 +959,7 @@ impl Jobs {
             let Ok(target) = server.target(&jobs).await else {
                 return;
             };
+            expect_part_stop(&sub);
             let c = format!(
                 "docker restart {}",
                 quote(&format!("{}-{}", sub.name, s.uuid))
@@ -864,6 +979,7 @@ impl Jobs {
         let Ok(target) = server.target(self).await else {
             return;
         };
+        expect_part_stop(sub);
         let name = quote(&format!("{}-{}", sub.name, s.uuid));
         let c = if remove {
             format!("docker rm -f {name}")
@@ -900,6 +1016,12 @@ impl Jobs {
         pull_latest: bool,
         force_rebuild: bool,
     ) -> Result<(), String> {
+        let part = svc::sub_by_name(&self.0.db, kind, service_id, name)
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Some(part) = &part {
+            expect_part_stop(part);
+        }
         let (parsed, effects) = self.parse_service_inline(service_id).await?;
         let s = svc::find_by_id(&self.0.db, service_id)
             .await
@@ -926,10 +1048,7 @@ impl Jobs {
             ),
             format!("touch {}", quote(&format!("{dir}/{ENV_FILE}"))),
         ];
-        if let Some(sub) = svc::sub_by_name(&self.0.db, kind, s.id, name)
-            .await
-            .map_err(|e| e.to_string())?
-        {
+        if let Some(sub) = part {
             commands.extend(storage::ensure_content_files(self, &s, &target, &[sub]).await);
         }
         commands.extend(warning_commands(&parsed.warnings));
@@ -940,6 +1059,10 @@ impl Jobs {
                 "{prefix}docker compose --project-directory {safe_dir} -f {safe_file} --project-name {safe_project} pull {safe_name} < /dev/null"
             ));
         }
+        // After the pull: the scanned build of a "Pull latest" security update keeps the tag of
+        // the compose file.
+        let scan_owner = self.service_scan_owner(&s).await;
+        commands.extend(start_pin_commands(scan_owner.as_ref(), &server));
         if has_networks(&s) {
             commands.push("echo Creating Docker network.".into());
             commands.push(format!(
@@ -957,6 +1080,10 @@ impl Jobs {
             up.push_str(" --no-start");
         }
         up.push_str(&format!(" {safe_name} < /dev/null"));
+        commands.extend(
+            self.remove_containers_with_removed_volumes_commands(&s, &target, Some(name))
+                .await,
+        );
         commands.push("echo Starting service container.".into());
         commands.push(up);
         if connect {
@@ -979,8 +1106,13 @@ impl Jobs {
         commands.push(format!(
             "docker network connect {safe_project} coolify-proxy >/dev/null 2>&1 || true"
         ));
-        self.run_service_process(&s, &server, &target, commands)
-            .await
+        let started = self
+            .run_service_process(&s, &server, &target, commands)
+            .await;
+        if let Some(owner) = &scan_owner {
+            crate::image_scan::scan_jobs::dispatch_after_start(self, owner).await;
+        }
+        started
     }
 
     pub fn spawn_sub_deploy(
@@ -1076,6 +1208,90 @@ impl Jobs {
     }
 }
 
+/// `NotifyResourceStoppedJob::expectStop($part)` for an application or database of a service.
+fn expect_part_stop(part: &SubRow) {
+    crate::notifications::resource_stopped::expect_stop(
+        part.kind.morph(),
+        part.id,
+        crate::notifications::resource_stopped::DEFAULT_STOP_TIMEOUT_SECONDS,
+    );
+}
+
+/// `ImageStartPin::commands(ImageStartPin::take($service), serverDockerConfigPrefix($server))`: the
+/// pulls of the scanned builds of a "Pull latest" security update that wait for this service.
+/// Taking them uses them up; nothing without a scan owner.
+fn start_pin_commands(
+    owner: Option<&coolify_db::image_scans::ScanOwner>,
+    server: &ServerInfo,
+) -> Vec<String> {
+    use crate::image_scan::update::image_start_pin;
+    let Some(owner) = owner else {
+        return Vec::new();
+    };
+    image_start_pin::commands(
+        &image_start_pin::take(owner, None),
+        docker_config_prefix(server),
+    )
+}
+
+/// `StopService::stopContainersCommands($containersToStop, $server)`: the stop and the removal.
+fn stop_containers_commands(containers: &[String], docker_version: Option<&str>) -> [String; 2] {
+    let timeout = if containers.len() > 5 { 10 } else { 30 };
+    let list = containers
+        .iter()
+        .map(|c| quote(c))
+        .collect::<Vec<_>>()
+        .join(" ");
+    [
+        docker_stop_command(timeout, &list, docker_version),
+        format!("docker rm -f {list}"),
+    ]
+}
+
+/// `StartService::stopAfterImageCheckCommands($service, $compose)`: stops and removes the
+/// containers of the service, but only after Compose has every image on the server.
+/// `up --no-start --no-recreate` pulls (or builds) only the missing images and does not touch the
+/// running containers. If an image cannot be fetched, the script stops there and the service
+/// keeps running.
+fn stop_after_image_check_commands(
+    containers: &[String],
+    compose: &str,
+    docker_version: Option<&str>,
+) -> Vec<String> {
+    if containers.is_empty() {
+        return Vec::new();
+    }
+    let mut commands = vec![
+        "echo 'Checking that all images are on the server.'".to_owned(),
+        format!("{compose} up --no-start --no-recreate < /dev/null"),
+        "echo 'Stopping service.'".to_owned(),
+    ];
+    commands.extend(
+        stop_containers_commands(containers, docker_version)
+            .into_iter()
+            .map(|command| format!("{command} || true")),
+    );
+    commands
+}
+
+/// The script lines of `removeContainersWithRemovedVolumesCommands()` for the containers that
+/// `compose_containers_with_removed_volumes()` found.
+fn removed_volume_commands(containers: &[(String, String)]) -> Vec<String> {
+    let mut commands = Vec::new();
+    for (container, volume) in containers {
+        commands.push(format!(
+            "echo {}",
+            quote(&format!(
+                "Removing container {container}, so that it does not keep the deleted volume {volume}."
+            ))
+        ));
+        // Without --time, Docker waits the stop_grace_period of the Compose file, as Compose does.
+        commands.push(format!("docker stop {} || true", quote(container)));
+        commands.push(crate::server_ops::proxy::docker_remove_command(container));
+    }
+    commands
+}
+
 /// `StartService::composeVolumeWarningCommands($service)`.
 fn warning_commands(warnings: &[String]) -> Vec<String> {
     warnings
@@ -1126,4 +1342,54 @@ pub fn compose_parses(compose: &str) -> Result<(), String> {
     validate::parse_docker_compose_yaml(compose)
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod start_command_tests {
+    use super::*;
+
+    /// `StartService::stopAfterImageCheckCommands()`: the containers stop only after Compose has
+    /// every image, so a failed pull leaves the service running.
+    #[test]
+    fn a_restart_checks_the_images_before_it_stops_the_containers() {
+        let containers = vec!["web-abc".to_owned(), "db-abc".to_owned()];
+        let compose =
+            "docker compose --project-directory /d -f /d/docker-compose.yml --project-name abc";
+        let commands = stop_after_image_check_commands(&containers, compose, None);
+        assert_eq!(commands.len(), 5);
+        assert_eq!(
+            commands[0],
+            "echo 'Checking that all images are on the server.'"
+        );
+        assert_eq!(
+            commands[1],
+            format!("{compose} up --no-start --no-recreate < /dev/null")
+        );
+        assert_eq!(commands[2], "echo 'Stopping service.'");
+        // The stop and the removal must not end the script when a container is already gone.
+        assert!(
+            commands[3].contains("'web-abc' 'db-abc'"),
+            "{}",
+            commands[3]
+        );
+        assert!(commands[3].ends_with(" || true"), "{}", commands[3]);
+        assert_eq!(commands[4], "docker rm -f 'web-abc' 'db-abc' || true");
+        // A service without parts has nothing to stop.
+        assert!(stop_after_image_check_commands(&[], compose, None).is_empty());
+    }
+
+    /// `removeContainersWithRemovedVolumesCommands()`: one echo, stop and removal per container.
+    #[test]
+    fn containers_that_keep_a_deleted_volume_are_removed_before_the_start() {
+        let commands = removed_volume_commands(&[("db-abc".to_owned(), "abc_pgdata".to_owned())]);
+        assert_eq!(commands.len(), 3);
+        assert_eq!(
+            commands[0],
+            "echo 'Removing container db-abc, so that it does not keep the deleted volume abc_pgdata.'"
+        );
+        assert_eq!(commands[1], "docker stop 'db-abc' || true");
+        assert!(commands[2].starts_with("bash -c "), "{}", commands[2]);
+        assert!(commands[2].contains("docker rm -f"), "{}", commands[2]);
+        assert!(removed_volume_commands(&[]).is_empty());
+    }
 }

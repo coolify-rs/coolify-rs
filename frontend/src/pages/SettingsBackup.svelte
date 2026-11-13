@@ -3,7 +3,6 @@
   // livewire/project/database/backup-edit/{general,s3,retention}.blade.php (BackupEdit) and the list
   // of livewire/project/database/backup-executions.blade.php (BackupExecutions).
   import Callout from '../components/Callout.svelte';
-  import CopyInput from '../components/CopyInput.svelte';
   import Empty from '../components/Empty.svelte';
   import FormInput from '../components/FormInput.svelte';
   import Listbox from '../components/Listbox.svelte';
@@ -26,6 +25,17 @@
   let savedEdit = $state('');
   let beforeUpdate = $state(true);
   let executions = $state<Values[]>([]);
+  /** The execution whose archive path was just copied (`x-copy-button`). */
+  let copied = $state<number | null>(null);
+  const basename = (path: string) => path.replace(/\/+$/, '').split('/').pop() ?? path;
+  function copyPath(e: Values) {
+    if (!e.filename) return;
+    navigator.clipboard?.writeText(e.filename).catch(() => {});
+    copied = e.id;
+    setTimeout(() => {
+      if (copied === e.id) copied = null;
+    }, 1000);
+  }
   let total = $state(0);
   let skip = $state(0);
   const take = 10;
@@ -141,7 +151,7 @@
                       required
                       value="Instance timezone"
                     />
-                    <FormInput label="Timeout" id="timeout" type="number" min="60" helper="Maximum backup runtime in seconds." required bind:value={edit.timeout} />
+                    <FormInput label="Timeout" id="timeout" type="number" min="60" helper="Maximum runtime in seconds of the complete backup run: the dumps and S3 uploads of all databases." required bind:value={edit.timeout} />
                     <FormInput
                       label="Missing backup alert after"
                       id="missingBackupNotificationDays"
@@ -209,15 +219,15 @@
               <SettingsSection title="Retention" description="The first reached limit removes the oldest backup. Use 0 for unlimited retention.">
                 <div class="space-y-6">
                   <div>
-                    <h3 class="mb-3 text-sm font-semibold text-black dark:text-fg">Local backups</h3>
+                    <h4 class="mb-2 text-xs! font-medium! text-neutral-500! dark:text-fg-dim!">Local backups</h4>
                     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                       <FormInput label="Backups to keep" id="retention-amount-local" type="number" min="0" helper="Maximum number of recent local backups." required bind:value={edit.database_backup_retention_amount_locally} />
                       <FormInput label="Days to keep" id="retention-days-local" type="number" min="0" helper="Remove local backups older than this many days." required bind:value={edit.database_backup_retention_days_locally} />
                       <FormInput label="Maximum storage (GB)" id="retention-storage-local" type="number" min="0" step="any" helper="Remove oldest local backups after this total size is reached." required bind:value={edit.database_backup_retention_max_storage_locally} />
                     </div>
                   </div>
-                  <div class="border-t border-neutral-200 pt-6 dark:border-white/[0.06]">
-                    <h3 class="mb-3 text-sm font-semibold text-black dark:text-fg">S3 backups</h3>
+                  <div>
+                    <h4 class="mb-2 text-xs! font-medium! text-neutral-500! dark:text-fg-dim!">S3 backups</h4>
                     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                       <FormInput label="Backups to keep" id="retention-amount-s3" type="number" min="0" helper="Maximum number of recent S3 backups." required bind:value={edit.database_backup_retention_amount_s3} />
                       <FormInput label="Days to keep" id="retention-days-s3" type="number" min="0" helper="Remove S3 backups older than this many days." required bind:value={edit.database_backup_retention_days_s3} />
@@ -233,7 +243,7 @@
                 <Listbox
                   id="is_backup_before_update_enabled"
                   label="Database backup"
-                  helper="Runs this backup once before every manual or automatic update, in addition to the schedule."
+                  helper="Runs this backup once before every manual or automatic update, in addition to the schedule. It does not run when the backup schedule is disabled."
                   bind:value={beforeUpdate}
                   onchange={(v) => run('instant', { is_backup_before_update_enabled: v })}
                   options={onOff}
@@ -257,11 +267,22 @@
                     </div>
                     {#each executions as e (e.id)}
                       {@const st = statusOf(e)}
-                      <div class="backup-execution-row">
-                        <div class="data-table-row backup-executions-table-grid min-h-14 border-b border-neutral-200 px-4 py-2.5 dark:border-white/[0.06]">
+                      <div class="backup-execution-row border-b border-neutral-200 dark:border-white/[0.06]">
+                        <div class="data-table-row backup-executions-table-grid min-h-14 px-4 py-2.5">
                           <div class="flex items-center gap-2"><StatusBadge label={st[0]} type={st[1]} /></div>
-                          <div class="truncate text-[12px] font-medium text-black dark:text-fg">{e.database_name ?? 'N/A'}</div>
-                          <div class="min-w-0"><CopyInput text={e.filename ?? 'No archive name'} /></div>
+                          <div class="truncate text-[12px] font-medium text-black dark:text-fg">{e.database_name || (data?.backup?.form.dump_all ? 'All databases' : '-')}</div>
+                          <div class="flex min-w-0 items-center gap-1">
+                            {#if e.filename}
+                              <span class="truncate font-mono text-[12px] text-black dark:text-fg" title={e.filename}>{basename(e.filename)}</span>
+                              <button type="button" title="Copy archive path" aria-label="Copy archive path" class="icon-button group shrink-0" onclick={() => copyPath(e)}>
+                                <span class="inline-flex transition-transform duration-150 ease-out group-active:scale-75">
+                                  {#if copied === e.id}<Reicon name="check" class="size-3.5 text-success" />{:else}<Reicon name="copy" class="size-3.5" />{/if}
+                                </span>
+                              </button>
+                            {:else}
+                              <span class="text-neutral-500 dark:text-fg-faint">-</span>
+                            {/if}
+                          </div>
                           <div class="text-[11px] text-neutral-500 dark:text-fg-faint">{e.finished_at ?? e.updated_at}</div>
                           <div class="tabular-nums text-neutral-500 dark:text-fg-dim">{e.size ?? '-'}</div>
                           <div class="flex flex-wrap items-center gap-1.5">
@@ -270,8 +291,11 @@
                           <div class="flex items-center justify-end gap-1"></div>
                         </div>
                         {#if e.message}
-                          <div class="border-t border-neutral-200 bg-neutral-50 px-4 py-3 dark:border-white/[0.06] dark:bg-white/[0.02]">
-                            <pre class="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-neutral-100 p-3 font-mono text-xs leading-5 text-neutral-700 dark:bg-black/20 dark:text-fg-dim">{e.message}</pre>
+                          <div class="px-4 pb-3">
+                            <pre
+                              class="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 {e.status === 'failed'
+                                ? 'text-red-600 dark:text-red-400'
+                                : 'text-neutral-500 dark:text-fg-faint'}">{e.message}</pre>
                           </div>
                         {/if}
                       </div>

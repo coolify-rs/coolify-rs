@@ -104,22 +104,58 @@ fn normalize(mut body: Map<String, Value>, uri: &Uri) -> Input {
     for (k, v) in parse_query(uri.query().unwrap_or("")) {
         body.entry(k).or_insert(Value::String(v));
     }
-    Input(body.into_iter().map(|(k, v)| (k, clean(v))).collect())
+    Input(
+        body.into_iter()
+            .map(|(k, v)| {
+                let cleaned = clean_at(&k, v);
+                (k, cleaned)
+            })
+            .collect(),
+    )
 }
 
-/// TrimStrings + ConvertEmptyStringsToNull, recursively.
-fn clean(v: Value) -> Value {
+/// `TrimStrings::$except` (4.7.5): environment variable values, `value` and `data.*.value`
+/// (dotted request keys, `*` is one segment or more as in `Str::is`).
+fn never_trimmed(path: &str) -> bool {
+    if path == "value" {
+        return true;
+    }
+    path.strip_prefix("data.")
+        .and_then(|rest| rest.strip_suffix(".value"))
+        .is_some_and(|middle| !middle.is_empty())
+}
+
+/// TrimStrings + ConvertEmptyStringsToNull, recursively. `path` is the dotted key of the value.
+fn clean_at(path: &str, v: Value) -> Value {
     match v {
         Value::String(s) => {
-            let t = trim_laravel(&s);
+            // An excepted `value` keeps its whitespace: the environment variable model trims a
+            // single-line value itself (`withoutEdgeWhitespace()`), other models keep it.
+            let t = if never_trimmed(path) {
+                s.as_str()
+            } else {
+                trim_laravel(&s)
+            };
             if t.is_empty() {
                 Value::Null
             } else {
                 Value::String(t.to_string())
             }
         }
-        Value::Array(a) => Value::Array(a.into_iter().map(clean).collect()),
-        Value::Object(o) => Value::Object(o.into_iter().map(|(k, v)| (k, clean(v))).collect()),
+        Value::Array(a) => Value::Array(
+            a.into_iter()
+                .enumerate()
+                .map(|(i, v)| clean_at(&format!("{path}.{i}"), v))
+                .collect(),
+        ),
+        Value::Object(o) => Value::Object(
+            o.into_iter()
+                .map(|(k, v)| {
+                    let cleaned = clean_at(&format!("{path}.{k}"), v);
+                    (k, cleaned)
+                })
+                .collect(),
+        ),
         other => other,
     }
 }
@@ -177,6 +213,54 @@ pub fn query_param(uri: &Uri, key: &str) -> Option<String> {
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+
+    /// `TrimStrings::$except` (4.7.5): `value` and `data.*.value` stay as they were sent. The
+    /// environment variable model trims a single-line value (`withoutEdgeWhitespace`) when it
+    /// saves it; shared variables keep it.
+    #[test]
+    fn environment_variable_values_keep_multiline_content() {
+        let key = "-----BEGIN KEY-----\nabc\n-----END KEY-----\n";
+        let body = serde_json::json!({
+            "key": " NAME ",
+            "value": key,
+            "comment": " note ",
+            "data": [{"key": " A ", "value": "  line one\nline two  "}, {"key": "B", "value": "  single  "}],
+            "nested": {"value": " trimmed "},
+        });
+        let input = normalize(to_map(body), &"/x".parse().unwrap_or_default());
+        assert_eq!(input.str("key"), Some("NAME"));
+        assert_eq!(input.str("value"), Some(key));
+        assert_eq!(input.str("comment"), Some("note"));
+        let data = input
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(data[0]["key"], "A");
+        assert_eq!(data[0]["value"], "  line one\nline two  ");
+        assert_eq!(data[1]["value"], "  single  ");
+        // Only the top-level `value` and `data.*.value` are excepted.
+        assert_eq!(
+            input.get("nested").and_then(|n| n.get("value")),
+            Some(&Value::from("trimmed"))
+        );
+        assert!(never_trimmed("value"));
+        assert!(never_trimmed("data.0.value"));
+        assert!(!never_trimmed("data.value"));
+        assert!(!never_trimmed("nested.value"));
+        // ConvertEmptyStringsToNull still applies.
+        let empty = normalize(
+            to_map(serde_json::json!({"value": ""})),
+            &"/x".parse().unwrap_or_default(),
+        );
+        assert_eq!(empty.get("value"), Some(&Value::Null));
+        // Whitespace only is not empty: the model trims it later.
+        let blank = normalize(
+            to_map(serde_json::json!({"value": "  "})),
+            &"/x".parse().unwrap_or_default(),
+        );
+        assert_eq!(blank.str("value"), Some("  "));
+    }
 
     fn json_headers() -> HeaderMap {
         let mut h = HeaderMap::new();

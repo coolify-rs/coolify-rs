@@ -44,6 +44,21 @@ export function logTime(ts: string | null | undefined, timeZone: string): string
   return `${p.year}-${MONTHS[Number(p.month) - 1]}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
 }
 
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** Carbon `toDayDateTimeString()` in UTC: `Thu, Dec 25, 1975 2:15 PM`. Empty without a timestamp. */
+export function dayDateTime(ts: string | null | undefined): string {
+  const d = parseTimestamp(ts);
+  if (!d) return '';
+  const h = d.getUTCHours();
+  return `${WEEKDAYS[d.getUTCDay()]}, ${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()} ${h % 12 || 12}:${String(d.getUTCMinutes()).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+/** Carbon `toIso8601String()` in UTC: `1975-12-25T14:15:16+00:00`. */
+export function iso8601(ts: string | null | undefined): string {
+  return parseTimestamp(ts)?.toISOString().replace(/\.\d{3}Z$/, '+00:00') ?? '';
+}
+
 const UNITS: [string, string, number][] = [
   ['year', 'yr', 365 * 86400],
   ['month', 'mo', 30 * 86400],

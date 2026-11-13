@@ -1,9 +1,7 @@
 <script lang="ts">
-  // Port of upstream livewire/project/resource/create.blade.php with the
-  // picker livewire/project/new/select.blade.php (Project\New\Select).
-  // Only PostgreSQL can be created by coolify-rs; every other resource is
-  // listed as upstream lists it and says it is not available yet. Service
-  // templates are not loaded (ADR 0008).
+  // Port of upstream livewire/project/resource/create.blade.php (Project\Resource\Create) with the
+  // picker livewire/project/new/select.blade.php (Project\New\Select). A resource type coolify-rs
+  // cannot create yet is listed as upstream lists it and says so when it is chosen.
   import NewDockerImage from '../components/NewDockerImage.svelte';
   import NewPublicRepository from '../components/NewPublicRepository.svelte';
   import NewPrivateRepository from '../components/NewPrivateRepository.svelte';
@@ -17,7 +15,9 @@
   import { servicesApi, type ServiceTemplate } from '../lib/servicesApi';
   import Dropdown from '../components/Dropdown.svelte';
   import SettingsSection from '../components/SettingsSection.svelte';
-  import NewResourceCard from '../components/NewResourceCard.svelte';
+  import NewResourceCard, { newResourceViewClasses } from '../components/NewResourceCard.svelte';
+  import StatusBadge from '../components/StatusBadge.svelte';
+  import Loading from '../components/Loading.svelte';
   import { dbUi, uiApi, ApiError, type DestinationServer, type ProjectPageData } from '../lib/api';
   import { link, router } from '../lib/router.svelte';
   import { setProjectCrumbs } from '../lib/crumbs';
@@ -70,8 +70,9 @@
     },
     {
       id: 'private-gitea-app',
-      name: 'Git Repository (with Gitea App)',
-      description: 'Deploy public or private Gitea repositories through a Gitea App, with automatic webhooks and pull request previews.',
+      name: 'Git Repository (with Gitea / Forgejo App)',
+      description:
+        'Deploy public or private Gitea, Forgejo, or Codeberg repositories through a Gitea / Forgejo App, with automatic webhooks and pull request previews.',
       logo: '/svgs/gitea.svg',
     },
   ];
@@ -99,10 +100,16 @@
     },
   ];
   const databases: Resource[] = [
-    { id: 'postgresql', name: 'PostgreSQL', description: 'A relational database with strong SQL standards support and extensibility.', logo: logo('postgres') },
+    { id: 'postgresql', name: 'PostgreSQL', description: 'An extensible relational database with strong SQL support.', logo: logo('postgres') },
     { id: 'mysql', name: 'MySQL', description: 'A relational database for web and general-purpose applications.', logo: logo('mysql') },
     { id: 'mariadb', name: 'MariaDB', description: 'A relational database and drop-in replacement for MySQL.', logo: logo('mariadb') },
-    { id: 'redis', name: 'Redis', description: 'An in-memory key-value store used as a database, cache, and message broker.', logo: logo('redis') },
+    {
+      id: 'redis',
+      name: 'Redis / Valkey',
+      description: 'An in-memory key-value store for caching, queues, and sessions.',
+      logo: logo('redis-valkey'),
+      logoDark: logo('redis-valkey-dark'),
+    },
     { id: 'keydb', name: 'KeyDB', description: 'A multithreaded, Redis-compatible in-memory store.', logo: logo('keydb'), logoDark: logo('keydb-dark') },
     {
       id: 'dragonfly',
@@ -111,24 +118,36 @@
       logo: logo('dragonfly'),
       logoDark: logo('dragonfly-dark'),
     },
-    { id: 'mongodb', name: 'MongoDB', description: 'A document-oriented NoSQL database that stores JSON-like documents.', logo: logo('mongodb') },
-    { id: 'clickhouse', name: 'ClickHouse', description: 'A column-oriented database for real-time analytics over large datasets.', logo: logo('clickhouse') },
+    { id: 'mongodb', name: 'MongoDB', description: 'A NoSQL database that stores JSON-like documents.', logo: logo('mongodb') },
+    { id: 'clickhouse', name: 'ClickHouse', description: 'A column-oriented database for real-time analytics.', logo: logo('clickhouse') },
     { id: 'sqlite', name: 'SQLite', description: 'A lightweight relational database stored in a single file.', logo: logo('sqlite'), experimental: true },
   ];
   const databaseLinks: Record<string, { docs: string; website: string }> = {
-    postgresql: { docs: 'https://www.postgresql.org/docs/', website: 'https://www.postgresql.org/' },
-    mysql: { docs: 'https://dev.mysql.com/doc/', website: 'https://www.mysql.com/' },
-    mariadb: { docs: 'https://mariadb.com/kb/en/documentation/', website: 'https://mariadb.org/' },
-    redis: { docs: 'https://redis.io/docs/latest/', website: 'https://redis.io/' },
-    keydb: { docs: 'https://docs.keydb.dev/', website: 'https://keydb.dev/' },
-    dragonfly: { docs: 'https://www.dragonflydb.io/docs', website: 'https://www.dragonflydb.io/' },
-    mongodb: { docs: 'https://www.mongodb.com/docs/', website: 'https://www.mongodb.com/' },
-    clickhouse: { docs: 'https://clickhouse.com/docs', website: 'https://clickhouse.com/' },
-    sqlite: { docs: 'https://sqlite.org/docs.html', website: 'https://sqlite.org/' },
+    postgresql: { docs: 'https://www.postgresql.org/docs/', website: 'https://www.postgresql.org/?ref=coolify.io' },
+    mysql: { docs: 'https://dev.mysql.com/doc/', website: 'https://www.mysql.com/?ref=coolify.io' },
+    mariadb: { docs: 'https://mariadb.com/kb/en/documentation/', website: 'https://mariadb.org/?ref=coolify.io' },
+    redis: { docs: 'https://redis.io/docs/latest/', website: 'https://redis.io/?ref=coolify.io' },
+    keydb: { docs: 'https://docs.keydb.dev/', website: 'https://keydb.dev/?ref=coolify.io' },
+    dragonfly: { docs: 'https://www.dragonflydb.io/docs', website: 'https://www.dragonflydb.io/?ref=coolify.io' },
+    mongodb: { docs: 'https://www.mongodb.com/docs/', website: 'https://www.mongodb.com/?ref=coolify.io' },
+    clickhouse: { docs: 'https://clickhouse.com/docs', website: 'https://clickhouse.com/?ref=coolify.io' },
+    sqlite: { docs: 'https://sqlite.org/docs.html', website: 'https://sqlite.org/?ref=coolify.io' },
   };
 
+  type DatabaseImage = { image: string; name: string; badge?: 'default' | 'amd'; description: string; docs: string };
+  // The `select-redis-type` step.
+  const redisImages: DatabaseImage[] = [
+    {
+      image: 'valkey/valkey:9-alpine',
+      name: 'Valkey 9',
+      badge: 'default',
+      description: 'An open-source (BSD) fork of Redis from the Linux Foundation. It works with all Redis clients.',
+      docs: 'https://hub.docker.com/r/valkey/valkey/',
+    },
+    { image: 'redis:8', name: 'Redis 8', description: 'The original in-memory key-value store.', docs: 'https://hub.docker.com/_/redis/' },
+  ];
   // The `select-postgresql-type` step.
-  const postgresImages: { image: string; name: string; badge?: 'default' | 'amd'; description: string; docs: string }[] = [
+  const postgresImages: DatabaseImage[] = [
     {
       image: 'postgres:18-alpine',
       name: 'PostgreSQL 18',
@@ -149,13 +168,13 @@
       docs: 'https://hub.docker.com/_/postgres/',
     },
     {
-      image: 'supabase/postgres:17.4.1.032',
+      image: 'supabase/postgres:17.11.0.018',
       name: 'Supabase PostgreSQL',
       description: 'Supabase is a modern, open-source alternative to PostgreSQL with lots of extensions.',
       docs: 'https://github.com/supabase/postgres',
     },
     {
-      image: 'postgis/postgis:17-3.5-alpine',
+      image: 'postgis/postgis:18-3.7-alpine',
       name: 'PostGIS',
       badge: 'amd',
       description: 'PostGIS is a PostgreSQL extension for geographic objects.',
@@ -185,7 +204,13 @@
   let project = $state<ProjectPageData | null>(null);
   let missing = $state(false);
 
-  let step = $state<'type' | 'servers' | 'destinations' | 'select-postgresql-type'>('type');
+  // `Select::DATABASE_IMAGE_STEPS`: database types that ask for an image before the database is created.
+  type ImageStep = 'select-postgresql-type' | 'select-redis-type';
+  const databaseImageSteps: Record<string, ImageStep> = { postgresql: 'select-postgresql-type', redis: 'select-redis-type' };
+  // `DATABASE_TYPES`.
+  const databaseTypes = ['postgresql', 'redis', 'mongodb', 'mysql', 'mariadb', 'keydb', 'dragonfly', 'clickhouse', 'sqlite'];
+
+  let step = $state<'type' | 'servers' | 'destinations' | ImageStep>('type');
   let selectedType = $state('postgresql');
   // Database types coolify-rs can create (SQLite is not ported).
   const portedDatabases = ['postgresql', 'mysql', 'mariadb', 'redis', 'keydb', 'dragonfly', 'mongodb', 'clickhouse'];
@@ -194,6 +219,38 @@
   // `Create::mount()`: `?type=…&destination=…` renders that type's form.
   const formType = $derived(router.query('type'));
   const formDestination = $derived(router.query('destination') ?? '');
+  const formServerId = $derived(router.query('server_id'));
+  const formImage = $derived(router.query('database_image') ?? '');
+  // `Create::mount()`, `$pendingType`: a database (with its image when it asks for one) or a one-click
+  // service is created on this page, which shows what is being created meanwhile.
+  const pendingType = $derived.by(() => {
+    if (!formType || !formDestination) return null;
+    if (databaseTypes.includes(formType)) return databaseImageSteps[formType] && !formImage ? null : formType;
+    return formType.startsWith('one-click-service-') ? formType : null;
+  });
+
+  // `viewMode`: a list by default; the choice is kept in this browser.
+  function storedViewMode(): 'list' | 'grid' {
+    try {
+      return localStorage.getItem('new-resource-view') === 'grid' ? 'grid' : 'list';
+    } catch {
+      return 'list';
+    }
+  }
+  let viewMode = $state<'list' | 'grid'>(storedViewMode());
+  function setViewMode(mode: 'list' | 'grid') {
+    viewMode = mode;
+    try {
+      localStorage.setItem('new-resource-view', mode);
+    } catch {
+      // Kept for this page only.
+    }
+  }
+  const viewClasses = $derived(newResourceViewClasses(viewMode));
+  const viewModes: ['list' | 'grid', string, string][] = [
+    ['list', 'List view', 'unordered-list'],
+    ['grid', 'Grid view', 'grid'],
+  ];
   let search = $state('');
   let resourceType = $state('all');
   let searchInput: HTMLInputElement | undefined = $state();
@@ -211,7 +268,7 @@
   let creating = $state(false);
 
   // Select::loadServers(): usable servers, and build servers that cannot host resources.
-  const servers = $derived((allServers ?? []).filter((s) => s.functional && !s.is_build));
+  const servers = $derived((allServers ?? []).filter((s) => s.functional && !s.is_build && s.can_place_resource));
   const buildServers = $derived((allServers ?? []).filter((s) => s.functional && s.is_build));
   const onlyBuildServerAvailable = $derived(servers.length === 0 && buildServers.length > 0);
 
@@ -325,58 +382,95 @@
     step = 'destinations';
   }
 
+  /** `route('project.resource.create', [...])`: this page with the chosen type, destination and server. */
+  function createUrl(extra: Record<string, string> = {}): string {
+    const query = new URLSearchParams({ type: selectedType, destination: destinationUuid, server_id: String(server?.id ?? ''), ...extra });
+    return `/project/${uuid}/environment/${env}/new?${query}`;
+  }
+
   function setDestination(destination: string) {
     destinationUuid = destination;
-    // `whatToDoNext()`: application types continue on their own form.
-    if (portedApplications.includes(selectedType)) {
-      const serverId = server?.id ?? '';
-      router.go(`/project/${uuid}/environment/${env}/new?type=${selectedType}&destination=${destination}&server_id=${serverId}`);
+    // `whatToDoNext()`: PostgreSQL and Redis ask for an image first; everything else goes on.
+    const imageStep = databaseImageSteps[selectedType];
+    if (imageStep) {
+      step = imageStep;
       return;
     }
-    if (selectedType === 'postgresql') {
-      step = 'select-postgresql-type';
-      return;
-    }
-    if (selectedType.startsWith('one-click-service-')) {
-      createService(selectedType);
-      return;
-    }
-    // Other databases are created right away (`resource.create` without an image).
-    createDatabase(selectedType);
+    router.go(createUrl());
   }
 
-  function setPostgresqlType(image: string) {
-    createDatabase('postgresql', image);
-  }
-
-  // `Project\\Resource\\Create` for `one-click-service-*`.
-  async function createService(type: string) {
+  /** `setDatabaseImage()`. */
+  function setDatabaseImage(image: string) {
     if (creating) return;
     creating = true;
-    try {
-      const r = await servicesApi.create({ project_uuid: uuid, environment_uuid: env, destination_uuid: destinationUuid, type });
-      router.go(`/project/${uuid}/environment/${env}/service/${r.uuid}`);
-    } catch (e) {
-      notify.error(e instanceof ApiError ? e.message : String(e));
-      creating = false;
-    }
+    router.go(createUrl({ database_image: image }));
   }
 
-  async function createDatabase(type: string, image?: string) {
-    if (creating) return;
-    creating = true;
+  // `Select::mount()`: with the type, server and destination in the query (the command palette),
+  // a database that asks for an image opens on its image step.
+  let imageStepFromQuery = false;
+  $effect(() => {
+    const imageStep = formType ? databaseImageSteps[formType] : undefined;
+    if (imageStepFromQuery || !imageStep || !formType || formServerId === null || !formDestination || formImage || allServers === null) return;
+    imageStepFromQuery = true;
+    // `Gate::allows('placeResource', $server)`: `servers` holds only the servers that pass it.
+    const queried = servers.find((s) => String(s.id) === formServerId && s.destinations.some((d) => d.uuid === formDestination));
+    if (!queried) return;
+    selectedType = formType;
+    server = queried;
+    destinationUuid = formDestination;
+    step = imageStep;
+  });
+
+  // `pendingResource()`: the name and logo of what is being created.
+  const pendingService = $derived.by(() => {
+    if (!pendingType?.startsWith('one-click-service-')) return undefined;
+    const key = pendingType.slice('one-click-service-'.length).toLowerCase();
+    return services.find((s) => s.id.toLowerCase() === key);
+  });
+  /** `Str::headline()` of a type or a template key. */
+  const headline = (value: string) =>
+    value
+      .split(/[-_\s]+/)
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  const pendingName = $derived(
+    !pendingType ? '' : pendingType.startsWith('one-click-service-') ? (pendingService?.name ?? headline(pendingType.slice('one-click-service-'.length))) : headline(pendingType),
+  );
+  const pendingLogo = $derived(pendingService?.logo ?? null);
+
+  // `wire:init="createResource"`: creates the pending resource once and opens it.
+  let createdFor = '';
+  $effect(() => {
+    if (!project || !pendingType) return;
+    const request = `${pendingType}|${formDestination}|${formImage}`;
+    if (createdFor === request) return;
+    createdFor = request;
+    createResource(pendingType, formDestination, formImage);
+  });
+
+  /** `Create::createResource()`. The new page replaces this one, so Back does not create a second resource. */
+  async function createResource(type: string, destination: string, image: string) {
     try {
+      if (type.startsWith('one-click-service-')) {
+        const r = await servicesApi.create({ project_uuid: uuid, environment_uuid: env, destination_uuid: destination, type });
+        router.go(`/project/${uuid}/environment/${env}/service/${r.uuid}`, true);
+        return;
+      }
       const { uuid: dbUuid } = await dbUi.create({
         project_uuid: uuid,
         environment_uuid: env,
-        destination_uuid: destinationUuid,
+        destination_uuid: destination,
         type,
         ...(image ? { database_image: image } : {}),
       });
-      router.go(`/project/${uuid}/environment/${env}/database/${dbUuid}`);
+      router.go(`/project/${uuid}/environment/${env}/database/${dbUuid}`, true);
     } catch (e) {
       notify.error(e instanceof ApiError ? e.message : String(e));
       creating = false;
+      step = 'type';
+      router.go(`/project/${uuid}/environment/${env}/new`, true);
     }
   }
 
@@ -388,8 +482,8 @@
     'group flex min-h-14 w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-neutral-50 dark:hover:bg-white/[0.025]';
   const rowIcon =
     'flex size-8 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.035] dark:text-fg-dim';
-  const badge =
-    'inline-flex h-6 max-w-full items-center gap-1.5 whitespace-nowrap rounded-full border border-neutral-200 bg-neutral-100 px-2 text-xs font-medium leading-none text-neutral-700 dark:border-white/[0.12] dark:bg-white/[0.07] dark:text-white';
+  const imageCard =
+    'group relative flex min-h-24 items-center gap-3 rounded-xl border border-neutral-200 bg-white p-4 transition-colors hover:border-neutral-300 dark:border-white/[0.08] dark:bg-white/[0.05] dark:hover:border-white/[0.14]';
 </script>
 
 <svelte:window
@@ -407,19 +501,62 @@
   }}
 />
 
-{#snippet statusBadge(text: string)}
-  <!-- components/status-badge.blade.php, neutral dot -->
-  <span class={badge}>
-    <span class="relative flex size-1.5 shrink-0">
-      <span class="relative inline-flex size-1.5 rounded-full bg-neutral-400 dark:bg-neutral-500"></span>
-    </span>
-    <span class="truncate">{text}</span>
-  </span>
+<!-- One card of an image step (`select-postgresql-type`, `select-redis-type`). -->
+{#snippet imageOption(option: DatabaseImage)}
+  <div
+    class="{imageCard} {creating ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}"
+    role="button"
+    tabindex="-1"
+    aria-disabled={creating}
+    onclick={() => setDatabaseImage(option.image)}
+    onkeydown={(e) => e.key === 'Enter' && setDatabaseImage(option.image)}
+  >
+    <div class="flex flex-col">
+      <div class="text-[13px] font-semibold text-black dark:text-fg">
+        {option.name}
+        {#if option.badge === 'default'}
+          <span class="ml-1 rounded-full bg-coollabs/10 px-2 py-0.5 text-[10px] font-medium text-coollabs dark:bg-brand/15 dark:text-brand-light">Default</span>
+        {:else if option.badge === 'amd'}
+          <span class="ml-1 text-[10px] font-medium text-amber-600 dark:text-amber-300">AMD only</span>
+        {/if}
+      </div>
+      <div class="mt-1 pr-8 text-[11px] leading-4 text-neutral-500 dark:text-fg-faint">{option.description}</div>
+    </div>
+    <a
+      href={option.docs}
+      target="_blank"
+      onclick={(e) => e.stopPropagation()}
+      class="absolute top-2 right-2 flex size-7 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-black dark:text-fg-faint dark:hover:bg-white/[0.06] dark:hover:text-fg"
+      title="View documentation"
+    >
+      <svg class="w-4 h-4 text-neutral-600 dark:text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+        />
+      </svg>
+    </a>
+  </div>
 {/snippet}
 
 {#if missing}
   <div class="application-settings-form w-full">
     <Empty title="Environment not found" description="It may have been deleted, or it belongs to another team." iconName="layers" size="lg" />
+  </div>
+{:else if project && pendingType}
+  <div>
+    <div class="mx-auto flex max-w-md flex-col items-center pt-24 text-center">
+      {#if pendingLogo}
+        <img src={pendingLogo} alt="" class="mb-4 size-10 object-contain" />
+      {:else}
+        <Reicon name="database" class="mb-4 size-8 text-neutral-400 dark:text-fg-faint" />
+      {/if}
+      <h2 class="empty-state-title">Creating {pendingName}</h2>
+      <p class="empty-state-description text-[13px]">Setting up the resource. You will be redirected when it is ready.</p>
+      <Loading text="Creating..." class="mt-4" />
+    </div>
   </div>
 {:else if project && formType === 'docker-image' && formDestination}
   <div>
@@ -484,6 +621,23 @@
               </div>
 
               <div class="flex shrink-0 items-center gap-2">
+                <!-- Only the view that is not current shows, as an icon: the button switches to that view. -->
+                <div class="view-toggle w-fit">
+                  {#each viewModes as [mode, viewLabel, icon] (mode)}
+                    {#if viewMode !== mode}
+                      <button
+                        type="button"
+                        onclick={() => setViewMode(mode)}
+                        title={viewLabel}
+                        aria-label={viewLabel}
+                        class="relative flex h-7.5 w-7.5 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-black dark:hover:text-white"
+                      >
+                        <Reicon name={icon} class="size-3.5" />
+                      </button>
+                    {/if}
+                  {/each}
+                </div>
+
                 <Dropdown panelClass="w-48!">
                   {#snippet trigger({ open })}
                     <button type="button" class="button" aria-haspopup="listbox" aria-expanded={open}>
@@ -594,7 +748,7 @@
           {#if search === ''}
             <a
               href="/canvas?project={uuid}&environment={env}"
-              class="mt-6 flex items-center gap-4 rounded-lg border border-neutral-200 bg-white p-4 shadow-[0_1px_2px_rgb(0_0_0/0.05)] transition-colors hover:border-neutral-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent dark:border-white/[0.08] dark:bg-white/[0.05] dark:shadow-none dark:hover:border-white/[0.14]"
+              class="mt-6 flex items-center gap-4 rounded-xl border border-neutral-200 bg-white p-4 shadow-[0_1px_2px_rgb(0_0_0/0.05)] transition-colors hover:border-neutral-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent dark:border-white/[0.08] dark:bg-white/[0.05] dark:shadow-none dark:hover:border-white/[0.14]"
             >
               <div class="flex size-11 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-600 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-fg-dim">
                 <Reicon name="deploy-canvas" class="size-5" />
@@ -624,28 +778,32 @@
                     <h2>Applications</h2>
                   </div>
                 </div>
-                <div class="application-settings-section-body grid grid-cols-1 justify-start gap-3 text-left md:grid-cols-2 xl:grid-cols-3">
-                  {#each filteredGit as app (app.name)}
-                    <NewResourceCard
-                      name={app.name}
-                      description={app.description}
-                      logo={app.logo}
-                      logoDark={app.logoDark}
-                      source="Git source"
-                      docs={app.documentation}
-                      onselect={() => setType(app.id)}
-                    />
-                  {/each}
-                  {#each filteredDocker as app (app.name)}
-                    <NewResourceCard
-                      name={app.name}
-                      description={app.description}
-                      logo={app.logo}
-                      source="Docker source"
-                      docs={app.documentation}
-                      onselect={() => setType(app.id)}
-                    />
-                  {/each}
+                <div class="application-settings-section-body {viewMode === 'list' ? 'is-flush' : ''}">
+                  <div class="text-left {viewClasses.container}">
+                    {#each filteredGit as app (app.name)}
+                      <NewResourceCard
+                        name={app.name}
+                        description={app.description}
+                        logo={app.logo}
+                        logoDark={app.logoDark}
+                        source="Git source"
+                        docs={app.documentation}
+                        view={viewClasses}
+                        onselect={() => setType(app.id)}
+                      />
+                    {/each}
+                    {#each filteredDocker as app (app.name)}
+                      <NewResourceCard
+                        name={app.name}
+                        description={app.description}
+                        logo={app.logo}
+                        source="Docker source"
+                        docs={app.documentation}
+                        view={viewClasses}
+                        onselect={() => setType(app.id)}
+                      />
+                    {/each}
+                  </div>
                 </div>
               </section>
             {/if}
@@ -658,19 +816,22 @@
                     <h2>Databases</h2>
                   </div>
                 </div>
-                <div class="application-settings-section-body grid grid-cols-1 justify-start gap-3 text-left md:grid-cols-2 xl:grid-cols-3">
-                  {#each filteredDatabases as database (database.id)}
-                    <NewResourceCard
-                      name={database.name}
-                      description={database.description}
-                      logo={database.logo}
-                      logoDark={database.logoDark}
-                      experimental={database.experimental}
-                      docs={databaseLinks[database.id]?.docs}
-                      website={databaseLinks[database.id]?.website}
-                      onselect={() => setType(database.id)}
-                    />
-                  {/each}
+                <div class="application-settings-section-body {viewMode === 'list' ? 'is-flush' : ''}">
+                  <div class="text-left {viewClasses.container}">
+                    {#each filteredDatabases as database (database.id)}
+                      <NewResourceCard
+                        name={database.name}
+                        description={database.description}
+                        logo={database.logo}
+                        logoDark={database.logoDark}
+                        experimental={database.experimental}
+                        docs={databaseLinks[database.id]?.docs}
+                        website={databaseLinks[database.id]?.website}
+                        view={viewClasses}
+                        onselect={() => setType(database.id)}
+                      />
+                    {/each}
+                  </div>
                 </div>
               </section>
             {/if}
@@ -690,17 +851,19 @@
                     {/if}
                   </div>
                 </div>
-                <div class="application-settings-section-body">
-                  <Callout type="info" title="Trademarks policy" class="mb-4">
-                    The respective trademarks mentioned here are owned by the respective companies, and use of them does not imply any affiliation or
-                    endorsement.
-                  </Callout>
-                  <div class="grid grid-cols-1 justify-start gap-3 text-left md:grid-cols-2 xl:grid-cols-3">
+                <div class="application-settings-section-body {viewMode === 'list' ? 'is-flush' : ''}">
+                  <div class={viewMode === 'list' ? 'px-4 pt-4' : ''}>
+                    <Callout type="info" title="Trademarks policy" class="mb-4">
+                      The respective trademarks mentioned here are owned by the respective companies, and use of them does not imply any affiliation or
+                      endorsement.
+                    </Callout>
+                  </div>
+                  <div class="text-left {viewClasses.container}">
                     {#each filteredServices as service (service.id)}
                       <article
                         role="button"
                         tabindex="0"
-                        aria-label="Deploy {service.name}"
+                        aria-label="Configure {service.name}"
                         onclick={() => setType('one-click-service-' + service.id)}
                         onkeydown={(e) => {
                           if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
@@ -708,10 +871,10 @@
                             setType('one-click-service-' + service.id);
                           }
                         }}
-                        class="group flex min-h-48 cursor-pointer flex-col rounded-xl border border-neutral-200 bg-white p-4 transition-colors hover:border-neutral-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent dark:border-white/[0.08] dark:bg-white/[0.03] dark:hover:border-white/[0.14]"
+                        class="group flex cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent {viewClasses.item}"
                       >
-                        <div class="flex min-w-0 items-start gap-3">
-                          <div class="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50 dark:border-white/[0.08] dark:bg-white/[0.04]">
+                        <div class="flex min-w-0 items-start gap-3 {viewClasses.header}">
+                          <div class="flex shrink-0 items-center justify-center overflow-hidden border border-neutral-200 bg-neutral-50 dark:border-white/[0.08] dark:bg-white/[0.04] {viewClasses.logo}">
                             <img
                               class="h-full w-full object-contain p-2"
                               src={service.logo}
@@ -741,22 +904,36 @@
                             >
                           {/if}
                         </div>
-                        <p class="mt-3 line-clamp-2 text-[12px] leading-5 text-neutral-600 dark:text-fg-dim">
+                        <p class="text-[12px] leading-5 text-neutral-600 dark:text-fg-dim {viewClasses.description}">
                           {service.slogan || service.description || 'Deploy this service with a ready-to-use coolify-rs template.'}
                         </p>
-                        <div class="mt-auto flex items-center gap-1.5 border-t border-neutral-200 pt-3 dark:border-white/[0.07]">
+                        <div class="flex items-center gap-1.5 {viewClasses.footer}">
                           <a
                             href={'https://coolify.io/docs/services/' + service.docsSlug}
                             target="_blank"
                             rel="noopener noreferrer"
                             onclick={(e) => e.stopPropagation()}
-                            class="button">Docs</a
+                            class="icon-button"
+                            title="Documentation"
+                            aria-label="Documentation"
                           >
+                            <Reicon name="documentation" class="size-4" />
+                          </a>
                           {#if service.website}
-                            <a href={service.website} target="_blank" rel="noopener noreferrer" class="button" onclick={(e) => e.stopPropagation()}>Website</a>
+                            <a
+                              href={service.website}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              class="icon-button"
+                              title="Website"
+                              aria-label="Website"
+                              onclick={(e) => e.stopPropagation()}
+                            >
+                              <Reicon name="globe" class="size-4" />
+                            </a>
                           {/if}
-                          <span class="button button-highlighted ml-auto">
-                            Deploy
+                          <span class="button {viewClasses.action}">
+                            Configure
                             <Reicon name="arrow-right" class="size-3.5" />
                           </span>
                         </div>
@@ -792,7 +969,7 @@
                   <span class="block truncate text-[13px] font-semibold text-black dark:text-fg">{s.name}</span>
                   <span class="block truncate text-[11px] text-neutral-500 dark:text-fg-faint">{s.description || s.ip}</span>
                 </span>
-                {@render statusBadge('running')}
+                <StatusBadge type="success" label="Running" />
               </button>
             {:else}
               {#if buildServers.length === 0}
@@ -816,7 +993,7 @@
                   <span class="block truncate text-[13px] font-semibold text-black dark:text-fg">{s.name}</span>
                   <span class="block text-[11px] text-neutral-500 dark:text-fg-faint">Build-only servers cannot host resources.</span>
                 </span>
-                {@render statusBadge('exited')}
+                <StatusBadge label="Build only" />
                 <a href="/server/{s.uuid}" use:link class="button">Settings</a>
               </div>
             {/each}
@@ -838,11 +1015,23 @@
                   <span class="block truncate text-[13px] font-semibold text-black dark:text-fg">{d.name}</span>
                   <span class="block truncate text-[11px] text-neutral-500 dark:text-fg-faint">Network: {d.network}</span>
                 </span>
-                {@render statusBadge('running')}
+                <StatusBadge type="success" label="Standalone Docker" />
               </button>
             {/each}
           </div>
         </SettingsSection>
+      {/if}
+
+      {#if step === 'select-redis-type'}
+        <div>
+          <div class="mb-4">
+            <h2 class="text-[15px]! font-semibold!">Select a Redis or Valkey image</h2>
+            <p class="mt-1 text-[12px] text-neutral-500 dark:text-fg-dim">Both work with the same clients, commands, and configuration.</p>
+          </div>
+          <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            {#each redisImages as option (option.image)}{@render imageOption(option)}{/each}
+          </div>
+        </div>
       {/if}
 
       {#if step === 'select-postgresql-type'}
@@ -852,49 +1041,7 @@
             <p class="mt-1 text-[12px] text-neutral-500 dark:text-fg-dim">Use PostgreSQL 18 unless the workload needs bundled extensions.</p>
           </div>
           <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            {#each postgresImages as pg (pg.image)}
-              <div
-                class="group relative flex min-h-24 items-center gap-3 rounded-[10px] border border-neutral-200 bg-white p-4 transition-colors hover:border-neutral-300 hover:bg-neutral-50 dark:border-white/[0.07] dark:bg-surface dark:hover:border-white/[0.12] dark:hover:bg-white/[0.035] {creating
-                  ? 'cursor-not-allowed opacity-50'
-                  : 'cursor-pointer'}"
-                role="button"
-                tabindex="-1"
-                aria-disabled={creating}
-                onclick={() => setPostgresqlType(pg.image)}
-                onkeydown={(e) => e.key === 'Enter' && setPostgresqlType(pg.image)}
-              >
-                <div class="flex flex-col">
-                  <div class="text-[13px] font-semibold text-black dark:text-fg">
-                    {pg.name}
-                    {#if pg.badge === 'default'}
-                      <span
-                        class="ml-1 rounded-full bg-coollabs/10 px-2 py-0.5 text-[10px] font-medium text-coollabs dark:bg-brand/15 dark:text-brand-light"
-                        >Default</span
-                      >
-                    {:else if pg.badge === 'amd'}
-                      <span class="ml-1 text-[10px] font-medium text-amber-600 dark:text-amber-300">AMD only</span>
-                    {/if}
-                  </div>
-                  <div class="mt-1 pr-8 text-[11px] leading-4 text-neutral-500 dark:text-fg-faint">{pg.description}</div>
-                </div>
-                <a
-                  href={pg.docs}
-                  target="_blank"
-                  onclick={(e) => e.stopPropagation()}
-                  class="absolute top-2 right-2 flex size-7 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-black dark:text-fg-faint dark:hover:bg-white/[0.06] dark:hover:text-fg"
-                  title="View documentation"
-                >
-                  <svg class="w-4 h-4 text-neutral-600 dark:text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      stroke-width="2"
-                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                    />
-                  </svg>
-                </a>
-              </div>
-            {/each}
+            {#each postgresImages as option (option.image)}{@render imageOption(option)}{/each}
           </div>
         </div>
       {/if}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Port of upstream livewire/security/api-tokens.blade.php (4.6.0) and components/api-disabled-callout.blade.php.
+  // Port of upstream livewire/security/api-tokens.blade.php (4.7.5) and components/api-disabled-callout.blade.php.
   import Reicon from '../components/Reicon.svelte';
   import Empty from '../components/Empty.svelte';
   import Helper from '../components/Helper.svelte';
@@ -21,7 +21,6 @@
   document.title = 'API Tokens | coolify-rs';
 
   let page = $state<ApiTokensPage | null>(null);
-  let listed = $state<number[] | null>(null);
   let creating = $state(false);
   let editing = $state<ApiToken | null>(null);
   let issuedToken = $state<string | null>(null);
@@ -46,8 +45,8 @@
     const d = await securityUi.apiTokens();
     if (page === null) form = blankForm(d.can_use.team_scope);
     page = d;
-    // Upstream's Alpine list is rendered once: tokens created later stay hidden until a reload.
-    listed ??= d.tokens.map((t) => t.id);
+    // 4.7.5: the search index (`$wire.tokenSearchIndex`) changes with the tokens, so a token shows
+    // up, changes or goes away in the list right after create, edit and revoke.
   }
   load();
 
@@ -174,7 +173,6 @@
   const tokens = $derived(page?.tokens ?? []);
   const filtered = $derived(
     tokens.filter((t) => {
-      if (!listed?.includes(t.id)) return false;
       const q = search.trim().toLowerCase();
       return !q || searchText(t).includes(q);
     }),

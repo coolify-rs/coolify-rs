@@ -10,7 +10,8 @@ use serde_json::{Map, Value};
 
 use crate::state::AppState;
 
-/// `{{ team.KEY }}`, `{{ project.KEY }}`, `{{ environment.KEY }}` in `docker_compose_raw`.
+/// `{{ team.KEY }}`, `{{ project.KEY }}`, `{{ environment.KEY }}`, `{{ server.KEY }}` in
+/// `docker_compose_raw`.
 static SHARED_REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\{\{\s*(\w+)\.([^}\s]+)\s*\}\}").unwrap_or_else(|_| unreachable!())
 });
@@ -20,14 +21,17 @@ pub(crate) struct Owner<'a> {
     pub team_id: i64,
     pub project_id: Option<i64>,
     pub environment_id: Option<i64>,
+    /// `data_get($resource, 'destination.server_id')`.
+    pub server_id: Option<i64>,
     pub compose_raw: Option<&'a str>,
 }
 
-/// `(type, key, value, team_id, project_id, environment_id)` of a shared variable.
+/// `(type, key, value, team_id, project_id, environment_id, server_id)` of a shared variable.
 type SharedRow = (
     String,
     String,
     Option<String>,
+    Option<i64>,
     Option<i64>,
     Option<i64>,
     Option<i64>,
@@ -38,7 +42,8 @@ async fn shared_references(state: &AppState, owner: &Owner<'_>) -> Vec<String> {
     let raw = owner.compose_raw.unwrap_or_default();
     let references: Vec<(String, String)> = SHARED_REFERENCE
         .captures_iter(raw)
-        .filter(|c| matches!(&c[1], "team" | "project" | "environment"))
+        // `SHARED_VARIABLE_TYPES`.
+        .filter(|c| matches!(&c[1], "team" | "project" | "environment" | "server"))
         .map(|c| (c[1].to_owned(), c[2].to_owned()))
         .collect();
     if references.is_empty() {
@@ -46,7 +51,7 @@ async fn shared_references(state: &AppState, owner: &Owner<'_>) -> Vec<String> {
     }
     let keys: Vec<String> = references.iter().map(|(_, k)| k.clone()).collect();
     let rows: Vec<SharedRow> = sqlx::query_as(
-        "SELECT type, key, value, team_id, project_id, environment_id \
+        "SELECT type, key, value, team_id, project_id, environment_id, server_id \
              FROM shared_environment_variables \
              WHERE team_id = $1 AND is_shown_once = true AND key = ANY($2) ORDER BY id",
     )
@@ -59,11 +64,12 @@ async fn shared_references(state: &AppState, owner: &Owner<'_>) -> Vec<String> {
         return Vec::new();
     };
     rows.into_iter()
-        .filter(|(kind, key, _, team, project, environment)| {
+        .filter(|(kind, key, _, team, project, environment, server)| {
             let (scope, stored) = match kind.as_str() {
                 "team" => (Some(owner.team_id), *team),
                 "project" => (owner.project_id, *project),
                 "environment" => (owner.environment_id, *environment),
+                "server" => (owner.server_id, *server),
                 _ => return false,
             };
             references.iter().any(|(t, k)| t == kind && k == key)
@@ -170,6 +176,7 @@ pub(crate) async fn redact_application(
         team_id: a.team_id,
         project_id: a.project.get("id").and_then(Value::as_i64),
         environment_id: a.int("environment_id"),
+        server_id: a.server_id(),
         compose_raw: a.str("docker_compose_raw"),
     };
     redact_compose(state, &owner, locked, payload).await;
@@ -199,6 +206,7 @@ pub(crate) async fn redact_service(
         team_id: s.team_id,
         project_id: s.project.get("id").and_then(Value::as_i64),
         environment_id: s.int("environment_id"),
+        server_id: s.server_id(),
         compose_raw: s.str("docker_compose_raw"),
     };
     redact_compose(state, &owner, locked, payload).await;

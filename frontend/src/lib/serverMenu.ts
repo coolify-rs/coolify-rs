@@ -45,10 +45,14 @@ export function serverNavContext(s: ServerFacts, active: string, isAdmin: boolea
     { label: 'Log Drains', icon: 'notifications', href: `${base}/log-drains`, active: active === 'log-drains', group: 'Operations', disabled: off },
     { label: 'Metrics', icon: 'graph', href: `${base}/metrics`, active: active === 'metrics', group: 'Operations', disabled: off },
     { label: 'Analytics', icon: 'analytics', href: `${base}/analytics`, active: active === 'analytics', group: 'Operations', visible: !s.is_swarm && !s.is_build, disabled: off },
-    { label: 'Security', icon: 'shield-alert', href: `${base}/security/patches`, active: active === 'security', group: 'Security', visible: isAdmin, disabled: off,
+    // v4.7.5: also for a server that is not functional: a changed host key stops the connection,
+    // and the page to trust the new key is here.
+    { label: 'Security', icon: 'shield-alert', href: `${base}/security`, active: active === 'security', group: 'Security', visible: isAdmin,
+      warning: !!s.ssh_host_key_changed,
       links: [
-        { label: 'Patching', icon: 'bandage', href: `${base}/security/patches`, active: sub === 'patches', beta: true },
-        { label: 'Terminal Access', icon: 'browser-terminal', href: `${base}/security/terminal-access`, active: sub === 'terminal-access' },
+        { label: 'General', icon: 'settings', href: `${base}/security`, active: sub === 'overview' || sub === 'terminal-access' },
+        ...(s.functional ? [{ label: 'Patching', icon: 'refresh', href: `${base}/security/patches`, active: sub === 'patches' }] : []),
+        ...(s.functional ? [{ label: 'Vulnerabilities', icon: 'shield-alert', href: `${base}/security/vulnerabilities`, active: sub === 'vulnerabilities' }] : []),
       ] },
     { label: 'Transfer', icon: 'arrow-right', href: `${base}/transfer`, active: active === 'transfer', group: 'Operations', visible: !s.is_localhost && isAdmin, beta: true, disabled: off },
     { label: 'Plugins', icon: 'browser-code', href: `${base}/plugins`, active: active === 'plugins', group: 'Plugins', visible: plugins },

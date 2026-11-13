@@ -85,6 +85,10 @@ async fn show(
             build_servers.push(json!({"id": row.id, "name": name}));
             continue;
         }
+        // `->filter(fn ($server) => Gate::allows('placeResource', $server))`.
+        if !crate::place_resource::allows(&state, &ctx, row).await? {
+            continue;
+        }
         server_list.push(json!({
             "id": row.id,
             "name": name,
@@ -179,6 +183,8 @@ async fn clone_to(
     let Some(destination) = team_destination(&state, res.team_id, wanted).await? else {
         return Err(bad("Destination not found."));
     };
+    // `findResourceTeamDestination()`: `$this->authorize('placeResource', $destination->server)`.
+    crate::place_resource::authorize(&state, &ctx, &destination.2).await?;
     // `authorize(CloneVolumeDataWithSourceStopped::sourceAbility(...))`: an admin ability, checked above.
     let clone_volume_data = body
         .get("clone_volume_data")
@@ -692,6 +698,10 @@ async fn clone_me_page(
     rows.sort_by_key(|r| r.id);
     let mut server_list = Vec::new();
     for row in rows.iter().filter(|r| !is_build(r)) {
+        // `->filter(fn ($server) => Gate::allows('placeResource', $server))`.
+        if !crate::place_resource::allows(&state, &ctx, row).await? {
+            continue;
+        }
         server_list.push(json!({
             "id": row.id,
             "name": row.record.get("name"),
@@ -758,6 +768,8 @@ async fn clone_me(
     let Some(destination) = team_destination(&state, p.team_id, selected).await? else {
         return Err(bad("Destination not found."));
     };
+    // `$this->authorize('placeResource', $selectedDestination->server)`.
+    crate::place_resource::authorize(&state, &ctx, &destination.2).await?;
     let is_project = body.get("type").and_then(Value::as_str) == Some("project");
     // `authorize(sourceAbility($source))` for each resource: admin abilities, checked above.
     let clone_volume_data = body

@@ -124,7 +124,7 @@ pub async fn migrate(
         &ctx,
         &meta,
         "api.server.migrate",
-        json!({"team_id": ctx.team_id, "server_uuid": s.uuid, "target_url": migration["target_url"]}),
+        json!({"team_id": ctx.team_id, "server_uuid": s.uuid, "target_url": audit_url(migration["target_url"].as_str())}),
         "info",
     )
     .await;
@@ -311,7 +311,7 @@ pub async fn check(
             bundle::SCHEMA_VERSION
         )),
     })];
-    let remote = importer::import_checks(&state, &server_uuid, &ip, ctx.team_id, true)
+    let remote = importer::import_checks(&state, &server_uuid, &ip, ctx.team_id, true, port)
         .await
         .map_err(|_| ApiError::Message(StatusCode::INTERNAL_SERVER_ERROR, "Server Error"))?;
     for c in remote {
@@ -535,5 +535,57 @@ pub async fn complete(
             .await;
             Ok(answer(StatusCode::OK, v))
         }
+    }
+}
+
+/// `auditUrl()` (v4.7.5): scheme, host, port and path of a URL, without user info, query string
+/// or fragment, for the audit log.
+pub(crate) fn audit_url(url: Option<&str>) -> Option<String> {
+    let url = url.filter(|u| !u.is_empty())?;
+    // PHP `parse_url()` needs "scheme://host".
+    let Some((scheme, rest)) = url.split_once("://").filter(|(s, _)| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+    }) else {
+        return Some("[invalid-url]".to_owned());
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    if host_port.is_empty() {
+        return Some("[invalid-url]".to_owned());
+    }
+    let path = tail.split(['?', '#']).next().unwrap_or_default();
+    Some(format!("{scheme}://{host_port}{path}"))
+}
+
+#[cfg(test)]
+mod audit_url_tests {
+    use super::audit_url;
+
+    #[test]
+    fn audit_urls_have_no_credentials_query_or_fragment() {
+        assert_eq!(
+            audit_url(Some(
+                "https://user:secret@coolify.example:8443/path/x?token=abc#frag"
+            ))
+            .as_deref(),
+            Some("https://coolify.example:8443/path/x")
+        );
+        assert_eq!(
+            audit_url(Some("https://coolify.example")).as_deref(),
+            Some("https://coolify.example")
+        );
+        assert_eq!(
+            audit_url(Some("https://coolify.example?x=1")).as_deref(),
+            Some("https://coolify.example")
+        );
+        assert_eq!(
+            audit_url(Some("not a url")).as_deref(),
+            Some("[invalid-url]")
+        );
+        assert_eq!(audit_url(Some("")), None);
+        assert_eq!(audit_url(None), None);
     }
 }

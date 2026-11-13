@@ -25,6 +25,7 @@ export const APPLICATION_SECTIONS = [
   'rollback',
   'resource-limits',
   'resource-operations',
+  'maintenance',
   'metrics',
   'analytics',
   'tags',
@@ -33,6 +34,7 @@ export const APPLICATION_SECTIONS = [
   'logs',
   'terminal',
   'files',
+  'vulnerabilities',
   // coolify-rs plugins (ADR 0013); only shown, and only kept, when the team has an application panel.
   'plugins',
 ];
@@ -67,7 +69,7 @@ export function applicationBackupNavContext(base: string, backup: string, sectio
 export function applicationNavContext(
   base: string,
   active: string,
-  opts: { canAccessTerminal: boolean; gitBased: boolean; dockerImage: boolean; compose: boolean; swarm?: boolean; serverBadge?: string; plugins?: boolean },
+  opts: { canAccessTerminal: boolean; gitBased: boolean; dockerImage: boolean; compose: boolean; swarm?: boolean; serverBadge?: string; plugins?: boolean; security?: string | null },
 ): NavContext {
   const item = (label: string, section: string, icon: string, extra: Partial<Entry> = {}): Entry => ({
     label,
@@ -109,6 +111,8 @@ export function applicationNavContext(
     'Files': item('Files', 'files', 'folder', { visible: opts.canAccessTerminal && !opts.swarm, beta: true }),
     'Metrics': item('Metrics', 'metrics', 'graph'),
     'Analytics': item('Analytics', 'analytics', 'analytics'),
+    // `'security' => SecurityStatus::stored($application)->status->value` (the security dot).
+    'Security': item('Security', 'vulnerabilities', 'shield-alert', { security: opts.security ?? null }),
     'Git Source': item('Git Source', 'source', 'sources', { visible: opts.gitBased }),
     'Servers': item('Servers', 'servers', 'servers', { errorBadge: opts.serverBadge }),
     'Preview Deployments': item('Preview Deployments', 'preview-deployments', 'eye', {
@@ -133,7 +137,9 @@ export function applicationNavContext(
         { id: 'move-resource-section', label: 'Move resource' },
       ],
     }),
-    'Resource Limits': item('Resource Limits', 'resource-limits', 'cpu'),
+    // Docker Compose applications set their limits in the compose file.
+    'Resource Limits': item('Resource Limits', 'resource-limits', 'cpu', { visible: !opts.compose }),
+    'Maintenance Mode': item('Maintenance Mode', 'maintenance', 'bandage'),
     'Rollback': item('Rollback', 'rollback', 'time-back'),
     'Tags': item('Tags', 'tags', 'tags'),
     'Plugins': item('Plugins', 'plugins', 'browser-code', { visible: !!opts.plugins }),
@@ -141,10 +147,10 @@ export function applicationNavContext(
   };
   const menuGroups = [
     ['General', 'Domains', 'Environment Variables', 'Persistent Storage', 'Advanced', 'Swarm', 'Healthcheck'],
-    ['Runtime Logs', 'Deployment Logs', 'Terminal', 'Files', 'Metrics', 'Analytics'],
+    ['Runtime Logs', 'Deployment Logs', 'Terminal', 'Files', 'Metrics', 'Analytics', 'Security'],
     ['Git Source', 'Servers', 'Preview Deployments'],
     ['Scheduled Tasks', 'Webhooks', 'Backups'],
-    ['Resource Operations', 'Resource Limits', 'Rollback', 'Tags'],
+    ['Resource Operations', 'Maintenance Mode', 'Resource Limits', 'Rollback', 'Tags'],
     ['Plugins'],
     ['Danger Zone'],
   ];

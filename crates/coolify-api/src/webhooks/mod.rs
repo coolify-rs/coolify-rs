@@ -55,6 +55,68 @@ fn client_address(peer: Option<&ConnectInfo<SocketAddr>>) -> String {
     peer.map_or_else(|| "127.0.0.1".to_owned(), |c| c.0.ip().to_string())
 }
 
+/// The `event_header` of `auditLogWebhookFailure()` (4.7.5 adds `X-Forgejo-Event`): the first
+/// event header the request has.
+pub(crate) fn event_header(headers: &HeaderMap) -> Option<String> {
+    [
+        "X-GitHub-Event",
+        "X-Gitlab-Event",
+        "X-Gitea-Event",
+        "X-Forgejo-Event",
+        "X-Event-Key",
+    ]
+    .iter()
+    .find_map(|name| headers.get(*name)?.to_str().ok().map(str::to_owned))
+}
+
+/// `auditFailureDeduplicationWindow('webhook.{provider}.signature_failed', $context)` (4.7.5):
+/// Sentinel pushes for a deleted server or an unpaid team fail until someone acts, so they are
+/// recorded once an hour; other webhook failures once every 300 seconds.
+pub(crate) fn failure_dedup_window(provider: &str, reason: &str) -> std::time::Duration {
+    let seconds =
+        if provider == "sentinel" && matches!(reason, "server_not_found" | "subscription_unpaid") {
+            3600
+        } else {
+            300
+        };
+    std::time::Duration::from_secs(seconds)
+}
+
+/// `auditLogWebhookFailure($provider, $reason, $context)` with its audit row: `reason`,
+/// `method`, `path` and `event_header`, then the context. `shouldRecordAuditEvent()` keeps the
+/// first failure per source address, reason and server in each window.
+pub(crate) async fn record_failure(
+    state: &AppState,
+    meta: &crate::audit::Meta,
+    request: (&str, &str, &HeaderMap),
+    provider: &str,
+    reason: &str,
+    context: serde_json::Map<String, Value>,
+) {
+    let (method, path, headers) = request;
+    let event = format!("webhook.{provider}.signature_failed");
+    let key = format!(
+        "audit-failure-dedup:{event}:{}:{reason}:{}",
+        meta.ip.as_deref().unwrap_or_default(),
+        context
+            .get("server_uuid")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    );
+    if crate::rules::throttle(&key, 1, failure_dedup_window(provider, reason)).is_some() {
+        return;
+    }
+    let team_id = context.get("team_id").and_then(Value::as_i64);
+    let mut row = serde_json::Map::new();
+    row.insert("reason".into(), json!(reason));
+    row.insert("method".into(), json!(method));
+    row.insert("path".into(), json!(path.trim_start_matches('/')));
+    row.insert("event_header".into(), json!(event_header(headers)));
+    row.extend(context);
+    audit_failure(provider, reason, "");
+    crate::audit::log_system(state, team_id, &event, Value::Object(row), "warning", meta).await;
+}
+
 /// `auditLogWebhookFailure($provider, $reason, $context)`.
 pub(crate) fn audit_failure(provider: &str, reason: &str, detail: &str) {
     tracing::warn!(target: "audit", event = %format!("webhook.{provider}.signature_failed"), reason = %reason, detail = %detail, "webhook signature failed");
@@ -297,7 +359,41 @@ fn header(headers: &HeaderMap, name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{payload, repository_pattern};
+    use super::{event_header, failure_dedup_window, payload, repository_pattern};
+
+    /// `auditLogWebhookFailure()`: `X-Forgejo-Event` comes after the Gitea header (4.7.5).
+    #[test]
+    fn the_event_header_of_a_failure() {
+        let mut headers = axum::http::HeaderMap::new();
+        assert_eq!(event_header(&headers), None);
+        headers.insert("x-forgejo-event", "push".parse().unwrap());
+        assert_eq!(event_header(&headers).as_deref(), Some("push"));
+        headers.insert("x-gitea-event", "pull_request".parse().unwrap());
+        assert_eq!(event_header(&headers).as_deref(), Some("pull_request"));
+        headers.insert("x-github-event", "ping".parse().unwrap());
+        assert_eq!(event_header(&headers).as_deref(), Some("ping"));
+    }
+
+    /// `auditFailureDeduplicationWindow()`: one row an hour for a deleted server or an unpaid team.
+    #[test]
+    fn sentinel_failures_that_need_a_person_are_recorded_hourly() {
+        assert_eq!(
+            failure_dedup_window("sentinel", "server_not_found").as_secs(),
+            3600
+        );
+        assert_eq!(
+            failure_dedup_window("sentinel", "subscription_unpaid").as_secs(),
+            3600
+        );
+        assert_eq!(
+            failure_dedup_window("sentinel", "token_mismatch").as_secs(),
+            300
+        );
+        assert_eq!(
+            failure_dedup_window("github", "invalid_signature").as_secs(),
+            300
+        );
+    }
 
     #[test]
     fn the_repository_prefilter_keeps_every_accepted_form() {

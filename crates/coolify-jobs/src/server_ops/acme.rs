@@ -143,10 +143,202 @@ pub async fn list_certificates(srv: &Srv) -> Result<Vec<Value>, String> {
     if !is_traefik(srv) {
         return Ok(Vec::new());
     }
-    match contents(srv).await? {
-        Some(bytes) => certificates(&bytes),
-        None => Ok(Vec::new()),
+    let list = match contents(srv).await? {
+        Some(bytes) => certificates(&bytes)?,
+        None => Vec::new(),
+    };
+    if list.is_empty() {
+        return Ok(list);
     }
+    // v4.7.5: `in_use` is false when no route of the proxy and no resource on the server uses a
+    // domain of the certificate, and null when Coolify could not check it.
+    let known = routing_configuration(srv)
+        .await
+        .map(|text| hostnames(&text));
+    Ok(list
+        .into_iter()
+        .map(|mut certificate| {
+            let in_use = known
+                .as_ref()
+                .map(|names| json!(is_in_use(&certificate, names)))
+                .unwrap_or(Value::Null);
+            if let Some(map) = certificate.as_object_mut() {
+                map.insert("in_use".into(), in_use);
+            }
+            certificate
+        })
+        .collect())
+}
+
+/// `GetTraefikCertificates::routingConfiguration()`: text that names the domains the proxy can
+/// serve: the Traefik labels of all containers and Swarm services, the proxy and dynamic
+/// configuration files, and the domains of the resources on the server. Stopped resources have
+/// no containers, so their domains come from the database. `None` when the server did not answer.
+async fn routing_configuration(srv: &Srv) -> Option<String> {
+    let proxy_path = shell_arg(directory(srv).trim_end_matches('/'));
+    let script = [
+        "docker ps -aq --filter label=traefik.enable=true | xargs -r docker inspect --format '{{json .Config.Labels}}' 2>/dev/null".to_owned(),
+        "docker service ls -q 2>/dev/null | xargs -r docker service inspect --format '{{json .Spec.Labels}}' 2>/dev/null".to_owned(),
+        format!("cat {proxy_path}/docker-compose.yml {proxy_path}/dynamic/*.yaml {proxy_path}/dynamic/*.yml 2>/dev/null"),
+        "true".to_owned(),
+    ]
+    .join("; ");
+    let output = srv
+        .run(
+            &[format!("sh -c {}", shell_arg(&script))],
+            "proxy.certificates",
+        )
+        .await
+        .ok()?
+        .unwrap_or_default();
+    let on_server = "((a.destination_type = 'App\\Models\\StandaloneDocker' AND a.destination_id IN \
+         (SELECT id FROM standalone_dockers WHERE server_id = $1)) \
+         OR (a.destination_type = 'App\\Models\\SwarmDocker' AND a.destination_id IN \
+         (SELECT id FROM swarm_dockers WHERE server_id = $1)) \
+         OR a.id IN (SELECT application_id FROM additional_destinations WHERE server_id = $1))";
+    let domains: Vec<Option<String>> = sqlx::query_scalar(&format!(
+        "SELECT d FROM ( \
+           SELECT a.fqdn::text AS d FROM applications a WHERE a.deleted_at IS NULL AND {on_server} \
+           UNION ALL SELECT a.docker_compose_domains::text FROM applications a WHERE a.deleted_at IS NULL AND {on_server} \
+           UNION ALL SELECT p.fqdn::text FROM application_previews p JOIN applications a ON a.id = p.application_id \
+             WHERE a.deleted_at IS NULL AND {on_server} \
+           UNION ALL SELECT p.docker_compose_domains::text FROM application_previews p JOIN applications a ON a.id = p.application_id \
+             WHERE a.deleted_at IS NULL AND {on_server} \
+           UNION ALL SELECT sa.fqdn::text FROM service_applications sa JOIN services s ON s.id = sa.service_id \
+             WHERE s.server_id = $1 AND s.deleted_at IS NULL \
+           UNION ALL SELECT i.fqdn::text FROM instance_settings i WHERE i.id = 0 AND $2 \
+         ) x"
+    ))
+    .bind(srv.id())
+    .bind(srv.is_localhost())
+    .fetch_all(srv.db().pool())
+    .await
+    .ok()?;
+    let domains: Vec<String> = domains
+        .into_iter()
+        .flatten()
+        .filter(|d| !d.is_empty())
+        .collect();
+    Some(format!("{output}\n{}", domains.join("\n")))
+}
+
+/// `TraefikAcmeService::hostnames()`: every host name in the text, such as the hosts of Traefik
+/// rules, labels, and resource URLs.
+pub fn hostnames(text: &str) -> std::collections::HashSet<String> {
+    static HOST: std::sync::LazyLock<fancy_regex::Regex> = std::sync::LazyLock::new(|| {
+        fancy_regex::Regex::new(
+            r"(?<![a-z0-9-])(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?![a-z0-9-])",
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"))
+    });
+    let lower = text.to_lowercase();
+    HOST.find_iter(&lower)
+        .filter_map(Result::ok)
+        .map(|m| m.as_str().to_owned())
+        .collect()
+}
+
+/// `TraefikAcmeService::isInUse()`: true when a host in use matches the main domain or an
+/// alternative name of the certificate.
+pub fn is_in_use(certificate: &Value, hostnames: &std::collections::HashSet<String>) -> bool {
+    let main = certificate.get("main_domain").and_then(Value::as_str);
+    let sans = certificate
+        .get("sans")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str);
+    for domain in main.into_iter().chain(sans) {
+        let domain = domain.to_lowercase();
+        if hostnames.contains(&domain) {
+            return true;
+        }
+        // A wildcard certificate covers exactly one label below its domain.
+        if let Some(suffix) = domain.strip_prefix('*') {
+            let covered = hostnames.iter().any(|hostname| {
+                hostname
+                    .strip_suffix(suffix)
+                    .is_some_and(|label| !label.is_empty() && !label.contains('.'))
+            });
+            if covered {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// `TraefikAcmeService::deleteCertificates()`: removes the certificates with the given
+/// identifiers from every resolver.
+fn delete_many_from_contents(contents: &[u8], ids: &[String]) -> Result<String, String> {
+    let not_found = || "The selected certificate could not be found.".to_string();
+    let mut data = php_assoc(&decode(contents)?);
+    let mut pending: Vec<&String> = ids.iter().collect();
+    if let Some(resolvers) = data.as_object_mut() {
+        for (resolver, resolver_data) in resolvers.iter_mut() {
+            let Some(certs) = resolver_data
+                .get_mut("Certificates")
+                .and_then(Value::as_array_mut)
+            else {
+                continue;
+            };
+            certs.retain(|certificate| {
+                if !certificate.is_object() {
+                    return true;
+                }
+                let id = certificate_id(resolver, certificate);
+                match pending.iter().position(|p| **p == id) {
+                    Some(position) => {
+                        pending.remove(position);
+                        false
+                    }
+                    None => true,
+                }
+            });
+        }
+    }
+    if ids.is_empty() || !pending.is_empty() {
+        return Err(not_found());
+    }
+    Ok(php_json::encode_pretty(&data) + "\n")
+}
+
+/// `DeleteTraefikCertificate::handle($server, $certificateIds)` (v4.7.5): deletes the
+/// certificates in one write, so acme.json gets one backup.
+pub async fn delete_certificates(srv: &mut Srv, ids: &[String]) -> Result<Vec<Value>, String> {
+    if !is_traefik(srv) {
+        return Err("TLS certificates can only be managed for Traefik proxies.".to_string());
+    }
+    let Some(bytes) = contents(srv).await? else {
+        return Err("The Traefik ACME file could not be found.".to_string());
+    };
+    let deleted: Vec<Value> = certificates(&bytes)?
+        .into_iter()
+        .filter(|c| {
+            c.get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| ids.iter().any(|wanted| wanted == id))
+        })
+        .collect();
+    let updated = delete_many_from_contents(&bytes, ids)?;
+    save_file(srv, &updated).await?;
+    require_restart(srv).await?;
+    Ok(deleted)
+}
+
+/// `Certificates::deleteUnusedTraefikCertificates()`: deletes the certificates that no route and
+/// no resource on the server uses, so Traefik stops renewing them. Empty when there are none.
+pub async fn delete_unused_certificates(srv: &mut Srv) -> Result<Vec<Value>, String> {
+    let unused: Vec<String> = list_certificates(srv)
+        .await?
+        .iter()
+        .filter(|c| c.get("in_use") == Some(&Value::Bool(false)))
+        .filter_map(|c| c.get("id").and_then(Value::as_str).map(str::to_owned))
+        .collect();
+    if unused.is_empty() {
+        return Ok(Vec::new());
+    }
+    delete_certificates(srv, &unused).await
 }
 
 /// `TraefikAcmeService::deleteCertificate`.
@@ -374,4 +566,76 @@ pub async fn delete_backup(srv: &Srv, name: &str) -> Result<(), String> {
     )
     .await
     .map(|_| ())
+}
+
+#[cfg(test)]
+mod v475_tests {
+    use super::*;
+
+    // `TraefikAcmeService::hostnames()` and `isInUse()` (upstream tests/Unit/TraefikAcmeServiceTest).
+    #[test]
+    fn finds_hosts_of_rules_labels_and_urls() {
+        let names = hostnames(
+            "traefik.http.routers.a.rule=Host(`App.Example.com`) && PathPrefix(`/`)\nhttps://api.example.org:8443/path,http://x.internal\nHostRegexp(`*.wild.example.net`)\nnot-a-host localhost 10.0.0.1",
+        );
+        for expected in [
+            "app.example.com",
+            "api.example.org",
+            "x.internal",
+            "*.wild.example.net",
+        ] {
+            assert!(names.contains(expected), "{expected}: {names:?}");
+        }
+        assert!(!names.contains("localhost"));
+    }
+
+    #[test]
+    fn a_certificate_is_in_use_when_a_host_matches_one_of_its_names() {
+        let names = hostnames("Host(`app.example.com`) Host(`deep.sub.example.org`)");
+        let certificate = |main: &str, sans: &[&str]| json!({"main_domain": main, "sans": sans});
+        assert!(is_in_use(&certificate("app.example.com", &[]), &names));
+        assert!(is_in_use(
+            &certificate("other.example.com", &["APP.example.com"]),
+            &names
+        ));
+        assert!(!is_in_use(
+            &certificate("gone.example.com", &["old.example.com"]),
+            &names
+        ));
+        // A wildcard certificate covers exactly one label below its domain.
+        assert!(is_in_use(&certificate("*.example.com", &[]), &names));
+        assert!(!is_in_use(&certificate("*.example.org", &[]), &names));
+        assert!(is_in_use(&certificate("*.sub.example.org", &[]), &names));
+    }
+
+    // `TraefikAcmeService::deleteCertificates()`.
+    #[test]
+    fn deletes_several_certificates_in_one_write() {
+        let acme = br#"{"letsencrypt":{"Account":{},"Certificates":[{"domain":{"main":"a.example.com"},"certificate":"QQ==","key":"Sw=="},{"domain":{"main":"b.example.com"},"certificate":"Qg==","key":"Sw=="}]},"other":{"Certificates":[{"domain":{"main":"c.example.com"},"certificate":"Qw==","key":"Sw=="}]}}"#;
+        let list = certificates(acme).unwrap_or_default();
+        let id = |domain: &str| {
+            list.iter()
+                .find(|c| c["main_domain"] == domain)
+                .and_then(|c| c["id"].as_str())
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let updated = delete_many_from_contents(acme, &[id("a.example.com"), id("c.example.com")])
+            .unwrap_or_default();
+        let left = certificates(updated.as_bytes()).unwrap_or_default();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0]["main_domain"], "b.example.com");
+        assert!(updated.ends_with('\n'));
+        // An unknown identifier, or none: nothing is written.
+        let not_found = Err("The selected certificate could not be found.".to_string());
+        assert_eq!(
+            delete_many_from_contents(acme, &["nope".to_owned()]),
+            not_found
+        );
+        assert_eq!(
+            delete_many_from_contents(acme, &[id("a.example.com"), "nope".to_owned()]),
+            not_found
+        );
+        assert_eq!(delete_many_from_contents(acme, &[]), not_found);
+    }
 }

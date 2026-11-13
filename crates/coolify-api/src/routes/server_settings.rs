@@ -1022,10 +1022,18 @@ pub(crate) async fn restore_previous_ip(state: &AppState, s: &ServerRow) -> Resu
         if !current.is_empty() && current != "0" {
             changes.push(("ip_previous", C::Text(Some(current))));
         }
-        servers::update_columns(&state.db, s.id, &changes, state.now()).await?;
+        // `Server::saved`: `forgetSshHostKey('address_changed')`, before the update clears the key.
         if let Some(jobs) = &state.jobs {
-            jobs.remote().forget_host_key(&s.uuid);
+            coolify_jobs::server_ops::host_key::forget(
+                jobs,
+                s.id,
+                s.team_id,
+                &s.uuid,
+                "address_changed",
+            )
+            .await;
         }
+        servers::update_columns(&state.db, s.id, &changes, state.now()).await?;
     }
     Ok(true)
 }

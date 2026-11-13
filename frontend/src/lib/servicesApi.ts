@@ -22,6 +22,8 @@ export interface ServicePart {
   status: string | null;
   fqdn: string | null;
   configuration_required: boolean;
+  /** The part is no longer in the Docker Compose file. */
+  is_removed_from_compose?: boolean;
   container_present: boolean | null;
   restart_limit_reached: boolean;
   restart_count: number | null;
@@ -179,6 +181,8 @@ interface DomainAnswer {
   warnings?: string[];
   domain_conflicts?: { domain: string; resource_name: string; resource_link?: string | null; resource_type: string }[];
   port_warning?: number;
+  /** The port of the domain that does not use the required port. */
+  requested_port?: number | null;
 }
 
 const base = (uuid: string) => `/ui/services/${encodeURIComponent(uuid)}`;
@@ -206,6 +210,8 @@ export const servicesApi = {
       warning?: string | null;
       domain_conflicts?: { domain: string; resource_name: string; resource_type: string; resource_link?: string | null; message: string }[];
       port_warning?: number;
+      /** The port of the domain that does not use the required port. */
+      requested_port?: number | null;
     }>('PATCH', part(uuid, resource), body),
   deleteResource: (uuid: string, resource: string, password: string) =>
     request<{ message: string; warning: boolean }>('DELETE', part(uuid, resource), { password }),

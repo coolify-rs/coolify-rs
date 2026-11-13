@@ -36,6 +36,11 @@ const SKIP_SERVER_SETTINGS: &[&str] = &[
     "patch_check_result",
     "patch_check_error",
     "patch_checked_at",
+    // The daily candidate scan counter of the source; the target counts its own.
+    "image_candidate_scans_today",
+    "image_candidate_scans_date",
+    // A host key that did not match; the target reads the key again over its own connection.
+    "ssh_host_key_pending",
 ];
 
 /// `SKIP_APPLICATION_ATTRS`.
@@ -80,6 +85,56 @@ const DATABASE_NOT_FILLABLE: &[&str] = &[
 
 const DEST: &str = "((x.destination_type = 'App\\Models\\StandaloneDocker' AND x.destination_id IN (SELECT id FROM standalone_dockers WHERE server_id = $1)) \
     OR (x.destination_type = 'App\\Models\\SwarmDocker' AND x.destination_id IN (SELECT id FROM swarm_dockers WHERE server_id = $1)))";
+
+/// The scan rules of the team that the server inherits (`$fromTeam`): only the fields the team
+/// row sets.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct TeamScanRules {
+    gate_mode: Option<String>,
+    on_scan_error: Option<String>,
+    count_medium: Option<bool>,
+}
+
+impl TeamScanRules {
+    /// `$fromTeam === []`.
+    fn is_empty(&self) -> bool {
+        self.gate_mode.is_none() && self.on_scan_error.is_none() && self.count_medium.is_none()
+    }
+}
+
+/// One entry of `exportImageScanPolicies()`: a field the row leaves empty takes the team value
+/// for the server row.
+fn exported_policy(
+    policy: &coolify_db::image_scans::ImageScanPolicyRow,
+    is_server: bool,
+    scope_uuid: Value,
+    from_team: &TeamScanRules,
+) -> Value {
+    let inherit = |own: Option<String>, team: &Option<String>| {
+        own.or_else(|| if is_server { team.clone() } else { None })
+    };
+    json!({
+        "scope_kind": if is_server { "server" } else { "application" },
+        "scope_uuid": scope_uuid,
+        "gate_mode": inherit(policy.gate_mode.clone(), &from_team.gate_mode),
+        "on_scan_error": inherit(policy.on_scan_error.clone(), &from_team.on_scan_error),
+        "count_medium": policy
+            .count_medium
+            .or(if is_server { from_team.count_medium } else { None }),
+    })
+}
+
+/// The warning of `buildWarnings()` for a key that `PrivateKey::validationError()` refuses.
+fn weak_key_warning(name: &str, error: &str) -> String {
+    format!(
+        "SSH key {name}: {error} The key moves unchanged. Rotate it to an Ed25519 key after the transfer."
+    )
+}
+
+/// A bigint column of a `row_to_json` row.
+fn id_of_column(v: &Value) -> i64 {
+    super::as_int(v)
+}
 
 #[derive(Debug)]
 pub struct Exporter<'a> {
@@ -528,7 +583,10 @@ impl<'a> Exporter<'a> {
             .await?;
         Ok(json!(rows.iter().map(|t| json!({
             "uuid": t["uuid"], "name": t["name"], "command": t["command"], "frequency": t["frequency"],
-            "container": t["container"], "timeout": t["timeout"], "enabled": t.get("enabled").is_none_or(crate::serialize::php_truthy),
+            "container": t["container"], "timeout": t["timeout"],
+            "use_shell": t.get("use_shell").is_none_or(|v| v.is_null() || crate::serialize::php_truthy(v)),
+            "enabled": t.get("enabled").is_none_or(crate::serialize::php_truthy),
+            "disabled_reason": t.get("disabled_reason").cloned().unwrap_or(Value::Null),
         })).collect::<Vec<_>>()))
     }
 
@@ -1291,10 +1349,21 @@ impl<'a> Exporter<'a> {
                 warnings.push(format!("Some applications use a system-wide {name} App, which is not exported. On import, Coolify will re-link to a matching system-wide {name} App on the target instance (by UUID) if one exists."));
             }
         }
+        // The weak SSH key warnings come first; they are added below, once the keys of the S3
+        // storages are collected too.
+        if self
+            .has_active_preview_github_deployments(&applications)
+            .await?
+        {
+            warnings.push("Deployment history is not transferred, so the target instance cannot mark the GitHub Deployments of current preview deployments as inactive when their pull requests close. Mark them as inactive on GitHub, or redeploy the previews on the target instance.".to_owned());
+        }
         if !self.s3_ids.is_empty() {
             warnings.push("S3 storage credentials were exported. Confirm endpoint access from the target instance and that bucket policies still apply.".to_owned());
         }
         warnings.append(&mut self.warnings);
+        if self.has_team_wide_ignores().await? {
+            warnings.push("Team-wide vulnerability ignores stay on this instance.".to_owned());
+        }
         if self.left_out_links > 0 {
             warnings.push(format!(
                 "{} {} between resources on the environment canvas {} not transferred, because one of the linked resources stays on this instance.",
@@ -1316,15 +1385,40 @@ impl<'a> Exporter<'a> {
             else {
                 return Err("An S3 storage used by a backup on this server does not belong to the server team. Select an S3 storage of this team first.".into());
             };
+            // An SFTP storage that logs in with a private key needs that key on the target.
+            let mut private_key_uuid = Value::Null;
+            if let Some(key) = s.get("private_key_id").and_then(Value::as_i64) {
+                let row = self.team_record("private_keys", key, "private key").await?;
+                private_key_uuid = row["uuid"].clone();
+                push_unique(&mut self.private_key_ids, key);
+            }
             s3_out.push(json!({
-                "uuid": s["uuid"], "name": s["name"], "description": s["description"], "region": s["region"],
+                "uuid": s["uuid"],
+                // `$storage->type->value`: a row from before the column is an S3 storage.
+                "type": s.get("type").and_then(Value::as_str).unwrap_or("s3"),
+                "name": s["name"], "description": s["description"], "region": s["region"],
                 "key": self.dec(s.get("key")), "secret": self.dec(s.get("secret")), "bucket": s["bucket"],
                 "endpoint": s["endpoint"],
                 // `usesPathStyleEndpoint()`
                 "use_path_style_endpoint": s.get("use_path_style_endpoint").and_then(Value::as_bool).unwrap_or(true),
+                "private_key_uuid": private_key_uuid,
+                "sftp_host_key": s.get("sftp_host_key").cloned().unwrap_or(Value::Null),
+                "skip_tls_verification": truthy(s.get("skip_tls_verification")),
                 "is_usable": truthy(s.get("is_usable")),
             }));
         }
+
+        // `buildWarnings()`: keys that `PrivateKey::validationError()` refuses move unchanged.
+        let key_warnings = self.weak_key_warnings().await?;
+        let mut all_warnings = key_warnings;
+        all_warnings.append(&mut warnings);
+        warnings = all_warnings;
+        let image_scan_policies = self
+            .image_scan_policies(&server, server_id, &applications)
+            .await?;
+        let image_scan_ignores = self
+            .image_scan_ignores(&applications, &databases, &services)
+            .await?;
 
         let mut private_keys = Vec::new();
         for id in self.private_key_ids.clone() {
@@ -1375,6 +1469,8 @@ impl<'a> Exporter<'a> {
             "dns_zones": dns.0,
             "managed_dns_records": dns.1,
             "ssl_certificates": certificates,
+            "image_scan_policies": image_scan_policies,
+            "image_scan_ignores": image_scan_ignores,
             "volume_backups": self.volume_backups,
             "server": self.export_server(&server, &settings).await?,
             "destinations": destinations,
@@ -1382,6 +1478,217 @@ impl<'a> Exporter<'a> {
             "shared_environment_variables": {"server": server_shared, "team": team_shared},
             "projects": project_payloads,
         }))
+    }
+
+    /// The SSH key warnings of `buildWarnings()`. A key that cannot be decrypted is reported by
+    /// `export_private_key()`.
+    async fn weak_key_warnings(&self) -> R<Vec<String>> {
+        let mut out = Vec::new();
+        for id in &self.private_key_ids {
+            let Some(k) = self
+                .one(
+                    "SELECT name, private_key FROM private_keys WHERE id = $1",
+                    &[Bind::I(*id)],
+                )
+                .await?
+            else {
+                continue;
+            };
+            let Some(plain) = k["private_key"]
+                .as_str()
+                .and_then(|c| self.enc.decrypt_string(c).ok())
+            else {
+                continue;
+            };
+            if let Some(error) = coolify_compat::sshkey::validation_error(&plain, true) {
+                out.push(weak_key_warning(&text(&k["name"]), error));
+            }
+        }
+        Ok(out)
+    }
+
+    /// `buildWarnings()`: preview deployments of the applications with a GitHub Deployment that
+    /// is not inactive.
+    async fn has_active_preview_github_deployments(&self, applications: &[Value]) -> R<bool> {
+        for application in applications {
+            let id = id_of(application).to_string();
+            let found = self
+                .one(
+                    "SELECT 1 AS found FROM application_deployment_queues WHERE application_id = $1 \
+                     AND pull_request_id <> 0 AND github_deployment_id IS NOT NULL \
+                     AND (github_deployment_state IS NULL OR github_deployment_state <> 'inactive') LIMIT 1",
+                    &[Bind::S(&id)],
+                )
+                .await?;
+            if found.is_some() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// `ImageScanIgnore::query()->where('team_id', ...)->whereNull('resource_type')->exists()`.
+    async fn has_team_wide_ignores(&self) -> R<bool> {
+        Ok(self
+            .one(
+                "SELECT 1 AS found FROM image_scan_ignores WHERE team_id = $1 AND resource_type IS NULL LIMIT 1",
+                &[Bind::I(self.team_id)],
+            )
+            .await?
+            .is_some())
+    }
+
+    /// `exportImageScanPolicies($server, $applications)`: the scan rules of the server and of its
+    /// applications. A rule the server inherits from its team is exported as a rule of the
+    /// server where the server has no value of its own, so the gate is not weaker on the target.
+    /// Team and instance rules stay here.
+    async fn image_scan_policies(
+        &self,
+        server: &Value,
+        server_id: i64,
+        applications: &[Value],
+    ) -> R<Vec<Value>> {
+        use coolify_db::image_scans::{
+            APPLICATION_MORPH, ImageScanPolicyRow, SERVER_MORPH, TEAM_MORPH, scope_policy,
+        };
+        // `ImageScanPolicyResolver::inheritedFor($server)` with source `team`: the fields the
+        // team row sets.
+        let team = scope_policy(&self.state.db, TEAM_MORPH, self.team_id)
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, "server transfer export query failed");
+                "A database error occurred.".to_owned()
+            })?;
+        let from_team = TeamScanRules {
+            gate_mode: team.as_ref().and_then(|t| t.gate_mode.clone()),
+            on_scan_error: team.as_ref().and_then(|t| t.on_scan_error.clone()),
+            count_medium: team.as_ref().and_then(|t| t.count_medium),
+        };
+        let application_ids: Vec<i64> = applications.iter().map(id_of).collect();
+        let policies: Vec<ImageScanPolicyRow> = sqlx::query_as(
+            "SELECT id, uuid, scope_type, scope_id, gate_mode, on_scan_error, count_medium, created_at, updated_at \
+             FROM image_scan_policies WHERE (scope_type = $1 AND scope_id = $2) \
+             OR (scope_type = $3 AND scope_id = ANY($4)) ORDER BY id",
+        )
+        .bind(SERVER_MORPH)
+        .bind(server_id)
+        .bind(APPLICATION_MORPH)
+        .bind(&application_ids)
+        .fetch_all(self.state.db.pool())
+        .await
+        .map_err(db_error)?;
+        let mut out = Vec::new();
+        let mut server_exported = false;
+        for policy in &policies {
+            let is_server = policy.scope_type.as_deref() == Some(SERVER_MORPH);
+            let scope_uuid = if is_server {
+                server["uuid"].clone()
+            } else {
+                match applications
+                    .iter()
+                    .find(|a| Some(id_of(a)) == policy.scope_id)
+                {
+                    Some(a) => a["uuid"].clone(),
+                    None => continue,
+                }
+            };
+            out.push(exported_policy(policy, is_server, scope_uuid, &from_team));
+            server_exported = server_exported || is_server;
+        }
+        if !server_exported && !from_team.is_empty() {
+            out.insert(
+                0,
+                json!({
+                    "scope_kind": "server",
+                    "scope_uuid": server["uuid"],
+                    "gate_mode": from_team.gate_mode,
+                    "on_scan_error": from_team.on_scan_error,
+                    "count_medium": from_team.count_medium,
+                }),
+            );
+        }
+        Ok(out)
+    }
+
+    /// `exportImageScanIgnores()`: the ignores of the resources on the server. Team-wide ignores
+    /// stay here.
+    async fn image_scan_ignores(
+        &self,
+        applications: &[Value],
+        databases: &[(Value, &str)],
+        services: &[Value],
+    ) -> R<Vec<Value>> {
+        use coolify_db::image_scans::{
+            APPLICATION_MORPH, SERVICE_APPLICATION_MORPH, SERVICE_DATABASE_MORPH,
+        };
+        let mut resources: BTreeMap<(String, i64), (&'static str, Value)> = BTreeMap::new();
+        for a in applications {
+            resources.insert(
+                (APPLICATION_MORPH.to_owned(), id_of(a)),
+                ("application", a["uuid"].clone()),
+            );
+        }
+        for (d, type_name) in databases {
+            resources.insert(
+                (format!("App\\Models\\{type_name}"), id_of(d)),
+                ("database", d["uuid"].clone()),
+            );
+        }
+        for service in services {
+            let id = id_of(service);
+            for part in self
+                .rows(
+                    "SELECT id, uuid FROM service_applications WHERE service_id = $1 ORDER BY id",
+                    &[Bind::I(id)],
+                )
+                .await?
+            {
+                resources.insert(
+                    (SERVICE_APPLICATION_MORPH.to_owned(), id_of(&part)),
+                    ("service_application", part["uuid"].clone()),
+                );
+            }
+            for part in self
+                .rows(
+                    "SELECT id, uuid FROM service_databases WHERE service_id = $1 ORDER BY id",
+                    &[Bind::I(id)],
+                )
+                .await?
+            {
+                resources.insert(
+                    (SERVICE_DATABASE_MORPH.to_owned(), id_of(&part)),
+                    ("service_database", part["uuid"].clone()),
+                );
+            }
+        }
+        let ignores = self
+            .rows(
+                "SELECT resource_type, resource_id, vulnerability_id, package, reason, \
+                 to_char(expires_at, 'YYYY-MM-DD\"T\"HH24:MI:SS') AS expires_at \
+                 FROM image_scan_ignores WHERE team_id = $1 AND resource_type IS NOT NULL ORDER BY id",
+                &[Bind::I(self.team_id)],
+            )
+            .await?;
+        let mut out = Vec::new();
+        for ignore in ignores {
+            let key = (
+                text(&ignore["resource_type"]),
+                id_of_column(&ignore["resource_id"]),
+            );
+            let Some((kind, uuid)) = resources.get(&key) else {
+                continue;
+            };
+            out.push(json!({
+                "resource_kind": kind,
+                "resource_uuid": uuid,
+                "vulnerability_id": ignore["vulnerability_id"],
+                "package": ignore["package"],
+                "reason": ignore["reason"],
+                // `$ignore->expires_at?->toIso8601String()` in UTC.
+                "expires_at": ignore["expires_at"].as_str().map(|t| format!("{t}+00:00")),
+            }));
+        }
+        Ok(out)
     }
 
     async fn export_git_apps(&self) -> R<(Vec<Value>, Vec<Value>, Vec<Value>, GitNames)> {
@@ -1428,6 +1735,7 @@ impl<'a> Exporter<'a> {
                     "contents",
                     "metadata",
                     "pull_requests",
+                    "deployments",
                     "administration",
                     "organization_self_hosted_runners",
                     "actions",
@@ -1691,7 +1999,7 @@ impl<'a> Exporter<'a> {
         if has_runner {
             steps.push("After the GitHub App sends webhooks to {target_url}, open this server there, check the runner requirements, and enable GitHub runners. Enabling them stops runners that another Coolify instance started on this server.".to_owned());
         }
-        steps.push("This instance keeps a copy of the SSH key of the server. On {target_url}, add a new SSH key to the server and select it there, then remove the old public key from ~/.ssh/authorized_keys on the server.".to_owned());
+        steps.push("This instance keeps a copy of the SSH key of the server. On {target_url}, open the SSH key of the server in Security > Private Keys and use Rotate key. It moves the server to a new key and removes the old public key from ~/.ssh/authorized_keys on the server.".to_owned());
         Ok(steps)
     }
 }
@@ -1816,4 +2124,61 @@ struct GitNames {
 enum Bind<'b> {
     I(i64),
     S(&'b str),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use coolify_db::image_scans::ImageScanPolicyRow;
+
+    fn policy(
+        gate: Option<&str>,
+        on_error: Option<&str>,
+        medium: Option<bool>,
+    ) -> ImageScanPolicyRow {
+        ImageScanPolicyRow {
+            id: 1,
+            uuid: "p".into(),
+            scope_type: None,
+            scope_id: None,
+            gate_mode: gate.map(str::to_owned),
+            on_scan_error: on_error.map(str::to_owned),
+            count_medium: medium,
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    /// `exportImageScanPolicies()`: the server row takes the team values it leaves empty; an
+    /// application row keeps its own values only.
+    #[test]
+    fn the_server_policy_inherits_the_team_rules() {
+        let team = TeamScanRules {
+            gate_mode: Some("strict".into()),
+            on_scan_error: None,
+            count_medium: Some(true),
+        };
+        let row = policy(None, Some("block"), None);
+        assert_eq!(
+            exported_policy(&row, true, json!("srv"), &team),
+            json!({"scope_kind": "server", "scope_uuid": "srv", "gate_mode": "strict", "on_scan_error": "block", "count_medium": true})
+        );
+        assert_eq!(
+            exported_policy(&row, false, json!("app"), &team),
+            json!({"scope_kind": "application", "scope_uuid": "app", "gate_mode": null, "on_scan_error": "block", "count_medium": null})
+        );
+        assert!(TeamScanRules::default().is_empty());
+        assert!(!team.is_empty());
+    }
+
+    #[test]
+    fn weak_keys_are_named_in_the_warnings() {
+        assert_eq!(
+            weak_key_warning(
+                "old",
+                "DSA keys are not supported. Use an Ed25519 or RSA key."
+            ),
+            "SSH key old: DSA keys are not supported. Use an Ed25519 or RSA key. The key moves unchanged. Rotate it to an Ed25519 key after the transfer."
+        );
+    }
 }

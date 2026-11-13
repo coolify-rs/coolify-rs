@@ -176,6 +176,15 @@
         </Callout>
       {/if}
 
+      {#if options?.is_root_team && rows.some((row) => row.levels.Write || row.levels.Root)}
+        <Callout type="warning" title="Write access can give root on the Coolify host">
+          With write access on a resource that runs on the localhost server, a member can run a
+          privileged container there. That gives root on the server that runs Coolify, and access to
+          the data of all teams. Give write access in the root team only to people that you trust as
+          instance admins.
+        </Callout>
+      {/if}
+
       {#if Object.keys(errors).length}
         <Callout type="danger" title="Check the scopes">
           {#each Object.entries(errors) as [k, messages] (k)}

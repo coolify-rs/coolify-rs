@@ -44,6 +44,8 @@ const GUEST_LIFETIME: Duration = Duration::from_secs(2 * 3600);
 const MAX_SESSIONS: usize = 10_000;
 /// Login throttle keys kept at most; a flood of distinct emails evicts keys instead of growing.
 const MAX_ATTEMPT_KEYS: usize = 50_000;
+/// Longest email a login is checked for (the `users.email` column length).
+const MAX_EMAIL_LENGTH: usize = 255;
 const ABSOLUTE_LIFETIME: Duration = Duration::from_secs(30 * 24 * 3600);
 const LOGIN_LIMIT: usize = 5;
 const LOGIN_WINDOW: Duration = Duration::from_secs(60);
@@ -693,11 +695,50 @@ fn web_gates(live: &Live, path: &str) -> Result<(), ApiError> {
         ));
     }
     team_two_factor(live, live.team_id, path)?;
-    // Instance settings act for the root team, whatever team the session is on.
-    if path.starts_with("/ui/settings/oauth") {
+    // Instance-wide pages act for the root team, whatever team the session is on: an instance
+    // admin also meets the root team's two-factor rule there.
+    let root_admin = live
+        .memberships
+        .iter()
+        .any(|m| m.team_id == 0 && m.role.is_admin());
+    if root_admin && is_instance_admin_ui_path(path) {
         team_two_factor(live, 0, path)?;
     }
     Ok(())
+}
+
+/// Pages that change or show instance-wide state for an instance admin (`isInstanceAdmin()`):
+/// instance settings (OAuth included), plugin installation and the catalog, the user admin
+/// view and the instance image-scan settings. Team-level plugin pages are not among them.
+const INSTANCE_ADMIN_UI_PREFIXES: &[&str] = &[
+    "/ui/settings",
+    "/ui/team/admin",
+    "/ui/plugins/catalog",
+    "/ui/image-scan/settings/instance",
+];
+
+pub(crate) fn is_instance_admin_ui_path(path: &str) -> bool {
+    if INSTANCE_ADMIN_UI_PREFIXES.iter().any(|p| {
+        path == *p
+            || path
+                .strip_prefix(p)
+                .is_some_and(|rest| rest.starts_with('/'))
+    }) {
+        return true;
+    }
+    // `/ui/plugins` (list, upload), `/ui/plugins/{publisher}/{name}` (enable, uninstall) and
+    // `/ui/plugins/{publisher}/{name}/update`.
+    let Some(rest) = path.strip_prefix("/ui/plugins") else {
+        return false;
+    };
+    if rest.is_empty() {
+        return true;
+    }
+    let Some(rest) = rest.strip_prefix('/') else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('/').collect();
+    matches!(parts.as_slice(), [_, _] | [_, _, "update"])
 }
 
 /// A team that requires two-factor authentication refuses a user without it, for every request
@@ -1245,13 +1286,17 @@ pub(crate) fn signed_in(cookie: HeaderValue, body: Value) -> Response {
     res
 }
 
+/// The once-a-minute key of `audit_failed_login`: hashed, so its size does not depend on the email.
+fn audit_failed_login_key(ip: &str, email: &str) -> String {
+    format!(
+        "audit-failure-dedup:{}",
+        hex_digest(&format!("{ip}|{}", email.trim().to_lowercase()))
+    )
+}
+
 /// `auditLog('auth.user.login_failed', ...)`, once a minute per address and attempted email.
 async fn audit_failed_login(state: &AppState, email: &str, meta: &Meta) {
-    let key = format!(
-        "audit-failure-dedup:{}|{}",
-        meta.ip.as_deref().unwrap_or_default(),
-        email.trim().to_lowercase()
-    );
+    let key = audit_failed_login_key(meta.ip.as_deref().unwrap_or_default(), email);
     if crate::rules::throttle(&key, 1, Duration::from_secs(60)).is_some() {
         return;
     }
@@ -1303,6 +1348,11 @@ pub async fn login(
         .trim()
         .to_lowercase();
     let pass = input.get("password").and_then(Value::as_str).unwrap_or("");
+    // No account has an email longer than the column (255): answer as for unknown credentials
+    // before hashing, throttling or auditing anything.
+    if email.chars().count() > MAX_EMAIL_LENGTH {
+        return Err(failed_login());
+    }
     // `throttle:login`: every attempt counts, also a successful one.
     // Hashed, so a long email in the body costs the map no more than a short one.
     let mut keys = vec![format!("login:{}", hex_digest(&format!("{email}|{ip}")))];
@@ -1565,6 +1615,50 @@ mod tests {
             s.record_failure(&target);
         }
         assert!(s.throttled(&target).is_some());
+    }
+
+    #[test]
+    fn the_failed_login_audit_key_does_not_grow_with_the_email() {
+        let short = audit_failed_login_key("10.0.0.1", "a@b.co");
+        let long = audit_failed_login_key("10.0.0.1", &"a".repeat(60_000));
+        assert_eq!(short.len(), long.len());
+        assert!(!long.contains("aaaa"));
+        assert_ne!(short, long);
+        // Case and surrounding space do not make a new key.
+        assert_eq!(short, audit_failed_login_key("10.0.0.1", " A@B.co "));
+    }
+
+    #[test]
+    fn instance_admin_paths() {
+        for p in [
+            "/ui/settings/general",
+            "/ui/settings/oauth/github/toggle",
+            "/ui/settings/upgrade",
+            "/ui/team/admin",
+            "/ui/team/admin/7/delete",
+            "/ui/plugins",
+            "/ui/plugins/catalog/install",
+            "/ui/plugins/acme/hello",
+            "/ui/plugins/acme/hello/update",
+            "/ui/image-scan/settings/instance",
+        ] {
+            assert!(is_instance_admin_ui_path(p), "{p}");
+        }
+        for p in [
+            "/ui/settingsx",
+            "/ui/team",
+            "/ui/team/audit-log",
+            "/ui/team/administrators",
+            "/ui/plugins/nav",
+            "/ui/plugins/team",
+            "/ui/plugins/acme/hello/team",
+            "/ui/plugins/acme/hello/settings",
+            "/ui/plugins/acme/hello/panels/sidebar",
+            "/ui/image-scan/settings/team",
+            "/ui/image-scan/settings/server/abc",
+        ] {
+            assert!(!is_instance_admin_ui_path(p), "{p}");
+        }
     }
 
     #[test]

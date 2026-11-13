@@ -15,6 +15,7 @@ pub mod legacy_escaping;
 pub mod load;
 pub mod php;
 pub mod raw;
+pub mod removed_volumes;
 pub mod service;
 pub mod service_parser;
 pub mod validate;

@@ -253,7 +253,28 @@ pub fn attributes_for(event: &str, context: &Map<String, Value>, actor: &Actor) 
             .to_string()
         });
     let mut meta = context.clone();
-    meta.shift_remove("audit_changes");
+    // 4.7.5 (3379fa448): the actor's email, address and user agent have their own columns and stay
+    // out of the metadata.
+    for key in [
+        "audit_changes",
+        "actor_email",
+        "actor_ip",
+        "actor_user_agent",
+    ] {
+        meta.shift_remove(key);
+    }
+    // API tokens store `team_id` as a string. Keep it an integer, so JSON filters on metadata work.
+    let numeric_team = match meta.get("team_id") {
+        Some(Value::String(team))
+            if !team.is_empty() && team.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            team.parse::<i64>().ok()
+        }
+        _ => None,
+    };
+    if let Some(id) = numeric_team {
+        meta.insert("team_id".into(), Value::from(id));
+    }
     Attributes {
         source,
         resource_type,
@@ -288,6 +309,16 @@ pub async fn record(
     } else {
         "info"
     };
+    // 4.7.5: `actor_ip` and `actor_user_agent` of the context come before the request's, and an
+    // empty user agent is stored as NULL (`Str::limit(...) ?: null`).
+    let ip_address = context
+        .get("actor_ip")
+        .and_then(as_text)
+        .or_else(|| actor.ip.clone());
+    let user_agent = stored_user_agent(
+        context.get("actor_user_agent").and_then(as_text),
+        actor.user_agent.as_deref(),
+    );
     sqlx::query(
         "INSERT INTO audit_events (team_id, event, source, action, level, actor_type, actor_id, actor_name, \
          actor_email, actor_token_id, actor_token_name, resource_type, resource_uuid, resource_name, description, \
@@ -311,12 +342,162 @@ pub async fn record(
     .bind(&a.description)
     .bind(a.metadata.to_string())
     .bind(changes_encrypted)
-    .bind(&actor.ip)
-    .bind(&actor.user_agent)
+    .bind(&ip_address)
+    .bind(&user_agent)
     .bind(now)
     .execute(db.pool())
     .await?;
     Ok(())
+}
+
+/// `Str::limit((string) ($context['actor_user_agent'] ?? request()->userAgent()), 200, '') ?: null`.
+pub fn stored_user_agent(
+    from_context: Option<String>,
+    from_request: Option<&str>,
+) -> Option<String> {
+    let agent = from_context.or_else(|| from_request.map(str::to_owned))?;
+    let limited: String = agent.chars().take(200).collect();
+    (!limited.is_empty() && limited != "0").then_some(limited)
+}
+
+/// `auditUrl($url)` (4.7.5): scheme, host, port and path of a URL, without user info, query
+/// string or fragment. `None` for a value that is not a non-empty string.
+pub fn audit_url(url: Option<&str>) -> Option<String> {
+    let url = url.filter(|u| !u.is_empty())?;
+    let invalid = || Some("[invalid-url]".to_owned());
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return invalid();
+    };
+    if scheme.is_empty()
+        || !scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    {
+        return invalid();
+    }
+    let rest = rest.split('#').next().unwrap_or_default();
+    let rest = rest.split('?').next().unwrap_or_default();
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    };
+    let host_port = authority.rsplit('@').next().unwrap_or_default();
+    // An IPv6 literal keeps its brackets; the port is what follows the last colon after them.
+    let (host, port) = match host_port.rfind(':') {
+        Some(i) if !host_port[i..].contains(']') => (&host_port[..i], Some(&host_port[i + 1..])),
+        _ => (host_port, None),
+    };
+    if host.is_empty() {
+        return invalid();
+    }
+    let port = match port {
+        Some(p) if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => format!(":{p}"),
+        Some(p) if !p.is_empty() => return invalid(),
+        _ => String::new(),
+    };
+    Some(format!("{scheme}://{host}{port}{path}"))
+}
+
+/// `id, actor_type, actor_id, resource_name, description, metadata` of an event to anonymize.
+type AnonymizeRow = (
+    i64,
+    String,
+    Option<i64>,
+    Option<String>,
+    String,
+    Option<String>,
+);
+
+/// `AuditEvent::anonymizeUser($user)` (4.7.5, 3379fa448), run when a user is deleted: removes the
+/// personal data from the events that the user did, and from the events about the user (team
+/// member, impersonation, deletion). Returns the number of rows changed.
+pub async fn anonymize_user(db: &Db, user_id: i64, name: &str, email: &str) -> DbResult<u64> {
+    db.ensure_writable()?;
+    const REPLACEMENT: &str = "[deleted user]";
+    let personal: Vec<String> = [email, name]
+        .iter()
+        .map(|v| v.to_lowercase())
+        .filter(|v| !v.is_empty() && v != "0")
+        .collect();
+    let rows: Vec<AnonymizeRow> = sqlx::query_as(
+        "SELECT id, actor_type, actor_id, resource_name, description, metadata::text FROM audit_events \
+         WHERE (actor_type = 'user' AND actor_id = $1) \
+            OR (metadata::jsonb -> 'member_id') @> to_jsonb($1::bigint) \
+            OR (metadata::jsonb -> 'target_user_id') @> to_jsonb($1::bigint) \
+            OR (metadata::jsonb -> 'deleted_user_id') @> to_jsonb($1::bigint) \
+         ORDER BY id",
+    )
+    .bind(user_id)
+    .fetch_all(db.pool())
+    .await?;
+    let mut changed = 0;
+    for (id, actor_type, actor_id, resource_name, description, metadata) in rows {
+        let own = actor_type == "user" && actor_id == Some(user_id);
+        let (resource_name, description) =
+            anonymized_resource(resource_name, description, &personal, REPLACEMENT);
+        let metadata = metadata
+            .as_deref()
+            .and_then(|m| serde_json::from_str::<Value>(m).ok())
+            .map(|m| replace_personal_values(&m, &personal, REPLACEMENT).to_string());
+        changed += sqlx::query(
+            "UPDATE audit_events SET \
+               actor_name = CASE WHEN $2 THEN $3 ELSE actor_name END, \
+               actor_email = CASE WHEN $2 THEN NULL ELSE actor_email END, \
+               ip_address = CASE WHEN $2 THEN NULL ELSE ip_address END, \
+               user_agent = CASE WHEN $2 THEN NULL ELSE user_agent END, \
+               resource_name = $4, description = $5, metadata = $6::json \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(own)
+        .bind(REPLACEMENT)
+        .bind(resource_name)
+        .bind(description)
+        .bind(metadata)
+        .execute(db.pool())
+        .await?
+        .rows_affected();
+    }
+    Ok(changed)
+}
+
+/// The `resource_name` and `description` of `anonymizeUser`: a resource named after the user is
+/// renamed, and the description, which starts with that name, with it.
+pub fn anonymized_resource(
+    resource_name: Option<String>,
+    description: String,
+    personal: &[String],
+    replacement: &str,
+) -> (Option<String>, String) {
+    match resource_name {
+        Some(name) if personal.contains(&name.to_lowercase()) => {
+            let tail = description.get(name.len()..).unwrap_or_default();
+            (Some(replacement.to_owned()), format!("{replacement}{tail}"))
+        }
+        other => (other, description),
+    }
+}
+
+/// `AuditEvent::replacePersonalValues`: every string of the metadata that is the user's email or
+/// name (compared in lower case) is replaced.
+pub fn replace_personal_values(value: &Value, personal: &[String], replacement: &str) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|v| replace_personal_values(v, personal, replacement))
+                .collect(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), replace_personal_values(v, personal, replacement)))
+                .collect(),
+        ),
+        Value::String(s) if personal.contains(&s.to_lowercase()) => {
+            Value::String(replacement.to_owned())
+        }
+        other => other.clone(),
+    }
 }
 
 /// The name and email columns of an actor.
@@ -484,6 +665,122 @@ mod tests {
         assert_eq!(a.resource_uuid.as_deref(), Some("u1"));
         assert_eq!(a.description, "x Created");
         assert_eq!(a.metadata["secret_value"], json!("[REDACTED]"));
+    }
+
+    /// `AuditEvent::attributesFor` (4.7.5): the actor's personal data stays out of the metadata
+    /// and a token's string `team_id` becomes an integer.
+    #[test]
+    fn metadata_has_no_actor_data_and_an_integer_team() {
+        let ctx = json!({
+            "team_id": "4",
+            "member_id": 7,
+            "member_name": "Bob",
+            "actor_email": "alice@example.test",
+            "actor_ip": "203.0.113.9",
+            "actor_user_agent": "curl/8",
+            "audit_changes": {"a": 1},
+        });
+        let a = attributes_for(
+            "ui.team_member.removed",
+            ctx.as_object().unwrap(),
+            &Actor::default(),
+        );
+        assert_eq!(
+            a.metadata,
+            json!({"team_id": 4, "member_id": 7, "member_name": "Bob"})
+        );
+        // Only digits are converted.
+        let ctx = json!({"team_id": "4a"});
+        let a = attributes_for("ui.x.y", ctx.as_object().unwrap(), &Actor::default());
+        assert_eq!(a.metadata["team_id"], json!("4a"));
+    }
+
+    #[test]
+    fn user_agents_are_limited_and_empty_ones_are_null() {
+        assert_eq!(stored_user_agent(None, Some("")), None);
+        assert_eq!(stored_user_agent(None, None), None);
+        assert_eq!(
+            stored_user_agent(None, Some("curl/8")).as_deref(),
+            Some("curl/8")
+        );
+        // The context wins over the request.
+        assert_eq!(
+            stored_user_agent(Some("worker".into()), Some("curl/8")).as_deref(),
+            Some("worker")
+        );
+        assert_eq!(
+            stored_user_agent(None, Some(&"a".repeat(300))).map(|s| s.len()),
+            Some(200)
+        );
+    }
+
+    /// `auditUrl()` (4.7.5).
+    #[test]
+    fn audit_urls_keep_scheme_host_port_and_path_only() {
+        assert_eq!(audit_url(None), None);
+        assert_eq!(audit_url(Some("")), None);
+        assert_eq!(
+            audit_url(Some(
+                "https://user:pw@example.test:8443/hook/x?token=1#frag"
+            ))
+            .as_deref(),
+            Some("https://example.test:8443/hook/x")
+        );
+        assert_eq!(
+            audit_url(Some("http://example.test")).as_deref(),
+            Some("http://example.test")
+        );
+        assert_eq!(
+            audit_url(Some("http://[2001:db8::1]:8080/a")).as_deref(),
+            Some("http://[2001:db8::1]:8080/a")
+        );
+        assert_eq!(
+            audit_url(Some("not a url")).as_deref(),
+            Some("[invalid-url]")
+        );
+        assert_eq!(
+            audit_url(Some("/relative/path")).as_deref(),
+            Some("[invalid-url]")
+        );
+    }
+
+    /// `AuditEvent::anonymizeUser()` (4.7.5): the pure parts.
+    #[test]
+    fn personal_values_are_replaced() {
+        let personal = vec!["bob@example.test".to_string(), "bob member".to_string()];
+        let metadata = json!({
+            "member_id": 2,
+            "member_name": "Bob Member",
+            "invitation_email": "BOB@example.test",
+            "list": ["bob member", "other"],
+            "team_id": 1,
+        });
+        assert_eq!(
+            replace_personal_values(&metadata, &personal, "[deleted user]"),
+            json!({
+                "member_id": 2,
+                "member_name": "[deleted user]",
+                "invitation_email": "[deleted user]",
+                "list": ["[deleted user]", "other"],
+                "team_id": 1,
+            })
+        );
+        assert_eq!(
+            anonymized_resource(
+                Some("Bob Member".into()),
+                "Bob Member Removed".into(),
+                &personal,
+                "[deleted user]"
+            ),
+            (
+                Some("[deleted user]".to_string()),
+                "[deleted user] Removed".to_string()
+            )
+        );
+        assert_eq!(
+            anonymized_resource(Some("Shop".into()), "Shop Updated".into(), &personal, "x"),
+            (Some("Shop".to_string()), "Shop Updated".to_string())
+        );
     }
 
     #[test]

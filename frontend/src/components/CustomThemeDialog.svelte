@@ -9,6 +9,7 @@
     parseCustomTheme,
     readableTextOn as textOn,
     serializeCustomTheme,
+    themeAccentFill as accentFill,
     themeAccentForeground as accentTextOn,
     type CustomTheme,
     type ThemePreset,
@@ -168,13 +169,13 @@
               </div>
               <div class="flex items-center gap-2 rounded-md px-2 py-1.5 opacity-75">
                 <Reicon name="servers" class="size-3.5" /> Servers
-                <span class="ml-auto rounded-full px-1.5 text-[10px] font-semibold" style="background: {draftColors.accent}; color: {accentTextOn(draftColors.accent)}">3</span>
+                <span class="ml-auto rounded-full px-1.5 text-[10px] font-semibold" style="background: {accentFill(draftColors.accent)}; color: {accentTextOn(draftColors.accent)}">3</span>
               </div>
             </div>
             <div class="flex min-w-0 flex-1 flex-col gap-2 p-3" style="background: {draftColors.background}; color: {textOn(draftColors.background)}">
               <div class="flex items-center justify-between gap-2">
                 <span class="text-sm font-semibold">Projects</span>
-                <span class="rounded-md px-2 py-1 text-[11px] font-medium" style="background: {draftColors.accent}; color: {accentTextOn(draftColors.accent)}">+ New</span>
+                <span class="rounded-md px-2 py-1 text-[11px] font-medium" style="background: {accentFill(draftColors.accent)}; color: {accentTextOn(draftColors.accent)}">+ New</span>
               </div>
               {#each [['My first project', 'production'], ['Website', 'staging']] as [name, env] (name)}
                 <div

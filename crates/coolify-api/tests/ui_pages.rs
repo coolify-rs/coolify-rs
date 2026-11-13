@@ -224,7 +224,11 @@ async fn keys_generate_list_and_cleanup() {
             Some(json!({"private_key": "nope"})),
         )
         .await;
-    r.assert(200, r#"{"public_key":null}"#);
+    // v4.7.5 `Create::validatePrivateKey()` shows `PrivateKey::validationError()` in the form.
+    r.assert(
+        200,
+        r#"{"public_key":null,"error":"The private key is invalid. Paste an unencrypted private key, not a public key or a certificate."}"#,
+    );
 
     // Members cannot generate or clean up.
     let bob = Ui::login(&h, "bob@example.test").await;

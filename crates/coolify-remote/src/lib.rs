@@ -5,12 +5,15 @@
 //! SECURITY_MODEL.md section 7.
 
 pub mod exec;
+pub mod host_key;
 pub mod retry;
+pub mod sftp;
 pub mod shell;
 pub mod sudo;
 pub mod text;
 
 pub use exec::{
-    HostKeyPolicy, PrivateKey, Remote, RemoteConfig, RemoteError, RunOptions, SetupError, Stream,
-    Tap, Target, TtyInvocation,
+    HostKeyMismatchListener, PrivateKey, RawOutput, Remote, RemoteConfig, RemoteError, RunOptions,
+    SetupError, Stream, Tap, Target, TtyInvocation,
 };
+pub use host_key::{HOST_KEY_CHANGED_MESSAGE, HostKeyCheck, HostKeyMode, HostKeyScan};

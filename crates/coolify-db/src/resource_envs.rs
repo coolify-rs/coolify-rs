@@ -140,6 +140,55 @@ pub async fn by_key(
 }
 
 /// `$resource->environment_variables()->max('order')`.
+/// `$resource->environment_variables[_preview]()->where('key', $key)->get()`: every copy of a
+/// key. A key can have copies from earlier duplicate saves.
+pub async fn all_by_key(
+    db: &Db,
+    morph: &str,
+    resource_id: i64,
+    is_preview: bool,
+    key: &str,
+) -> DbResult<Vec<Record>> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT row_to_json(v)::text FROM environment_variables v WHERE resourceable_type = $1 AND resourceable_id = $2 AND is_preview = $3 AND key = $4 ORDER BY id",
+    )
+    .bind(morph)
+    .bind(resource_id)
+    .bind(is_preview)
+    .bind(key)
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter()
+        .map(|t| {
+            crate::records::parse_row(t).map_err(|e| {
+                crate::DbError::Schema(format!("decoding environment variable row: {e}"))
+            })
+        })
+        .collect()
+}
+
+/// `$env->sameKeyVariables($key)->exists()`: whether another variable of the resource and
+/// preview flag has the key.
+pub async fn same_key_exists(
+    db: &Db,
+    morph: &str,
+    resource_id: i64,
+    is_preview: bool,
+    key: &str,
+    except_id: i64,
+) -> DbResult<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 AND is_preview = $3 AND key = $4 AND id <> $5)",
+    )
+    .bind(morph)
+    .bind(resource_id)
+    .bind(is_preview)
+    .bind(key)
+    .bind(except_id)
+    .fetch_one(db.pool())
+    .await?)
+}
+
 pub async fn max_order(db: &Db, morph: &str, resource_id: i64) -> DbResult<i64> {
     let max: Option<i32> = sqlx::query_scalar(
         "SELECT MAX(\"order\") FROM environment_variables WHERE resourceable_type = $1 AND resourceable_id = $2 AND is_preview = false",
@@ -173,6 +222,23 @@ pub struct NewEnv<'a> {
 
 pub async fn create(db: &Db, n: &NewEnv<'_>, now: NaiveDateTime) -> DbResult<Record> {
     db.ensure_writable()?;
+    // `EnvironmentVariable::performInsert()` (v4.7): inserts of one key wait for each other, and a
+    // second row is refused like a unique index refuses it.
+    let mut tx = db.pool().begin().await?;
+    if crate::environment_variables::lock_key_for_insert(
+        &mut tx,
+        n.morph,
+        n.resource_id,
+        n.is_preview,
+        n.key,
+    )
+    .await?
+    .is_some()
+    {
+        return Err(DbError::Schema(
+            crate::environment_variables::duplicate_key_message(n.key),
+        ));
+    }
     let text: String = sqlx::query_scalar(
         "INSERT INTO environment_variables (key, value, comment, is_multiline, is_literal, is_runtime, is_buildtime, is_required, is_shown_once, is_preview, is_shared, \"order\", resourceable_type, resourceable_id, uuid, version, created_at, updated_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::integer, $13, $14, $15, $16, $17, $17) RETURNING row_to_json(environment_variables)::text",
@@ -194,8 +260,9 @@ pub async fn create(db: &Db, n: &NewEnv<'_>, now: NaiveDateTime) -> DbResult<Rec
     .bind(new_public_id())
     .bind(n.version)
     .bind(now)
-    .fetch_one(db.pool())
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     decode(&text)
 }
 

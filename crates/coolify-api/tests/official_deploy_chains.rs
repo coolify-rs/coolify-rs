@@ -107,7 +107,7 @@ async fn team(h: &Harness, token: &str, prefix: &str, apps: &[&str]) -> Vec<Stri
             "POST",
             "/api/v1/security/keys",
             t,
-            Some(json!({"name": "k", "private_key": pem})),
+            Some(json!({"name": "key", "private_key": pem})),
         )
         .await,
     );

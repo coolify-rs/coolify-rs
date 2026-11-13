@@ -35,6 +35,19 @@ pub fn api_url_base(source: &Record) -> String {
     url
 }
 
+/// `GiteaApp::allowsRepositoryOwner($owner)`: the organization field limits the source to
+/// repositories of these owners. Empty allows all owners.
+pub fn allows_repository_owner(source: &Record, owner: Option<&str>) -> bool {
+    let owner = owner.unwrap_or_default().to_lowercase();
+    let mut organizations = field(source, "organization")
+        .unwrap_or_default()
+        .split(',')
+        .map(|o| o.trim().to_lowercase())
+        .filter(|o| !o.is_empty() && o != "0")
+        .peekable();
+    organizations.peek().is_none() || organizations.any(|o| o == owner)
+}
+
 /// The differences between `refreshGitlabToken()` and `refreshGiteaToken()`.
 pub(crate) struct TokenFlow {
     pub table: &'static str,
@@ -77,6 +90,10 @@ pub(crate) async fn refresh(
         field(row, k).and_then(|c| enc.decrypt_maybe_serialized(c).ok())
     };
     if decrypt(source, "refresh_token").is_none() {
+        // `refreshGiteaToken()` names both products the source can be.
+        if flow.table == "gitea_apps" {
+            return Err("Gitea / Forgejo source has no refresh token. Please reconnect the Gitea / Forgejo App.".to_owned());
+        }
         return Err(format!(
             "{provider} source has no refresh token. Please reconnect the {provider} app."
         ));
@@ -110,7 +127,13 @@ pub(crate) async fn refresh(
         .unwrap_or_default()
         .trim_end_matches('/')
         .to_owned();
-    let http = git_http::client(Some(db), &base, Duration::from_secs(30)).await?;
+    let http = git_http::client(
+        Some(db),
+        git_http::may_use_private_networks(&row),
+        &base,
+        Duration::from_secs(30),
+    )
+    .await?;
     let client_id = field(&row, "client_id").unwrap_or_default().to_owned();
     let client_secret = decrypt(&row, "client_secret").unwrap_or_default();
     let refresh_token = decrypt(&row, "refresh_token").unwrap_or_default();
@@ -135,19 +158,29 @@ pub(crate) async fn refresh(
     if !status.is_success() {
         return Err(format!(
             "Failed to refresh {provider} token: {}",
-            git_http::error_text(&body, "error_description")
+            git_http::error_text(status.as_u16(), &body, "error_description")
         ));
     }
     let data: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
     let access = data
         .get("access_token")
         .and_then(Value::as_str)
-        .ok_or_else(|| format!("Failed to refresh {provider} token: {body}"))?
+        .ok_or_else(|| {
+            format!(
+                "Failed to refresh {provider} token: {}",
+                git_http::unexpected_response(status.as_u16(), &body)
+            )
+        })?
         .to_owned();
     let new_refresh = match data.get("refresh_token").and_then(Value::as_str) {
         Some(t) => t.to_owned(),
         None if flow.keep_refresh_token => refresh_token.clone(),
-        None => return Err(format!("Failed to refresh {provider} token: {body}")),
+        None => {
+            return Err(format!(
+                "Failed to refresh {provider} token: {}",
+                git_http::unexpected_response(status.as_u16(), &body)
+            ));
+        }
     };
     let expires_in = data
         .get("expires_in")
@@ -200,7 +233,13 @@ pub async fn api(
 ) -> Result<(Value, i64), String> {
     let token = access_token(db, enc, source).await?;
     let base = api_url_base(source);
-    let http = git_http::client(Some(db), &base, Duration::from_secs(20)).await?;
+    let http = git_http::client(
+        Some(db),
+        git_http::may_use_private_networks(source),
+        &base,
+        Duration::from_secs(20),
+    )
+    .await?;
     let url = format!("{base}/{}", endpoint.trim_start_matches('/'));
     let response = git_http::retry(|| {
         let r = http
@@ -224,10 +263,43 @@ pub async fn api(
     if !status.is_success() {
         return Err(format!(
             "Gitea API call failed: {}",
-            git_http::error_text(&body, "message")
+            git_http::error_text(status.as_u16(), &body, "message")
         ));
     }
     Ok((serde_json::from_str(&body).unwrap_or(Value::Null), total))
+}
+
+/// `Http::Gitea($source->apiUrlBase(), $token)->timeout(20)->retry(3, 200, throw: false)->get("/repos/{owner}/{name}")`
+/// (the repository check of `ApplicationsController::giteaAppRepository()`): the status and JSON
+/// body of the last attempt. `Err` is the connection error of the last try.
+pub async fn repository_access(
+    db: Option<&Db>,
+    source: &Record,
+    token: &str,
+    repository_path: &str,
+) -> Result<(u16, Value), String> {
+    let base = api_url_base(source);
+    let http = git_http::client(
+        db,
+        git_http::may_use_private_networks(source),
+        &base,
+        Duration::from_secs(20),
+    )
+    .await?;
+    let path = repository_path
+        .split('/')
+        .map(raw_url_encode)
+        .collect::<Vec<_>>()
+        .join("/");
+    let url = format!("{base}/repos/{path}");
+    let response = git_http::retry(|| {
+        http.get(&url)
+            .header("Accept", "application/json")
+            .bearer_auth(token)
+    })
+    .await?;
+    let status = response.status().as_u16();
+    Ok((status, response.json().await.unwrap_or(Value::Null)))
 }
 
 /// `loadGiteaRepositories($source, $page)`.
@@ -239,7 +311,13 @@ pub async fn load_repositories(
 ) -> Result<Value, String> {
     let token = access_token(db, enc, source).await?;
     let base = api_url_base(source);
-    let http = git_http::client(Some(db), &base, Duration::from_secs(20)).await?;
+    let http = git_http::client(
+        Some(db),
+        git_http::may_use_private_networks(source),
+        &base,
+        Duration::from_secs(20),
+    )
+    .await?;
     let url = format!("{base}/user/repos");
     let page_text = page.to_string();
     let limit = PAGE_SIZE.to_string();
@@ -255,22 +333,9 @@ pub async fn load_repositories(
     }
     let list: Vec<Value> = response.json().await.unwrap_or_default();
     let has_more = list.len() == PAGE_SIZE;
-    let organizations: Vec<String> = field(source, "organization")
-        .unwrap_or_default()
-        .split(',')
-        .map(|o| o.trim().to_lowercase())
-        .filter(|o| !o.is_empty())
-        .collect();
     let repositories: Vec<Value> = list
         .iter()
-        .filter(|r| {
-            organizations.is_empty()
-                || organizations.contains(
-                    &path_str(r, "owner.login")
-                        .unwrap_or_default()
-                        .to_lowercase(),
-                )
-        })
+        .filter(|r| allows_repository_owner(source, path_str(r, "owner.login")))
         .map(|r| {
             json!({
                 "id": r.get("id"),
@@ -299,7 +364,13 @@ pub async fn load_branches(
 ) -> Result<Value, String> {
     let token = access_token(db, enc, source).await?;
     let base = api_url_base(source);
-    let http = git_http::client(Some(db), &base, Duration::from_secs(20)).await?;
+    let http = git_http::client(
+        Some(db),
+        git_http::may_use_private_networks(source),
+        &base,
+        Duration::from_secs(20),
+    )
+    .await?;
     let path = full_name
         .splitn(2, '/')
         .map(raw_url_encode)
@@ -332,4 +403,30 @@ pub fn raw_url_encode(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(organization: Value) -> Record {
+        let mut row = Record::new();
+        row.insert("organization".into(), organization);
+        row
+    }
+
+    #[test]
+    fn the_organization_field_limits_repository_owners() {
+        // Empty allows all owners.
+        for empty in [Value::Null, json!(""), json!(" , ")] {
+            let row = source(empty);
+            assert!(allows_repository_owner(&row, Some("anyone")));
+            assert!(allows_repository_owner(&row, None));
+        }
+        let row = source(json!("Acme, coollabs"));
+        assert!(allows_repository_owner(&row, Some("acme")));
+        assert!(allows_repository_owner(&row, Some("CoolLabs")));
+        assert!(!allows_repository_owner(&row, Some("someone")));
+        assert!(!allows_repository_owner(&row, None));
+    }
 }

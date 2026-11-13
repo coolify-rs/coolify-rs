@@ -438,6 +438,17 @@ async fn upsert(
             json!({"message": "Validation failed.", "errors": errors}),
         ));
     }
+    // `persistSchedule()`: a storage that is not a destination of the schedule yet needs write
+    // access on the whole team (`$this->authorize('useTeamCredentials', $resource)`).
+    let existing = vb::schedule_of(&state.db, target.morph, parts::id_of(&target.row)).await?;
+    let wanted: Vec<i64> = storages.iter().map(parts::id_of).collect();
+    if !vb::new_storage_ids(&state.db, existing.as_ref(), &wanted)
+        .await?
+        .is_empty()
+        && !ctx.can_use_team_credentials()
+    {
+        return Err(ApiError::Unauthorized);
+    }
     let int = |k: &str, default: i64| input.get(k).and_then(as_integer).unwrap_or(default);
     let num = |k: &str| input.get(k).and_then(as_numeric).unwrap_or(0.0);
     let values = ScheduleValues {

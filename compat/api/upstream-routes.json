@@ -1,6 +1,6 @@
 {
   "generator": "coolify-port 0.1.0",
-  "upstream_commit": "0becfba9113063336b09860579627fd218cb3fc4",
+  "upstream_commit": "378ce3735c4522ebb6b68e93b909b0511f278763",
   "routes": [
     {
       "methods": [
@@ -886,6 +886,21 @@
       "methods": [
         "GET"
       ],
+      "uri": "api/v1/applications/{uuid}/vulnerabilities",
+      "action": "App\\Http\\Controllers\\Api\\VulnerabilitiesController@application",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
       "uri": "api/v1/audit-events",
       "action": "App\\Http\\Controllers\\Api\\AuditEventsController@index",
       "middleware": [
@@ -1141,6 +1156,21 @@
       "methods": [
         "GET"
       ],
+      "uri": "api/v1/databases/{uuid}/vulnerabilities",
+      "action": "App\\Http\\Controllers\\Api\\VulnerabilitiesController@database",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
       "uri": "api/v1/deploy",
       "action": "App\\Http\\Controllers\\Api\\OtherController@post_required",
       "middleware": [
@@ -1307,6 +1337,21 @@
       ],
       "uri": "api/v1/dns/zones",
       "action": "App\\Http\\Controllers\\Api\\DnsController@zones",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/gitea-apps",
+      "action": "App\\Http\\Controllers\\Api\\GiteaController@list_gitea_apps",
       "middleware": [
         "api",
         "App\\Http\\Middleware\\Authenticate:sanctum",
@@ -1976,6 +2021,21 @@
       "methods": [
         "GET"
       ],
+      "uri": "api/v1/servers/{uuid}/image-scanning",
+      "action": "App\\Http\\Controllers\\Api\\ServerImageScanningController@show",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
       "uri": "api/v1/servers/{uuid}/log-drains",
       "action": "App\\Http\\Controllers\\Api\\ServerLogDrainsController@show",
       "middleware": [
@@ -2396,6 +2456,21 @@
       "methods": [
         "GET"
       ],
+      "uri": "api/v1/services/{uuid}/vulnerabilities",
+      "action": "App\\Http\\Controllers\\Api\\VulnerabilitiesController@service",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
       "uri": "api/v1/settings/email",
       "action": "App\\Http\\Controllers\\Api\\InstanceEmailSettingsController@show",
       "middleware": [
@@ -2548,6 +2623,21 @@
       ],
       "uri": "api/v1/version",
       "action": "App\\Http\\Controllers\\Api\\OtherController@version",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:read"
+      ]
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "uri": "api/v1/vulnerabilities",
+      "action": "App\\Http\\Controllers\\Api\\VulnerabilitiesController@index",
       "middleware": [
         "api",
         "App\\Http\\Middleware\\Authenticate:sanctum",
@@ -3177,6 +3267,21 @@
       "methods": [
         "PATCH"
       ],
+      "uri": "api/v1/servers/{uuid}/image-scanning",
+      "action": "App\\Http\\Controllers\\Api\\ServerImageScanningController@update",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
       "uri": "api/v1/servers/{uuid}/log-drains",
       "action": "App\\Http\\Controllers\\Api\\ServerLogDrainsController@update",
       "middleware": [
@@ -3447,6 +3552,21 @@
       ],
       "uri": "api/v1/applications/private-deploy-key",
       "action": "App\\Http\\Controllers\\Api\\ApplicationsController@create_private_deploy_key_application",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/applications/private-gitea-app",
+      "action": "App\\Http\\Controllers\\Api\\ApplicationsController@create_private_gitea_app_application",
       "middleware": [
         "api",
         "App\\Http\\Middleware\\Authenticate:sanctum",
@@ -4523,6 +4643,21 @@
       ],
       "uri": "api/v1/servers/{uuid}/envs",
       "action": "App\\Http\\Controllers\\Api\\SharedEnvironmentVariablesController@server_create_env",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\Authenticate:sanctum",
+        "App\\Http\\Middleware\\EnsureTokenBelongsToCurrentTeamMember",
+        "App\\Http\\Middleware\\ApiAllowed",
+        "App\\Http\\Middleware\\ApiSensitiveData",
+        "App\\Http\\Middleware\\ApiAbility:write"
+      ]
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "uri": "api/v1/servers/{uuid}/host-key/reset",
+      "action": "App\\Http\\Controllers\\Api\\ServersController@reset_host_key",
       "middleware": [
         "api",
         "App\\Http\\Middleware\\Authenticate:sanctum",
