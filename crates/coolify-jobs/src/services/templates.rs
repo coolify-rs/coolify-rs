@@ -4,6 +4,10 @@
 //! (`config('constants.services.file_name')`), which its image ships and `PullTemplatesFromCDN`
 //! replaces. coolify-rs embeds the same file and reads `COOLIFY_RS_TEMPLATES_DIR` first, where the
 //! Docker image installs it, so a newer file can replace it without a rebuild.
+//!
+//! coolify-rs can ship a template newer than upstream's list (a later `template_last_updated_at`).
+//! Such a built-in entry wins over a stored or downloaded bundle, so a pull from upstream's CDN does
+//! not bring the older version back; every other template follows upstream.
 
 use std::collections::BTreeMap;
 use std::sync::{LazyLock, RwLock};
@@ -13,6 +17,9 @@ use serde_json::Value;
 
 const EMBEDDED: &str = include_str!("../../../../templates/service-templates-latest.json");
 const FILE_NAME: &str = "service-templates-latest.json";
+
+/// The templates this build ships.
+static BUILTIN: LazyLock<BTreeMap<String, Value>> = LazyLock::new(|| parse(EMBEDDED));
 
 /// `NEEDS_TO_CONNECT_TO_PREDEFINED_NETWORK`.
 pub const NEEDS_TO_CONNECT_TO_PREDEFINED_NETWORK: [&str; 3] =
@@ -36,9 +43,9 @@ static TEMPLATES: LazyLock<RwLock<&'static BTreeMap<String, Value>>> = LazyLock:
         .map(|text| parse(&text))
         .unwrap_or_default();
     let bundle = if parsed.is_empty() {
-        parse(EMBEDDED)
+        BUILTIN.clone()
     } else {
-        parsed
+        with_newer_builtin(parsed, &BUILTIN)
     };
     RwLock::new(Box::leak(Box::new(bundle)))
 });
@@ -54,6 +61,7 @@ pub fn store_bundle(json: &str) -> bool {
     if parsed.is_empty() {
         return false;
     }
+    let parsed = with_newer_builtin(parsed, &BUILTIN);
     let path = templates_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -64,6 +72,28 @@ pub fn store_bundle(json: &str) -> bool {
         *slot = Box::leak(Box::new(parsed));
     }
     written
+}
+
+/// `template_last_updated_at` of a template entry.
+fn updated_at(entry: &Value) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    chrono::DateTime::parse_from_rfc3339(entry.get("template_last_updated_at")?.as_str()?).ok()
+}
+
+/// The bundle with each template replaced by the built-in one when that is newer. A template only
+/// one side has is left as the bundle has it (upstream may have removed or renamed it).
+fn with_newer_builtin(
+    mut bundle: BTreeMap<String, Value>,
+    builtin: &BTreeMap<String, Value>,
+) -> BTreeMap<String, Value> {
+    for (key, ours) in builtin {
+        if let Some(theirs) = bundle.get_mut(key)
+            && let (Some(ours_at), Some(theirs_at)) = (updated_at(ours), updated_at(theirs))
+            && ours_at > theirs_at
+        {
+            *theirs = ours.clone();
+        }
+    }
+    bundle
 }
 
 /// `get_service_templates()`: sorted by key (`sortKeys()`).
@@ -135,6 +165,57 @@ pub fn required_port(service_type: Option<&str>) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entry(image: &str, updated: &str) -> Value {
+        serde_json::json!({"compose": image, "template_last_updated_at": updated})
+    }
+
+    #[test]
+    fn a_newer_builtin_template_wins_over_the_downloaded_one() {
+        let builtin: BTreeMap<String, Value> = [
+            (
+                "umami".to_owned(),
+                entry("3.5.0", "2026-11-14T03:23:45+05:00"),
+            ),
+            ("ghost".to_owned(), entry("5", "2025-01-01T00:00:00+00:00")),
+            (
+                "only-ours".to_owned(),
+                entry("1", "2026-01-01T00:00:00+00:00"),
+            ),
+        ]
+        .into();
+        let downloaded: BTreeMap<String, Value> = [
+            (
+                "umami".to_owned(),
+                entry("3.0.3", "2025-12-17T22:34:31+05:30"),
+            ),
+            ("ghost".to_owned(), entry("6", "2026-02-01T00:00:00+00:00")),
+            (
+                "only-theirs".to_owned(),
+                entry("2", "2026-01-01T00:00:00+00:00"),
+            ),
+        ]
+        .into();
+        let merged = with_newer_builtin(downloaded, &builtin);
+        // Ours is newer: kept. Theirs is newer: upstream's update applies.
+        assert_eq!(merged["umami"]["compose"], "3.5.0");
+        assert_eq!(merged["ghost"]["compose"], "6");
+        // Templates only one side has are not added back.
+        assert!(merged.contains_key("only-theirs"));
+        assert!(!merged.contains_key("only-ours"));
+    }
+
+    #[test]
+    fn a_template_without_a_readable_date_follows_the_bundle() {
+        let builtin: BTreeMap<String, Value> =
+            [("a".to_owned(), entry("ours", "2026-11-14T00:00:00+00:00"))].into();
+        let downloaded: BTreeMap<String, Value> =
+            [("a".to_owned(), serde_json::json!({"compose": "theirs"}))].into();
+        assert_eq!(
+            with_newer_builtin(downloaded, &builtin)["a"]["compose"],
+            "theirs"
+        );
+    }
 
     #[test]
     fn embedded_templates_load() {
