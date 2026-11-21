@@ -120,7 +120,7 @@ impl Ctx {
                 .get()
                 .cloned()
                 .or_else(|| std::env::var("COOLIFY_VERSION").ok())
-                .unwrap_or_else(|| "4.7.5".to_owned()),
+                .unwrap_or_else(|| "4.7.6".to_owned()),
             cloud: std::env::var("SELF_HOSTED").is_ok_and(|v| v == "false" || v == "0"),
             dev,
         }

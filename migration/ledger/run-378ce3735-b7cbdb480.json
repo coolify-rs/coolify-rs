@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "run_id": "run-378ce3735-b7cbdb480",
+  "upstream_from": "378ce3735c4522ebb6b68e93b909b0511f278763",
+  "upstream_to": "b7cbdb480faa1a124423e3c3c886481848c96cf9",
+  "stage": "analyzed",
+  "commits": [
+    {
+      "sha": "59a6625091ab39419bb9573eb4450d577437d0a1",
+      "subject": "fix(security): upgrade the dependencies for v4.7.6 (#12600)",
+      "categories": [
+        "documentation",
+        "tests",
+        "container_integration",
+        "dependency_upgrade",
+        "build_release",
+        "unclassified"
+      ],
+      "security_sensitive": true,
+      "files": 20
+    },
+    {
+      "sha": "b7cbdb480faa1a124423e3c3c886481848c96cf9",
+      "subject": "feat(release): bump coolify version to v4.7.6",
+      "categories": [
+        "documentation",
+        "unclassified"
+      ],
+      "security_sensitive": false,
+      "files": 5
+    }
+  ],
+  "plan": {
+    "schema_version": 1,
+    "upstream_from": "378ce3735c4522ebb6b68e93b909b0511f278763",
+    "upstream_to": "b7cbdb480faa1a124423e3c3c886481848c96cf9",
+    "commits": [
+      "59a6625091ab39419bb9573eb4450d577437d0a1",
+      "b7cbdb480faa1a124423e3c3c886481848c96cf9"
+    ],
+    "categories": [
+      "documentation",
+      "tests",
+      "container_integration",
+      "dependency_upgrade",
+      "build_release",
+      "unclassified"
+    ],
+    "security_sensitive": true,
+    "risk": "high",
+    "risk_reasons": [
+      "security-sensitive (2 signals)",
+      "category DependencyUpgrade",
+      "category ContainerIntegration"
+    ],
+    "affected_components": [],
+    "unmapped_files": [
+      "composer.json",
+      "composer.lock",
+      "docker-compose-maxio.dev.yml",
+      "docker-compose.dev-multi.yml",
+      "docker-compose.dev.yml",
+      "docker/coolify-terminal/package-lock.json",
+      "docker/coolify-terminal/package.json",
+      "docker/development/Dockerfile",
+      "docker/development/etc/nginx/site-opts.d/http.conf",
+      "docker/production/Dockerfile",
+      "docker/production/etc/nginx/server-opts.d/coolify.conf",
+      "docker/production/etc/nginx/site-opts.d/http.conf",
+      "docker/production/etc/php-fpm.d/zzzz-coolify-listen.conf",
+      "package-lock.json",
+      "package.json",
+      "release.json",
+      "vet.json"
+    ],
+    "route_diff": {
+      "added": [],
+      "removed": [],
+      "changed": []
+    },
+    "migrations": [],
+    "actions": [],
+    "validation": [
+      [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      [
+        "cargo",
+        "test",
+        "--workspace"
+      ]
+    ],
+    "escalation": {
+      "reasons": [
+        "high risk: requires explicit human approval before integration"
+      ],
+      "decision_required": "approve or reject the generated patch and assign the semantic port of the listed components"
+    },
+    "mapping_coverage": 0.0,
+    "unresolved_questions": [
+      "some files matched no classification rule; extend PATH_RULES"
+    ]
+  },
+  "branch": null,
+  "base_commit": null,
+  "worktree": null,
+  "generated_files": [],
+  "patch_file": null,
+  "prompt_pack": null,
+  "attempts": [],
+  "verdict": null,
+  "recommended_action": "analysis only: re-run with generation to produce a patch",
+  "started_at": "2026-11-21T09:29:45Z",
+  "updated_at": "2026-11-21T09:29:46Z"
+}

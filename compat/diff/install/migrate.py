@@ -3,7 +3,7 @@
 
     migrate.py <private work folder> <coolify-rs image tag> [stage ...]
 
-One throwaway OrbStack VM: upstream's own installer at the release coolify-rs matches (UP_VERSION, default 4.7.5, from
+One throwaway OrbStack VM: upstream's own installer at the release coolify-rs matches (UP_VERSION, default 4.7.6, from
 .upstream/snapshot-<version>), a deployment on it, the dry-run check, the coolify-rs installer over it, checks and a
 deployment on coolify-rs, then upstream's installer again to go back. The image is coolify-rs/coolify-rs:<tag> in the
 local Docker. Stages: clean up user seed dryrun migrate after back delete. Without stages, all run and the VM is deleted at
@@ -20,7 +20,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 VM, PORT = "coolify-rs-agent-install-up", "28093"
-UP_VERSION = os.environ.get("UP_VERSION", "4.7.5")
+UP_VERSION = os.environ.get("UP_VERSION", "4.7.6")
 work, tag = Path(sys.argv[1]), sys.argv[2]
 stages = sys.argv[3:]
 failures = []
