@@ -8,7 +8,7 @@
 | Default branch | `main` (also `next`) | `git ls-remote --heads` |
 | License | Apache-2.0 | `LICENSE`, `composer.json` |
 | Analysed snapshot | tag `v4.5.3` @ `70c1bcb1381de7d42fd290e6cd50bf9a5bcf714d`, version string `4.5.3` (`.upstream/snapshot-4.5.3`); `main` @ `b5823c777b8d60df856fcf779b70e4b1d237a845` (`.upstream/snapshot`) for older notes | `config/constants.php:8` |
-| **Compatibility baseline** | tag `v4.7.5` @ `378ce3735c4522ebb6b68e93b909b0511f278763` (coolify-rs reports `4.7.5` by default; releases set `COOLIFY_VERSION=4.7.5-rs.N`) | port of `v4.6.0..v4.7.5`, 2026-11-12 |
+| **Compatibility baseline** | tag `v4.7.6` @ `b7cbdb480faa1a124423e3c3c886481848c96cf9` (coolify-rs reports `4.7.6` by default; releases set `COOLIFY_VERSION=4.7.6-rs.N`) | `v4.7.5..v4.7.6` only changes Coolify's own image and dependencies (no migrations, no application code), 2026-11-21 |
 | Schema baseline | Coolify v4.7.5 (520 migrations): the v4.6.0 dump plus the twenty-seven migrations of v4.7.0 to v4.7.5 as `bootstrap::MIGRATIONS` runs them (compared on 2026-11-13 with a real `coollabsio/coolify:4.7.5` database, `php artisan migrate` on Postgres 15: identical, the same 520 migration names, apart from install-time timestamp defaults) | `compat/baseline/upstream-4.7.5-*.sql` |
 | v4.6.0 baseline | tag `v4.6.0` @ `0becfba9113063336b09860579627fd218cb3fc4` (493 migrations: the v4.5.3 capture plus the fifteen v4.6.0 migrations; compared with a real `coollabsio/coolify:4.6.0` database: identical except install-time timestamp defaults); `coolify-rs boot` upgrades it | `compat/baseline/upstream-4.6.0-*.sql` |
 | Runtime reference | image `coollabsio/coolify:sha-b5823c7` (upstream's per-commit `main` build; image label `org.opencontainers.image.revision` = `b5823c77…`); not moved to 4.5.3, so the v4.5.3 port was verified by reading the PHP and by Rust tests | `compat/reference` |
@@ -18,6 +18,7 @@
 | Commits `b5823c7..v4.5.3` | 71 first-parent, 5 new migrations | migration run `run-b5823c777-70c1bcb13` |
 | Commits `v4.5.3..v4.6.0` | 74, 15 new migrations | migration run `run-70c1bcb13-0becfba91` |
 | Commits `v4.6.0..v4.7.5` | 242, 27 new migrations | ported by hand, one area at a time |
+| Commits `v4.7.5..v4.7.6` | 12, no migrations: PHP, nginx, Node.js, cloudflared and Composer/npm updates of the `coolify` image, and its nginx and PHP-FPM configuration | nothing to port (coolify-rs runs none of them) |
 
 History: session 1 used `v4.5.0` (newest release with an official image). Session 2 adopted `main` after finding that
 upstream publishes immutable per-commit images (`sha-<7>`), so source and runtime can again be pinned to the same

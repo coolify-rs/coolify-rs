@@ -16,10 +16,10 @@ can replace Coolify for you. It is maintained with the code: an entry goes when 
 - **Update channels.** The Preview and Nightly channels of the update settings take a version only from a version
   file that lists channels (`{"stable": …, "preview": …, "nightly": …}`); with a stable-only file every channel
   gets the stable release. A custom image tag installs `ghcr.io/coolify-rs/coolify-rs:<tag>`.
-- **Existing Coolify databases.** Each release takes over exactly one Coolify release (4.7.5 for `4.7.5-rs.2`; see
+- **Existing Coolify databases.** Each release takes over exactly one Coolify release (4.7.6 for `4.7.6-rs.1`; see
   [MIGRATING.md](MIGRATING.md)). `coolify-rs boot` runs the upstream migrations from Coolify 4.5.3 to that release (the
   ones that bring its own earlier installs up), whoever created the database: a Coolify 4.5.3 or 4.6.0 database is
-  upgraded to the 4.7.5 schema on the first start, and from then on only Coolify 4.7.5 can take it back. A database
+  upgraded to the 4.7.6 schema on the first start, and from then on only Coolify 4.7.6 can take it back. A database
   from a Coolify release older than 4.5.3 is served read-only until Coolify itself is upgraded. A database with migrations newer than
   the build is read-only too (writes answer `503`) unless `COOLIFY_RS_ALLOW_UNKNOWN_SCHEMA=true`. Migration names that
   upstream later renamed or deleted (`compat/baseline/historical-migrations.txt`) are accepted.

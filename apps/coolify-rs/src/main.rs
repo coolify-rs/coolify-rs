@@ -32,7 +32,7 @@ mod plugin_cli;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// The upstream release whose API contract and schema this build implements.
-const UPSTREAM_COMPAT_VERSION: &str = "4.7.5";
+const UPSTREAM_COMPAT_VERSION: &str = "4.7.6";
 
 #[derive(Parser)]
 #[command(name = "coolify-rs", version, about)]
